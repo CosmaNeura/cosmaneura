@@ -264,6 +264,7 @@ def _receipt(
 def _fixture(
     root: Path,
     *,
+    prepare_policy: Callable[[dict[str, Any]], None] | None = None,
     mutate_documents: Callable[[dict[str, Any], dict[str, dict[str, Any]]], None]
     | None = None,
     mutate_receipt: Callable[[dict[str, Any]], None] | None = None,
@@ -272,6 +273,8 @@ def _fixture(
 ) -> tuple[dict[str, Any], Path]:
     root.chmod(0o700)
     policy = _policy()
+    if prepare_policy is not None:
+        prepare_policy(policy)
     state = _state(policy)
     documents: dict[str, Any] = {
         auth.STATE_FILE: state,
@@ -339,6 +342,11 @@ def test_checked_in_policy_is_exact_hash_pinned_and_non_authoritative() -> None:
     assert policy["claims"]["bootstrap_authority_authenticated"] is False
     assert policy["claims"]["provider_mutation_authority"] is False
     assert policy["claims"]["database_mutation_authority"] is False
+    assert policy["status"]["binding_plan_integration_implemented"] is True
+    assert (
+        "bootstrap_binding_plan_integration_unimplemented"
+        not in policy["status"]["activation_blockers"]
+    )
     assert policy["status"]["activation_ready"] is False
 
 

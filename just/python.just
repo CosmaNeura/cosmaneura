@@ -299,7 +299,7 @@ py_test-ci-infrastructure-sanitizer-bootstrap-binding:
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_contract_is_hash_pinned_closed_world_and_dormant \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_bootstrap_design_is_separate_ephemeral_and_teardown_bound \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_real_chain_mints_only_redacted_binding_metadata \
-		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_api_accepts_only_one_keyword_only_exact_connection_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_api_accepts_only_two_keyword_only_exact_inputs \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_clock_requires_exact_whole_second_utc \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_security_relevant_contract_mutations_fail_closed \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
@@ -315,7 +315,10 @@ py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest:
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_connection_plan_identity_and_nested_ancestry_are_retained --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_connection_plan_identity_and_nested_ancestry_are_retained \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_bootstrap_identity_evidence_exact_object_is_retained \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding-state:
