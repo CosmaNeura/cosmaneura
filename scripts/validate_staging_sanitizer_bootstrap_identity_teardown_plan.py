@@ -379,8 +379,10 @@ def _validate_variables(plan: Mapping[str, Any]) -> None:
         if not isinstance(record, Mapping) or set(record) != {"value"}:
             raise BootstrapPlanError("teardown plan variable shape is not exact")
         values[name] = record["value"]
+    authorization = values.pop("authorize_sanitizer_bootstrap_identity_teardown")
+    if not base._normalized_bool(authorization, label="teardown authorization"):
+        raise BootstrapPlanError("teardown authorization must be true")
     if values != {
-        "authorize_sanitizer_bootstrap_identity_teardown": "true",
         "enable_sanitizer_bootstrap_identity": False,
         "sanitizer_bootstrap_identity_plan_approved": False,
         "sanitizer_bootstrap_lifetime_hours": None,

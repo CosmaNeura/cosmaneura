@@ -212,7 +212,7 @@ def _valid_plan() -> dict[str, Any]:
         "timestamp": PLAN_TIMESTAMP,
         "errored": False,
         "variables": {
-            "authorize_sanitizer_bootstrap_identity_teardown": {"value": "true"},
+            "authorize_sanitizer_bootstrap_identity_teardown": {"value": True},
             "enable_sanitizer_bootstrap_identity": {"value": False},
             "sanitizer_bootstrap_identity_plan_approved": {"value": False},
             "sanitizer_bootstrap_lifetime_hours": {"value": None},
@@ -413,6 +413,14 @@ def test_exact_teardown_is_bound_but_never_authorizes_apply() -> None:
     assert receipt["apply_authorized"] is False
     assert receipt["founder_apply_required"] is True
     assert receipt["pass"] is True
+
+
+def test_cli_string_boolean_is_normalized() -> None:
+    plan = _valid_plan()
+    plan["variables"]["authorize_sanitizer_bootstrap_identity_teardown"]["value"] = (
+        "true"
+    )
+    assert validator._validate_plan(plan, now=NOW) == PLAN_TIMESTAMP
 
 
 @pytest.mark.parametrize(
