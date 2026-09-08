@@ -369,7 +369,17 @@ def test_output_is_immutable_nonserializable_and_tamper_evident(
             action()
     with pytest.raises(Failure):
         result.row_count = 0
+    original_row_count = result.row_count
     object.__setattr__(result, "row_count", 0)
+    assert not result._is_authenticated()
+    object.__setattr__(result, "row_count", original_row_count)
+    assert result._is_authenticated()
+
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+    object.__setattr__(result, "database_mutation_authority", EqualitySpoof())
     assert not result._is_authenticated()
 
 
