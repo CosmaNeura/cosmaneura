@@ -87,6 +87,13 @@ again prove no federation, RBAC, job attachment, PostgreSQL administrator
 binding, or state change immediately before apply. The saved plan, validator
 receipt, and fresh evidence require independent review. Agents do not apply it.
 
+Azure CLI 2.89 accepts either a subscription or tenant selector for token
+acquisition, but rejects both together. The generator therefore supplies the
+exact subscription and leaves the backend tenant field null. This is not a
+tenant relaxation: the subscription uniquely selects its tenant, while the
+refreshed UAMI, embedded state, configuration, and outputs must still contain
+the exact expected tenant ID or validation fails.
+
 Abort on any extra resource action, drift, state lineage/serial change,
 authority or attachment, changed identity IDs/tags, expired or ambiguous
 evidence, source/master change, or inability to preserve the spent creation

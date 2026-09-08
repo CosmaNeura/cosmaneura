@@ -492,13 +492,33 @@ def test_backend_metadata_rejects_redirects_and_credentials() -> None:
         json.dumps({"backend": {"type": "azurerm", "config": config}}).encode()
     )
 
-    for field, value in (("key", "other.tfstate"), ("access_key", "secret")):
+    for field, value in (
+        ("key", "other.tfstate"),
+        ("tenant_id", validator.base.EXPECTED_TENANT_ID),
+        ("access_key", "secret"),
+    ):
         changed = deepcopy(config)
         changed[field] = value
         with pytest.raises(validator.BootstrapPlanError, match="backend"):
             validator._validate_backend_metadata(
                 json.dumps({"backend": {"type": "azurerm", "config": changed}}).encode()
             )
+
+
+def test_backend_init_omits_only_the_redundant_tenant_selector() -> None:
+    arguments = validator._backend_init_arguments(Path("/trusted/tofu"))
+    supplied = {
+        item.removeprefix("-backend-config=")
+        for item in arguments
+        if item.startswith("-backend-config=")
+    }
+
+    assert supplied == {
+        f"{key}={str(value).lower()}"
+        for key, value in validator.EXPECTED_BACKEND_CONFIG.items()
+        if value is not None
+    }
+    assert not any(item.startswith("tenant_id=") for item in supplied)
 
 
 def test_targeted_destroy_missing_guard_and_outputs_refuses() -> None:

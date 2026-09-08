@@ -43,7 +43,10 @@ EXPECTED_BACKEND_CONFIG: Mapping[str, Any] = {
     "container_name": "cosmaneura-tfstate",
     "key": "staging-sanitizer-bootstrap-identity.tfstate",
     "subscription_id": base.EXPECTED_SUBSCRIPTION_ID,
-    "tenant_id": base.EXPECTED_TENANT_ID,
+    # Azure CLI 2.89 rejects get-access-token when both subscription and tenant
+    # are supplied. The exact subscription selects its tenant; the refreshed
+    # UAMI and embedded state are still required to carry EXPECTED_TENANT_ID.
+    "tenant_id": None,
     "environment": "public",
     "use_azuread_auth": True,
     "use_cli": True,
@@ -368,6 +371,23 @@ def _validate_backend_metadata(value: bytes) -> str:
         if name not in EXPECTED_BACKEND_CONFIG and setting not in (None, "", False):
             raise BootstrapPlanError("backend configuration contains an override")
     return base._sha256_bytes(value)
+
+
+def _backend_init_arguments(tofu: Path) -> tuple[str, ...]:
+    return (
+        str(tofu),
+        f"-chdir={base.IDENTITY_ROOT}",
+        "init",
+        "-backend=true",
+        "-input=false",
+        "-lockfile=readonly",
+        "-reconfigure",
+        *(
+            f"-backend-config={key}={str(value).lower()}"
+            for key, value in EXPECTED_BACKEND_CONFIG.items()
+            if value is not None
+        ),
+    )
 
 
 def _validate_variables(plan: Mapping[str, Any]) -> None:
@@ -838,19 +858,7 @@ def create_and_validate_teardown_plan(
         ):
             raise BootstrapPlanError("the OpenTofu executable digest is not pinned")
         init = recovery._run_process(
-            [
-                str(tofu),
-                f"-chdir={base.IDENTITY_ROOT}",
-                "init",
-                "-backend=true",
-                "-input=false",
-                "-lockfile=readonly",
-                "-reconfigure",
-                *(
-                    f"-backend-config={key}={str(value).lower()}"
-                    for key, value in EXPECTED_BACKEND_CONFIG.items()
-                ),
-            ],
+            _backend_init_arguments(tofu),
             cwd=base.REPOSITORY_ROOT,
             timeout_seconds=300,
             data_dir=execution_data_dir,
