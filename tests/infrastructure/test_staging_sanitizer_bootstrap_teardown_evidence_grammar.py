@@ -597,12 +597,29 @@ def test_validates_closed_world_bundle(tmp_path: Path) -> None:
                 "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             )
         ),
+        lambda value: value["prior_envelope"]["raw_evidence"]["jobs"][0].update(
+            id=value["prior_envelope"]["raw_evidence"]["jobs"][0]["id"].replace(
+                "/subscriptions/", "/ſubscriptions/"
+            )
+        ),
+        lambda value: value["prior_envelope"]["raw_evidence"]["jobs"][0].update(
+            id=value["prior_envelope"]["raw_evidence"]["jobs"][0]["id"].replace(
+                "Microsoft.App", "Microſoft.App"
+            )
+        ),
         lambda value: value["prior_envelope"]["raw_evidence"]["postgres_admins"][
             0
         ].update(
             id=value["prior_envelope"]["raw_evidence"]["postgres_admins"][0][
                 "id"
             ].replace("cosmaneura-scheduling-dev-pg", "wrong-server")
+        ),
+        lambda value: value["prior_envelope"]["raw_evidence"]["postgres_admins"][
+            0
+        ].update(
+            id=value["prior_envelope"]["raw_evidence"]["postgres_admins"][0][
+                "id"
+            ].replace("cosmaneura-scheduling-dev-pg", "coſmaneura-scheduling-dev-pg")
         ),
         lambda value: value["prior_envelope"]["verification"].update(
             state_serial=False
@@ -698,6 +715,20 @@ def test_malformed_job_identity_type_has_bounded_refusal(
         mutate_evidence=lambda value: value["prior_envelope"]["raw_evidence"]["jobs"][
             0
         ].update(identity={"type": identity_type}),
+    )
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+@pytest.mark.parametrize("invalid_hash", [[], None, 1, False])
+def test_malformed_component_hash_has_bounded_refusal(
+    tmp_path: Path, invalid_hash: Any
+) -> None:
+    directory, policy = _bundle(
+        tmp_path,
+        mutate_evidence=lambda value: value["prior_envelope"]["evidence_hashes"].update(
+            jobs=invalid_hash
+        ),
     )
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)

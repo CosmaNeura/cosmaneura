@@ -265,19 +265,19 @@ def _resource_segments(
     resource_type: str,
     code: str,
 ) -> list[str]:
-    if type(value) is not str or value.strip() != value:
+    if type(value) is not str or not value.isascii() or value.strip() != value:
         _fail(code)
     parts = value.split("/")
     if (
         len(parts) != 9
         or parts[0] != ""
-        or parts[1].casefold() != "subscriptions"
-        or parts[2].casefold() != subscription_id.casefold()
-        or parts[3].casefold() != "resourcegroups"
+        or parts[1].lower() != "subscriptions"
+        or parts[2].lower() != subscription_id.lower()
+        or parts[3].lower() != "resourcegroups"
         or not parts[4]
-        or parts[5].casefold() != "providers"
-        or parts[6].casefold() != provider.casefold()
-        or parts[7].casefold() != resource_type.casefold()
+        or parts[5].lower() != "providers"
+        or parts[6].lower() != provider.lower()
+        or parts[7].lower() != resource_type.lower()
         or not parts[8]
     ):
         _fail(code)
@@ -332,8 +332,8 @@ def _validate_job_inventory(jobs: Any, *, subscription_id: str, code: str) -> No
                 for name in ("clientId", "principalId")
             ):
                 _fail(code)
-    if len(set(map(str.casefold, job_ids))) != len(job_ids) or job_ids != sorted(
-        job_ids, key=str.casefold
+    if len(set(map(str.lower, job_ids))) != len(job_ids) or job_ids != sorted(
+        job_ids, key=str.lower
     ):
         _fail(code)
 
@@ -367,7 +367,7 @@ def _validate_postgres_inventory(
         )
         if server["state"] != "Ready":
             _fail(code)
-        if server["id"].casefold() == enabled_server_id.casefold():
+        if server["id"].lower() == enabled_server_id.lower():
             if auth != {
                 "activeDirectoryAuth": "Enabled",
                 "passwordAuth": "Disabled",
@@ -380,9 +380,9 @@ def _validate_postgres_inventory(
             "tenantId": None,
         }:
             _fail(code)
-    if len(set(map(str.casefold, server_ids))) != len(
-        server_ids
-    ) or server_ids != sorted(server_ids, key=str.casefold):
+    if len(set(map(str.lower, server_ids))) != len(server_ids) or server_ids != sorted(
+        server_ids, key=str.lower
+    ):
         _fail(code)
     administrator_ids: list[str] = []
     prefix = f"{enabled_server_id}/administrators/"
@@ -394,7 +394,8 @@ def _validate_postgres_inventory(
         )
         if (
             type(admin["id"]) is not str
-            or not admin["id"].casefold().startswith(prefix.casefold())
+            or not admin["id"].isascii()
+            or not admin["id"].lower().startswith(prefix.lower())
             or not _matches(UUID_RE, admin["id"][len(prefix) :])
             or type(admin["name"]) is not str
             or not admin["name"]
@@ -404,9 +405,9 @@ def _validate_postgres_inventory(
         ):
             _fail(code)
         administrator_ids.append(admin["id"])
-    if len(set(map(str.casefold, administrator_ids))) != len(
+    if len(set(map(str.lower, administrator_ids))) != len(
         administrator_ids
-    ) or administrator_ids != sorted(administrator_ids, key=str.casefold):
+    ) or administrator_ids != sorted(administrator_ids, key=str.lower):
         _fail(code)
 
 
@@ -765,6 +766,8 @@ def _validate_evidence(
         },
         code,
     )
+    if any(not _matches(HEX_DIGEST_RE, item) for item in evidence_hashes.values()):
+        _fail(code)
     _integer(envelope["schema_version"], 3, code)
     _integer(prior["schema_version"], 2, code)
     _integer(verification["schema_version"], 1, code)
@@ -857,7 +860,6 @@ def _validate_evidence(
         != prior["capture_script_sha256"]
         or not _matches(HEX_DIGEST_RE, prior["capture_script_sha256"])
         or prior["query_contract"] != expected_queries
-        or any(not _matches(HEX_DIGEST_RE, item) for item in evidence_hashes.values())
         or not component_hashes_valid
         or not hmac.compare_digest(
             hashlib.sha256(raw_files[STATE_EVIDENCE_FILE]).hexdigest(),
