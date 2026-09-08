@@ -311,6 +311,47 @@ def verify_private_executable(path: Path, *, expected: str, label: str) -> str:
     return observed
 
 
+def _remove_created_executable(
+    *, parent: int, name: str, expected_node: tuple[int, int]
+) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent,
+        )
+        metadata = os.fstat(descriptor)
+        linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o500
+            or (metadata.st_dev, metadata.st_ino) != expected_node
+            or (linked.st_dev, linked.st_ino) != expected_node
+        ):
+            raise OfflineRuntimeError(
+                "incomplete executable cleanup target is not exact"
+            )
+        os.close(descriptor)
+        descriptor = None
+        os.unlink(name, dir_fd=parent)
+        os.fsync(parent)
+    except (OSError, OfflineRuntimeError) as exc:
+        if isinstance(exc, OfflineRuntimeError):
+            raise
+        raise OfflineRuntimeError(
+            "incomplete executable cleanup could not be confirmed"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def copy_pinned_executable(
     source: Path,
     destination: Path,
@@ -336,7 +377,8 @@ def copy_pinned_executable(
     source_fd: int | None = None
     destination_fd: int | None = None
     created = False
-    complete = False
+    created_node: tuple[int, int] | None = None
+    failure: OSError | OfflineRuntimeError | None = None
     try:
         source_path_metadata = source.stat()
         source_fd = os.open(
@@ -364,6 +406,9 @@ def copy_pinned_executable(
             dir_fd=parent,
         )
         created = True
+        os.fchmod(destination_fd, 0o500)
+        destination_metadata = os.fstat(destination_fd)
+        created_node = (destination_metadata.st_dev, destination_metadata.st_ino)
         digest = hashlib.sha256()
         total = 0
         while chunk := os.read(source_fd, 1024 * 1024):
@@ -375,7 +420,6 @@ def copy_pinned_executable(
             while offset < len(chunk):
                 offset += os.write(destination_fd, chunk[offset:])
         os.fsync(destination_fd)
-        os.fchmod(destination_fd, 0o500)
         source_after = os.fstat(source_fd)
         linked_after = os.stat(source, follow_symlinks=False)
         if (
@@ -386,23 +430,37 @@ def copy_pinned_executable(
             raise OfflineRuntimeError(f"the {label} source changed while copied")
         if digest.hexdigest() != expected:
             raise OfflineRuntimeError(f"the {label} executable digest is not pinned")
-        complete = True
-    except OSError as exc:
-        raise OfflineRuntimeError(
-            f"the {label} executable could not be isolated"
-        ) from exc
+        os.close(destination_fd)
+        destination_fd = None
+        verify_private_executable(destination, expected=expected, label=label)
+        os.fsync(parent)
+    except (OSError, OfflineRuntimeError) as exc:
+        failure = exc
     finally:
         if source_fd is not None:
             os.close(source_fd)
         if destination_fd is not None:
             os.close(destination_fd)
-        if created and not complete:
-            try:
-                os.unlink(destination.name, dir_fd=parent)
-            except OSError:
-                pass
+    if failure is not None:
+        try:
+            if created and created_node is not None:
+                _remove_created_executable(
+                    parent=parent,
+                    name=destination.name,
+                    expected_node=created_node,
+                )
+        except OfflineRuntimeError as cleanup_error:
+            os.close(parent)
+            raise OfflineRuntimeError(
+                f"the {label} executable copy failed and cleanup could not be confirmed"
+            ) from cleanup_error
         os.close(parent)
-    verify_private_executable(destination, expected=expected, label=label)
+        if isinstance(failure, OfflineRuntimeError):
+            raise failure
+        raise OfflineRuntimeError(
+            f"the {label} executable could not be isolated"
+        ) from failure
+    os.close(parent)
     return destination
 
 
