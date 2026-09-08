@@ -336,107 +336,100 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
 def _review_response(
     policy: dict[str, Any], metadata: dict[str, str]
 ) -> dict[str, Any]:
-    return {
-        "background": False,
-        "completed_at": 2,
-        "content_filters": [
-            {
-                "blocked": False,
-                "source_type": "prompt",
-                "content_filter_raw": [],
-                "content_filter_results": {},
-                "content_filter_offsets": {
-                    "start_offset": 0,
-                    "end_offset": policy["independent_review"][
-                        "content_filter_end_offset"
-                    ],
-                    "check_offset": 0,
+    review = policy["independent_review"]
+    response: dict[str, Any] = dict.fromkeys(grammar.RESPONSE_FIELDS)
+    response.update(
+        {
+            "background": False,
+            "completed_at": 2,
+            "content_filters": [
+                {
+                    "blocked": False,
+                    "source_type": "prompt",
+                    "content_filter_raw": [],
+                    "content_filter_results": {},
+                    "content_filter_offsets": {
+                        "start_offset": 0,
+                        "end_offset": review["content_filter_end_offset"],
+                        "check_offset": 0,
+                    },
+                }
+            ],
+            "created_at": 1,
+            "frequency_penalty": 0.0,
+            "id": review["response_id"],
+            "max_output_tokens": review["maximum_output_tokens"],
+            "metadata": metadata,
+            "model": review["model"],
+            "object": "response",
+            "output": [
+                {
+                    "id": "rs_fixture",
+                    "type": "reasoning",
+                    "content": [],
+                    "encrypted_content": "fixture",
+                    "summary": [],
                 },
-            }
-        ],
-        "created_at": 1,
-        "error": None,
-        "frequency_penalty": 0.0,
-        "id": policy["independent_review"]["response_id"],
-        "incomplete_details": None,
-        "instructions": None,
-        "max_output_tokens": policy["independent_review"]["maximum_output_tokens"],
-        "max_tool_calls": None,
-        "metadata": metadata,
-        "model": policy["independent_review"]["model"],
-        "moderation": None,
-        "object": "response",
-        "output": [
-            {
-                "id": "rs_fixture",
-                "type": "reasoning",
-                "content": [],
-                "encrypted_content": "fixture",
-                "summary": [],
+                {
+                    "id": "msg_fixture",
+                    "type": "message",
+                    "status": "completed",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "annotations": [],
+                            "logprobs": [],
+                            "text": review["verdict"],
+                        }
+                    ],
+                    "phase": "final_answer",
+                    "role": "assistant",
+                },
+            ],
+            "parallel_tool_calls": True,
+            "presence_penalty": 0.0,
+            "prompt_cache_retention": "24h",
+            "reasoning": {
+                "context": "all_turns",
+                "effort": "high",
+                "mode": "standard",
+                "summary": None,
             },
-            {
-                "id": "msg_fixture",
-                "type": "message",
-                "status": "completed",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "annotations": [],
-                        "logprobs": [],
-                        "text": policy["independent_review"]["verdict"],
-                    }
-                ],
-                "phase": "final_answer",
-                "role": "assistant",
+            "service_tier": "default",
+            "status": "completed",
+            "store": True,
+            "temperature": 1.0,
+            "text": {"format": {"type": "text"}, "verbosity": "medium"},
+            "tool_choice": "auto",
+            "tool_usage": {
+                "image_gen": {
+                    "input_tokens": 0,
+                    "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "output_tokens": 0,
+                    "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                    "total_tokens": 0,
+                },
+                "web_search": {"num_requests": 0},
             },
-        ],
-        "parallel_tool_calls": True,
-        "presence_penalty": 0.0,
-        "previous_response_id": None,
-        "prompt_cache_key": None,
-        "prompt_cache_retention": "24h",
-        "reasoning": {
-            "context": "all_turns",
-            "effort": "high",
-            "mode": "standard",
-            "summary": None,
-        },
-        "safety_identifier": None,
-        "service_tier": "default",
-        "status": "completed",
-        "store": True,
-        "temperature": 1.0,
-        "text": {"format": {"type": "text"}, "verbosity": "medium"},
-        "tool_choice": "auto",
-        "tool_usage": {
-            "image_gen": {
-                "input_tokens": 0,
-                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
-                "output_tokens": 0,
-                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
-                "total_tokens": 0,
+            "tools": [],
+            "top_logprobs": 0,
+            "top_p": 0.98,
+            "truncation": "disabled",
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+                "output_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 1},
+                "total_tokens": 3,
             },
-            "web_search": {"num_requests": 0},
-        },
-        "tools": [],
-        "top_logprobs": 0,
-        "top_p": 0.98,
-        "truncation": "disabled",
-        "usage": {
-            "input_tokens": 1,
-            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
-            "output_tokens": 2,
-            "output_tokens_details": {"reasoning_tokens": 1},
-            "total_tokens": 3,
-        },
-        "user": None,
-    }
+        }
+    )
+    return response
 
 
 def _zero_usage(value: dict[str, Any]) -> None:
-    usage = value["usage"]
-    usage.update(input_tokens=0, output_tokens=0, total_tokens=0)
-    usage["output_tokens_details"]["reasoning_tokens"] = 0
+    value["usage"].update(input_tokens=0, output_tokens=0, total_tokens=0)
+    value["usage"]["output_tokens_details"]["reasoning_tokens"] = 0
 
 
 def _policy() -> dict[str, Any]:
@@ -639,16 +632,14 @@ def test_validates_closed_world_bundle(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_scope_hash_and_closed_world_mutations_refuse(
-    tmp_path: Path, mutation: Callable[[dict[str, Any]], None]
-) -> None:
+def test_evidence_mutations_refuse(tmp_path: Path, mutation: Any) -> None:
     directory, policy = _bundle(tmp_path, mutate_evidence=mutation)
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)
 
 
 @pytest.mark.parametrize(
-    ("request_mutation", "response_mutation"),
+    ("req", "res"),
     [
         (lambda value: value.update(input="unrelated"), None),
         (
@@ -690,16 +681,8 @@ def test_scope_hash_and_closed_world_mutations_refuse(
         ),
     ],
 )
-def test_review_binding_and_shape_mutations_refuse(
-    tmp_path: Path,
-    request_mutation: Callable[[dict[str, Any]], None] | None,
-    response_mutation: Callable[[dict[str, Any]], None] | None,
-) -> None:
-    directory, policy = _bundle(
-        tmp_path,
-        mutate_request=request_mutation,
-        mutate_response=response_mutation,
-    )
+def test_review_mutations_refuse(tmp_path: Path, req: Any, res: Any) -> None:
+    directory, policy = _bundle(tmp_path, mutate_request=req, mutate_response=res)
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)
 
@@ -751,18 +734,30 @@ def test_bad_postgres_servers_refuses(tmp_path: Path, servers: Any) -> None:
         grammar.validate_evidence_directory(directory, policy)
 
 
-@pytest.mark.parametrize("field", ["offset", "digest"])
-@pytest.mark.parametrize("value", ["missing", None, False, "53234", 53234.0])
+@pytest.mark.parametrize("field", ["offset", "digest", "size"])
+@pytest.mark.parametrize(
+    "value", ["missing", None, False, "53234", 53234.0, 0, -1, 1_048_577, float("inf")]
+)
 def test_bad_policy_values_refuse(tmp_path: Path, field: str, value: Any) -> None:
     directory, p = _bundle(tmp_path)
-    target = p["independent_review"] if field == "offset" else p["evidence"]["files"]
-    key = "content_filter_end_offset" if field == "offset" else grammar.EVIDENCE_FILE
+    target, key = {
+        "offset": (p["independent_review"], "content_filter_end_offset"),
+        "digest": (p["evidence"]["files"], grammar.EVIDENCE_FILE),
+        "size": (p["evidence"], "maximum_file_bytes"),
+    }[field]
     if value == "missing":
         target.pop(key)
     else:
         target[key] = value
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, p)
+
+
+def test_directory_enumeration_stops_after_fifth_entry() -> None:
+    names = (str(index) for index in range(100))
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar._bounded_entry_names(names)
+    assert next(names) == str(len(grammar.EVIDENCE_FILES) + 1)
 
 
 @pytest.mark.parametrize("invalid_hash", [[], None, 1, False])

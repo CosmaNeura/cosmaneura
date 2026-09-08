@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Closed-world grammar for reviewed bootstrap-identity teardown evidence."""
-
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +7,7 @@ import json
 import os
 import re
 import stat
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn
@@ -37,12 +35,7 @@ DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 RESPONSE_FIELDS: set[str] = set(
-    "background completed_at content_filters created_at error frequency_penalty id "
-    "incomplete_details instructions max_output_tokens max_tool_calls metadata model "
-    "moderation object output parallel_tool_calls presence_penalty previous_response_id "
-    "prompt_cache_key prompt_cache_retention reasoning safety_identifier service_tier "
-    "status store temperature text tool_choice tool_usage tools top_logprobs top_p "
-    "truncation usage user".split()
+    "background completed_at content_filters created_at error frequency_penalty id incomplete_details instructions max_output_tokens max_tool_calls metadata model moderation object output parallel_tool_calls presence_penalty previous_response_id prompt_cache_key prompt_cache_retention reasoning safety_identifier service_tier status store temperature text tool_choice tool_usage tools top_logprobs top_p truncation usage user".split()
 )
 
 
@@ -116,6 +109,15 @@ def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def _bounded_entry_names(names: Iterable[str]) -> set[str]:
+    result: set[str] = set()
+    for count, name in enumerate(names, start=1):
+        if count > len(EVIDENCE_FILES):
+            _fail("bootstrap_identity_teardown_evidence.directory_invalid")
+        result.add(name)
+    return result
+
+
 def _matches(pattern: re.Pattern[str], value: Any) -> bool:
     return type(value) is str and pattern.fullmatch(value) is not None
 
@@ -141,11 +143,15 @@ def _read_evidence_files(
     descriptor = -1
     open_files: list[int] = []
     try:
+        maximum_bytes = policy["evidence"]["maximum_file_bytes"]
+        if type(maximum_bytes) is not int or not 0 < maximum_bytes <= 1024 * 1024:
+            _fail(code)
         descriptor = offline.open_private_directory(
             directory, label="bootstrap identity teardown evidence directory"
         )
         directory_before = os.fstat(descriptor)
-        entries = set(os.listdir(descriptor))
+        with os.scandir(descriptor) as listing:
+            entries = _bounded_entry_names(item.name for item in listing)
         if entries != set(EVIDENCE_FILES):
             _fail(code)
         result: dict[str, bytes] = {}
@@ -156,7 +162,6 @@ def _read_evidence_files(
             | getattr(os, "O_NOFOLLOW", 0)
             | getattr(os, "O_NONBLOCK", 0)
         )
-        maximum_bytes = policy["evidence"]["maximum_file_bytes"]
         for name in EVIDENCE_FILES:
             file_descriptor = os.open(name, flags, dir_fd=descriptor)
             open_files.append(file_descriptor)
@@ -187,8 +192,11 @@ def _read_evidence_files(
                 _fail("bootstrap_identity_teardown_evidence.file_invalid")
             result[name] = bytes(value)
             metadata[name] = after
-        if set(os.listdir(descriptor)) != set(EVIDENCE_FILES):
-            _fail(code)
+        with os.scandir(descriptor) as listing:
+            if _bounded_entry_names(item.name for item in listing) != set(
+                EVIDENCE_FILES
+            ):
+                _fail(code)
         for name, before in metadata.items():
             linked = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
             if _stat_identity(before) != _stat_identity(linked):
