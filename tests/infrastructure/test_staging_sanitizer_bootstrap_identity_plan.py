@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import inspect
 import io
 import json
+import os
+import shutil
 import subprocess
 import sys
 import zipfile
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -477,6 +480,73 @@ def test_embedded_states_must_be_exact_empty_then_read_only_refresh() -> None:
         _validate(refreshed=extra)
 
 
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            lambda plan: plan["variables"][
+                "enable_sanitizer_bootstrap_identity"
+            ].update(value="false"),
+            "must both be true",
+        ),
+        (lambda plan: plan.update(applyable=False), "completeness"),
+        (lambda plan: plan.update(complete=False), "completeness"),
+        (
+            lambda plan: plan["variables"]["sanitizer_bootstrap_lifetime_hours"].update(
+                value="25"
+            ),
+            "lifetime",
+        ),
+        (
+            lambda plan: plan["configuration"]["provider_config"]["azurerm"][
+                "expressions"
+            ]["subscription_id"].update(references=["var.subscription_id"]),
+            "provider expressions",
+        ),
+        (
+            lambda plan: plan["resource_changes"][0]["change"].update(
+                actions=["update"]
+            ),
+            "non-create",
+        ),
+        (
+            lambda plan: plan["resource_changes"][0]["change"]["after"]["tags"].update(
+                unexpected="tag"
+            ),
+            "UAMI values",
+        ),
+        (
+            lambda plan: plan["resource_changes"][1]["change"]["after"].update(
+                triggers_replace=None
+            ),
+            "activation guard",
+        ),
+        (
+            lambda plan: plan["checks"][0].update(status="pass"),
+            "check result set",
+        ),
+        (
+            lambda plan: plan["prior_state"]["values"]["root_module"]["resources"][0][
+                "values"
+            ].update(location="westus"),
+            "resource group",
+        ),
+        (
+            lambda plan: plan["output_changes"][
+                "sanitizer_bootstrap_identity_foundation"
+            ]["after"].update(provider_authority_bound=True),
+            "identity output",
+        ),
+    ),
+)
+def test_security_relevant_plan_mutations_refuse(mutation: Any, message: str) -> None:
+    plan = _valid_plan()
+    mutation(plan)
+
+    with pytest.raises(validator.BootstrapPlanError, match=message):
+        _validate(plan=plan)
+
+
 def test_prior_state_shape_is_closed() -> None:
     for target in (
         lambda plan: plan["prior_state"],
@@ -491,6 +561,81 @@ def test_prior_state_shape_is_closed() -> None:
             validator.BootstrapPlanError, match="prior state|boundary|resource group"
         ):
             _validate(plan=plan)
+
+
+def test_plan_timestamp_and_cleanup_are_exact_and_fresh() -> None:
+    plan = _valid_plan()
+    plan["timestamp"] = "2026-09-08T03:01:49Z"
+    with pytest.raises(validator.BootstrapPlanError, match="cleanup deadline"):
+        _validate(plan=plan, now=NOW + timedelta(hours=6))
+
+    plan = _valid_plan()
+    plan["resource_changes"][0]["change"]["after"]["tags"]["cleanup-not-after"] = (
+        "2026-09-08T10:01:50Z"
+    )
+    with pytest.raises(validator.BootstrapPlanError, match="UAMI values"):
+        _validate(plan=plan)
+
+
+def test_show_uses_the_exact_saved_plan_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = b"exact-saved-plan-bytes"
+    plan_json = json.dumps(_valid_plan()).encode()
+
+    def fake_run(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert arguments[-2] == "-json"
+        assert kwargs["data_dir"] == Path("/protected/data")
+        descriptor = kwargs["pass_fds"][0]
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        assert os.read(descriptor, len(captured) + 1) == captured
+        return subprocess.CompletedProcess(arguments, 0, plan_json, b"")
+
+    monkeypatch.setattr(validator, "_run_process", fake_run)
+    assert (
+        validator._show_saved_plan(
+            captured, tofu=TOFU, data_dir=Path("/protected/data")
+        )
+        == plan_json
+    )
+    assert (
+        "plan_json" not in inspect.signature(validator.validate_saved_plan).parameters
+    )
+
+
+def test_real_opentofu_plan_decodes_from_captured_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = shutil.which("tofu")
+    if executable is None:
+        pytest.skip("OpenTofu is not installed")
+    version = json.loads(subprocess.check_output([executable, "version", "-json"]))
+    if version["terraform_version"] != validator.EXPECTED_TOFU_VERSION:
+        pytest.skip("test requires the repository-pinned OpenTofu")
+    module = tmp_path / "module"
+    module.mkdir(mode=0o700)
+    (module / "main.tf").write_text(
+        'terraform { required_version = "= 1.12.5" }\n'
+        'resource "terraform_data" "probe" { input = "bound" }\n',
+        encoding="utf-8",
+    )
+    plan_path = tmp_path / "real.tfplan"
+    for command in (
+        [executable, f"-chdir={module}", "init", "-backend=false", "-input=false"],
+        [executable, f"-chdir={module}", "plan", "-input=false", f"-out={plan_path}"],
+    ):
+        subprocess.run(command, check=True, capture_output=True)
+    monkeypatch.setattr(validator, "IDENTITY_ROOT", module)
+
+    decoded = validator._show_saved_plan(
+        plan_path.read_bytes(),
+        tofu=Path(executable),
+        data_dir=module / ".terraform",
+    )
+
+    plan = json.loads(decoded)
+    assert plan["terraform_version"] == validator.EXPECTED_TOFU_VERSION
+    assert plan["resource_changes"][0]["address"] == "terraform_data.probe"
 
 
 def test_decoder_initialization_is_backend_free(
@@ -530,6 +675,24 @@ def test_decoder_initialization_is_backend_free(
         validator._initialize_decoder(tofu=TOFU, data_dir=data_dir)
         == hashlib.sha256(b"provider").hexdigest()
     )
+
+
+def test_protected_plan_file_rules(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    plan = tmp_path / "plan.tfplan"
+    plan.write_bytes(b"plan")
+    plan.chmod(0o400)
+    assert validator._read_protected_file(plan, label="saved plan") == b"plan"
+
+    plan.chmod(0o600)
+    with pytest.raises(validator.BootstrapPlanError, match="0400"):
+        validator._read_protected_file(plan, label="saved plan")
+
+    plan.chmod(0o400)
+    link = tmp_path / "linked.tfplan"
+    link.symlink_to(plan)
+    with pytest.raises(validator.BootstrapPlanError, match="unavailable"):
+        validator._read_protected_file(link, label="saved plan")
 
 
 def test_tool_digests_and_decoder_environment_are_pinned(
