@@ -8,6 +8,6 @@ Duplicate database OIDs or names and duplicate rows within a frame fail closed. 
 
 Public construction remains terminal at `activation.sanitizer_privileged_global_database_observer_unimplemented`. Bootstrap identity, maintenance database, disabled-database handling, the connection adapter, observer, offline authenticator, stability authorities, post-provision descriptor, and final join remain separate reviewed work.
 
-Observation-frames contract SHA-256: `379f9ea209a1352809b440bce2ab17cc0d049204335eddf9ac4237be1bebf99f`.
+Observation-frames contract SHA-256: `6cbff47fbd162b52c0bc6e22d71d28adea3d91666ef09c84d8125172b0e1b1bf`.
 
 Recovery is a code-only revert. No external state is created.
