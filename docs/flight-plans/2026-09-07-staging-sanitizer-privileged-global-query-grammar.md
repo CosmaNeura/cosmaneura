@@ -8,12 +8,12 @@ Microsoft Entra principal mappings come only from `pg_shseclabel` labels owned b
 
 The selected frames cover Entra mappings, password-null state, shared dependencies, closed-world database inventory and ACLs, effective database privileges and active sessions, tablespace and parameter privileges, publication/subscription/extension/event-trigger authority, and PostgreSQL 16 system-object ACL deltas. Raw catalog values remain sealed and process-local and cannot be logged, persisted, or published.
 
-The exact templates were exercised locally against disposable PostgreSQL 16.15. All 13 parsed and executed; the system-object baseline returned no delta on a fresh cluster, then detected one isolated test grant. This was local validation only.
+The exact templates were exercised locally against disposable PostgreSQL 16.15. All 13 parsed and executed. After the ACL-delta set operations were isolated, the corrected system-object template was re-executed successfully and returned no delta on the fresh cluster. This was local validation only.
 
 Public activation remains terminal at `activation.sanitizer_privileged_global_database_observer_unimplemented`. Bootstrap identity, maintenance database, disabled-database strategy, connection adapter, observer, offline authenticator, stability authorities, post-provision descriptor, and final adapter join remain unselected or unimplemented.
 
-Template-set SHA-256: `bd6a985e8101363332de22a753ffde90837c9d8fdd8532a03e1a87066992d3fa`.
+Template-set SHA-256: `6dbc52487fccdefe28bfa18e08feccc99fe8f433012ec08b5cdc48cca96ea88c`.
 
-Query-grammar contract SHA-256: `d6d751a71f87936768f153986f087a89ca5edf4cf1a3dc9f5193a225dbe23bb8`.
+Query-grammar contract SHA-256: `80930c0516f0c3090d0c80e37c5d33c544443900b71aaa88490700c0daf8ce7e`.
 
 Recovery is a code-only revert. No cloud, staging, or production state is created.
