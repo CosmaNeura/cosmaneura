@@ -244,10 +244,12 @@ py_test-ci-infrastructure-sanitizer-observer:
 [script]
 py_test-ci-infrastructure-sanitizer-observer-runtime:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-runtime is CI-only" >&2; exit 1; }
-	uv run pytest \
-		tests/infrastructure/test_staging_restore_sanitizer_target_role_database_observer.py \
-		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_output_is_sealed_redacted_nonserializable_and_tamper_evident \
-		--verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_database_observer.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-output is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_output_is_sealed_redacted_nonserializable_and_tamper_evident --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-observer-integrity:
