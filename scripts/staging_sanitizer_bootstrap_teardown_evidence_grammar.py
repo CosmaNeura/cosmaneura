@@ -301,12 +301,15 @@ def _validate_job_inventory(jobs: Any, *, subscription_id: str, code: str) -> No
             code=code,
         )
         identity = job["identity"]
-        if type(identity) is not dict or identity.get("type") not in {
+        if type(identity) is not dict:
+            _fail(code)
+        identity_type = identity.get("type")
+        if type(identity_type) is not str or identity_type not in {
             "None",
             "UserAssigned",
         }:
             _fail(code)
-        if identity["type"] == "None":
+        if identity_type == "None":
             if set(identity) != {"type"}:
                 _fail(code)
             continue
@@ -1030,7 +1033,9 @@ def _validate_review_response(
     if usage["total_tokens"] != usage["input_tokens"] + usage["output_tokens"]:
         _fail(code)
     if (
-        usage["output_tokens"] > review["maximum_output_tokens"]
+        input_details["cache_write_tokens"] + input_details["cached_tokens"]
+        > usage["input_tokens"]
+        or usage["output_tokens"] > review["maximum_output_tokens"]
         or output_details["reasoning_tokens"] > usage["output_tokens"]
     ):
         _fail(code)
@@ -1135,13 +1140,14 @@ def _validate_review_request(
         "evidence_sha256": policy["evidence"]["files"][EVIDENCE_FILE],
         "request_input_sha256": review["request_input_sha256"],
     }
-    calculated_input_sha256 = (
-        _digest(review_input.encode("utf-8")) if type(review_input) is str else ""
-    )
+    if type(request["model"]) is not str or type(review_input) is not str:
+        _fail(code)
+    calculated_input_sha256 = _digest(review_input.encode("utf-8"))
     calculated_binding = expected_review_binding(
         evidence_sha256=expected_metadata["evidence_sha256"],
         request_input_sha256=calculated_input_sha256,
         maximum_output_tokens=review["maximum_output_tokens"],
+        model=request["model"],
     )
     if (
         request["model"] != review["model"]
@@ -1160,7 +1166,11 @@ def _validate_review_request(
 
 
 def expected_review_binding(
-    *, evidence_sha256: str, request_input_sha256: str, maximum_output_tokens: int
+    *,
+    evidence_sha256: str,
+    request_input_sha256: str,
+    maximum_output_tokens: int,
+    model: str,
 ) -> str:
     return _digest(
         _canonical(
@@ -1168,7 +1178,7 @@ def expected_review_binding(
                 "domain": REVIEW_BINDING_DOMAIN,
                 "evidence_sha256": evidence_sha256,
                 "maximum_output_tokens": maximum_output_tokens,
-                "model": "codex-auto-review",
+                "model": model,
                 "reasoning_effort": "high",
                 "request_input_sha256": request_input_sha256,
             }

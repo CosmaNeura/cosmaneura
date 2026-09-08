@@ -516,6 +516,7 @@ def _bundle(
     mutate_request: Callable[[dict[str, Any]], None] | None = None,
     mutate_response: Callable[[dict[str, Any]], None] | None = None,
     binding_override: str | None = None,
+    model_override: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     policy = _policy()
     evidence = _envelope(policy)
@@ -537,6 +538,7 @@ def _bundle(
         evidence_sha256=policy["evidence"]["files"][grammar.EVIDENCE_FILE],
         request_input_sha256=review["request_input_sha256"],
         maximum_output_tokens=review["maximum_output_tokens"],
+        model=review["model"],
     )
     metadata = {
         "binding_id": review["binding_id"],
@@ -553,6 +555,10 @@ def _bundle(
     if mutate_request:
         mutate_request(request)
     response = _review_response(policy, metadata, len(review_input))
+    if model_override is not None:
+        review["model"] = model_override
+        request["model"] = model_override
+        response["model"] = model_override
     if binding_override is not None:
         review["binding_id"] = binding_override
         metadata["binding_id"] = binding_override
@@ -634,6 +640,12 @@ def test_scope_hash_and_closed_world_mutations_refuse(
         ),
         (
             None,
+            lambda value: value["usage"]["input_tokens_details"].update(
+                cached_tokens=2
+            ),
+        ),
+        (
+            None,
             lambda value: value["output"][-1]["content"][0].update(text="APPROVED"),
         ),
     ],
@@ -667,6 +679,26 @@ def test_verification_provider_is_bound_to_raw_state(tmp_path: Path) -> None:
 
 def test_consistently_replaced_review_binding_refuses(tmp_path: Path) -> None:
     directory, policy = _bundle(tmp_path, binding_override="sha256:" + "f" * 64)
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+def test_consistently_replaced_model_with_stale_binding_refuses(tmp_path: Path) -> None:
+    directory, policy = _bundle(tmp_path, model_override="unexpected-review-model")
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+@pytest.mark.parametrize("identity_type", [[], {}, 1, False, None])
+def test_malformed_job_identity_type_has_bounded_refusal(
+    tmp_path: Path, identity_type: Any
+) -> None:
+    directory, policy = _bundle(
+        tmp_path,
+        mutate_evidence=lambda value: value["prior_envelope"]["raw_evidence"]["jobs"][
+            0
+        ].update(identity={"type": identity_type}),
+    )
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)
 
