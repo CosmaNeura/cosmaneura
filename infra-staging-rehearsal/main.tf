@@ -75,21 +75,21 @@ resource "terraform_data" "activation_guard" {
   count = local.any_control_requested ? 1 : 0
 
   input = {
-    deploy_control_plane                 = var.deploy_staging_restore_control_plane
-    target_cidr_inventory_revalidated    = var.target_cidr_inventory_revalidated
-    control_cidr_inventory_revalidated   = var.control_cidr_inventory_revalidated
-    private_executor_network_foundation  = var.enable_private_executor_network_foundation
-    private_executor_network_approved    = var.private_executor_network_plan_approved
-    marker_create_assignments            = var.enable_marker_create_assignments
-    marker_create_authorization_proven   = var.marker_create_authorization_proven
-    private_marker_network_posture       = var.private_marker_network_posture_proven
-    irreversible_controls_approved       = var.irreversible_marker_controls_approved
-    marker_legal_holds                   = var.enable_marker_legal_holds
-    marker_legal_hold_readback_proven    = var.marker_legal_hold_readback_proven
-    locked_marker_immutability_policies  = var.lock_marker_immutability_policies
-    marker_readonly_lock                 = var.enable_marker_readonly_lock
-    private_executor_binding             = local.private_executor_binding_implemented
-    trusted_evidence_binding             = local.trusted_evidence_binding_implemented
+    deploy_control_plane                = var.deploy_staging_restore_control_plane
+    target_cidr_inventory_revalidated   = var.target_cidr_inventory_revalidated
+    control_cidr_inventory_revalidated  = var.control_cidr_inventory_revalidated
+    private_executor_network_foundation = var.enable_private_executor_network_foundation
+    private_executor_network_approved   = var.private_executor_network_plan_approved
+    marker_create_assignments           = var.enable_marker_create_assignments
+    marker_create_authorization_proven  = var.marker_create_authorization_proven
+    private_marker_network_posture      = var.private_marker_network_posture_proven
+    irreversible_controls_approved      = var.irreversible_marker_controls_approved
+    marker_legal_holds                  = var.enable_marker_legal_holds
+    marker_legal_hold_readback_proven   = var.marker_legal_hold_readback_proven
+    locked_marker_immutability_policies = var.lock_marker_immutability_policies
+    marker_readonly_lock                = var.enable_marker_readonly_lock
+    private_executor_binding            = local.private_executor_binding_implemented
+    trusted_evidence_binding            = local.trusted_evidence_binding_implemented
   }
 
   lifecycle {

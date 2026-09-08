@@ -20,7 +20,6 @@ locals {
       name = "cosmaneura-staging-restore-cleanup-job"
     }
   }
-
 }
 
 resource "azurerm_user_assigned_identity" "dispatcher" {
