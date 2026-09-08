@@ -312,6 +312,19 @@ def test_scalar_types_ranges_nullability_and_text_encoding_are_exact() -> None:
         nullable
     )._is_valid()
 
+    grammar = query_grammar.load_privileged_global_query_grammar_contract()
+    oversized_utf8 = _replace_server_cell(
+        raw,
+        frame_name="entra_principal_mappings",
+        column_index=1,
+        value="\u00e9" * grammar["resource_bounds"]["maximum_row_bytes"],
+    )
+    with pytest.raises(
+        observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
+        match="privileged_global_observation_frames.bounds_invalid",
+    ):
+        observation_frames._decode_privileged_global_observation_frames(oversized_utf8)
+
 
 def test_duplicate_rows_and_per_frame_bounds_refuse() -> None:
     raw = _raw_bundle()
@@ -392,12 +405,19 @@ def test_global_budgets_refuse_before_excess_decoding_or_final_canonicalization(
     original_decode_scalar = observation_frames._decode_scalar
 
     def tracked_decode_scalar(
-        value: object, *, logical_type: str, nullable: bool
+        value: object,
+        *,
+        logical_type: str,
+        nullable: bool,
+        maximum_text_bytes: int,
     ) -> observation_frames.Scalar:
         nonlocal decoded_scalar_calls
         decoded_scalar_calls += 1
         return original_decode_scalar(
-            value, logical_type=logical_type, nullable=nullable
+            value,
+            logical_type=logical_type,
+            nullable=nullable,
+            maximum_text_bytes=maximum_text_bytes,
         )
 
     monkeypatch.setattr(observation_frames, "_decode_scalar", tracked_decode_scalar)
@@ -411,6 +431,48 @@ def test_global_budgets_refuse_before_excess_decoding_or_final_canonicalization(
     assert decoded_scalar_calls == len(grammar["grammar"]["frames"][0]["exact_columns"])
 
     monkeypatch.setattr(observation_frames, "_decode_scalar", original_decode_scalar)
+    oversized = _replace_server_cell(
+        raw,
+        frame_name="entra_principal_mappings",
+        column_index=1,
+        value="x" * (grammar["resource_bounds"]["maximum_row_bytes"] + 1),
+    )
+    bounded_canonical_inputs: list[object] = []
+    original_bounded_canonical = observation_frames._canonical_bounded
+
+    def tracked_bounded_canonical(value: object, *, maximum_bytes: int) -> bytes:
+        bounded_canonical_inputs.append(value)
+        return original_bounded_canonical(value, maximum_bytes=maximum_bytes)
+
+    monkeypatch.setattr(
+        observation_frames, "_canonical_bounded", tracked_bounded_canonical
+    )
+    with pytest.raises(
+        observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
+        match="privileged_global_observation_frames.bounds_invalid",
+    ):
+        observation_frames._decode_bundle(oversized, grammar=grammar)
+    assert bounded_canonical_inputs == []
+
+    _bundle, canonical, _row_count = observation_frames._decode_bundle(
+        raw, grammar=grammar
+    )
+    bounded_canonical_inputs.clear()
+    changed = copy.deepcopy(grammar)
+    changed["resource_bounds"]["maximum_output_bytes"] = len(canonical) - 1
+    with pytest.raises(
+        observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
+        match="privileged_global_observation_frames.bounds_invalid",
+    ):
+        observation_frames._decode_bundle(raw, grammar=changed)
+    assert any(
+        type(value) is dict and set(value) == {"server_once", "per_database"}
+        for value in bounded_canonical_inputs
+    )
+
+    monkeypatch.setattr(
+        observation_frames, "_canonical_bounded", original_bounded_canonical
+    )
     canonical_inputs: list[object] = []
     original_canonical = observation_frames._canonical
 
@@ -426,10 +488,7 @@ def test_global_budgets_refuse_before_excess_decoding_or_final_canonicalization(
         match="privileged_global_observation_frames.bounds_invalid",
     ):
         observation_frames._decode_bundle(raw, grammar=changed)
-    assert not any(
-        type(value) is dict and set(value) == {"server_once", "per_database"}
-        for value in canonical_inputs
-    )
+    assert canonical_inputs == []
 
 
 def test_contract_drift_and_unexpected_failures_are_content_free(
