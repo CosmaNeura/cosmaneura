@@ -251,31 +251,34 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
     assert not forged._is_authenticated()
 
 
-def test_issuance_rejects_policy_mutation_after_evidence_validation(
+def test_issuance_uses_private_policy_copy_across_aba_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     directory, policy = _fixture(tmp_path, monkeypatch)
+    original_target = copy.deepcopy(policy["target"])
+    original_digest = policy["evidence"]["files"][auth.EVIDENCE_FILE]
     calls = 0
 
     def mutating_clock() -> datetime:
         nonlocal calls
         calls += 1
-        if calls == 2:
+        if calls == 1:
             policy["target"]["subscription_id"] = "00000000-0000-0000-0000-000000000001"
             policy["evidence"]["files"][auth.EVIDENCE_FILE] = "sha256:" + "0" * 64
+        else:
+            policy["target"]["subscription_id"] = original_target["subscription_id"]
+            policy["evidence"]["files"][auth.EVIDENCE_FILE] = original_digest
         return NOW
 
-    authenticate, _verify, _project = auth._build_provenance(
+    authenticate, verify, _project = auth._build_provenance(
         read_policy=lambda: (policy, b"retained-policy-alias"), clock=mutating_clock
     )
     monkeypatch.setattr(auth, "_fail", lambda _code: None)
     monkeypatch.setattr(auth, "dict", lambda value=(), **_kwargs: value, raising=False)
     monkeypatch.setattr(auth, "datetime", SimpleNamespace(now=mutating_clock))
-    with pytest.raises(
-        auth.BootstrapIdentityTeardownEvidenceFailure,
-        match="bootstrap_identity_teardown_evidence.policy_changed",
-    ):
-        authenticate(evidence_directory=directory)
+    value = authenticate(evidence_directory=directory)
+    assert verify(value)
+    assert dict(value._target) == original_target
 
 
 def test_module_verifier_rejects_replaced_slot_and_getattribute_descriptors(
@@ -348,15 +351,28 @@ def test_provenance_rejects_replaced_weak_registry_operations(
     original_set = registry_type.__setitem__
 
     def elevating_set(registry: Any, key: Any, record: Any) -> None:
-        original_set(registry, key, (record[0], record[1], (("executable", True),)))
-
-    with monkeypatch.context() as registry_patch:
-        registry_patch.setattr(registry_type, "__setitem__", elevating_set)
-        forged_authenticate, _verify, _project = auth._build_provenance(
-            read_policy=lambda: (policy, b"registry-write-test"), clock=lambda: NOW
+        projection = tuple(
+            (name, True if name == "executable" else item) for name, item in record[2]
         )
-        with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
-            forged_authenticate(evidence_directory=directory)
+        original_set(registry, key, (record[0], record[1], projection))
+
+    class StatefulProjection(tuple):
+        def __iter__(self) -> Any:
+            return iter((("executable", True),))
+
+    def stateful_set(registry: Any, key: Any, record: Any) -> None:
+        original_set(
+            registry, key, (record[0], record[1], StatefulProjection(record[2]))
+        )
+
+    for replacement in (elevating_set, stateful_set):
+        with monkeypatch.context() as registry_patch:
+            registry_patch.setattr(registry_type, "__setitem__", replacement)
+            forged_authenticate, _verify, _project = auth._build_provenance(
+                read_policy=lambda: (policy, b"registry-write-test"), clock=lambda: NOW
+            )
+            with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+                forged_authenticate(evidence_directory=directory)
 
 
 def test_exact_field_provenance(

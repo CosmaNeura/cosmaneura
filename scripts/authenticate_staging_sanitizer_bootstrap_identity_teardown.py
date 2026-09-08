@@ -723,6 +723,7 @@ def _validated_candidate(
     evidence_failure: type[Exception] = grammar.EvidenceGrammarFailure,
     binding_material: Callable[..., dict[str, Any]] = _binding_material,
     canonical: Callable[[Any], bytes] = _canonical,
+    decode_json: Callable[[str], Any] = json.JSONDecoder().decode,
     digest: Callable[[bytes], str] = _digest,
     compare_digest: Callable[[bytes, bytes], bool] = hmac.compare_digest,
     fail: Callable[[str], NoReturn] = _fail,
@@ -734,8 +735,8 @@ def _validated_candidate(
     to_str: Callable[[Any], str] = str,
 ) -> tuple[dict[str, Any], tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     expected_policy = canonical(policy)
-    document = validate_policy(policy)
-    if document is not policy:
+    document = decode_json(expected_policy.decode("ascii"))
+    if validate_policy(document) is not document:
         fail("bootstrap_identity_teardown_evidence.policy_invalid")
     if not compare_digest(canonical(document), expected_policy):
         fail("bootstrap_identity_teardown_evidence.policy_changed")
@@ -801,6 +802,7 @@ def _build_provenance(
     evidence_failure: type[Exception] = grammar.EvidenceGrammarFailure,
     binding_material: Callable[..., dict[str, Any]] = _binding_material,
     canonical: Callable[[Any], bytes] = _canonical,
+    decode_json: Callable[[str], Any] = json.JSONDecoder().decode,
     digest: Callable[[bytes], str] = _digest,
     fail: Callable[[str], NoReturn] = _fail,
     kind: str = KIND,
@@ -821,8 +823,9 @@ def _build_provenance(
     utc = UTC
     zero_offset = timedelta(0)
     type_of, type_read_attr = type, type.__getattribute__
-    identity, pair_length, any_true = id, len, any
-    tuple_type, mapping_type, scalar_types = tuple, dict, (str, bool, int)
+    identity, pair_length, any_true, enumerate_items = id, len, any, enumerate
+    tuple_type, mapping_type, bytes_type = tuple, dict, bytes
+    scalar_types = (str, bool, int)
     type_error, value_error, base_error = TypeError, ValueError, Exception
     new_value = object.__new__
     key = random_bytes(32)
@@ -917,6 +920,20 @@ def _build_provenance(
                 return
         raise value_error
 
+    def valid_public_projection(value: object) -> bool:
+        return (
+            type_of(value) is tuple_type
+            and pair_length(value) == pair_length(public_fields)
+            and not any_true(
+                type_of(pair) is not tuple_type
+                or pair_length(pair) != 2
+                or type_of(pair[0]) is not scalar_types[0]
+                or pair[0] != public_fields[index]
+                or type_of(pair[1]) not in scalar_types
+                for index, pair in enumerate_items(value)
+            )
+        )
+
     def reset_after_fork() -> None:
         nonlocal key
         registry_clear(issued)
@@ -1007,9 +1024,15 @@ def _build_provenance(
             ):
                 return None
             record = registry_get(issued, value)
-            if record is None:
+            if type_of(record) is not tuple_type or pair_length(record) != 3:
                 return None
             issued_pid, expected_snapshot, public_projection = record
+            if (
+                type_of(issued_pid) is not scalar_types[2]
+                or type_of(expected_snapshot) is not bytes_type
+                or not valid_public_projection(public_projection)
+            ):
+                return None
             current_snapshot = snapshot(value)
             if (
                 issued_pid == process_id()
@@ -1054,6 +1077,7 @@ def _build_provenance(
             evidence_failure=evidence_failure,
             binding_material=binding_material,
             canonical=canonical,
+            decode_json=decode_json,
             digest=digest,
             compare_digest=compare_digest,
             fail=fail,
