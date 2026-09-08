@@ -683,9 +683,10 @@ def _build_provenance(
     private_fields: tuple[str, ...] = PRIVATE_FIELDS,
     provenance_domain: str = PROVENANCE_DOMAIN,
     seal: object = _SEAL,
+    process_id: Callable[[], int] = os.getpid,
+    register_at_fork: Callable[..., None] = os.register_at_fork,
 ) -> tuple[Callable[..., Any], Callable[..., bool]]:
     random_bytes = os.urandom
-    process_id = os.getpid
     hmac_new = hmac.new
     compare_digest = hmac.compare_digest
     sha256 = hashlib.sha256
@@ -701,6 +702,13 @@ def _build_provenance(
     issued: weakref.WeakKeyDictionary[
         AuthenticatedBootstrapIdentityTeardownEvidence, tuple[int, bytes]
     ] = weakref.WeakKeyDictionary()
+
+    def reset_after_fork() -> None:
+        nonlocal key
+        issued.clear()
+        key = random_bytes(32)
+
+    register_at_fork(after_in_child=reset_after_fork)
 
     def snapshot(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bytes:
         if type_of(value) is not value_type:

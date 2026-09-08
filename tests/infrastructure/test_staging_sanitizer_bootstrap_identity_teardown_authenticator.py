@@ -446,6 +446,7 @@ def _fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
+    process_id: Callable[[], int] = os.getpid,
     mutate_evidence: Callable[[dict[str, Any]], None] | None = None,
     mutate_request: Callable[[dict[str, Any]], None] | None = None,
     mutate_response: Callable[[dict[str, Any]], None] | None = None,
@@ -525,6 +526,7 @@ def _fixture(
         ),
         clock=lambda: NOW,
         policy_sha256=policy_sha256,
+        process_id=process_id,
     )
     monkeypatch.setattr(auth, "_authenticate", authenticate)
     monkeypatch.setattr(
@@ -690,18 +692,17 @@ def test_provenance_registry_does_not_retain_unreferenced_values(
 def test_authenticated_value_does_not_survive_fork(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    directory, _policy = _fixture(tmp_path, monkeypatch)
+    parent_pid = os.getpid()
+    directory, _policy = _fixture(tmp_path, monkeypatch, process_id=lambda: parent_pid)
     value = auth.authenticate_bootstrap_identity_teardown_evidence(
         evidence_directory=directory
     )
-    parent_pid = os.getpid()
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
         os.close(read_fd)
         exit_code = 0
         try:
-            auth.os.getpid = lambda: parent_pid
             os.write(write_fd, b"1" if value._is_authenticated() else b"0")
         except BaseException:
             exit_code = 2
