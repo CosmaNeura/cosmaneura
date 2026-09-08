@@ -15,6 +15,7 @@ state and Azure Foundry response objects are closed-world and type-strict.
 
 The review request must carry a deterministic binding over its exact input,
 evidence digest, model, reasoning level, and output ceiling. The response must
-echo that metadata and contain only the exact completed verdict structure.
+echo that metadata, match its policy-pinned content-filter offset, and contain
+only the exact completed verdict structure.
 The helper emits no authority and is inert until imported by a separately
 reviewed authenticator. Recovery is code-only revert.

@@ -935,7 +935,13 @@ def _validate_review_response(
     )
     _integer(offsets["start_offset"], 0, code)
     _integer(offsets["check_offset"], 0, code)
-    _integer(offsets["end_offset"], review_input_length, code)
+    expected_end_offset = review.get("content_filter_end_offset")
+    if (
+        type(expected_end_offset) is not int
+        or expected_end_offset < review_input_length
+    ):
+        _fail(code)
+    _integer(offsets["end_offset"], expected_end_offset, code)
     if not _same_typed(
         {
             name: content_filter[name]

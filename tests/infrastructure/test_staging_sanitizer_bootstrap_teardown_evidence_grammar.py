@@ -334,7 +334,7 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
 
 
 def _review_response(
-    policy: dict[str, Any], metadata: dict[str, str], input_length: int
+    policy: dict[str, Any], metadata: dict[str, str]
 ) -> dict[str, Any]:
     return {
         "background": False,
@@ -347,7 +347,9 @@ def _review_response(
                 "content_filter_results": {},
                 "content_filter_offsets": {
                     "start_offset": 0,
-                    "end_offset": input_length,
+                    "end_offset": policy["independent_review"][
+                        "content_filter_end_offset"
+                    ],
                     "check_offset": 0,
                 },
             }
@@ -503,6 +505,7 @@ def _policy() -> dict[str, Any]:
             "request_input_sha256": "sha256:" + "0" * 64,
             "binding_id": "sha256:" + "0" * 64,
             "maximum_output_tokens": 20000,
+            "content_filter_end_offset": 0,
             "response_id": "resp_fixture",
             "verdict": "POST-APPLY VERIFIED",
         },
@@ -540,6 +543,7 @@ def _bundle(
         maximum_output_tokens=review["maximum_output_tokens"],
         model=review["model"],
     )
+    review["content_filter_end_offset"] = len(review_input) + 778
     metadata = {
         "binding_id": review["binding_id"],
         "evidence_sha256": policy["evidence"]["files"][grammar.EVIDENCE_FILE],
@@ -554,7 +558,7 @@ def _bundle(
     }
     if mutate_request:
         mutate_request(request)
-    response = _review_response(policy, metadata, len(review_input))
+    response = _review_response(policy, metadata)
     if model_override is not None:
         review["model"] = model_override
         request["model"] = model_override
@@ -649,6 +653,12 @@ def test_scope_hash_and_closed_world_mutations_refuse(
         ),
         (None, lambda value: value.update(unexpected=True)),
         (None, lambda value: value.update(max_output_tokens=20000.0)),
+        (
+            None,
+            lambda value: value["content_filters"][0]["content_filter_offsets"].update(
+                end_offset=0
+            ),
+        ),
         (
             None,
             lambda value: value["usage"].update(
