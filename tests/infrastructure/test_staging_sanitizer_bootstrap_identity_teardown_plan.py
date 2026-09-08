@@ -504,6 +504,15 @@ def test_backend_metadata_rejects_redirects_and_credentials() -> None:
                 json.dumps({"backend": {"type": "azurerm", "config": changed}}).encode()
             )
 
+    missing_tenant = deepcopy(config)
+    del missing_tenant["tenant_id"]
+    with pytest.raises(validator.BootstrapPlanError, match="backend"):
+        validator._validate_backend_metadata(
+            json.dumps(
+                {"backend": {"type": "azurerm", "config": missing_tenant}}
+            ).encode()
+        )
+
 
 def test_backend_init_omits_only_the_redundant_tenant_selector() -> None:
     arguments = validator._backend_init_arguments(Path("/trusted/tofu"))

@@ -365,7 +365,7 @@ def _validate_backend_metadata(value: bytes) -> str:
     if not isinstance(config, Mapping):
         raise BootstrapPlanError("backend configuration is missing")
     for name, expected in EXPECTED_BACKEND_CONFIG.items():
-        if config.get(name) != expected:
+        if name not in config or config[name] != expected:
             raise BootstrapPlanError("backend coordinates are not exact")
     for name, setting in config.items():
         if name not in EXPECTED_BACKEND_CONFIG and setting not in (None, "", False):
