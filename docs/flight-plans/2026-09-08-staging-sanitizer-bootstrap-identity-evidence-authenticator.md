@@ -31,9 +31,10 @@ evidence or exact identity values.
 
 The authenticator rechecks a whole-second UTC clock before and after all file
 reads and refuses at or after `2026-09-08T17:40:01Z`. Its result cannot extend
-the identity lifetime. A later slice must add fresh authenticated provider
-readback and integrate the sealed evidence into the bootstrap binding plan
-before any reviewed single-use job attachment or authority transition.
+the identity lifetime. The sealed retrospective evidence is now an exact
+retained input to the bootstrap binding plan. A later slice must still add
+fresh authenticated provider readback before any reviewed single-use job
+attachment or authority transition.
 
 Recovery is code-only revert. The already-applied UAMI remains governed by its
 separate reviewed teardown path and must never be removed by reusing the spent

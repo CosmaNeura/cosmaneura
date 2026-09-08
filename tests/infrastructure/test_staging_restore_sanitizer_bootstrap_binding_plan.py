@@ -12,6 +12,7 @@ from typing import Any, cast
 
 import pytest
 
+from scripts import authenticate_staging_sanitizer_bootstrap_identity as identity_auth
 from scripts import staging_restore_sanitizer_bootstrap_binding_plan as bootstrap
 from scripts import (
     staging_restore_sanitizer_privileged_global_connection_plan as connection,
@@ -20,6 +21,9 @@ from scripts import (
     staging_restore_sanitizer_target_role_observation_plan as target_plan,
 )
 
+from tests.infrastructure import (
+    test_staging_sanitizer_bootstrap_identity_authenticator as identity_helpers,
+)
 from tests.infrastructure._staging_restore_fixed_catalog_source_state_helpers import (
     NOW,
     RealChain,
@@ -70,10 +74,58 @@ def retained_connection_plan(
     return _connection_plan(real_chain)
 
 
+@pytest.fixture
+def authenticated_bootstrap_identity_evidence(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> identity_auth.AuthenticatedBootstrapIdentityEvidence:
+    retained = retained_connection_plan
+    cleanup_not_after = retained.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def prepare_policy(policy: dict[str, Any]) -> None:
+        policy["foundation"]["rehearsal_id"] = retained.rehearsal_id
+        policy["foundation"]["cleanup_not_after"] = cleanup_not_after
+        policy["identity"]["tags"]["rehearsal-id"] = retained.rehearsal_id
+        policy["identity"]["tags"]["cleanup-not-after"] = cleanup_not_after
+
+    def prepare_receipt(receipt: dict[str, Any]) -> None:
+        receipt["created_at_utc"] = (NOW - timedelta(seconds=1)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+
+    policy, root = identity_helpers._fixture(
+        tmp_path,
+        prepare_policy=prepare_policy,
+        mutate_receipt=prepare_receipt,
+    )
+    raw = identity_auth._canonical(policy)
+    monkeypatch.setattr(
+        identity_auth,
+        "_read_policy",
+        lambda: (identity_auth._validate_policy(copy.deepcopy(policy)), raw),
+    )
+    monkeypatch.setattr(
+        identity_auth,
+        "_read_exact_evidence",
+        lambda directory, name, _expected, _maximum: (directory / name).read_bytes(),
+    )
+    monkeypatch.setattr(identity_auth, "_utc_now", lambda: NOW)
+    return identity_auth.authenticate_bootstrap_identity_evidence(
+        evidence_directory=root
+    )
+
+
 def _make(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> bootstrap.SanitizerBootstrapBindingPlan:
-    return _planner().plan(connection_plan=retained_connection_plan)
+    return _planner().plan(
+        connection_plan=retained_connection_plan,
+        bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+    )
 
 
 def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
@@ -84,7 +136,7 @@ def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     assert contract["claims"] == bootstrap.CLAIMS
     assert contract["status"] == bootstrap._expected_status()
     assert contract["status"]["bootstrap_mechanism_selected"] is True
-    assert contract["status"]["bootstrap_identity_selected"] is False
+    assert contract["status"]["bootstrap_identity_selected"] is True
     assert contract["status"]["activation_ready"] is False
     assert (
         "exact_database_role_unselected"
@@ -92,6 +144,10 @@ def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     )
     assert (
         "provision_job_identity_exact_ids_unpinned"
+        not in contract["status"]["activation_blockers"]
+    )
+    assert (
+        "bootstrap_identity_exact_ids_unpinned"
         not in contract["status"]["activation_blockers"]
     )
     with pytest.raises(
@@ -106,9 +162,10 @@ def test_bootstrap_design_is_separate_ephemeral_and_teardown_bound() -> None:
     design = contract["bootstrap_design"]
     lifecycle = contract["future_lifecycle"]
     assert design["mechanism"] == bootstrap.BOOTSTRAP_MECHANISM
-    assert design["identity_source"].endswith("identities.jobs.bootstrap")
+    assert design["identity_source"].endswith("retained_private_identity")
+    assert design["identity_binding_sha256_source"].endswith("identity_binding_sha256")
     assert design["identity_name"] == bootstrap.BOOTSTRAP_IDENTITY_NAME
-    assert design["identity_selected"] is False
+    assert design["identity_selected"] is True
     assert (
         design[
             "must_be_distinct_from_provision_cleanup_dispatcher_github_and_scribe_identities"
@@ -135,8 +192,12 @@ def test_bootstrap_design_is_separate_ephemeral_and_teardown_bound() -> None:
 
 def test_real_chain_mints_only_redacted_binding_metadata(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
     retained = retained_connection_plan
+    identity_evidence = authenticated_bootstrap_identity_evidence
     reads: list[datetime] = []
 
     def clock() -> datetime:
@@ -146,10 +207,14 @@ def test_real_chain_mints_only_redacted_binding_metadata(
     worker = bootstrap.SanitizerBootstrapBindingPlanner._from_reviewed_configuration(
         clock=clock
     )
-    result = worker.plan(connection_plan=retained)
+    result = worker.plan(
+        connection_plan=retained,
+        bootstrap_identity_evidence=identity_evidence,
+    )
     assert reads == [NOW, NOW]
     assert result._is_authenticated()
     assert result._connection_plan is retained
+    assert result._bootstrap_identity_evidence is identity_evidence
     assert result.connection_plan_sha256 == retained.connection_plan_sha256
     assert result.rehearsal_id == retained.rehearsal_id
     assert result.planned_at == NOW
@@ -158,6 +223,14 @@ def test_real_chain_mints_only_redacted_binding_metadata(
     assert result.bootstrap_identity_key == "bootstrap"
     assert result.runtime_role_binding_sha256.startswith("sha256:")
     assert len(result.runtime_role_binding_sha256) == 71
+    assert (
+        result.bootstrap_identity_binding_sha256
+        == identity_evidence.identity_binding_sha256
+    )
+    assert (
+        result.bootstrap_identity_evidence_policy_sha256
+        == identity_evidence.policy_sha256
+    )
     assert all(
         getattr(result, name) is expected for name, expected in bootstrap.CLAIMS.items()
     )
@@ -180,6 +253,9 @@ def test_real_chain_mints_only_redacted_binding_metadata(
         identity[name] not in public_text
         for name in bootstrap.PROVISION_IDENTITY_FIELDS
     )
+    assert all(
+        value not in public_text for value in dict(identity_evidence._identity).values()
+    )
     for forbidden in (
         "database_role",
         "provision_identity",
@@ -196,10 +272,16 @@ def test_real_chain_mints_only_redacted_binding_metadata(
 
 def test_binding_digest_is_domain_separated_and_exact(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
     retained = retained_connection_plan
     material, target = bootstrap._binding_material(retained, now=NOW)
-    result = _planner().plan(connection_plan=retained)
+    result = _planner().plan(
+        connection_plan=retained,
+        bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+    )
     assert target is retained._target_role_plan
     assert tuple(material) == bootstrap.BINDING_DIGEST_FIELDS
     assert result.runtime_role_binding_sha256 == bootstrap._runtime_role_binding_digest(
@@ -212,19 +294,33 @@ def test_binding_digest_is_domain_separated_and_exact(
     )
 
 
-def test_api_accepts_only_one_keyword_only_exact_connection_plan(
+def test_api_accepts_only_two_keyword_only_exact_inputs(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
     retained = retained_connection_plan
     parameters = inspect.signature(
         bootstrap.SanitizerBootstrapBindingPlanner.plan
     ).parameters
-    assert tuple(parameters) == ("self", "connection_plan")
+    assert tuple(parameters) == (
+        "self",
+        "connection_plan",
+        "bootstrap_identity_evidence",
+    )
     assert parameters["connection_plan"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert (
+        parameters["bootstrap_identity_evidence"].kind is inspect.Parameter.KEYWORD_ONLY
+    )
     with pytest.raises(TypeError):
-        cast(Any, _planner().plan)(retained)
+        cast(Any, _planner().plan)(retained, authenticated_bootstrap_identity_evidence)
     with pytest.raises(TypeError):
-        cast(Any, _planner().plan)(connection_plan=retained, identity={})
+        cast(Any, _planner().plan)(
+            connection_plan=retained,
+            bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+            identity={},
+        )
 
     class ConnectionPlanSubclass(connection.SanitizerPrivilegedGlobalConnectionPlan):
         pass
@@ -240,20 +336,54 @@ def test_api_accepts_only_one_keyword_only_exact_connection_plan(
             bootstrap.SanitizerBootstrapBindingPlanFailure,
             match="bootstrap_binding_plan.connection_plan_invalid",
         ):
-            _planner().plan(connection_plan=cast(Any, value))
+            _planner().plan(
+                connection_plan=cast(Any, value),
+                bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+            )
 
 
 def test_connection_plan_identity_and_nested_ancestry_are_retained(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
     retained = retained_connection_plan
-    result = _planner().plan(connection_plan=retained)
+    result = _planner().plan(
+        connection_plan=retained,
+        bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+    )
     duplicate = object.__new__(connection.SanitizerPrivilegedGlobalConnectionPlan)
     for name in retained.__slots__:
         object.__setattr__(duplicate, name, getattr(retained, name))
     assert duplicate is not retained
     assert duplicate._is_authenticated() is False
     object.__setattr__(result, "_connection_plan", duplicate)
+    assert result._is_authenticated() is False
+
+
+def test_bootstrap_identity_evidence_exact_object_is_retained(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
+) -> None:
+    evidence = authenticated_bootstrap_identity_evidence
+    result = _make(retained_connection_plan, evidence)
+    duplicate = object.__new__(identity_auth.AuthenticatedBootstrapIdentityEvidence)
+    for name in evidence.__slots__:
+        object.__setattr__(duplicate, name, getattr(evidence, name))
+    assert duplicate is not evidence
+    assert duplicate._is_authenticated() is False
+    with pytest.raises(
+        bootstrap.SanitizerBootstrapBindingPlanFailure,
+        match="bootstrap_binding_plan.identity_evidence_invalid",
+    ):
+        _planner().plan(
+            connection_plan=retained_connection_plan,
+            bootstrap_identity_evidence=duplicate,
+        )
+    object.__setattr__(result, "_bootstrap_identity_evidence", duplicate)
     assert result._is_authenticated() is False
 
 
@@ -267,6 +397,9 @@ def test_connection_plan_identity_and_nested_ancestry_are_retained(
 )
 def test_clock_requires_exact_whole_second_utc(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
     invalid: datetime,
 ) -> None:
     retained = retained_connection_plan
@@ -274,23 +407,35 @@ def test_clock_requires_exact_whole_second_utc(
         bootstrap.SanitizerBootstrapBindingPlanFailure,
         match="bootstrap_binding_plan.clock_invalid",
     ):
-        _planner(invalid).plan(connection_plan=retained)
+        _planner(invalid).plan(
+            connection_plan=retained,
+            bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+        )
 
 
 def test_clock_regression_expiry_and_between_read_mutation_refuse(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
     retained = retained_connection_plan
     with pytest.raises(
         bootstrap.SanitizerBootstrapBindingPlanFailure,
         match="bootstrap_binding_plan.clock_regressed",
     ):
-        _planner(NOW, NOW - timedelta(seconds=1)).plan(connection_plan=retained)
+        _planner(NOW, NOW - timedelta(seconds=1)).plan(
+            connection_plan=retained,
+            bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+        )
     with pytest.raises(
         bootstrap.SanitizerBootstrapBindingPlanFailure,
         match="bootstrap_binding_plan.target_expired",
     ):
-        _planner(retained.expires_at).plan(connection_plan=retained)
+        _planner(retained.expires_at).plan(
+            connection_plan=retained,
+            bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+        )
 
     original = retained.connection_plan_sha256
     reads = 0
@@ -312,15 +457,21 @@ def test_clock_regression_expiry_and_between_read_mutation_refuse(
             bootstrap.SanitizerBootstrapBindingPlanFailure,
             match="bootstrap_binding_plan.connection_plan_invalid",
         ):
-            worker.plan(connection_plan=retained)
+            worker.plan(
+                connection_plan=retained,
+                bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+            )
     finally:
         object.__setattr__(retained, "connection_plan_sha256", original)
 
 
 def test_output_refuses_serialization_and_direct_construction(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
-    result = _make(retained_connection_plan)
+    result = _make(retained_connection_plan, authenticated_bootstrap_identity_evidence)
     assert repr(result) == "<SanitizerBootstrapBindingPlan sealed metadata-only>"
     for operation in (
         lambda: copy.copy(result),
@@ -341,8 +492,11 @@ def test_output_refuses_serialization_and_direct_construction(
 
 def test_duplicated_output_cannot_authenticate(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
-    result = _make(retained_connection_plan)
+    result = _make(retained_connection_plan, authenticated_bootstrap_identity_evidence)
     duplicate = object.__new__(bootstrap.SanitizerBootstrapBindingPlan)
     for name in result.__slots__:
         object.__setattr__(duplicate, name, getattr(result, name))
@@ -351,8 +505,11 @@ def test_duplicated_output_cannot_authenticate(
 
 def test_mutated_output_cannot_authenticate(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
 ) -> None:
-    result = _make(retained_connection_plan)
+    result = _make(retained_connection_plan, authenticated_bootstrap_identity_evidence)
     object.__setattr__(result, "bootstrap_identity_bound", True)
     assert result._is_authenticated() is False
     object.__setattr__(result, "bootstrap_identity_bound", False)
@@ -373,7 +530,7 @@ def test_mutated_output_cannot_authenticate(
             "retained_runtime_binding.raw_database_role_or_identity_values_may_be_public",
             True,
         ),
-        ("bootstrap_design.identity_selected", True),
+        ("bootstrap_design.identity_selected", False),
         ("bootstrap_design.federated_credentials_permitted", True),
         ("bootstrap_design.runtime_identity_may_bootstrap", True),
         ("bootstrap_design.maximum_database_token_requests", 2),
@@ -478,6 +635,9 @@ def test_public_factory_remains_terminal() -> None:
 
 def test_unexpected_failures_are_content_free_and_return_no_partial_plan(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    authenticated_bootstrap_identity_evidence: (
+        identity_auth.AuthenticatedBootstrapIdentityEvidence
+    ),
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     retained = retained_connection_plan
@@ -487,6 +647,9 @@ def test_unexpected_failures_are_content_free_and_return_no_partial_plan(
 
     monkeypatch.setattr(bootstrap, "_binding_material", fail)
     with pytest.raises(bootstrap.SanitizerBootstrapBindingPlanFailure) as captured:
-        _planner().plan(connection_plan=retained)
+        _planner().plan(
+            connection_plan=retained,
+            bootstrap_identity_evidence=authenticated_bootstrap_identity_evidence,
+        )
     assert captured.value.args == ("bootstrap_binding_plan.connection_plan_invalid",)
     assert "secret" not in str(captured.value)

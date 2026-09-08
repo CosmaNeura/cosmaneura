@@ -241,7 +241,7 @@ SANITIZER_BOOTSTRAP_BINDING_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_and_dormant",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_bootstrap_design_is_separate_ephemeral_and_teardown_bound",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_real_chain_mints_only_redacted_binding_metadata",
-    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_api_accepts_only_one_keyword_only_exact_connection_plan",
+    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_api_accepts_only_two_keyword_only_exact_inputs",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_clock_requires_exact_whole_second_utc",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_security_relevant_contract_mutations_fail_closed",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse",
@@ -253,6 +253,7 @@ SANITIZER_BOOTSTRAP_BINDING_DIGEST_SELECTORS = (
 )
 SANITIZER_BOOTSTRAP_BINDING_ANCESTRY_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_connection_plan_identity_and_nested_ancestry_are_retained",
+    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_bootstrap_identity_evidence_exact_object_is_retained",
 )
 SANITIZER_BOOTSTRAP_BINDING_STATE_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_clock_regression_expiry_and_between_read_mutation_refuse",
@@ -538,7 +539,12 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_DIGEST_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-bootstrap-binding-ancestry": (
-            f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_ANCESTRY_SELECTORS[0]} --verbosity=2"
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_BOOTSTRAP_BINDING_ANCESTRY_SELECTORS
+            )
+            + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-bootstrap-binding-state": (
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_STATE_SELECTORS[0]} --verbosity=2"
@@ -1067,7 +1073,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_234_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_235_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -1160,15 +1166,15 @@ def test_sanitizer_observer_shards_partition_all_234_collected_cases_once() -> N
     assert len(connection_plan_contract) == 13
     assert len(bootstrap_binding) == 20
     assert len(bootstrap_binding_digest) == 1
-    assert len(bootstrap_binding_ancestry) == 1
+    assert len(bootstrap_binding_ancestry) == 2
     assert len(bootstrap_binding_state) == 1
     assert len(bootstrap_binding_output) == 1
     assert len(bootstrap_binding_duplicate) == 1
     assert len(bootstrap_binding_tamper) == 1
     assert len(bootstrap_binding_failure) == 1
-    assert len(bootstrap_binding_family) == 27
+    assert len(bootstrap_binding_family) == 28
     assert len(integrity) == 39
-    assert len(family) == 234
+    assert len(family) == 235
     assert all(len(group) == len(set(group)) for group in groups)
     assert len(bootstrap_binding_family) == len(set(bootstrap_binding_family))
     assert len(family) == len(set(family))
@@ -1238,13 +1244,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(privileged_global_query_grammar) == 25
     assert len(privileged_global_observation_frames) == 12
     assert len(privileged_global_connection_plan) == 24
-    assert len(bootstrap_binding_plan) == 27
+    assert len(bootstrap_binding_plan) == 28
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 520
+    assert len(family) == 521
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))

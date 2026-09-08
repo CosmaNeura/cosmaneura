@@ -136,13 +136,12 @@
   "status": {
     "offline_authenticator_implemented": true,
     "live_provider_transport_implemented": false,
-    "binding_plan_integration_implemented": false,
+    "binding_plan_integration_implemented": true,
     "job_attachment_implemented": false,
     "teardown_authenticator_implemented": false,
     "activation_ready": false,
     "activation_blockers": [
       "fresh_live_provider_reauthentication_unimplemented",
-      "bootstrap_binding_plan_integration_unimplemented",
       "bootstrap_job_attachment_unimplemented",
       "bootstrap_teardown_authenticator_unimplemented"
     ]

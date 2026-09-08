@@ -27,7 +27,7 @@ POLICY_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-bootstrap-identity-evidence-policy.json"
 )
-POLICY_SHA256 = "0a811508de1c92237a5f77a61717a7f7697176e0e782669afdf09c2779ea74e0"
+POLICY_SHA256 = "8c6dd344d9eae0e682098402f48bb5f816787b3f4f9686b5744672c2ebe420ed"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -386,13 +386,12 @@ def _validate_policy(policy: Any) -> dict[str, Any]:
         != {
             "offline_authenticator_implemented": True,
             "live_provider_transport_implemented": False,
-            "binding_plan_integration_implemented": False,
+            "binding_plan_integration_implemented": True,
             "job_attachment_implemented": False,
             "teardown_authenticator_implemented": False,
             "activation_ready": False,
             "activation_blockers": [
                 "fresh_live_provider_reauthentication_unimplemented",
-                "bootstrap_binding_plan_integration_unimplemented",
                 "bootstrap_job_attachment_unimplemented",
                 "bootstrap_teardown_authenticator_unimplemented",
             ],

@@ -3,6 +3,10 @@
   "policy_id": "cosmaneura-staging-sanitizer-bootstrap-binding-plan-v1",
   "closed_world": true,
   "upstream_policies": {
+    "bootstrap_identity_evidence": {
+      "policy_id": "cosmaneura-staging-sanitizer-bootstrap-identity-evidence-v1",
+      "sha256": "sha256:8c6dd344d9eae0e682098402f48bb5f816787b3f4f9686b5744672c2ebe420ed"
+    },
     "privileged_global_connection_plan": {
       "policy_id": "cosmaneura-staging-sanitizer-privileged-global-connection-plan-v1",
       "sha256": "sha256:d7bd6ef34b63a4dd281101ea23b8855b101bb4154e172199c3bf90f0e592dde4"
@@ -13,10 +17,17 @@
     }
   },
   "input": {
-    "only_public_input": "sealed_privileged_global_connection_plan",
-    "required_kind": "sealed-sanitizer-privileged-global-connection-plan-v1",
+    "only_public_inputs": [
+      "sealed_privileged_global_connection_plan",
+      "authenticated_bootstrap_identity_evidence"
+    ],
+    "required_kinds": {
+      "connection_plan": "sealed-sanitizer-privileged-global-connection-plan-v1",
+      "bootstrap_identity_evidence": "sealed-authenticated-staging-sanitizer-bootstrap-identity-evidence-v1"
+    },
     "exact_type_seal_process_local_identity_and_retained_ancestry_required": true,
-    "current_time_reauthentication_required_at_start_and_end": true,
+    "both_inputs_reauthenticated_at_start_and_end": true,
+    "identical_rehearsal_and_unexpired_lifetime_required": true,
     "caller_roles_identity_ids_names_tokens_credentials_dsns_connections_connectors_callbacks_sql_provider_clients_policies_timestamps_or_runtime_overrides_permitted": false
   },
   "retained_runtime_binding": {
@@ -42,9 +53,11 @@
   },
   "bootstrap_design": {
     "mechanism": "ephemeral-separate-uami-postgresql-entra-administrator-v1",
-    "identity_source": "future_authenticated_runtime_binding.identities.jobs.bootstrap",
+    "identity_source": "authenticated_bootstrap_identity_evidence.retained_private_identity",
+    "identity_binding_sha256_source": "authenticated_bootstrap_identity_evidence.identity_binding_sha256",
+    "identity_evidence_policy_sha256": "sha256:8c6dd344d9eae0e682098402f48bb5f816787b3f4f9686b5744672c2ebe420ed",
     "identity_name": "cosmaneura-staging-restore-bootstrap-job",
-    "identity_selected": false,
+    "identity_selected": true,
     "required_identity_fields": [
       "resource_id",
       "client_id",
@@ -84,7 +97,7 @@
     "administrator_principal_type": "ServicePrincipal",
     "target_server_source": "retained_authenticated_controller_receipt",
     "tenant_source": "retained_authenticated_production_authority.identity.tenant_id",
-    "bootstrap_object_id_source": "future_authenticated_runtime_binding.identities.jobs.bootstrap.principal_id",
+    "bootstrap_object_id_source": "retained_authenticated_bootstrap_identity_evidence.private_identity.principal_id",
     "provider_create_read_delete_readback_required": true,
     "database_session_must_end_before_provider_teardown": true,
     "bootstrap_authority_absence_required_before_runtime_role_execution": true,
@@ -104,6 +117,8 @@
       "target_role_observation_plan_sha256",
       "controller_receipt_sha256",
       "runtime_role_binding_sha256",
+      "bootstrap_identity_binding_sha256",
+      "bootstrap_identity_evidence_policy_sha256",
       "rehearsal_id",
       "planned_at",
       "expires_at",
@@ -113,6 +128,8 @@
       "exact_database_role_selected",
       "provision_job_identity_bound",
       "bootstrap_mechanism_selected",
+      "bootstrap_identity_evidence_authenticated",
+      "bootstrap_identity_selected",
       "bootstrap_identity_bound",
       "bootstrap_authority_authenticated",
       "database_connection_authority",
@@ -130,15 +147,18 @@
     ],
     "private_fields": [
       "_connection_plan",
+      "_bootstrap_identity_evidence",
       "_contract_bytes",
       "_proof_sha256",
       "_seal"
     ],
     "copy_pickle_json_serialization_or_mutation_permitted": false,
     "retains_identical_connection_plan_process_local_only": true,
+    "retains_identical_bootstrap_identity_evidence_process_local_only": true,
+    "raw_bootstrap_identity_values_copied_into_plan": false,
     "retains_no": [
       "raw-database-role",
-      "raw-identity-id",
+      "raw-identity-id-copies-outside-sealed-ancestry",
       "bootstrap-authority",
       "access-token",
       "credential",
@@ -156,6 +176,8 @@
     "exact_database_role_selected": true,
     "provision_job_identity_bound": true,
     "bootstrap_mechanism_selected": true,
+    "bootstrap_identity_evidence_authenticated": true,
+    "bootstrap_identity_selected": true,
     "bootstrap_identity_bound": false,
     "bootstrap_authority_authenticated": false,
     "database_connection_authority": false,
@@ -175,7 +197,7 @@
     "contract_validator_implemented": true,
     "retained_runtime_binding_authenticator_implemented": true,
     "bootstrap_mechanism_selected": true,
-    "bootstrap_identity_selected": false,
+    "bootstrap_identity_selected": true,
     "bootstrap_job_attachment_implemented": false,
     "bootstrap_control_plane_adapter_implemented": false,
     "bootstrap_database_provisioner_implemented": false,
@@ -189,9 +211,8 @@
     "workflow_integrated": false,
     "executable": false,
     "activation_ready": false,
-    "public_activation_failure": "activation.sanitizer_bootstrap_identity_unavailable",
+    "public_activation_failure": "activation.sanitizer_bootstrap_job_attachment_unavailable",
     "activation_blockers": [
-      "bootstrap_identity_exact_ids_unpinned",
       "bootstrap_job_attachment_unimplemented",
       "bootstrap_control_plane_adapter_unimplemented",
       "bootstrap_database_provisioner_unimplemented",

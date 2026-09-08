@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Bind the exact retained runtime role and select a dormant bootstrap design.
+"""Bind the exact retained runtime role and authenticated bootstrap identity.
 
 This module performs no I/O beyond reading its pinned contract. It exposes no
-role or identity value and grants no provider, database, or mutation authority.
+raw role or identity value and grants no provider, database, or mutation
+authority.
 """
 
 from __future__ import annotations
@@ -19,12 +20,16 @@ from typing import Any, NoReturn
 
 try:
     from scripts import (
+        authenticate_staging_sanitizer_bootstrap_identity as bootstrap_identity,
+    )
+    from scripts import (
         staging_restore_sanitizer_privileged_global_connection_plan as connection,
     )
     from scripts import (
         staging_restore_sanitizer_target_role_observation_plan as target_plan,
     )
 except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
+    import authenticate_staging_sanitizer_bootstrap_identity as bootstrap_identity
     import staging_restore_sanitizer_privileged_global_connection_plan as connection
     import staging_restore_sanitizer_target_role_observation_plan as target_plan
 
@@ -34,14 +39,17 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-bootstrap-binding-plan-contract.json"
 )
-CONTRACT_SHA256 = "bec46b28d75e2b19c2ab4fbdf5412d846252b14d0bb62d0b15ab729342810926"
+CONTRACT_SHA256 = "2e670cfc42a64c1f33e21791eb4795832d4c3be39141c7cde4186cd7c90739c2"
 CONNECTION_PLAN_CONTRACT_SHA256 = (
     "d7bd6ef34b63a4dd281101ea23b8855b101bb4154e172199c3bf90f0e592dde4"
 )
 TARGET_PLAN_CONTRACT_SHA256 = (
     "d341d653195b9b3d3d941304205f801d952e3195cd0eefafd0e9d6a9131a0dbb"
 )
-ACTIVATION_FAILURE = "activation.sanitizer_bootstrap_identity_unavailable"
+BOOTSTRAP_IDENTITY_EVIDENCE_POLICY_SHA256 = (
+    "8c6dd344d9eae0e682098402f48bb5f816787b3f4f9686b5744672c2ebe420ed"
+)
+ACTIVATION_FAILURE = "activation.sanitizer_bootstrap_job_attachment_unavailable"
 PLAN_KIND = "sealed-sanitizer-bootstrap-binding-plan-v1"
 BOOTSTRAP_MECHANISM = "ephemeral-separate-uami-postgresql-entra-administrator-v1"
 BOOTSTRAP_IDENTITY_KEY = "bootstrap"
@@ -55,6 +63,12 @@ PROVISION_IDENTITY_FIELDS = (
     "provision_job_uami_resource_id",
     "provision_job_uami_client_id",
     "provision_job_uami_principal_id",
+)
+BOOTSTRAP_IDENTITY_FIELDS = (
+    "resource_id",
+    "client_id",
+    "principal_id",
+    "tenant_id",
 )
 BINDING_DIGEST_FIELDS = (
     "approved_database_role",
@@ -80,6 +94,8 @@ _POSITIVE_CLAIMS = {
     "exact_database_role_selected": True,
     "provision_job_identity_bound": True,
     "bootstrap_mechanism_selected": True,
+    "bootstrap_identity_evidence_authenticated": True,
+    "bootstrap_identity_selected": True,
 }
 _NEGATIVE_CLAIMS = dict.fromkeys(
     "bootstrap_identity_bound bootstrap_authority_authenticated "
@@ -100,6 +116,8 @@ _BASE_PUBLIC_FIELDS = (
     "target_role_observation_plan_sha256",
     "controller_receipt_sha256",
     "runtime_role_binding_sha256",
+    "bootstrap_identity_binding_sha256",
+    "bootstrap_identity_evidence_policy_sha256",
     "rehearsal_id",
     "planned_at",
     "expires_at",
@@ -109,6 +127,7 @@ _BASE_PUBLIC_FIELDS = (
 PUBLIC_FIELDS = (*_BASE_PUBLIC_FIELDS, *CLAIMS)
 PRIVATE_FIELDS = (
     "_connection_plan",
+    "_bootstrap_identity_evidence",
     "_contract_bytes",
     "_proof_sha256",
     "_seal",
@@ -121,6 +140,7 @@ _FAILURE_CODES = frozenset(
         "bootstrap_binding_plan.clock_regressed",
         "bootstrap_binding_plan.configuration_invalid",
         "bootstrap_binding_plan.connection_plan_invalid",
+        "bootstrap_binding_plan.identity_evidence_invalid",
         "bootstrap_binding_plan.contract_invalid",
         "bootstrap_binding_plan.output_invalid",
         "bootstrap_binding_plan.target_expired",
@@ -195,7 +215,7 @@ def _expected_status() -> dict[str, Any]:
         "contract_validator_implemented": True,
         "retained_runtime_binding_authenticator_implemented": True,
         "bootstrap_mechanism_selected": True,
-        "bootstrap_identity_selected": False,
+        "bootstrap_identity_selected": True,
         "bootstrap_job_attachment_implemented": False,
         "bootstrap_control_plane_adapter_implemented": False,
         "bootstrap_database_provisioner_implemented": False,
@@ -211,7 +231,6 @@ def _expected_status() -> dict[str, Any]:
         "activation_ready": False,
         "public_activation_failure": ACTIVATION_FAILURE,
         "activation_blockers": [
-            "bootstrap_identity_exact_ids_unpinned",
             "bootstrap_job_attachment_unimplemented",
             "bootstrap_control_plane_adapter_unimplemented",
             "bootstrap_database_provisioner_unimplemented",
@@ -236,6 +255,10 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         _fail("bootstrap_binding_plan.contract_invalid")
 
     expected_upstream = {
+        "bootstrap_identity_evidence": {
+            "policy_id": "cosmaneura-staging-sanitizer-bootstrap-identity-evidence-v1",
+            "sha256": f"sha256:{BOOTSTRAP_IDENTITY_EVIDENCE_POLICY_SHA256}",
+        },
         "privileged_global_connection_plan": {
             "policy_id": connection_contract["policy_id"],
             "sha256": f"sha256:{CONNECTION_PLAN_CONTRACT_SHA256}",
@@ -246,10 +269,17 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         },
     }
     expected_input = {
-        "only_public_input": "sealed_privileged_global_connection_plan",
-        "required_kind": connection.PLAN_KIND,
+        "only_public_inputs": [
+            "sealed_privileged_global_connection_plan",
+            "authenticated_bootstrap_identity_evidence",
+        ],
+        "required_kinds": {
+            "connection_plan": connection.PLAN_KIND,
+            "bootstrap_identity_evidence": bootstrap_identity.KIND,
+        },
         "exact_type_seal_process_local_identity_and_retained_ancestry_required": True,
-        "current_time_reauthentication_required_at_start_and_end": True,
+        "both_inputs_reauthenticated_at_start_and_end": True,
+        "identical_rehearsal_and_unexpired_lifetime_required": True,
         "caller_roles_identity_ids_names_tokens_credentials_dsns_connections_"
         "connectors_callbacks_sql_provider_clients_policies_timestamps_or_"
         "runtime_overrides_permitted": False,
@@ -274,9 +304,17 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
     }
     expected_bootstrap = {
         "mechanism": BOOTSTRAP_MECHANISM,
-        "identity_source": "future_authenticated_runtime_binding.identities.jobs.bootstrap",
+        "identity_source": (
+            "authenticated_bootstrap_identity_evidence.retained_private_identity"
+        ),
+        "identity_binding_sha256_source": (
+            "authenticated_bootstrap_identity_evidence.identity_binding_sha256"
+        ),
+        "identity_evidence_policy_sha256": (
+            f"sha256:{BOOTSTRAP_IDENTITY_EVIDENCE_POLICY_SHA256}"
+        ),
         "identity_name": BOOTSTRAP_IDENTITY_NAME,
-        "identity_selected": False,
+        "identity_selected": True,
         "required_identity_fields": ["resource_id", "client_id", "principal_id"],
         "must_be_distinct_from_provision_cleanup_dispatcher_github_and_scribe_identities": True,
         "federated_credentials_permitted": False,
@@ -302,7 +340,8 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
             "retained_authenticated_production_authority.identity.tenant_id"
         ),
         "bootstrap_object_id_source": (
-            "future_authenticated_runtime_binding.identities.jobs.bootstrap.principal_id"
+            "retained_authenticated_bootstrap_identity_evidence.private_identity."
+            "principal_id"
         ),
         "provider_create_read_delete_readback_required": True,
         "database_session_must_end_before_provider_teardown": True,
@@ -319,9 +358,11 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "private_fields": list(PRIVATE_FIELDS),
         "copy_pickle_json_serialization_or_mutation_permitted": False,
         "retains_identical_connection_plan_process_local_only": True,
+        "retains_identical_bootstrap_identity_evidence_process_local_only": True,
+        "raw_bootstrap_identity_values_copied_into_plan": False,
         "retains_no": [
             "raw-database-role",
-            "raw-identity-id",
+            "raw-identity-id-copies-outside-sealed-ancestry",
             "bootstrap-authority",
             "access-token",
             "credential",
@@ -335,7 +376,10 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         ],
     }
     if (
-        connection.CONTRACT_SHA256 != CONNECTION_PLAN_CONTRACT_SHA256
+        bootstrap_identity.POLICY_SHA256 != BOOTSTRAP_IDENTITY_EVIDENCE_POLICY_SHA256
+        or bootstrap_identity.KIND
+        != "sealed-authenticated-staging-sanitizer-bootstrap-identity-evidence-v1"
+        or connection.CONTRACT_SHA256 != CONNECTION_PLAN_CONTRACT_SHA256
         or target_plan.CONTRACT_SHA256 != TARGET_PLAN_CONTRACT_SHA256
         or document.get("schema_version") != 1
         or document.get("policy_id")
@@ -510,19 +554,78 @@ def _runtime_role_binding_digest(material: Mapping[str, Any]) -> str:
     )
 
 
+def _bootstrap_identity_material(
+    value: bootstrap_identity.AuthenticatedBootstrapIdentityEvidence,
+    *,
+    now: datetime,
+    rehearsal_id: str,
+) -> dict[str, str]:
+    try:
+        identity = dict(value._identity)  # noqa: SLF001
+        if (
+            type(value) is not bootstrap_identity.AuthenticatedBootstrapIdentityEvidence
+            or value._seal is not bootstrap_identity._SEAL  # noqa: SLF001
+            or not value._is_authenticated()  # noqa: SLF001
+            or value.kind != bootstrap_identity.KIND
+            or value.policy_sha256
+            != f"sha256:{BOOTSTRAP_IDENTITY_EVIDENCE_POLICY_SHA256}"
+            or value.rehearsal_id != rehearsal_id
+            or type(value.authenticated_at) is not datetime
+            or now < value.authenticated_at
+            or not now < value.expires_at
+            or tuple(identity) != BOOTSTRAP_IDENTITY_FIELDS
+            or any(type(item) is not str or not item for item in identity.values())
+            or not _uami_resource_id(identity["resource_id"])
+            or identity["resource_id"].rsplit("/", 1)[-1].casefold()
+            != BOOTSTRAP_IDENTITY_NAME.casefold()
+            or not all(_uuid(identity[name]) for name in BOOTSTRAP_IDENTITY_FIELDS[1:])
+            or len({identity[name] for name in BOOTSTRAP_IDENTITY_FIELDS[1:]}) != 3
+            or value.retrospective_evidence_authenticated is not True
+            or value.bootstrap_identity_selected is not True
+            or value.bootstrap_identity_exact_ids_pinned is not True
+            or value.bootstrap_identity_current_live_state_authenticated is not False
+            or value.bootstrap_identity_bound_to_single_use_job is not False
+            or value.bootstrap_authority_authenticated is not False
+            or value.database_connection_authority is not False
+            or value.database_mutation_authority is not False
+            or value.provider_mutation_authority is not False
+            or value.workflow_integrated is not False
+            or value.executable is not False
+        ):
+            _fail("bootstrap_binding_plan.identity_evidence_invalid")
+        return {
+            "identity_binding_sha256": value.identity_binding_sha256,
+            "policy_sha256": value.policy_sha256,
+        }
+    except SanitizerBootstrapBindingPlanFailure:
+        raise
+    except Exception:
+        _fail("bootstrap_binding_plan.identity_evidence_invalid")
+
+
 def _projection(
-    value: connection.SanitizerPrivilegedGlobalConnectionPlan, *, now: datetime
+    value: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    identity_evidence: bootstrap_identity.AuthenticatedBootstrapIdentityEvidence,
+    *,
+    now: datetime,
 ) -> dict[str, Any]:
     material, retained = _binding_material(value, now=now)
+    selected = _bootstrap_identity_material(
+        identity_evidence,
+        now=now,
+        rehearsal_id=retained.rehearsal_id,
+    )
     return {
         "bootstrap_binding_plan_contract_sha256": f"sha256:{CONTRACT_SHA256}",
         "connection_plan_sha256": value.connection_plan_sha256,
         "target_role_observation_plan_sha256": retained.observation_plan_sha256,
         "controller_receipt_sha256": retained.controller_receipt_sha256,
         "runtime_role_binding_sha256": _runtime_role_binding_digest(material),
+        "bootstrap_identity_binding_sha256": selected["identity_binding_sha256"],
+        "bootstrap_identity_evidence_policy_sha256": selected["policy_sha256"],
         "rehearsal_id": retained.rehearsal_id,
         "planned_at": now,
-        "expires_at": retained.expires_at,
+        "expires_at": min(retained.expires_at, identity_evidence.expires_at),
         "bootstrap_mechanism": BOOTSTRAP_MECHANISM,
         "bootstrap_identity_key": BOOTSTRAP_IDENTITY_KEY,
         **CLAIMS,
@@ -548,6 +651,7 @@ def _private_proof(
     public: Mapping[str, Any],
     value_identity: int,
     retained: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    identity_evidence: bootstrap_identity.AuthenticatedBootstrapIdentityEvidence,
 ) -> str:
     return hashlib.sha256(
         _canonical(
@@ -558,6 +662,12 @@ def _private_proof(
                 "connection_plan_identity": id(retained),
                 "connection_plan_type_identity": id(type(retained)),
                 "connection_plan_seal_identity": id(retained._seal),  # noqa: SLF001
+                "identity_evidence_identity": id(identity_evidence),
+                "identity_evidence_type_identity": id(type(identity_evidence)),
+                "identity_evidence_seal_identity": id(  # noqa: SLF001
+                    identity_evidence._seal
+                ),
+                "identity_evidence_proof_sha256": identity_evidence._proof_sha256,  # noqa: SLF001
             }
         )
     ).hexdigest()
@@ -575,6 +685,8 @@ class SanitizerBootstrapBindingPlan:
     target_role_observation_plan_sha256: str
     controller_receipt_sha256: str
     runtime_role_binding_sha256: str
+    bootstrap_identity_binding_sha256: str
+    bootstrap_identity_evidence_policy_sha256: str
     rehearsal_id: str
     planned_at: datetime
     expires_at: datetime
@@ -584,6 +696,8 @@ class SanitizerBootstrapBindingPlan:
     exact_database_role_selected: bool
     provision_job_identity_bound: bool
     bootstrap_mechanism_selected: bool
+    bootstrap_identity_evidence_authenticated: bool
+    bootstrap_identity_selected: bool
     bootstrap_identity_bound: bool
     bootstrap_authority_authenticated: bool
     database_connection_authority: bool
@@ -599,6 +713,9 @@ class SanitizerBootstrapBindingPlan:
     transaction_executed: bool
     workflow_integrated: bool
     _connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan
+    _bootstrap_identity_evidence: (
+        bootstrap_identity.AuthenticatedBootstrapIdentityEvidence
+    )
     _contract_bytes: bytes
     _proof_sha256: str
     _seal: object
@@ -635,7 +752,11 @@ class SanitizerBootstrapBindingPlan:
         try:
             contract = _parse(self._contract_bytes, expected_sha256=CONTRACT_SHA256)
             _validate_semantics(contract)
-            projection = _projection(self._connection_plan, now=self.planned_at)
+            projection = _projection(
+                self._connection_plan,
+                self._bootstrap_identity_evidence,
+                now=self.planned_at,
+            )
             public_without_digest = {"kind": PLAN_KIND, **projection}
             public = {
                 "kind": PLAN_KIND,
@@ -658,6 +779,7 @@ class SanitizerBootstrapBindingPlan:
                         public=actual_public,
                         value_identity=id(self),
                         retained=self._connection_plan,
+                        identity_evidence=self._bootstrap_identity_evidence,
                     ),
                 )
             )
@@ -668,6 +790,7 @@ class SanitizerBootstrapBindingPlan:
 def _mint_plan(
     *,
     retained: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    identity_evidence: bootstrap_identity.AuthenticatedBootstrapIdentityEvidence,
     contract_bytes: bytes,
     projection: Mapping[str, Any],
 ) -> SanitizerBootstrapBindingPlan:
@@ -683,11 +806,17 @@ def _mint_plan(
     for name, item in public.items():
         object.__setattr__(value, name, item)
     object.__setattr__(value, "_connection_plan", retained)
+    object.__setattr__(value, "_bootstrap_identity_evidence", identity_evidence)
     object.__setattr__(value, "_contract_bytes", bytes(contract_bytes))
     object.__setattr__(
         value,
         "_proof_sha256",
-        _private_proof(public=public, value_identity=id(value), retained=retained),
+        _private_proof(
+            public=public,
+            value_identity=id(value),
+            retained=retained,
+            identity_evidence=identity_evidence,
+        ),
     )
     object.__setattr__(value, "_seal", _PLAN_SEAL)
     if not value._is_authenticated():
@@ -736,6 +865,9 @@ class SanitizerBootstrapBindingPlanner:
         self,
         *,
         connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+        bootstrap_identity_evidence: (
+            bootstrap_identity.AuthenticatedBootstrapIdentityEvidence
+        ),
     ) -> SanitizerBootstrapBindingPlan:
         code = "bootstrap_binding_plan.connection_plan_invalid"
         try:
@@ -743,8 +875,16 @@ class SanitizerBootstrapBindingPlanner:
                 _fail("bootstrap_binding_plan.configuration_invalid")
             contract, contract_bytes = _read_contract()
             _validate_semantics(contract)
-            started = _projection(connection_plan, now=self._read_clock())
-            completed = _projection(connection_plan, now=self._read_clock())
+            started = _projection(
+                connection_plan,
+                bootstrap_identity_evidence,
+                now=self._read_clock(),
+            )
+            completed = _projection(
+                connection_plan,
+                bootstrap_identity_evidence,
+                now=self._read_clock(),
+            )
             if any(
                 started[name] != completed[name]
                 for name in started
@@ -753,6 +893,7 @@ class SanitizerBootstrapBindingPlanner:
                 _fail("bootstrap_binding_plan.binding_invalid")
             return _mint_plan(
                 retained=connection_plan,
+                identity_evidence=bootstrap_identity_evidence,
                 contract_bytes=contract_bytes,
                 projection=completed,
             )
@@ -768,7 +909,7 @@ class SanitizerBootstrapBindingPlanner:
 
 
 def build_sanitizer_bootstrap_binding_planner() -> NoReturn:
-    """Refuse public construction until the separate identity exists."""
+    """Refuse public construction until the single-use job adapter exists."""
 
     load_bootstrap_binding_plan_contract()
     _fail(ACTIVATION_FAILURE)
