@@ -312,34 +312,42 @@ def verify_private_executable(path: Path, *, expected: str, label: str) -> str:
 
 
 def _remove_created_executable(
-    *, parent: int, name: str, expected_node: tuple[int, int]
+    *, parent: int, name: str, expected_node: tuple[int, int] | None
 ) -> None:
     descriptor: int | None = None
     try:
-        descriptor = os.open(
-            name,
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0),
-            dir_fd=parent,
-        )
-        metadata = os.fstat(descriptor)
-        linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_nlink != 1
-            or stat.S_IMODE(metadata.st_mode) != 0o500
-            or (metadata.st_dev, metadata.st_ino) != expected_node
-            or (linked.st_dev, linked.st_ino) != expected_node
-        ):
-            raise OfflineRuntimeError(
-                "incomplete executable cleanup target is not exact"
+        if expected_node is not None:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=parent,
             )
-        os.close(descriptor)
-        descriptor = None
+            metadata = os.fstat(descriptor)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_nlink != 1
+                or (metadata.st_dev, metadata.st_ino) != expected_node
+                or (linked.st_dev, linked.st_ino) != expected_node
+            ):
+                raise OfflineRuntimeError(
+                    "incomplete executable cleanup target is not exact"
+                )
+            os.close(descriptor)
+            descriptor = None
         os.unlink(name, dir_fd=parent)
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise OfflineRuntimeError(
+                "incomplete executable cleanup did not remove its target"
+            )
         os.fsync(parent)
     except (OSError, OfflineRuntimeError) as exc:
         if isinstance(exc, OfflineRuntimeError):
@@ -406,9 +414,9 @@ def copy_pinned_executable(
             dir_fd=parent,
         )
         created = True
-        os.fchmod(destination_fd, 0o500)
         destination_metadata = os.fstat(destination_fd)
         created_node = (destination_metadata.st_dev, destination_metadata.st_ino)
+        os.fchmod(destination_fd, 0o500)
         digest = hashlib.sha256()
         total = 0
         while chunk := os.read(source_fd, 1024 * 1024):
@@ -443,7 +451,7 @@ def copy_pinned_executable(
             os.close(destination_fd)
     if failure is not None:
         try:
-            if created and created_node is not None:
+            if created:
                 _remove_created_executable(
                     parent=parent,
                     name=destination.name,

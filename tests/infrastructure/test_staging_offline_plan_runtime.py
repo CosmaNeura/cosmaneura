@@ -119,6 +119,30 @@ def test_copy_cleans_destination_when_final_verification_fails(
     assert not destination.exists()
 
 
+def test_copy_cleans_destination_when_initial_metadata_setup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    source.write_bytes(b"#!/bin/sh\nprintf trusted")
+    source.chmod(0o500)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    destination = private / "tool"
+
+    def fail_mode_change(_descriptor: int, _mode: int) -> None:
+        raise OSError("simulated mode failure")
+
+    monkeypatch.setattr(runtime.os, "fchmod", fail_mode_change)
+    with pytest.raises(runtime.OfflineRuntimeError, match="could not be isolated"):
+        runtime.copy_pinned_executable(
+            source,
+            destination,
+            expected=runtime.sha256_bytes(source.read_bytes()),
+            label="tool",
+        )
+    assert not destination.exists()
+
+
 def test_executable_hash_rejects_fifo_and_copy_enforces_size_bound(
     tmp_path: Path,
 ) -> None:
