@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-sanitizer-bootstrap-identity-evidence-v1",
+  "closed_world": true,
+  "foundation": {
+    "repository": "CosmaNeura/cosmaneura",
+    "protected_ref": "refs/heads/master",
+    "source_commit": "9928fcc5eb5625381efdd31b0610d76191118c90",
+    "saved_plan_sha256": "sha256:92533bd3d95c8c579e9985214271991a845fb9f857beae0c6807114979d9167f",
+    "rehearsal_id": "21506aaeec3c",
+    "cleanup_not_after": "2026-09-08T17:40:01Z"
+  },
+  "evidence": {
+    "acceptance_mode": "reviewed-retrospective-read-only-provider-evidence",
+    "caller_selects_directory_not_content": true,
+    "regular_owner_only_files_required": true,
+    "symlinks_permitted": false,
+    "maximum_file_bytes": 1048576,
+    "files": {
+      "post-apply-evidence-receipt.json": "sha256:bf7dbc49482a2d275f9678ca3a1d0806c11e691cf8ec20ef1284da1d7e568cf0",
+      "post-apply-final.tfstate": "sha256:c8c6d4ab4401d457b861ff697fa08a23a7368cd52959cc39c44f1d31a34d9de5",
+      "post-apply-normalized.tfstate": "sha256:650e5a4e467956c800c3aaa3d46de9b0f686a172083b87486912fe5a58d92e60",
+      "post-apply-identity.json": "sha256:76a015de9bf36473800aa5c34cd8f1e27b286d3a8915e9fb9f602bcedf81f5fa",
+      "post-apply-federated-credentials.json": "sha256:37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "post-apply-role-assignments.json": "sha256:37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "job-inventory.json": "sha256:4e3e125336aaa914e15bcefb06fb19a6efe0eb6c93a43c46ff462bf4d4f120be",
+      "job-identity-pilot-migrate.json": "sha256:0bd3e6d555f983195877d1d66d2097d8bc473a44ad5ee46c772b576eeb2aa810",
+      "job-identity-pilot-worker.json": "sha256:5d74af65eb756b72791f9eb86ab3701814efbe54b5cb843cfcd2be844d827ac0",
+      "job-identity-prod-migrate.json": "sha256:619e463a1c99754bd5e597fad365f8e7bdeead096234ce7505cd16cc8df240c4",
+      "job-identity-sched-dev-migrate.json": "sha256:2089007032b8e0145975f37732725db840cdd5db891bdd15ec36f5ebb7109dda",
+      "job-identity-scribe-dev-smoke.json": "sha256:1b9a172fedb697668a9094dfa06b4d9ddcfd1f7f71e7a618088eb4977474137c",
+      "job-identity-staging-migrate.json": "sha256:03c62938e86912d4dc22894717274538b98076dd788010d9762a25b6d442c9cf"
+    }
+  },
+  "state": {
+    "backend_key": "staging-sanitizer-bootstrap-identity.tfstate",
+    "opentofu_version": "1.12.5",
+    "lineage": "a0c8b939-2fb2-0604-3e70-d925aeee5950",
+    "pre_apply_serial": 1,
+    "post_apply_serial": 2,
+    "exact_resource_addresses": [
+      "data.azurerm_resource_group.control",
+      "managed.azurerm_user_assigned_identity.sanitizer_bootstrap",
+      "managed.terraform_data.activation_guard"
+    ],
+    "exact_output_keys": [
+      "sanitizer_bootstrap_identity_foundation",
+      "state_boundary"
+    ],
+    "required_passing_checks": [
+      "azurerm_user_assigned_identity.sanitizer_bootstrap",
+      "terraform_data.activation_guard",
+      "var.sanitizer_bootstrap_lifetime_hours",
+      "var.sanitizer_bootstrap_rehearsal_id"
+    ]
+  },
+  "identity": {
+    "name": "cosmaneura-staging-restore-bootstrap-job",
+    "resource_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging-rehearsal-control/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-staging-restore-bootstrap-job",
+    "client_id": "1d494ade-7391-479b-b860-c0b13ef98c34",
+    "principal_id": "10e9110b-9a64-4961-9210-06ab05b4e5ab",
+    "tenant_id": "d51754d0-bba5-4810-820e-afac542844d6",
+    "resource_group": "cosmaneura-staging-rehearsal-control",
+    "location": "eastus",
+    "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+    "isolation_scope": "None",
+    "assignment_restrictions": {
+      "providers": []
+    },
+    "tags": {
+      "cleanup-not-after": "2026-09-08T17:40:01Z",
+      "data-classification": "non-phi-control-metadata",
+      "environment": "staging",
+      "lifecycle": "ephemeral",
+      "managed-by": "opentofu",
+      "purpose": "staging-restore-sanitizer-bootstrap",
+      "rehearsal-id": "21506aaeec3c"
+    }
+  },
+  "job_inventory": {
+    "exact_jobs": {
+      "job-identity-pilot-migrate.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-cab-pilot/providers/Microsoft.App/jobs/cosmaneura-pilot-mig-i4akwqry",
+      "job-identity-pilot-worker.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-cab-pilot/providers/Microsoft.App/jobs/cosmaneura-pilot-wrk-i4akwqry",
+      "job-identity-prod-migrate.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.App/jobs/cosmaneura-prod-migrate",
+      "job-identity-sched-dev-migrate.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scheduling-development/providers/Microsoft.App/jobs/cosmaneura-sched-dev-migrate",
+      "job-identity-scribe-dev-smoke.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scribe-development/providers/Microsoft.App/jobs/cosmaneura-scribe-dev-smoke",
+      "job-identity-staging-migrate.json": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.App/jobs/cosmaneura-staging-migrate"
+    },
+    "bootstrap_attachment_count": 0
+  },
+  "claims": {
+    "retrospective_evidence_authenticated": true,
+    "bootstrap_identity_selected": true,
+    "bootstrap_identity_exact_ids_pinned": true,
+    "bootstrap_identity_current_live_state_authenticated": false,
+    "bootstrap_identity_bound_to_single_use_job": false,
+    "bootstrap_authority_authenticated": false,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "provider_mutation_authority": false,
+    "workflow_integrated": false,
+    "executable": false
+  },
+  "output": {
+    "kind": "sealed-authenticated-staging-sanitizer-bootstrap-identity-evidence-v1",
+    "public_fields": [
+      "kind",
+      "identity_binding_sha256",
+      "policy_sha256",
+      "foundation_source_commit",
+      "post_apply_receipt_sha256",
+      "rehearsal_id",
+      "authenticated_at",
+      "expires_at",
+      "retrospective_evidence_authenticated",
+      "bootstrap_identity_selected",
+      "bootstrap_identity_exact_ids_pinned",
+      "bootstrap_identity_current_live_state_authenticated",
+      "bootstrap_identity_bound_to_single_use_job",
+      "bootstrap_authority_authenticated",
+      "database_connection_authority",
+      "database_mutation_authority",
+      "provider_mutation_authority",
+      "workflow_integrated",
+      "executable"
+    ],
+    "private_fields": [
+      "_identity",
+      "_evidence_digests",
+      "_proof_sha256",
+      "_seal"
+    ],
+    "copy_pickle_json_serialization_or_mutation_permitted": false,
+    "raw_evidence_or_exact_identity_values_publicly_exposed": false
+  },
+  "status": {
+    "offline_authenticator_implemented": true,
+    "live_provider_transport_implemented": false,
+    "binding_plan_integration_implemented": false,
+    "job_attachment_implemented": false,
+    "teardown_authenticator_implemented": false,
+    "activation_ready": false,
+    "activation_blockers": [
+      "fresh_live_provider_reauthentication_unimplemented",
+      "bootstrap_binding_plan_integration_unimplemented",
+      "bootstrap_job_attachment_unimplemented",
+      "bootstrap_teardown_authenticator_unimplemented"
+    ]
+  }
+}
