@@ -366,6 +366,15 @@ def test_output_is_sealed_redacted_nonserializable_and_tamper_evident(
 
     object.__setattr__(result, "runtime_authority", True)
     assert result._is_authenticated() is False
+    object.__setattr__(result, "runtime_authority", False)
+    assert result._is_authenticated() is True
+
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+    object.__setattr__(result, "runtime_authority", EqualitySpoof())
+    assert result._is_authenticated() is False
 
 
 @pytest.mark.parametrize(
