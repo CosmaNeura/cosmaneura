@@ -647,9 +647,7 @@ def test_output_is_redacted_immutable_nonserializable_and_tamper_evident(
         def __eq__(self, other: object) -> bool:
             return other is False
 
-    object.__setattr__(
-        authority, "database_connection_authority", EqualitySpoof()
-    )
+    object.__setattr__(authority, "database_connection_authority", EqualitySpoof())
     assert not authority._is_authenticated()
 
 
