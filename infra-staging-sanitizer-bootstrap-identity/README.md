@@ -47,23 +47,6 @@ No workflow in this slice plans against live state or applies this root. A live
 plan must use the checked-in backend, be saved, and receive independent
 exact-SHA and exact-plan review before a founder-operated apply.
 
-The follow-on verifier is deliberately offline and non-authoritative. From a
-clean checkout at the exact reviewed `origin/master` commit, place the saved
-plan in an owner-controlled `0700` directory, set the plan file to `0400`, and
-run:
+The follow-on verifier is offline and non-authoritative. From a clean checkout at the exact reviewed `origin/master`, place the saved plan in an owner-controlled `0700` directory with mode `0400`, then run `python scripts/validate_staging_sanitizer_bootstrap_identity_plan.py --saved-plan <absolute-plan> --provider-package-dir <absolute-registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64> --expected-saved-plan-sha256 <sha256> --expected-source-commit <full-sha> --expected-state-lineage <uuid> --expected-state-serial <positive-integer>`.
 
-```sh
-python scripts/validate_staging_sanitizer_bootstrap_identity_plan.py \
-  --saved-plan /absolute/path/bootstrap.tfplan \
-  --expected-saved-plan-sha256 '<64 lowercase hex>' \
-  --expected-source-commit '<40 lowercase hex>' \
-  --expected-state-lineage '<reviewed UUID>' \
-  --expected-state-serial '<reviewed positive integer>'
-```
-
-It installs the lockfile-constrained decoder with `-backend=false`, requires the
-reviewed Darwin arm64 OpenTofu and AzureRM executable digests, invokes only
-`tofu show -json`, and emits `apply_authorized=false`. It neither creates a plan
-nor reads, initializes, locks, or changes the live backend. Separate
-founder-controlled state capture, live resource readback, review, and apply
-gates remain required.
+It never runs `tofu init`; it requires the complete lockfile-H1-constrained package and reviewed Darwin arm64 executable digests, then invokes only `tofu version -json` and `tofu show -json` in default-deny sandboxes. It emits `apply_authorized=false`; founder-controlled backend capture, live readback, review, and apply remain separate.

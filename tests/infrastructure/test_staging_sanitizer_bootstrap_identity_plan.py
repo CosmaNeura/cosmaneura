@@ -2,18 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-import inspect
 import io
 import json
-import os
-import shutil
-import subprocess
 import sys
 import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -51,6 +47,12 @@ def _source_snapshot() -> Any:
         **terraform_files,
         ".terraform.lock.hcl": lockfile,
         str(SCRIPT.relative_to(ROOT)): SCRIPT.read_bytes(),
+        str(
+            validator.RUNTIME_PATH.relative_to(ROOT)
+        ): validator.RUNTIME_PATH.read_bytes(),
+        str(
+            validator.DECODER_PATH.relative_to(ROOT)
+        ): validator.DECODER_PATH.read_bytes(),
     }
     return validator.SourceSnapshot(
         commit="a" * 40,
@@ -388,6 +390,7 @@ def _validate(
             expected_state_serial=SERIAL,
             tofu_sha256="c" * 64,
             provider_sha256="b" * 64,
+            provider_package_h1=validator.EXPECTED_PROVIDER_PACKAGE_H1,
             now=now,
         )
     )
@@ -405,6 +408,7 @@ def test_exact_plan_is_bound_but_never_authorizes_apply() -> None:
         "open_tofu_version": validator.EXPECTED_TOFU_VERSION,
         "open_tofu_sha256": "c" * 64,
         "open_tofu_provider_sha256": "b" * 64,
+        "open_tofu_provider_package_h1": validator.EXPECTED_PROVIDER_PACKAGE_H1,
         "saved_plan_sha256": receipt["saved_plan_sha256"],
         "derived_plan_json_sha256": hashlib.sha256(
             json.dumps(_valid_plan()).encode()
@@ -577,103 +581,48 @@ def test_plan_timestamp_and_cleanup_are_exact_and_fresh() -> None:
         _validate(plan=plan)
 
 
-def test_show_uses_the_exact_saved_plan_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured = b"exact-saved-plan-bytes"
-    plan_json = json.dumps(_valid_plan()).encode()
+def test_decoder_receives_the_exact_trust_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source_snapshot()
+    provider_package = Path(
+        "/trusted/providers/registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64"
+    )
+    expected = SimpleNamespace(
+        plan_json=b"plan-json",
+        tofu_sha256=validator.EXPECTED_TOFU_SHA256,
+        provider_sha256=validator.EXPECTED_PROVIDER_SHA256,
+        provider_package_h1=validator.EXPECTED_PROVIDER_PACKAGE_H1,
+    )
 
-    def fake_run(
-        arguments: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[bytes]:
-        assert arguments[-2] == "-json"
-        assert kwargs["data_dir"] == Path("/protected/data")
-        descriptor = kwargs["pass_fds"][0]
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        assert os.read(descriptor, len(captured) + 1) == captured
-        return subprocess.CompletedProcess(arguments, 0, plan_json, b"")
+    def fake_decode(plan_bytes: bytes, **arguments: Any) -> Any:
+        assert plan_bytes == b"saved-plan"
+        assert arguments == {
+            "terraform_files": {
+                **source.terraform_files,
+                ".terraform.lock.hcl": source.lockfile,
+            },
+            "provider_package": provider_package,
+            "tofu_source": TOFU,
+            "expected_tofu_version": validator.EXPECTED_TOFU_VERSION,
+            "expected_tofu_sha256": validator.EXPECTED_TOFU_SHA256,
+            "provider_version": "4.73.0",
+            "provider_platform": validator.EXPECTED_PROVIDER_PLATFORM,
+            "expected_provider_sha256": validator.EXPECTED_PROVIDER_SHA256,
+            "expected_provider_package_h1": validator.EXPECTED_PROVIDER_PACKAGE_H1,
+        }
+        return expected
 
-    monkeypatch.setattr(validator, "_run_process", fake_run)
+    monkeypatch.setattr(validator.shutil, "which", lambda _: str(TOFU))
+    monkeypatch.setattr(
+        validator.offline_tofu_decoder, "decode_saved_plan", fake_decode
+    )
+
     assert (
-        validator._show_saved_plan(
-            captured, tofu=TOFU, data_dir=Path("/protected/data")
+        validator._decode_saved_plan(
+            b"saved-plan", source=source, provider_package=provider_package
         )
-        == plan_json
-    )
-    assert (
-        "plan_json" not in inspect.signature(validator.validate_saved_plan).parameters
-    )
-
-
-def test_real_opentofu_plan_decodes_from_captured_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    executable = shutil.which("tofu")
-    if executable is None:
-        pytest.skip("OpenTofu is not installed")
-    version = json.loads(subprocess.check_output([executable, "version", "-json"]))
-    if version["terraform_version"] != validator.EXPECTED_TOFU_VERSION:
-        pytest.skip("test requires the repository-pinned OpenTofu")
-    module = tmp_path / "module"
-    module.mkdir(mode=0o700)
-    (module / "main.tf").write_text(
-        'terraform { required_version = "= 1.12.5" }\n'
-        'resource "terraform_data" "probe" { input = "bound" }\n',
-        encoding="utf-8",
-    )
-    plan_path = tmp_path / "real.tfplan"
-    for command in (
-        [executable, f"-chdir={module}", "init", "-backend=false", "-input=false"],
-        [executable, f"-chdir={module}", "plan", "-input=false", f"-out={plan_path}"],
-    ):
-        subprocess.run(command, check=True, capture_output=True)
-    monkeypatch.setattr(validator, "IDENTITY_ROOT", module)
-
-    decoded = validator._show_saved_plan(
-        plan_path.read_bytes(),
-        tofu=Path(executable),
-        data_dir=module / ".terraform",
-    )
-
-    plan = json.loads(decoded)
-    assert plan["terraform_version"] == validator.EXPECTED_TOFU_VERSION
-    assert plan["resource_changes"][0]["address"] == "terraform_data.probe"
-
-
-def test_decoder_initialization_is_backend_free(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    data_dir = tmp_path / "data"
-    provider = (
-        data_dir
-        / "providers/registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64"
-        / "terraform-provider-azurerm"
-    )
-    provider.parent.mkdir(parents=True)
-    provider.write_bytes(b"provider")
-    provider.chmod(0o700)
-
-    def fake_run(
-        arguments: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[bytes]:
-        assert "init" in arguments
-        assert "-backend=false" in arguments
-        assert "plan" not in arguments and "apply" not in arguments
-        assert kwargs["data_dir"] == data_dir
-        return subprocess.CompletedProcess(arguments, 0, b"initialized", b"")
-
-    monkeypatch.setattr(validator, "_run_process", fake_run)
-    monkeypatch.setattr(
-        validator,
-        "_require_pinned_executable",
-        lambda *_, expected, **__: expected,
-    )
-    monkeypatch.setattr(
-        validator,
-        "EXPECTED_PROVIDER_SHA256",
-        hashlib.sha256(b"provider").hexdigest(),
-    )
-    assert (
-        validator._initialize_decoder(tofu=TOFU, data_dir=data_dir)
-        == hashlib.sha256(b"provider").hexdigest()
+        is expected
     )
 
 
@@ -695,27 +644,39 @@ def test_protected_plan_file_rules(tmp_path: Path) -> None:
         validator._read_protected_file(link, label="saved plan")
 
 
-def test_tool_digests_and_decoder_environment_are_pinned(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(validator.shutil, "which", lambda _: str(TOFU))
-    monkeypatch.setattr(validator, "_trusted_executable", lambda path, **_: path)
-    monkeypatch.setattr(validator, "_executable_sha256", lambda *_, **__: "0" * 64)
-    monkeypatch.setattr(
-        validator,
-        "_run_process",
-        lambda *_, **__: pytest.fail("an unpinned OpenTofu binary was executed"),
+def test_git_reader_allowlist_covers_only_required_source_reads() -> None:
+    source_root = str(validator.IDENTITY_ROOT.relative_to(validator.REPOSITORY_ROOT))
+    support_paths = tuple(
+        str(path.relative_to(validator.REPOSITORY_ROOT))
+        for path in (
+            validator.VALIDATOR_PATH,
+            validator.RUNTIME_PATH,
+            validator.DECODER_PATH,
+        )
     )
-    with pytest.raises(validator.BootstrapPlanError, match="digest is not pinned"):
-        validator._resolve_and_verify_tofu()
+    assert validator._git_arguments_are_read_only(("rev-parse", "HEAD"))
+    assert validator._git_arguments_are_read_only(
+        (
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            source_root,
+            *support_paths,
+        )
+    )
+    assert validator._git_arguments_are_read_only(
+        ("show", f"{'a' * 40}:{support_paths[-1]}")
+    )
+    assert not validator._git_arguments_are_read_only(("status", "--short"))
+    assert not validator._git_arguments_are_read_only(("checkout", "master"))
 
-    for name in ("HTTPS_PROXY", "http_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
-        monkeypatch.setenv(name, "attacker-controlled")
-    environment = validator._normalized_environment()
-    assert not any(
-        name.upper() in {key.upper() for key in environment}
-        for name in ("HTTPS_PROXY", "http_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
-    )
+
+def test_git_reader_sandbox_is_default_deny() -> None:
+    profile = validator._git_sandbox_profile(validator.SYSTEM_GIT)
+    assert "(deny default)" in profile and "(allow default)" not in profile
+    assert f'(literal "{validator.SYSTEM_GIT}")' in profile
+    assert "(deny network*)" in profile and "(deny file-write*)" in profile
 
 
 def test_checkout_reader_rejects_link_substitution(tmp_path: Path) -> None:
@@ -727,3 +688,31 @@ def test_checkout_reader_rejects_link_substitution(tmp_path: Path) -> None:
     link.symlink_to(source)
     with pytest.raises(validator.BootstrapPlanError, match="safely"):
         validator._read_checkout_file(link, label="source")
+
+
+def test_archive_is_rejected_before_decoder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tmp_path.chmod(0o700)
+    plan = tmp_path / "plan.tfplan"
+    plan.write_bytes(b"not-a-plan-archive")
+    plan.chmod(0o400)
+    monkeypatch.setattr(validator, "_source_snapshot", lambda _: _source_snapshot())
+    monkeypatch.setattr(
+        validator, "_decode_saved_plan", lambda *_args, **_kwargs: pytest.fail()
+    )
+    with pytest.raises(validator.BootstrapPlanError, match="archive"):
+        validator.validate_saved_plan(
+            saved_plan=plan,
+            provider_package=tmp_path,
+            expected_saved_plan_sha256=hashlib.sha256(plan.read_bytes()).hexdigest(),
+            expected_source_commit="a" * 40,
+            expected_state_lineage=LINEAGE,
+            expected_state_serial=SERIAL,
+        )
+
+
+def test_receipt_that_expires_during_validation_is_rejected() -> None:
+    expired = datetime.strptime(CLEANUP, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    with pytest.raises(validator.BootstrapPlanError, match="expired during"):
+        validator._require_receipt_fresh({"cleanup_not_after": CLEANUP}, now=expired)

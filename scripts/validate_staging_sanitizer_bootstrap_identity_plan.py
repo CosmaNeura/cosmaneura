@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import io
 import json
 import os
@@ -15,7 +14,6 @@ import signal
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -24,9 +22,18 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts import staging_offline_plan_runtime as offline_runtime
+    from scripts import staging_offline_tofu_decoder as offline_tofu_decoder
+except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    import staging_offline_plan_runtime as offline_runtime
+    import staging_offline_tofu_decoder as offline_tofu_decoder
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 IDENTITY_ROOT = REPOSITORY_ROOT / "infra-staging-sanitizer-bootstrap-identity"
 VALIDATOR_PATH = Path(__file__).resolve()
+RUNTIME_PATH = REPOSITORY_ROOT / "scripts/staging_offline_plan_runtime.py"
+DECODER_PATH = REPOSITORY_ROOT / "scripts/staging_offline_tofu_decoder.py"
 
 EXPECTED_FORMAT_VERSION = "1.2"
 EXPECTED_TOFU_VERSION = "1.12.5"
@@ -37,6 +44,7 @@ EXPECTED_PROVIDER_PLATFORM = "darwin_arm64"
 EXPECTED_PROVIDER_SHA256 = (
     "c983dc4efe57ed9a15162c5b1b6438e597c7f34706498ab6cc6d07b40e854e06"
 )
+EXPECTED_PROVIDER_PACKAGE_H1 = "h1:/GrU387kLaubwGZboawLjs4j5FDuVTcR2brU3ONOYxQ="
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
 EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
@@ -77,27 +85,22 @@ EXPECTED_CHANGE_ADDRESSES = frozenset(
     }
 )
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024 * 1024
-MAXIMUM_PLAN_JSON_BYTES = 16 * 1024 * 1024
 MAXIMUM_PLAN_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAXIMUM_CLOCK_SKEW = timedelta(minutes=5)
-SYSTEM_GIT = Path("/usr/bin/git")
+SYSTEM_GIT = Path("/Applications/Xcode.app/Contents/Developer/usr/bin/git")
+SYSTEM_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+BootstrapPlanError = offline_runtime.OfflineRuntimeError
+_canonical_file_set_sha256 = offline_runtime.canonical_file_set_sha256
+_load_json_bytes = offline_runtime.load_json_bytes
+_read_checkout_file = offline_runtime.read_checkout_file
+_read_protected_file = offline_runtime.read_private_file
+_reject_nonfinite_json = offline_runtime.reject_nonfinite_json
+_sha256_bytes = offline_runtime.sha256_bytes
+_unique_json_object = offline_runtime.unique_json_object
 
 
-class BootstrapPlanError(ValueError):
-    """Raised when a saved plan cannot satisfy the non-authoritative policy."""
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise BootstrapPlanError("JSON contains duplicate object keys")
-        result[key] = value
-    return result
-
-
-def _reject_nonfinite_json(_value: str) -> None:
-    raise BootstrapPlanError("JSON contains a non-finite number")
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -108,264 +111,37 @@ class SourceSnapshot:
     tree_sha256: str
 
 
-def _sha256_bytes(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()
-
-
-def _canonical_file_set_sha256(files: Mapping[str, bytes]) -> str:
-    digest = hashlib.sha256()
-    for name in sorted(files):
-        encoded_name = name.encode("utf-8")
-        value = files[name]
-        digest.update(len(encoded_name).to_bytes(8, "big"))
-        digest.update(encoded_name)
-        digest.update(len(value).to_bytes(8, "big"))
-        digest.update(value)
-    return digest.hexdigest()
-
-
-def _reject_symlink_components(path: Path, *, label: str) -> None:
-    if not path.is_absolute() or path != Path(os.path.abspath(path)):
-        raise BootstrapPlanError(f"{label} path must be absolute and normalized")
-    current = Path(path.anchor)
-    for part in path.parts[1:]:
-        current /= part
-        try:
-            metadata = os.lstat(current)
-        except OSError as exc:
-            raise BootstrapPlanError(f"{label} path is unavailable") from exc
-        if stat.S_ISLNK(metadata.st_mode):
-            raise BootstrapPlanError(f"{label} path contains a symbolic link")
-
-
-def _open_protected_directory(path: Path, *, label: str) -> int:
-    _reject_symlink_components(path, label=label)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
     try:
-        descriptor = os.open(path, flags)
-        metadata = os.fstat(descriptor)
-    except OSError as exc:
-        raise BootstrapPlanError(f"{label} is unavailable") from exc
-    if (
-        not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o700
-    ):
-        os.close(descriptor)
-        raise BootstrapPlanError(
-            f"{label} must be an owner-controlled directory with mode 0700"
-        )
-    return descriptor
-
-
-def _require_protected_directory(path: Path, *, label: str) -> None:
-    os.close(_open_protected_directory(path, label=label))
-
-
-def _read_protected_file(path: Path, *, label: str) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0)
-    parent_descriptor = _open_protected_directory(
-        path.parent, label=f"{label} directory"
-    )
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
     try:
-        descriptor = os.open(path.name, flags, dir_fd=parent_descriptor)
-    except OSError as exc:
-        raise BootstrapPlanError(f"{label} is unavailable") from exc
-    finally:
-        os.close(parent_descriptor)
-    try:
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_uid != os.geteuid()
-            or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) != 0o400
-            or before.st_size <= 0
-            or before.st_size > MAXIMUM_ARTIFACT_BYTES
-        ):
-            raise BootstrapPlanError(
-                f"{label} must be one owner-controlled 0400 regular file"
-            )
-        value = bytearray()
-        while len(value) < before.st_size:
-            chunk = os.read(descriptor, min(1024 * 1024, before.st_size - len(value)))
-            if not chunk:
-                break
-            value.extend(chunk)
-        after = os.fstat(descriptor)
-        identity_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        identity_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        if len(value) != before.st_size or identity_before != identity_after:
-            raise BootstrapPlanError(f"{label} changed while it was read")
-        return bytes(value)
-    except OSError as exc:
-        raise BootstrapPlanError(f"{label} could not be read") from exc
-    finally:
-        os.close(descriptor)
+        process.wait(timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
-def _read_checkout_file(path: Path, *, label: str) -> bytes:
-    """Read one reviewed source file without following or racing its pathname."""
-    _reject_symlink_components(path.parent, label=f"{label} directory")
-    directory = os.open(
-        path.parent,
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_DIRECTORY", 0),
-    )
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(
-            path.name,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=directory,
-        )
-        before = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(before.st_mode)
-            or before.st_uid != os.geteuid()
-            or before.st_nlink != 1
-            or stat.S_IMODE(before.st_mode) & 0o022
-            or not 0 < before.st_size <= MAXIMUM_ARTIFACT_BYTES
-        ):
-            raise BootstrapPlanError(f"{label} is not a stable reviewed file")
-        value = bytearray()
-        while len(value) < before.st_size:
-            value.extend(
-                os.read(descriptor, min(1024 * 1024, before.st_size - len(value)))
-            )
-        after = os.fstat(descriptor)
-        linked = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
-        identity_before = (
-            before.st_dev,
-            before.st_ino,
-            before.st_size,
-            before.st_mtime_ns,
-            before.st_ctime_ns,
-        )
-        identity_after = (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-            after.st_ctime_ns,
-        )
-        identity_linked = (
-            linked.st_dev,
-            linked.st_ino,
-            linked.st_size,
-            linked.st_mtime_ns,
-            linked.st_ctime_ns,
-        )
-        if (
-            len(value) != before.st_size
-            or identity_before != identity_after
-            or identity_after != identity_linked
-        ):
-            raise BootstrapPlanError(f"{label} changed while it was read")
-        return bytes(value)
-    except OSError as exc:
-        raise BootstrapPlanError(f"{label} could not be read safely") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        os.close(directory)
-
-
-def _load_json_bytes(value: bytes, *, label: str) -> Mapping[str, Any]:
-    try:
-        decoded = json.loads(
-            value,
-            object_pairs_hook=_unique_json_object,
-            parse_constant=_reject_nonfinite_json,
-        )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-        raise BootstrapPlanError(f"{label} is not valid JSON") from exc
-    if not isinstance(decoded, Mapping):
-        raise BootstrapPlanError(f"{label} must contain a JSON object")
-    return decoded
-
-
-def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
-    blocked = {
-        "ALL_PROXY",
-        "CURL_CA_BUNDLE",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "OPENSSL_CONF",
-        "REQUESTS_CA_BUNDLE",
-        "SSL_CERT_DIR",
-        "SSL_CERT_FILE",
-    }
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("TF_", "TOFU_", "OPENTOFU_", "GIT_", "ARM_", "AZURE_"))
-        and name.upper() not in blocked
-    }
-    environment["CHECKPOINT_DISABLE"] = "1"
-    environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["TF_CLI_CONFIG_FILE"] = os.devnull
-    environment["TF_IN_AUTOMATION"] = "1"
-    if data_dir is not None:
-        environment["TF_DATA_DIR"] = str(data_dir)
-    return environment
-
-
-def _run_process(
-    arguments: Sequence[str],
+def _collect_process(
+    process: subprocess.Popen[bytes],
     *,
-    cwd: Path,
     timeout_seconds: float,
-    pass_fds: Sequence[int] = (),
-    max_output_bytes: int = 8 * 1024 * 1024,
-    data_dir: Path | None = None,
-) -> subprocess.CompletedProcess[bytes]:
-    try:
-        process = subprocess.Popen(
-            list(arguments),
-            cwd=cwd,
-            env=_normalized_environment(data_dir=data_dir),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            pass_fds=tuple(pass_fds),
-            umask=0o077,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise BootstrapPlanError("required local command did not start") from exc
-    assert process.stdout is not None
-    assert process.stderr is not None
-    stdout_fd = process.stdout.fileno()
-    stderr_fd = process.stderr.fileno()
-    streams: dict[int, list[bytes]] = {stdout_fd: [], stderr_fd: []}
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ, stdout_fd)
-    selector.register(process.stderr, selectors.EVENT_READ, stderr_fd)
+    maximum_output_bytes: int,
+) -> tuple[int, bytes, bytes]:
+    stdout = None
+    stderr = None
+    selector: selectors.BaseSelector | None = None
     deadline = time.monotonic() + timeout_seconds
-    total = 0
     try:
+        stdout = process.stdout
+        stderr = process.stderr
+        if stdout is None or stderr is None:
+            raise BootstrapPlanError("required local command pipes are unavailable")
+        streams: dict[int, list[bytes]] = {stdout.fileno(): [], stderr.fileno(): []}
+        selector = selectors.DefaultSelector()
+        selector.register(stdout, selectors.EVENT_READ, stdout.fileno())
+        selector.register(stderr, selectors.EVENT_READ, stderr.fileno())
+        total = 0
         while selector.get_map():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -376,41 +152,49 @@ def _run_process(
                     selector.unregister(key.fileobj)
                     continue
                 total += len(chunk)
-                if total > max_output_bytes:
+                if total > maximum_output_bytes:
                     raise BootstrapPlanError(
                         "required local command output exceeded limit"
                     )
                 streams[key.data].append(chunk)
-        returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        while True:
+            if time.monotonic() >= deadline:
+                raise BootstrapPlanError("required local command timed out")
+            status = os.waitid(
+                os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+            )
+            if status is not None:
+                break
+            time.sleep(0.01)
+        captured_stdout = b"".join(streams[stdout.fileno()])
+        captured_stderr = b"".join(streams[stderr.fileno()])
     except (OSError, subprocess.TimeoutExpired, BootstrapPlanError) as exc:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
         if isinstance(exc, BootstrapPlanError):
             raise
         raise BootstrapPlanError("required local command did not complete") from exc
     finally:
-        selector.close()
-    stdout = b"".join(streams[stdout_fd])
-    stderr = b"".join(streams[stderr_fd])
-    process.stdout.close()
-    process.stderr.close()
-    return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
+        _terminate_process(process)
+        if selector is not None:
+            selector.close()
+        if stdout is not None:
+            stdout.close()
+        if stderr is not None:
+            stderr.close()
+    if process.returncode is None:
+        raise BootstrapPlanError("required local command could not be reaped")
+    return process.returncode, captured_stdout, captured_stderr
 
 
-def _trusted_executable(path: Path, *, label: str) -> Path:
+def _trusted_system_executable(path: Path, *, label: str) -> Path:
     try:
         resolved = path.resolve(strict=True)
         metadata = resolved.stat()
     except OSError as exc:
         raise BootstrapPlanError(f"the {label} executable is unavailable") from exc
     if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid not in {0, os.geteuid()}
+        resolved != path
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
         or stat.S_IMODE(metadata.st_mode) & 0o022
         or not os.access(resolved, os.X_OK)
     ):
@@ -418,69 +202,112 @@ def _trusted_executable(path: Path, *, label: str) -> Path:
     return resolved
 
 
-def _executable_sha256(path: Path, *, label: str) -> str:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor: int | None = None
-    try:
-        descriptor = os.open(path, flags)
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or not before.st_mode & 0o111:
-            raise BootstrapPlanError(f"the {label} executable is invalid")
-        digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 1024 * 1024):
-            digest.update(chunk)
-        after = os.fstat(descriptor)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev,
-            after.st_ino,
-            after.st_size,
-            after.st_mtime_ns,
-        ):
-            raise BootstrapPlanError(f"the {label} executable changed while hashed")
-        return digest.hexdigest()
-    except OSError as exc:
-        raise BootstrapPlanError(f"the {label} executable could not be hashed") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-
-
-def _require_pinned_executable(path: Path, *, expected: str, label: str) -> str:
-    observed = _executable_sha256(path, label=label)
-    if observed != expected:
-        raise BootstrapPlanError(f"the {label} executable digest is not pinned")
-    return observed
-
-
-def _resolve_and_verify_tofu() -> Path:
-    executable = shutil.which("tofu")
-    if executable is None:
-        raise BootstrapPlanError("the pinned OpenTofu executable is unavailable")
-    tofu = _trusted_executable(Path(executable), label="OpenTofu")
-    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
-    result = _run_process(
-        [str(tofu), "version", "-json"], cwd=REPOSITORY_ROOT, timeout_seconds=30
+def _git_arguments_are_read_only(arguments: tuple[str, ...]) -> bool:
+    source_root = str(IDENTITY_ROOT.relative_to(REPOSITORY_ROOT))
+    support_paths = (
+        str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
+        str(RUNTIME_PATH.relative_to(REPOSITORY_ROOT)),
+        str(DECODER_PATH.relative_to(REPOSITORY_ROOT)),
     )
-    version = _load_json_bytes(result.stdout, label="OpenTofu version output")
+    fixed = {
+        ("rev-parse", "HEAD"),
+        ("rev-parse", "refs/remotes/origin/master"),
+        ("remote", "get-url", "--all", "origin"),
+        (
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            source_root,
+            *support_paths,
+        ),
+    }
+    if arguments in fixed:
+        return True
     if (
-        result.returncode != 0
-        or version.get("terraform_version") != EXPECTED_TOFU_VERSION
+        len(arguments) == 6
+        and arguments[:3] == ("ls-tree", "-r", "--name-only")
+        and re.fullmatch(r"[0-9a-f]{40}", arguments[3]) is not None
+        and arguments[4:] == ("--", source_root)
     ):
-        raise BootstrapPlanError("the OpenTofu executable version is not pinned")
-    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
-    return tofu
+        return True
+    if len(arguments) != 2 or arguments[0] != "show":
+        return False
+    commit, separator, name = arguments[1].partition(":")
+    if separator != ":" or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        return False
+    return name in support_paths or (
+        name.startswith(f"{source_root}/")
+        and "/" not in name.removeprefix(f"{source_root}/")
+        and (name.endswith(".tf") or name.endswith("/.terraform.lock.hcl"))
+    )
+
+
+def _git_sandbox_profile(git: Path) -> str:
+    return (
+        '(version 1)(deny default)(import "system.sb")(deny process-exec*)'
+        f"(allow process-exec (literal {json.dumps(str(git))}))"
+        "(allow process-fork)(deny mach*)(deny ipc*)"
+        "(deny signal (target others))(deny process-info* (target others))"
+        "(deny network*)(deny file-write*)(allow file-read*)"
+    )
 
 
 def _run_git(arguments: Sequence[str]) -> bytes:
-    git = _trusted_executable(SYSTEM_GIT, label="Git")
-    result = _run_process(
-        [str(git), "--no-replace-objects", "-C", str(REPOSITORY_ROOT), *arguments],
-        cwd=REPOSITORY_ROOT,
+    exact_arguments = tuple(arguments)
+    if not _git_arguments_are_read_only(exact_arguments):
+        raise BootstrapPlanError("the Git operation is not an approved read")
+    git = _trusted_system_executable(SYSTEM_GIT, label="Git")
+    sandbox = _trusted_system_executable(SYSTEM_SANDBOX_EXEC, label="sandbox-exec")
+    environment = {
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_PAGER": "",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LANG": "C",
+        "LC_ALL": "C",
+    }
+    try:
+        process = subprocess.Popen(
+            (
+                str(sandbox),
+                "-p",
+                _git_sandbox_profile(git),
+                str(git),
+                "--no-optional-locks",
+                "--no-replace-objects",
+                "-c",
+                "core.fsmonitor=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "core.untrackedCache=false",
+                "-C",
+                str(REPOSITORY_ROOT),
+                *exact_arguments,
+            ),
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=False,
+            close_fds=True,
+            umask=0o077,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise BootstrapPlanError("the source checkout could not be verified") from exc
+    returncode, stdout, _stderr = _collect_process(
+        process,
         timeout_seconds=30,
+        maximum_output_bytes=MAXIMUM_ARTIFACT_BYTES,
     )
-    if result.returncode != 0:
+    if returncode != 0:
         raise BootstrapPlanError("the source checkout could not be verified")
-    return result.stdout
+    return stdout
 
 
 def _source_snapshot(expected_commit: str) -> SourceSnapshot:
@@ -502,6 +329,8 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     relevant_paths = (
         str(IDENTITY_ROOT.relative_to(REPOSITORY_ROOT)),
         str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
+        str(RUNTIME_PATH.relative_to(REPOSITORY_ROOT)),
+        str(DECODER_PATH.relative_to(REPOSITORY_ROOT)),
     )
     if _run_git(
         ["status", "--porcelain=v1", "--untracked-files=all", "--", *relevant_paths]
@@ -534,18 +363,22 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
             != value
         ):
             raise BootstrapPlanError("bootstrap source differs from the commit")
-    validator_name = str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT))
-    validator_bytes = _run_git(["show", f"{expected_commit}:{validator_name}"])
-    if (
-        _read_checkout_file(VALIDATOR_PATH, label="bootstrap plan validator")
-        != validator_bytes
+    support_files: dict[str, bytes] = {}
+    for support_path, label in (
+        (VALIDATOR_PATH, "bootstrap plan validator"),
+        (RUNTIME_PATH, "offline plan runtime"),
+        (DECODER_PATH, "offline OpenTofu decoder"),
     ):
-        raise BootstrapPlanError("bootstrap plan validator differs from the commit")
+        name = str(support_path.relative_to(REPOSITORY_ROOT))
+        committed_value = _run_git(["show", f"{expected_commit}:{name}"])
+        if _read_checkout_file(support_path, label=label) != committed_value:
+            raise BootstrapPlanError(f"{label} differs from the commit")
+        support_files[name] = committed_value
     lockfile = committed.pop(".terraform.lock.hcl")
     tree_files = {
         **committed,
         ".terraform.lock.hcl": lockfile,
-        validator_name: validator_bytes,
+        **support_files,
     }
     return SourceSnapshot(
         commit=head,
@@ -555,72 +388,30 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     )
 
 
-def _provider_tree_sha256(data_dir: Path) -> str:
-    providers = sorted((data_dir / "providers").rglob("terraform-provider-*"))
-    if len(providers) != 1 or providers[0].is_symlink():
-        raise BootstrapPlanError("offline decoder provider set is not exact")
-    relative = providers[0].relative_to(data_dir / "providers")
-    expected_parent = Path(
-        "registry.opentofu.org/hashicorp/azurerm/4.73.0",
-        EXPECTED_PROVIDER_PLATFORM,
+def _decode_saved_plan(
+    plan_bytes: bytes,
+    *,
+    source: SourceSnapshot,
+    provider_package: Path,
+) -> offline_tofu_decoder.DecodedPlan:
+    tofu_source = shutil.which("tofu")
+    if tofu_source is None:
+        raise BootstrapPlanError("the pinned OpenTofu executable is unavailable")
+    return offline_tofu_decoder.decode_saved_plan(
+        plan_bytes,
+        terraform_files={
+            **source.terraform_files,
+            ".terraform.lock.hcl": source.lockfile,
+        },
+        provider_package=provider_package,
+        tofu_source=Path(tofu_source),
+        expected_tofu_version=EXPECTED_TOFU_VERSION,
+        expected_tofu_sha256=EXPECTED_TOFU_SHA256,
+        provider_version="4.73.0",
+        provider_platform=EXPECTED_PROVIDER_PLATFORM,
+        expected_provider_sha256=EXPECTED_PROVIDER_SHA256,
+        expected_provider_package_h1=EXPECTED_PROVIDER_PACKAGE_H1,
     )
-    if relative.parent != expected_parent:
-        raise BootstrapPlanError("offline decoder provider path is not pinned")
-    provider = _trusted_executable(providers[0], label="AzureRM provider")
-    return _require_pinned_executable(
-        provider, expected=EXPECTED_PROVIDER_SHA256, label="AzureRM provider"
-    )
-
-
-def _initialize_decoder(*, tofu: Path, data_dir: Path) -> str:
-    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
-    result = _run_process(
-        [
-            str(tofu),
-            f"-chdir={IDENTITY_ROOT}",
-            "init",
-            "-backend=false",
-            "-input=false",
-            "-lockfile=readonly",
-            "-no-color",
-        ],
-        cwd=REPOSITORY_ROOT,
-        timeout_seconds=300,
-        data_dir=data_dir,
-    )
-    if result.returncode != 0:
-        raise BootstrapPlanError("the offline plan decoder could not be initialized")
-    if (data_dir / "terraform.tfstate").exists():
-        raise BootstrapPlanError("offline decoder unexpectedly initialized a backend")
-    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
-    return _provider_tree_sha256(data_dir)
-
-
-def _show_saved_plan(plan_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
-    with tempfile.TemporaryFile(prefix="cosmaneura-bootstrap-plan-") as plan_file:
-        plan_file.write(plan_bytes)
-        plan_file.flush()
-        plan_file.seek(0)
-        descriptor = plan_file.fileno()
-        result = _run_process(
-            [
-                str(tofu),
-                f"-chdir={IDENTITY_ROOT}",
-                "show",
-                "-json",
-                f"/dev/fd/{descriptor}",
-            ],
-            cwd=REPOSITORY_ROOT,
-            timeout_seconds=120,
-            pass_fds=(descriptor,),
-            max_output_bytes=MAXIMUM_PLAN_JSON_BYTES,
-            data_dir=data_dir,
-        )
-    if result.returncode != 0:
-        raise BootstrapPlanError("the saved plan could not be decoded by OpenTofu")
-    if not result.stdout or len(result.stdout) > MAXIMUM_PLAN_JSON_BYTES:
-        raise BootstrapPlanError("derived plan JSON size is outside the accepted range")
-    return result.stdout
 
 
 def _read_zip_member(archive: zipfile.ZipFile, name: str) -> bytes:
@@ -1278,20 +1069,66 @@ def _validate_artifacts(
     expected_state_serial: int,
     tofu_sha256: str,
     provider_sha256: str,
+    provider_package_h1: str,
     now: datetime,
 ) -> Mapping[str, Any]:
+    archive = _validate_archive(
+        saved_plan_bytes=saved_plan_bytes,
+        expected_saved_plan_sha256=expected_saved_plan_sha256,
+        source=source,
+        expected_state_lineage=expected_state_lineage,
+        expected_state_serial=expected_state_serial,
+    )
+    return _build_receipt(
+        saved_plan_bytes=saved_plan_bytes,
+        source=source,
+        archive=archive,
+        plan_json_bytes=plan_json_bytes,
+        expected_state_lineage=expected_state_lineage,
+        expected_state_serial=expected_state_serial,
+        tofu_sha256=tofu_sha256,
+        provider_sha256=provider_sha256,
+        provider_package_h1=provider_package_h1,
+        now=now,
+    )
+
+
+def _validate_archive(
+    *,
+    saved_plan_bytes: bytes,
+    expected_saved_plan_sha256: str,
+    source: SourceSnapshot,
+    expected_state_lineage: str,
+    expected_state_serial: int,
+) -> tuple[bytes, Mapping[str, Any], bytes, Mapping[str, Any]]:
     saved_plan_sha256 = _sha256_bytes(saved_plan_bytes)
     if saved_plan_sha256 != expected_saved_plan_sha256:
         raise BootstrapPlanError("saved plan digest does not match reviewed evidence")
-    previous_bytes, previous, refreshed_bytes, refreshed = _inspect_plan_archive(
-        saved_plan_bytes, source=source
-    )
+    archive = _inspect_plan_archive(saved_plan_bytes, source=source)
+    previous_bytes, previous, refreshed_bytes, refreshed = archive
     _validate_embedded_states(
         previous,
         refreshed,
         expected_lineage=expected_state_lineage,
         expected_serial=expected_state_serial,
     )
+    return archive
+
+
+def _build_receipt(
+    *,
+    saved_plan_bytes: bytes,
+    source: SourceSnapshot,
+    archive: tuple[bytes, Mapping[str, Any], bytes, Mapping[str, Any]],
+    plan_json_bytes: bytes,
+    expected_state_lineage: str,
+    expected_state_serial: int,
+    tofu_sha256: str,
+    provider_sha256: str,
+    provider_package_h1: str,
+    now: datetime,
+) -> Mapping[str, Any]:
+    previous_bytes, _previous, refreshed_bytes, _refreshed = archive
     plan = _load_json_bytes(plan_json_bytes, label="derived plan JSON")
     plan_timestamp, cleanup, rehearsal_id, lifetime_hours = _validate_plan(
         plan, now=now
@@ -1305,7 +1142,8 @@ def _validate_artifacts(
         "open_tofu_version": EXPECTED_TOFU_VERSION,
         "open_tofu_sha256": tofu_sha256,
         "open_tofu_provider_sha256": provider_sha256,
-        "saved_plan_sha256": saved_plan_sha256,
+        "open_tofu_provider_package_h1": provider_package_h1,
+        "saved_plan_sha256": _sha256_bytes(saved_plan_bytes),
         "derived_plan_json_sha256": _sha256_bytes(plan_json_bytes),
         "embedded_prior_state_sha256": _sha256_bytes(previous_bytes),
         "embedded_refreshed_state_sha256": _sha256_bytes(refreshed_bytes),
@@ -1329,14 +1167,24 @@ def _validate_artifacts(
     }
 
 
+def _require_receipt_fresh(receipt: Mapping[str, Any], *, now: datetime) -> None:
+    cleanup = datetime.strptime(
+        str(receipt["cleanup_not_after"]), "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=UTC)
+    if now.astimezone(UTC) >= cleanup:
+        raise BootstrapPlanError(
+            "saved plan cleanup deadline expired during validation"
+        )
+
+
 def validate_saved_plan(
     *,
     saved_plan: Path,
+    provider_package: Path,
     expected_saved_plan_sha256: str,
     expected_source_commit: str,
     expected_state_lineage: str,
     expected_state_serial: int,
-    now: datetime | None = None,
 ) -> Mapping[str, Any]:
     if re.fullmatch(r"[0-9a-f]{64}", expected_saved_plan_sha256) is None:
         raise BootstrapPlanError("expected saved-plan digest is invalid")
@@ -1350,52 +1198,46 @@ def validate_saved_plan(
         raise BootstrapPlanError("expected state lineage is invalid")
     if type(expected_state_serial) is not int or expected_state_serial < 1:
         raise BootstrapPlanError("expected state serial must be a positive integer")
-    saved_plan_bytes = _read_protected_file(saved_plan, label="saved plan")
+    saved_plan_bytes = _read_protected_file(
+        saved_plan, label="saved plan", maximum_bytes=MAXIMUM_ARTIFACT_BYTES
+    )
+    if _sha256_bytes(saved_plan_bytes) != expected_saved_plan_sha256:
+        raise BootstrapPlanError("saved plan digest does not match reviewed evidence")
     source_before = _source_snapshot(expected_source_commit)
-    tofu = _resolve_and_verify_tofu()
-    tofu_sha256 = EXPECTED_TOFU_SHA256
-    with tempfile.TemporaryDirectory(
-        prefix=".cosmaneura-bootstrap-plan-decoder-", dir=saved_plan.parent
-    ) as temporary_directory:
-        data_dir = Path(temporary_directory)
-        provider_sha256 = _initialize_decoder(tofu=tofu, data_dir=data_dir)
-        _require_pinned_executable(
-            tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu"
-        )
-        _provider_tree_sha256(data_dir)
-        plan_json_bytes = _show_saved_plan(
-            saved_plan_bytes, tofu=tofu, data_dir=data_dir
-        )
-        _require_pinned_executable(
-            tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu"
-        )
-        if (data_dir / "terraform.tfstate").exists():
-            raise BootstrapPlanError(
-                "offline decoder unexpectedly initialized a backend"
-            )
-        if _provider_tree_sha256(data_dir) != provider_sha256:
-            raise BootstrapPlanError(
-                "offline decoder provider changed during validation"
-            )
-    receipt = _validate_artifacts(
+    archive = _validate_archive(
         saved_plan_bytes=saved_plan_bytes,
         expected_saved_plan_sha256=expected_saved_plan_sha256,
         source=source_before,
-        plan_json_bytes=plan_json_bytes,
         expected_state_lineage=expected_state_lineage,
         expected_state_serial=expected_state_serial,
-        tofu_sha256=tofu_sha256,
-        provider_sha256=provider_sha256,
-        now=now or datetime.now(UTC),
+    )
+    decoded = _decode_saved_plan(
+        saved_plan_bytes,
+        source=source_before,
+        provider_package=provider_package,
+    )
+    receipt = _build_receipt(
+        saved_plan_bytes=saved_plan_bytes,
+        source=source_before,
+        archive=archive,
+        plan_json_bytes=decoded.plan_json,
+        expected_state_lineage=expected_state_lineage,
+        expected_state_serial=expected_state_serial,
+        tofu_sha256=decoded.tofu_sha256,
+        provider_sha256=decoded.provider_sha256,
+        provider_package_h1=decoded.provider_package_h1,
+        now=_utc_now(),
     )
     if _source_snapshot(expected_source_commit) != source_before:
         raise BootstrapPlanError("bootstrap plan source changed during validation")
+    _require_receipt_fresh(receipt, now=_utc_now())
     return receipt
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--saved-plan", required=True, type=Path)
+    parser.add_argument("--provider-package-dir", required=True, type=Path)
     parser.add_argument("--expected-saved-plan-sha256", required=True)
     parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument("--expected-state-lineage", required=True)
@@ -1408,6 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         receipt = validate_saved_plan(
             saved_plan=args.saved_plan,
+            provider_package=args.provider_package_dir,
             expected_saved_plan_sha256=args.expected_saved_plan_sha256,
             expected_source_commit=args.expected_source_commit,
             expected_state_lineage=args.expected_state_lineage,
