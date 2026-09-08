@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
+import platform
 import selectors
+import shutil
 import signal
 import stat
 import subprocess
+import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -16,20 +20,8 @@ from typing import Any
 
 MAX_FILE_BYTES = 128 * 1024 * 1024
 MAX_PROCESS_OUTPUT_BYTES = 8 * 1024 * 1024
-BLOCKED_ENVIRONMENT_NAMES = frozenset(
-    {
-        "ALL_PROXY",
-        "CURL_CA_BUNDLE",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "OPENSSL_CONF",
-        "REQUESTS_CA_BUNDLE",
-        "SSL_CERT_DIR",
-        "SSL_CERT_FILE",
-    }
-)
-BLOCKED_ENVIRONMENT_PREFIXES = ("TF_", "TOFU_", "OPENTOFU_", "GIT_", "ARM_", "AZURE_")
+SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+NETWORK_DENY_PROFILE = "(version 1)(allow default)(deny network*)"
 
 
 class OfflineRuntimeError(ValueError):
@@ -234,41 +226,97 @@ def read_checkout_file(
         os.close(parent)
 
 
-def normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
-    environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(BLOCKED_ENVIRONMENT_PREFIXES)
-        and name.upper() not in BLOCKED_ENVIRONMENT_NAMES
+def isolated_environment(*, runtime_root: Path, data_dir: Path) -> dict[str, str]:
+    require_private_directory(runtime_root, label="private runtime root")
+    directories = {
+        "HOME": runtime_root / "home",
+        "XDG_CACHE_HOME": runtime_root / "cache",
+        "XDG_CONFIG_HOME": runtime_root / "config",
+        "XDG_DATA_HOME": runtime_root / "data-home",
+        "TMPDIR": runtime_root / "tmp",
     }
-    environment.update(
-        CHECKPOINT_DISABLE="1",
-        GIT_CONFIG_GLOBAL=os.devnull,
-        GIT_CONFIG_NOSYSTEM="1",
-        GIT_NO_REPLACE_OBJECTS="1",
-        GIT_TERMINAL_PROMPT="0",
-        TF_CLI_CONFIG_FILE=os.devnull,
-        TF_IN_AUTOMATION="1",
-    )
-    if data_dir is not None:
-        environment["TF_DATA_DIR"] = str(data_dir)
-    return environment
+    for path in directories.values():
+        path.mkdir(mode=0o700, exist_ok=True)
+        require_private_directory(path, label="private runtime environment directory")
+    return {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "CHECKPOINT_DISABLE": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "TF_CLI_CONFIG_FILE": os.devnull,
+        "TF_DATA_DIR": str(data_dir),
+        "TF_IN_AUTOMATION": "1",
+        **{name: str(path) for name, path in directories.items()},
+    }
 
 
-def run_process(
+def _offline_command(arguments: Sequence[str]) -> list[str]:
+    if platform.system() != "Darwin":
+        raise OfflineRuntimeError("offline process isolation requires Darwin")
+    try:
+        metadata = SANDBOX_EXEC.stat()
+    except OSError as exc:
+        raise OfflineRuntimeError(
+            "the network sandbox executable is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
+        raise OfflineRuntimeError("the network sandbox executable is not trusted")
+    return [str(SANDBOX_EXEC), "-p", NETWORK_DENY_PROFILE, *arguments]
+
+
+def _validate_pass_fds(pass_fds: Sequence[int], *, maximum_bytes: int) -> None:
+    for descriptor in pass_fds:
+        try:
+            metadata = os.fstat(descriptor)
+            access_mode = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+        except OSError as exc:
+            raise OfflineRuntimeError(
+                "offline subprocess descriptor is invalid"
+            ) from exc
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink not in {0, 1}
+            or not 0 < metadata.st_size <= maximum_bytes
+            or access_mode != os.O_RDONLY
+        ):
+            raise OfflineRuntimeError(
+                "offline subprocess descriptor is not read-only data"
+            )
+
+
+def run_offline_process(
     arguments: Sequence[str],
     *,
+    runtime_root: Path,
+    expected_executable_sha256: str,
     cwd: Path,
     timeout_seconds: float,
     pass_fds: Sequence[int] = (),
     max_output_bytes: int = MAX_PROCESS_OUTPUT_BYTES,
-    data_dir: Path | None = None,
+    data_dir: Path,
 ) -> subprocess.CompletedProcess[bytes]:
+    if not arguments:
+        raise OfflineRuntimeError("offline command is missing")
+    executable = Path(arguments[0])
+    verify_private_executable(
+        executable, expected=expected_executable_sha256, label="offline tool"
+    )
+    _validate_pass_fds(pass_fds, maximum_bytes=MAX_FILE_BYTES)
+    sandboxed_arguments = _offline_command(arguments)
     try:
         process = subprocess.Popen(
-            list(arguments),
+            sandboxed_arguments,
             cwd=cwd,
-            env=normalized_environment(data_dir=data_dir),
+            env=isolated_environment(runtime_root=runtime_root, data_dir=data_dir),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -323,10 +371,13 @@ def run_process(
     stderr = b"".join(streams[process.stderr.fileno()])
     process.stdout.close()
     process.stderr.close()
+    verify_private_executable(
+        executable, expected=expected_executable_sha256, label="offline tool"
+    )
     return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
 
 
-def trusted_executable(path: Path, *, label: str) -> Path:
+def _resolve_executable_source(path: Path, *, label: str) -> Path:
     try:
         resolved = path.resolve(strict=True)
         metadata = resolved.stat()
@@ -368,7 +419,22 @@ def executable_sha256(path: Path, *, label: str) -> str:
             os.close(descriptor)
 
 
-def require_pinned_executable(path: Path, *, expected: str, label: str) -> str:
+def verify_private_executable(path: Path, *, expected: str, label: str) -> str:
+    parent = open_private_directory(path.parent, label=f"private {label} directory")
+    os.close(parent)
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise OfflineRuntimeError(
+            f"the private {label} executable is unavailable"
+        ) from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o500
+    ):
+        raise OfflineRuntimeError(f"the private {label} executable is not exact")
     observed = executable_sha256(path, label=label)
     if observed != expected:
         raise OfflineRuntimeError(f"the {label} executable digest is not pinned")
@@ -382,7 +448,7 @@ def copy_pinned_executable(
         character not in "0123456789abcdef" for character in expected
     ):
         raise OfflineRuntimeError(f"the {label} expected digest is invalid")
-    source = trusted_executable(source, label=label)
+    source = _resolve_executable_source(source, label=label)
     parent = open_private_directory(
         destination.parent, label=f"private {label} directory"
     )
@@ -431,23 +497,33 @@ def copy_pinned_executable(
             except OSError:
                 pass
         os.close(parent)
-    require_pinned_executable(destination, expected=expected, label=label)
+    verify_private_executable(destination, expected=expected, label=label)
     return destination
 
 
 def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
-    directory.mkdir(mode=0o700)
-    require_private_directory(directory, label="decoder source directory")
-    parent = open_private_directory(directory, label="decoder source directory")
+    if not files or any(
+        Path(name).name != name or not value for name, value in files.items()
+    ):
+        raise OfflineRuntimeError("decoder source member is invalid")
+    reject_symlink_components(
+        directory, label="decoder source", allow_missing_leaf=True
+    )
+    parent = open_private_directory(directory.parent, label="decoder source parent")
+    temporary: Path | None = None
+    target: int | None = None
     try:
+        temporary = Path(
+            tempfile.mkdtemp(prefix=f".{directory.name}-", dir=directory.parent)
+        )
+        temporary.chmod(0o700)
+        target = open_private_directory(temporary, label="temporary decoder source")
         for name, value in files.items():
-            if Path(name).name != name or not value:
-                raise OfflineRuntimeError("decoder source member is invalid")
             descriptor = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                 0o400,
-                dir_fd=parent,
+                dir_fd=target,
             )
             try:
                 offset = 0
@@ -457,9 +533,21 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
                 os.fchmod(descriptor, 0o400)
             finally:
                 os.close(descriptor)
-    except OSError as exc:
+        os.fsync(target)
+        os.close(target)
+        target = None
+        os.rename(temporary.name, directory.name, src_dir_fd=parent, dst_dir_fd=parent)
+        os.fsync(parent)
+        temporary = None
+    except (OSError, OfflineRuntimeError) as exc:
+        if isinstance(exc, OfflineRuntimeError):
+            raise
         raise OfflineRuntimeError("decoder source could not be materialized") from exc
     finally:
+        if target is not None:
+            os.close(target)
+        if temporary is not None:
+            shutil.rmtree(temporary)
         os.close(parent)
 
 
