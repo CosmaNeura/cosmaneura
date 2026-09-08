@@ -689,6 +689,8 @@ def _validate_evidence(
     jobs = raw["jobs"]
     admins = raw["postgres_admins"]
     servers = postgres["servers"]
+    if type(servers) is not list:
+        _fail(code)
     account = verification["account"]
     expected_rbac_command = (
         "az role assignment list --include-inherited --scope /subscriptions/"

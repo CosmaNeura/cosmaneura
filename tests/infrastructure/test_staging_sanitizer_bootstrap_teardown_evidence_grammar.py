@@ -656,7 +656,7 @@ def test_scope_hash_and_closed_world_mutations_refuse(
         (
             None,
             lambda value: value["content_filters"][0]["content_filter_offsets"].update(
-                end_offset=0
+                end_offset=1_000_000
             ),
         ),
         (
@@ -726,6 +726,30 @@ def test_malformed_job_identity_type_has_bounded_refusal(
             0
         ].update(identity={"type": identity_type}),
     )
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+@pytest.mark.parametrize("servers", [None, False, 1, {}])
+def test_malformed_postgres_servers_has_bounded_refusal(
+    tmp_path: Path, servers: Any
+) -> None:
+    def mutate(value: dict[str, Any]) -> None:
+        value["remediation"]["postgres_server_inventory"]["servers"] = servers
+
+    directory, policy = _bundle(tmp_path, mutate_evidence=mutate)
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+@pytest.mark.parametrize("offset", ["missing", None, False, "53234", 53234.0])
+def test_malformed_policy_filter_offset_refuses(tmp_path: Path, offset: Any) -> None:
+    directory, policy = _bundle(tmp_path)
+    review = policy["independent_review"]
+    if offset == "missing":
+        review.pop("content_filter_end_offset")
+    else:
+        review["content_filter_end_offset"] = offset
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)
 
