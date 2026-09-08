@@ -102,12 +102,26 @@ def test_executable_hash_rejects_fifo_and_copy_enforces_size_bound(
     os.mkfifo(fifo, mode=0o500)
     with pytest.raises(runtime.OfflineRuntimeError, match="invalid"):
         runtime.executable_sha256(fifo, label="FIFO")
+    with pytest.raises(runtime.OfflineRuntimeError, match="size limit is invalid"):
+        runtime.executable_sha256(
+            Path("/bin/sh").resolve(),
+            label="shell",
+            maximum_bytes=runtime.MAX_EXECUTABLE_BYTES + 1,
+        )
 
     source = tmp_path / "source"
     source.write_bytes(b"#!/bin/sh\n")
     source.chmod(0o500)
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
+    with pytest.raises(runtime.OfflineRuntimeError, match="size limit is invalid"):
+        runtime.copy_pinned_executable(
+            source,
+            private / "oversize-limit",
+            expected=runtime.sha256_bytes(source.read_bytes()),
+            label="tool",
+            maximum_bytes=runtime.MAX_EXECUTABLE_BYTES + 1,
+        )
     with pytest.raises(runtime.OfflineRuntimeError, match="not stable"):
         runtime.copy_pinned_executable(
             source,
@@ -130,6 +144,9 @@ def test_materialized_source_is_private_and_exact(tmp_path: Path) -> None:
     with pytest.raises(runtime.OfflineRuntimeError, match="member is invalid"):
         runtime.materialize_source(tmp_path / "bad", {"../escape": b"no"})
     assert not (tmp_path / "bad").exists()
+    with pytest.raises(runtime.OfflineRuntimeError, match="member is invalid"):
+        runtime.materialize_source(tmp_path / "bad-nul", {"bad\0name": b"no"})
+    assert not (tmp_path / "bad-nul").exists()
 
 
 def test_materialized_source_never_replaces_existing_directory(tmp_path: Path) -> None:

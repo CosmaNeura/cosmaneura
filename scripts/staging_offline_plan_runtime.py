@@ -247,6 +247,12 @@ def _resolve_executable_source(path: Path, *, label: str) -> Path:
 def executable_sha256(
     path: Path, *, label: str, maximum_bytes: int = MAX_EXECUTABLE_BYTES
 ) -> str:
+    if (
+        isinstance(maximum_bytes, bool)
+        or not isinstance(maximum_bytes, int)
+        or not 0 < maximum_bytes <= MAX_EXECUTABLE_BYTES
+    ):
+        raise OfflineRuntimeError("executable size limit is invalid")
     descriptor: int | None = None
     try:
         descriptor = os.open(
@@ -313,6 +319,12 @@ def copy_pinned_executable(
     label: str,
     maximum_bytes: int = MAX_EXECUTABLE_BYTES,
 ) -> Path:
+    if (
+        isinstance(maximum_bytes, bool)
+        or not isinstance(maximum_bytes, int)
+        or not 0 < maximum_bytes <= MAX_EXECUTABLE_BYTES
+    ):
+        raise OfflineRuntimeError("executable size limit is invalid")
     if len(expected) != 64 or any(
         character not in "0123456789abcdef" for character in expected
     ):
@@ -492,10 +504,19 @@ def _remove_flat_private_directory(
 
 
 def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
-    if not files or any(
-        Path(name).name != name or not value for name, value in files.items()
-    ):
+    if not files:
         raise OfflineRuntimeError("decoder source member is invalid")
+    for name, value in files.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or "\0" in name
+            or name in {".", ".."}
+            or Path(name).name != name
+            or not isinstance(value, bytes)
+            or not value
+        ):
+            raise OfflineRuntimeError("decoder source member is invalid")
     reject_symlink_components(
         directory, label="decoder source", allow_missing_leaf=True
     )
@@ -535,7 +556,7 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
         published = True
         temporary = None
         os.fsync(parent)
-    except (OSError, OfflineRuntimeError) as exc:
+    except (OSError, ValueError, TypeError, OfflineRuntimeError) as exc:
         if target is not None:
             os.close(target)
             target = None
