@@ -17,8 +17,10 @@ from typing import Any, NoReturn
 
 try:
     from scripts import staging_offline_plan_runtime as offline
+    from scripts import staging_sanitizer_bootstrap_teardown_evidence_grammar as grammar
 except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
     import staging_offline_plan_runtime as offline
+    import staging_sanitizer_bootstrap_teardown_evidence_grammar as grammar
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,13 +28,14 @@ POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-bootstrap-identity-teardown-evidence-policy.json"
 )
-POLICY_SHA256 = "2cdf25f0d4e6758d5ec76ea4eb9179c3310e9d7b71238868d971c5d140ccc6f0"
+POLICY_SHA256 = "e779112647ce1298fda1752ee0eb4f9f314c883041fc17a033c84bd11a7e21d2"
 MAXIMUM_POLICY_BYTES = 128 * 1024
 KIND = "sealed-authenticated-staging-sanitizer-bootstrap-identity-teardown-evidence-v1"
-EVIDENCE_FILE = "post-apply-verification-v3.json"
-REVIEW_REQUEST_FILE = "post-apply-review-request-v3.json"
-REVIEW_RESPONSE_FILE = "post-apply-review-response-v3.json"
-EVIDENCE_FILES = (EVIDENCE_FILE, REVIEW_REQUEST_FILE, REVIEW_RESPONSE_FILE)
+EVIDENCE_FILE = grammar.EVIDENCE_FILE
+STATE_EVIDENCE_FILE = grammar.STATE_EVIDENCE_FILE
+REVIEW_REQUEST_FILE = grammar.REVIEW_REQUEST_FILE
+REVIEW_RESPONSE_FILE = grammar.REVIEW_RESPONSE_FILE
+EVIDENCE_FILES = grammar.EVIDENCE_FILES
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -114,6 +117,29 @@ def _mapping(value: Any, fields: set[str], code: str) -> Mapping[str, Any]:
 def _integer(value: Any, expected: int, code: str) -> None:
     if type(value) is not int or value != expected:
         _fail(code)
+
+
+def _same_typed(value: Any, expected: Any) -> bool:
+    if type(value) is not type(expected):
+        return False
+    if type(expected) is dict:
+        return set(value) == set(expected) and all(
+            _same_typed(value[name], item) for name, item in expected.items()
+        )
+    if type(expected) is list:
+        return len(value) == len(expected) and all(
+            _same_typed(item, expected[index]) for index, item in enumerate(value)
+        )
+    return value == expected
+
+
+def _exact_typed(value: Any, expected: Any, code: str) -> None:
+    if not _same_typed(value, expected):
+        _fail(code)
+
+
+def _matches(pattern: re.Pattern[str], value: Any) -> bool:
+    return type(value) is str and pattern.fullmatch(value) is not None
 
 
 def _parse_utc(value: Any, code: str) -> datetime:
@@ -260,6 +286,10 @@ def _validate_policy(value: Any) -> dict[str, Any]:
             "model",
             "request_file",
             "request_sha256",
+            "request_input_sha256",
+            "binding_id",
+            "maximum_output_tokens",
+            "content_filter_end_offset",
             "response_file",
             "response_id",
             "response_sha256",
@@ -295,20 +325,43 @@ def _validate_policy(value: Any) -> dict[str, Any]:
             "activation.sanitizer_bootstrap_job_attachment_unavailable"
         ),
     }
+    claims = _mapping(document["claims"], set(CLAIMS), code)
+    status = _mapping(document["status"], set(expected_status), code)
     files = evidence["files"]
+    _integer(document["schema_version"], 1, code)
+    _integer(state["pre_apply_serial"], 2, code)
+    _integer(state["post_apply_serial"], 3, code)
+    _integer(review["content_filter_end_offset"], 53_234, code)
+    expected_authority = {
+        "identity_count": 0,
+        "direct_or_inherited_role_assignment_count": 0,
+        "subscription_container_apps_job_count": 6,
+        "bootstrap_identity_job_attachment_count": 0,
+        "subscription_postgres_server_count": 5,
+        "entra_enabled_postgres_server_count": 1,
+        "entra_enabled_postgres_server_id": authority[
+            "entra_enabled_postgres_server_id"
+        ],
+        "bootstrap_identity_postgres_administrator_count": 0,
+    }
+    for name, expected_value in expected_authority.items():
+        _exact_typed(authority[name], expected_value, code)
+    for name, expected_value in CLAIMS.items():
+        _exact_typed(claims[name], expected_value, code)
+    for name, expected_value in expected_status.items():
+        _exact_typed(status[name], expected_value, code)
     deadline = _parse_utc(cleanup["cleanup_not_after"], code)
     started = _parse_utc(cleanup["evidence_started_at"], code)
     completed = _parse_utc(cleanup["evidence_completed_at"], code)
     if (
-        document["schema_version"] != 1
-        or document["policy_id"]
+        document["policy_id"]
         != "cosmaneura-staging-sanitizer-bootstrap-identity-teardown-evidence-v1"
         or document["closed_world"] is not True
         or source["repository"] != "CosmaNeura/cosmaneura"
         or source["protected_ref"] != "refs/heads/master"
-        or SHA_RE.fullmatch(source["source_commit"]) is None
+        or not _matches(SHA_RE, source["source_commit"])
         or any(
-            DIGEST_RE.fullmatch(source[name]) is None
+            not _matches(DIGEST_RE, source[name])
             for name in (
                 "applied_plan_sha256",
                 "decoded_plan_sha256",
@@ -316,10 +369,11 @@ def _validate_policy(value: Any) -> dict[str, Any]:
                 "plan_review_response_sha256",
             )
         )
-        or not str(source["plan_review_response_id"]).startswith("resp_")
+        or type(source["plan_review_response_id"]) is not str
+        or not source["plan_review_response_id"].startswith("resp_")
         or source["plan_review_verdict"] != "APPROVED FOR FOUNDER APPLY"
         or any(
-            UUID_RE.fullmatch(target[name]) is None
+            not _matches(UUID_RE, target[name])
             for name in ("subscription_id", "tenant_id", "client_id", "principal_id")
         )
         or target["identity_name"] != "cosmaneura-staging-restore-bootstrap-job"
@@ -340,7 +394,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         or not 1 <= evidence["maximum_file_bytes"] <= offline.MAX_FILE_BYTES
         or type(files) is not dict
         or set(files) != set(EVIDENCE_FILES)
-        or any(DIGEST_RE.fullmatch(item) is None for item in files.values())
+        or any(not _matches(DIGEST_RE, item) for item in files.values())
         or cleanup["cleanup_target_met"] is not False
         or cleanup["cleanup_target_overrun_disclosed"] is not True
         or cleanup["overrun_is_not_current_authority_proof"] is not True
@@ -350,9 +404,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         or not deadline < started <= completed
         or state["backend_key"] != "staging-sanitizer-bootstrap-identity.tfstate"
         or state["opentofu_version"] != "1.12.5"
-        or UUID_RE.fullmatch(state["lineage"]) is None
-        or state["pre_apply_serial"] != 2
-        or state["post_apply_serial"] != 3
+        or not _matches(UUID_RE, state["lineage"])
         or state["exact_resource_addresses"]
         != ["managed.terraform_data.activation_guard"]
         or state["exact_output_keys"]
@@ -365,20 +417,8 @@ def _validate_policy(value: Any) -> dict[str, Any]:
             "var.sanitizer_bootstrap_teardown_rehearsal_id",
             "var.sanitizer_bootstrap_teardown_evidence_sha256",
         ]
-        or DIGEST_RE.fullmatch(state["teardown_evidence_sha256"]) is None
-        or authority
-        != {
-            "identity_count": 0,
-            "direct_or_inherited_role_assignment_count": 0,
-            "subscription_container_apps_job_count": 6,
-            "bootstrap_identity_job_attachment_count": 0,
-            "subscription_postgres_server_count": 5,
-            "entra_enabled_postgres_server_count": 1,
-            "entra_enabled_postgres_server_id": authority[
-                "entra_enabled_postgres_server_id"
-            ],
-            "bootstrap_identity_postgres_administrator_count": 0,
-        }
+        or not _matches(DIGEST_RE, state["teardown_evidence_sha256"])
+        or authority != expected_authority
         or not str(authority["entra_enabled_postgres_server_id"])
         .casefold()
         .startswith(f"/subscriptions/{target['subscription_id']}/".casefold())
@@ -386,16 +426,28 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         or review["request_file"] != REVIEW_REQUEST_FILE
         or review["response_file"] != REVIEW_RESPONSE_FILE
         or review["request_sha256"] != files[REVIEW_REQUEST_FILE]
+        or not _matches(DIGEST_RE, review["request_input_sha256"])
+        or not _matches(DIGEST_RE, review["binding_id"])
+        or type(review["maximum_output_tokens"]) is not int
+        or review["maximum_output_tokens"] != 20_000
+        or review["binding_id"]
+        != grammar.expected_review_binding(
+            evidence_sha256=files[EVIDENCE_FILE],
+            request_input_sha256=review["request_input_sha256"],
+            maximum_output_tokens=review["maximum_output_tokens"],
+            model=review["model"],
+        )
         or review["response_sha256"] != files[REVIEW_RESPONSE_FILE]
-        or not str(review["response_id"]).startswith("resp_")
+        or type(review["response_id"]) is not str
+        or not review["response_id"].startswith("resp_")
         or review["verdict"] != "POST-APPLY VERIFIED"
-        or document["claims"] != CLAIMS
+        or set(claims) != set(CLAIMS)
         or output["kind"] != KIND
         or output["public_fields"] != list(PUBLIC_FIELDS)
         or output["private_fields"] != list(PRIVATE_FIELDS)
         or output["raw_identity_or_provider_values_public"] is not False
         or output["copy_pickle_json_serialization_or_mutation_permitted"] is not False
-        or document["status"] != expected_status
+        or set(status) != set(expected_status)
     ):
         _fail(code)
     for key in (
@@ -431,466 +483,6 @@ def load_bootstrap_identity_teardown_evidence_policy() -> dict[str, Any]:
 
     policy, _raw = _read_policy()
     return policy
-
-
-def _read_evidence_files(
-    directory: Path, policy: Mapping[str, Any]
-) -> dict[str, bytes]:
-    code = "bootstrap_identity_teardown_evidence.directory_invalid"
-    if not isinstance(directory, Path) or not directory.is_absolute():
-        _fail(code)
-    descriptor = -1
-    try:
-        descriptor = offline.open_private_directory(
-            directory, label="bootstrap identity teardown evidence directory"
-        )
-        entries = set(os.listdir(descriptor))
-    except Exception:
-        _fail(code)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-    if entries != set(EVIDENCE_FILES):
-        _fail(code)
-    result: dict[str, bytes] = {}
-    for name in EVIDENCE_FILES:
-        try:
-            raw = offline.read_private_file(
-                directory / name,
-                label=name,
-                maximum_bytes=policy["evidence"]["maximum_file_bytes"],
-            )
-        except Exception:
-            _fail("bootstrap_identity_teardown_evidence.file_invalid")
-        expected = policy["evidence"]["files"][name]
-        if not hmac.compare_digest(_digest(raw), expected):
-            _fail("bootstrap_identity_teardown_evidence.file_invalid")
-        result[name] = raw
-    return result
-
-
-def _serialized_contains(value: Any, needles: tuple[str, ...]) -> bool:
-    serialized = _canonical(value).decode("ascii").casefold()
-    return any(needle.casefold() in serialized for needle in needles)
-
-
-def _validate_state(value: Any, policy: Mapping[str, Any]) -> None:
-    code = "bootstrap_identity_teardown_evidence.state_invalid"
-    state = _mapping(
-        value,
-        {
-            "version",
-            "terraform_version",
-            "serial",
-            "lineage",
-            "outputs",
-            "resources",
-            "check_results",
-        },
-        code,
-    )
-    expected = policy["state"]
-    resources = state["resources"]
-    outputs = state["outputs"]
-    checks = state["check_results"]
-    target = policy["target"]
-    cleanup = policy["cleanup"]
-    if (
-        state["version"] != 4
-        or state["terraform_version"] != expected["opentofu_version"]
-        or type(state["serial"]) is not int
-        or state["serial"] != expected["post_apply_serial"]
-        or state["lineage"] != expected["lineage"]
-        or type(resources) is not list
-        or [
-            f"{item.get('mode')}.{item.get('type')}.{item.get('name')}"
-            for item in resources
-        ]
-        != expected["exact_resource_addresses"]
-        or resources[0].get("provider") != 'provider["terraform.io/builtin/terraform"]'
-        or type(resources[0].get("instances")) is not list
-        or len(resources[0]["instances"]) != 1
-        or type(outputs) is not dict
-        or list(outputs) != expected["exact_output_keys"]
-        or type(checks) is not list
-        or [item.get("config_addr") for item in checks]
-        != expected["exact_passing_check_addresses"]
-        or any(item.get("status") != "pass" for item in checks)
-        or any(
-            type(item.get("objects")) is not list
-            or len(item["objects"]) != 1
-            or item["objects"][0].get("status") != "pass"
-            for item in checks
-        )
-    ):
-        _fail(code)
-    instance = resources[0]["instances"][0]
-    if (
-        type(instance) is not dict
-        or set(instance)
-        != {"index_key", "schema_version", "attributes", "sensitive_attributes"}
-        or instance["index_key"] != 0
-        or instance["schema_version"] != 0
-        or instance["sensitive_attributes"] != []
-        or type(instance["attributes"]) is not dict
-        or set(instance["attributes"]) != {"id", "input", "output", "triggers_replace"}
-        or UUID_RE.fullmatch(instance["attributes"]["id"]) is None
-    ):
-        _fail(code)
-    guard = {
-        "cleanup_not_after": cleanup["cleanup_not_after"],
-        "identity_resource_id": target["identity_resource_id"],
-        "mode": "teardown-only",
-        "rehearsal_id": target["rehearsal_id"],
-        "teardown_authorized": True,
-        "teardown_evidence_sha256": expected["teardown_evidence_sha256"],
-    }
-    attributes = instance["attributes"]
-    if (
-        type(attributes["input"]) is not dict
-        or attributes["input"].get("value") != guard
-        or type(attributes["output"]) is not dict
-        or attributes["output"].get("value") != guard
-        or type(attributes["triggers_replace"]) is not dict
-        or attributes["triggers_replace"].get("value")
-        != {
-            "cleanup_not_after": cleanup["cleanup_not_after"],
-            "lifetime_hours": 6,
-            "rehearsal_id": target["rehearsal_id"],
-        }
-    ):
-        _fail(code)
-    teardown = outputs["sanitizer_bootstrap_identity_teardown"].get("value")
-    boundary = outputs["state_boundary"].get("value")
-    if teardown != {
-        "apply_authorized": False,
-        "cleanup_not_after": cleanup["cleanup_not_after"],
-        "founder_apply_required": True,
-        "identity_resource_id": target["identity_resource_id"],
-        "mode": "teardown-only",
-        "rehearsal_id": target["rehearsal_id"],
-        "teardown_evidence_sha256": expected["teardown_evidence_sha256"],
-    } or boundary != {
-        "container": "cosmaneura-tfstate",
-        "key": expected["backend_key"],
-        "resource_group": "cosmaneura-tfstate",
-        "storage_account": "cosmaneuratfstate",
-    }:
-        _fail(code)
-
-
-def _validate_evidence(value: Any, policy: Mapping[str, Any]) -> None:
-    code = "bootstrap_identity_teardown_evidence.evidence_invalid"
-    envelope = _mapping(
-        value,
-        {
-            "schema_version",
-            "policy_id",
-            "prior_envelope_sha256",
-            "prior_envelope",
-            "remediation",
-            "pass",
-        },
-        code,
-    )
-    prior = _mapping(
-        envelope["prior_envelope"],
-        {
-            "schema_version",
-            "policy_id",
-            "target",
-            "source_commit",
-            "applied_plan_sha256",
-            "cleanup_not_after",
-            "capture_script_sha256",
-            "capture_script",
-            "query_contract",
-            "evidence_hashes",
-            "verification",
-            "raw_evidence",
-        },
-        code,
-    )
-    verification = _mapping(
-        prior["verification"],
-        {
-            "schema_version",
-            "policy_id",
-            "source_commit",
-            "applied_plan_sha256",
-            "cleanup_not_after",
-            "evidence_started_at",
-            "evidence_completed_at",
-            "account",
-            "identity_count",
-            "role_assignment_count",
-            "job_count",
-            "job_attachment_matches",
-            "postgres_server_count",
-            "postgres_admin_matches",
-            "state_lineage",
-            "state_serial",
-            "state_outputs",
-            "state_resources",
-            "pass",
-        },
-        code,
-    )
-    raw = _mapping(
-        prior["raw_evidence"],
-        {"identities", "role_assignments", "jobs", "postgres_admins", "isolated_state"},
-        code,
-    )
-    remediation = _mapping(
-        envelope["remediation"],
-        {"inherited_rbac", "postgres_server_inventory"},
-        code,
-    )
-    inherited = _mapping(
-        remediation["inherited_rbac"],
-        {
-            "command",
-            "started_at",
-            "completed_at",
-            "evidence_sha256",
-            "assignments",
-            "count",
-        },
-        code,
-    )
-    postgres = _mapping(
-        remediation["postgres_server_inventory"],
-        {
-            "query",
-            "evidence_sha256",
-            "servers",
-            "count",
-            "entra_enabled_count",
-            "entra_enabled_server_ids",
-        },
-        code,
-    )
-    target = policy["target"]
-    cleanup = policy["cleanup"]
-    state_policy = policy["state"]
-    authority = policy["authority"]
-    source = policy["source"]
-    observed_target = {
-        name: target[name]
-        for name in (
-            "subscription_id",
-            "tenant_id",
-            "resource_group",
-            "identity_name",
-            "identity_resource_id",
-            "client_id",
-            "principal_id",
-        )
-    }
-    needles = (
-        target["identity_name"],
-        target["client_id"],
-        target["principal_id"],
-        target["identity_resource_id"],
-    )
-    started = _parse_utc(verification["evidence_started_at"], code)
-    completed = _parse_utc(verification["evidence_completed_at"], code)
-    deadline = _parse_utc(cleanup["cleanup_not_after"], code)
-    rbac_started = _parse_utc(inherited["started_at"], code)
-    rbac_completed = _parse_utc(inherited["completed_at"], code)
-    jobs = raw["jobs"]
-    admins = raw["postgres_admins"]
-    servers = postgres["servers"]
-    account = verification["account"]
-    expected_rbac_command = (
-        "az role assignment list --include-inherited --scope /subscriptions/"
-        f"{target['subscription_id']} --subscription {target['subscription_id']} "
-        f"--query [exact principalId {target['principal_id']}]"
-    )
-    enabled = [
-        item
-        for item in servers
-        if type(item) is dict
-        and type(item.get("authConfig")) is dict
-        and item["authConfig"].get("activeDirectoryAuth") == "Enabled"
-    ]
-    expected_queries = {
-        "identity": (
-            "az identity list scoped to exact subscription and resource group, "
-            "filtered by exact identity name"
-        ),
-        "roles": (
-            "az role assignment list --all scoped to exact subscription, filtered "
-            "by exact immutable principalId"
-        ),
-        "jobs": (
-            "az containerapp job list scoped to exact subscription; verifier searches "
-            "serialized identity blocks for exact client ID, principal ID, and identity name"
-        ),
-        "postgres": (
-            "az postgres flexible-server list scoped to exact subscription plus exact "
-            "Entra-admin list for the only Entra-enabled server; verifier searches for "
-            "exact client ID, principal ID, and identity name"
-        ),
-        "state": (
-            "OpenTofu state pull using the exact isolated backend execution directory"
-        ),
-    }
-    evidence_hashes = prior["evidence_hashes"]
-    if (
-        envelope["schema_version"] != 3
-        or envelope["policy_id"]
-        != "cosmaneura-staging-sanitizer-bootstrap-identity-post-apply-v3"
-        or envelope["pass"] is not True
-        or HEX_DIGEST_RE.fullmatch(envelope["prior_envelope_sha256"]) is None
-        or envelope["prior_envelope_sha256"] != _pretty_file_digest(prior)
-        or prior["schema_version"] != 2
-        or prior["policy_id"]
-        != "cosmaneura-staging-sanitizer-bootstrap-identity-post-apply-v2"
-        or prior["target"] != observed_target
-        or prior["source_commit"] != source["source_commit"]
-        or f"sha256:{prior['applied_plan_sha256']}" != source["applied_plan_sha256"]
-        or prior["cleanup_not_after"] != cleanup["cleanup_not_after"]
-        or type(prior["capture_script"]) is not str
-        or hashlib.sha256(prior["capture_script"].encode()).hexdigest()
-        != prior["capture_script_sha256"]
-        or HEX_DIGEST_RE.fullmatch(prior["capture_script_sha256"]) is None
-        or prior["query_contract"] != expected_queries
-        or type(evidence_hashes) is not dict
-        or set(evidence_hashes)
-        != {
-            "v1_verification",
-            "identities",
-            "role_assignments",
-            "jobs",
-            "postgres_admins",
-            "isolated_state",
-        }
-        or any(
-            HEX_DIGEST_RE.fullmatch(item) is None for item in evidence_hashes.values()
-        )
-        or verification["schema_version"] != 1
-        or verification["policy_id"]
-        != "cosmaneura-staging-sanitizer-bootstrap-identity-post-apply-v1"
-        or verification["source_commit"] != source["source_commit"]
-        or f"sha256:{verification['applied_plan_sha256']}"
-        != source["applied_plan_sha256"]
-        or verification["cleanup_not_after"] != cleanup["cleanup_not_after"]
-        or started.strftime("%Y-%m-%dT%H:%M:%SZ") != cleanup["evidence_started_at"]
-        or completed.strftime("%Y-%m-%dT%H:%M:%SZ") != cleanup["evidence_completed_at"]
-        or started - deadline != timedelta(seconds=cleanup["started_overrun_seconds"])
-        or completed - deadline
-        != timedelta(seconds=cleanup["completed_overrun_seconds"])
-        or verification["pass"] is not True
-        or account
-        != {
-            "environmentName": "AzureCloud",
-            "id": target["subscription_id"],
-            "isDefault": True,
-            "state": "Enabled",
-            "tenantId": target["tenant_id"],
-        }
-        or raw["identities"] != []
-        or raw["role_assignments"] != []
-        or verification["identity_count"] != authority["identity_count"]
-        or verification["role_assignment_count"]
-        != authority["direct_or_inherited_role_assignment_count"]
-        or type(jobs) is not list
-        or len(jobs) != authority["subscription_container_apps_job_count"]
-        or verification["job_count"] != len(jobs)
-        or verification["job_attachment_matches"]
-        != authority["bootstrap_identity_job_attachment_count"]
-        or _serialized_contains(jobs, needles)
-        or type(admins) is not list
-        or verification["postgres_admin_matches"]
-        != authority["bootstrap_identity_postgres_administrator_count"]
-        or _serialized_contains(admins, needles)
-        or inherited["command"] != expected_rbac_command
-        or inherited["evidence_sha256"] != _pretty_file_digest(inherited["assignments"])
-        or inherited["assignments"] != []
-        or inherited["count"] != authority["direct_or_inherited_role_assignment_count"]
-        or not completed <= rbac_started <= rbac_completed
-        or type(servers) is not list
-        or postgres["evidence_sha256"] != _pretty_file_digest(servers)
-        or postgres["query"]
-        != (
-            "az postgres flexible-server list scoped to exact subscription "
-            f"{target['subscription_id']}"
-        )
-        or len(servers) != authority["subscription_postgres_server_count"]
-        or postgres["count"] != len(servers)
-        or postgres["entra_enabled_count"]
-        != authority["entra_enabled_postgres_server_count"]
-        or len(enabled) != authority["entra_enabled_postgres_server_count"]
-        or postgres["entra_enabled_server_ids"]
-        != [authority["entra_enabled_postgres_server_id"]]
-        or [item["id"] for item in enabled]
-        != [authority["entra_enabled_postgres_server_id"]]
-        or verification["postgres_server_count"] != len(servers)
-        or verification["state_lineage"] != state_policy["lineage"]
-        or type(verification["state_serial"]) is not int
-        or verification["state_serial"] != state_policy["post_apply_serial"]
-        or verification["state_outputs"] != state_policy["exact_output_keys"]
-        or [
-            f"{item.get('mode')}.{item.get('type')}.{item.get('name')}"
-            for item in verification["state_resources"]
-        ]
-        != state_policy["exact_resource_addresses"]
-    ):
-        _fail(code)
-    _integer(inherited["count"], 0, code)
-    _integer(postgres["count"], authority["subscription_postgres_server_count"], code)
-    _validate_state(raw["isolated_state"], policy)
-
-
-def _validate_review_response(value: Any, policy: Mapping[str, Any]) -> None:
-    code = "bootstrap_identity_teardown_evidence.review_invalid"
-    if type(value) is not dict:
-        _fail(code)
-    output = value.get("output")
-    if type(output) is not list:
-        _fail(code)
-    texts: list[str] = []
-    for item in output:
-        if type(item) is not dict or item.get("type") != "message":
-            continue
-        content = item.get("content")
-        if type(content) is not list:
-            _fail(code)
-        for block in content:
-            if type(block) is dict and block.get("type") == "output_text":
-                text = block.get("text")
-                if type(text) is not str:
-                    _fail(code)
-                texts.append(text)
-    review = policy["independent_review"]
-    if (
-        value.get("id") != review["response_id"]
-        or value.get("model") != review["model"]
-        or value.get("status") != "completed"
-        or value.get("error") is not None
-        or value.get("incomplete_details") is not None
-        or texts != [review["verdict"]]
-    ):
-        _fail(code)
-
-
-def _validate_review_request(
-    value: Any, evidence: Mapping[str, Any], policy: Mapping[str, Any]
-) -> None:
-    code = "bootstrap_identity_teardown_evidence.review_invalid"
-    request = _mapping(value, {"model", "reasoning", "input"}, code)
-    reasoning = _mapping(request["reasoning"], {"effort"}, code)
-    evidence_text = json.dumps(evidence, ensure_ascii=True, separators=(",", ":"))
-    review_input = request["input"]
-    if (
-        request["model"] != policy["independent_review"]["model"]
-        or reasoning["effort"] != "high"
-        or type(review_input) is not str
-        or not review_input.endswith(f"\n\nEVIDENCE V3\n{evidence_text}")
-        or review_input.count(evidence_text) != 1
-    ):
-        _fail(code)
 
 
 def _binding_material(
@@ -974,44 +566,7 @@ class AuthenticatedBootstrapIdentityTeardownEvidence:
         _fail("bootstrap_identity_teardown_evidence.output_invalid")
 
     def _is_authenticated(self) -> bool:
-        try:
-            policy = load_bootstrap_identity_teardown_evidence_policy()
-            target = dict(self._target)
-            evidence_digests = dict(self._evidence_digests)
-            material = _binding_material(policy, evidence_digests)
-            public = {
-                "kind": KIND,
-                "teardown_binding_sha256": _digest(_canonical(material)),
-                "policy_sha256": f"sha256:{POLICY_SHA256}",
-                "source_commit": policy["source"]["source_commit"],
-                "applied_plan_sha256": policy["source"]["applied_plan_sha256"],
-                "review_response_id": policy["independent_review"]["response_id"],
-                "rehearsal_id": policy["target"]["rehearsal_id"],
-                "authenticated_at": self.authenticated_at,
-                "evidence_completed_at": _parse_utc(
-                    policy["cleanup"]["evidence_completed_at"],
-                    "bootstrap_identity_teardown_evidence.policy_invalid",
-                ),
-                "cleanup_overrun_seconds": policy["cleanup"][
-                    "completed_overrun_seconds"
-                ],
-                **CLAIMS,
-            }
-            actual = {name: getattr(self, name) for name in PUBLIC_FIELDS}
-            return (
-                type(self) is AuthenticatedBootstrapIdentityTeardownEvidence
-                and self._seal is _SEAL
-                and tuple(public) == PUBLIC_FIELDS
-                and target == policy["target"]
-                and self._evidence_digests == tuple(policy["evidence"]["files"].items())
-                and all(
-                    type(actual[name]) is type(expected) and actual[name] == expected
-                    for name, expected in public.items()
-                )
-                and _verify_provenance(self)
-            )
-        except Exception:
-            return False
+        return False
 
 
 def _validated_candidate(
@@ -1019,6 +574,7 @@ def _validated_candidate(
     policy: Mapping[str, Any],
     evidence_directory: Path,
     clock: Callable[[], datetime],
+    seal: object = _SEAL,
 ) -> AuthenticatedBootstrapIdentityTeardownEvidence:
     document = _validate_policy(policy)
     before = _trusted_now(clock)
@@ -1028,19 +584,10 @@ def _validated_candidate(
     )
     if before < completed:
         _fail("bootstrap_identity_teardown_evidence.evidence_from_future")
-    raw = _read_evidence_files(evidence_directory, document)
     try:
-        parsed = {
-            name: offline.load_json_bytes(value, label=name)
-            for name, value in raw.items()
-        }
-    except Exception:
-        _fail("bootstrap_identity_teardown_evidence.file_invalid")
-    _validate_evidence(parsed[EVIDENCE_FILE], document)
-    _validate_review_request(
-        parsed[REVIEW_REQUEST_FILE], parsed[EVIDENCE_FILE], document
-    )
-    _validate_review_response(parsed[REVIEW_RESPONSE_FILE], document)
+        grammar.validate_evidence_directory(evidence_directory, document)
+    except grammar.EvidenceGrammarFailure as error:
+        _fail(str(error))
     after = _trusted_now(clock)
     if after < before:
         _fail("bootstrap_identity_teardown_evidence.clock_regressed")
@@ -1062,7 +609,7 @@ def _validated_candidate(
         "_target": tuple(document["target"].items()),
         "_evidence_digests": tuple(evidence_digests.items()),
         "_proof_sha256": "",
-        "_seal": _SEAL,
+        "_seal": seal,
     }
     if tuple(values) != (*PUBLIC_FIELDS, *PRIVATE_FIELDS):
         _fail("bootstrap_identity_teardown_evidence.output_invalid")
@@ -1071,9 +618,55 @@ def _validated_candidate(
     return value
 
 
+def _authentication_shape(
+    value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    *,
+    verify_provenance: Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], bool],
+    seal: object,
+) -> bool:
+    try:
+        policy = load_bootstrap_identity_teardown_evidence_policy()
+        target = dict(value._target)
+        evidence_digests = dict(value._evidence_digests)
+        material = _binding_material(policy, evidence_digests)
+        public = {
+            "kind": KIND,
+            "teardown_binding_sha256": _digest(_canonical(material)),
+            "policy_sha256": f"sha256:{POLICY_SHA256}",
+            "source_commit": policy["source"]["source_commit"],
+            "applied_plan_sha256": policy["source"]["applied_plan_sha256"],
+            "review_response_id": policy["independent_review"]["response_id"],
+            "rehearsal_id": policy["target"]["rehearsal_id"],
+            "authenticated_at": value.authenticated_at,
+            "evidence_completed_at": _parse_utc(
+                policy["cleanup"]["evidence_completed_at"],
+                "bootstrap_identity_teardown_evidence.policy_invalid",
+            ),
+            "cleanup_overrun_seconds": policy["cleanup"]["completed_overrun_seconds"],
+            **CLAIMS,
+        }
+        actual = {name: getattr(value, name) for name in PUBLIC_FIELDS}
+        return (
+            type(value) is AuthenticatedBootstrapIdentityTeardownEvidence
+            and value._seal is seal
+            and tuple(public) == PUBLIC_FIELDS
+            and target == policy["target"]
+            and value._evidence_digests == tuple(policy["evidence"]["files"].items())
+            and all(
+                type(actual[name]) is type(expected) and actual[name] == expected
+                for name, expected in public.items()
+            )
+            and verify_provenance(value)
+        )
+    except Exception:
+        return False
+
+
 def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
     key = os.urandom(32)
     issued: dict[tuple[int, int], object] = {}
+    seal = _SEAL
+    shape = _authentication_shape
 
     def proof(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> str:
         material = _canonical(
@@ -1085,7 +678,7 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
                 "authenticated_at": value.authenticated_at.strftime(
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
-                "seal_identity": id(_SEAL),
+                "seal_identity": id(seal),
             }
         )
         return hmac.new(key, material, hashlib.sha256).hexdigest()
@@ -1095,6 +688,11 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
             value._proof_sha256, proof(value)
         )
 
+    def is_authenticated(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    ) -> bool:
+        return shape(value, verify_provenance=verify, seal=seal)
+
     def authenticate(
         *, evidence_directory: Path
     ) -> AuthenticatedBootstrapIdentityTeardownEvidence:
@@ -1103,18 +701,23 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
             policy=policy,
             evidence_directory=evidence_directory,
             clock=_utc_now,
+            seal=seal,
         )
         object.__setattr__(value, "_proof_sha256", proof(value))
         issued[os.getpid(), id(value)] = value
-        if not value._is_authenticated():
+        if not is_authenticated(value):
             issued.pop((os.getpid(), id(value)), None)
             _fail("bootstrap_identity_teardown_evidence.output_invalid")
         return value
 
-    return authenticate, verify
+    return authenticate, is_authenticated
 
 
-_authenticate, _verify_provenance = _build_provenance()
+_authenticate, _bound_is_authenticated = _build_provenance()
+AuthenticatedBootstrapIdentityTeardownEvidence._is_authenticated = (  # type: ignore[method-assign]
+    _bound_is_authenticated
+)
+del _bound_is_authenticated
 
 
 def authenticate_bootstrap_identity_teardown_evidence(

@@ -32,8 +32,9 @@
     "maximum_file_bytes": 1048576,
     "files": {
       "post-apply-verification-v3.json": "sha256:3987fdeff5304ecd456bf0a6a024cb9e15748378e9e8b0a50d845b0838c4c4bb",
-      "post-apply-review-request-v3.json": "sha256:9e19c057940d3bd15cfb2b8b75faae10d3bde5617ec75afc5ed0ad22d688783b",
-      "post-apply-review-response-v3.json": "sha256:256a558e0e3805347e29bb991a2f3cfd7dc3fcae5bf0782ea7748a253eeeabac"
+      "post-apply-isolated.tfstate": "sha256:7b37223c4f46bcc32e2b3a8d59df9889b3dc194a94309abfd94ee5286826dae8",
+      "post-apply-review-request-v4.json": "sha256:ce5091fccdc7098fb5011bb993a1775e4243f9ac19561bc8285512dd06c30f11",
+      "post-apply-review-response-v4.json": "sha256:7d01ca2fcb117cf4ad26137bdb6f5262c90fc918e37d4c6604c23870a3a53603"
     }
   },
   "cleanup": {
@@ -80,11 +81,15 @@
   },
   "independent_review": {
     "model": "codex-auto-review",
-    "request_file": "post-apply-review-request-v3.json",
-    "request_sha256": "sha256:9e19c057940d3bd15cfb2b8b75faae10d3bde5617ec75afc5ed0ad22d688783b",
-    "response_file": "post-apply-review-response-v3.json",
-    "response_id": "resp_0d0eabaf192e71b1006aa04a9ca2fc8190843be3319976c892",
-    "response_sha256": "sha256:256a558e0e3805347e29bb991a2f3cfd7dc3fcae5bf0782ea7748a253eeeabac",
+    "request_file": "post-apply-review-request-v4.json",
+    "request_sha256": "sha256:ce5091fccdc7098fb5011bb993a1775e4243f9ac19561bc8285512dd06c30f11",
+    "request_input_sha256": "sha256:ee3902adbfcf68df52e14d0c2e2581287899f37f5ed0aa5bfcdab5be10416041",
+    "binding_id": "sha256:9327ce96f4c2e8631bd9c570d04faf64fa8481efa498cab37b40a52f4e123095",
+    "maximum_output_tokens": 20000,
+    "content_filter_end_offset": 53234,
+    "response_file": "post-apply-review-response-v4.json",
+    "response_id": "resp_03523e3973d13b5f006aa0708f1c508193bb230fa1f162fb91",
+    "response_sha256": "sha256:7d01ca2fcb117cf4ad26137bdb6f5262c90fc918e37d4c6604c23870a3a53603",
     "verdict": "POST-APPLY VERIFIED"
   },
   "claims": {

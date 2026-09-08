@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import pickle
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any, Callable
 import pytest
 
 from scripts import authenticate_staging_sanitizer_bootstrap_identity_teardown as auth
+from scripts import staging_sanitizer_bootstrap_teardown_evidence_grammar as grammar
 
 NOW = datetime(2026, 9, 8, 18, 10, tzinfo=UTC)
 
@@ -41,12 +43,30 @@ def _state(policy: dict[str, Any]) -> dict[str, Any]:
         "teardown_authorized": True,
         "teardown_evidence_sha256": state["teardown_evidence_sha256"],
     }
+    guard_type = [
+        "object",
+        {
+            "cleanup_not_after": "string",
+            "identity_resource_id": "string",
+            "mode": "string",
+            "rehearsal_id": "string",
+            "teardown_authorized": "bool",
+            "teardown_evidence_sha256": "string",
+        },
+    ]
     checks = [
         {
             "object_kind": "resource" if name.startswith("terraform_data") else "var",
             "config_addr": name,
             "status": "pass",
-            "objects": [{"object_addr": name, "status": "pass"}],
+            "objects": [
+                {
+                    "object_addr": (
+                        f"{name}[0]" if name.startswith("terraform_data") else name
+                    ),
+                    "status": "pass",
+                }
+            ],
         }
         for name in state["exact_passing_check_addresses"]
     ]
@@ -66,7 +86,18 @@ def _state(policy: dict[str, Any]) -> dict[str, Any]:
                     "rehearsal_id": target["rehearsal_id"],
                     "teardown_evidence_sha256": state["teardown_evidence_sha256"],
                 },
-                "type": "fixture",
+                "type": [
+                    "object",
+                    {
+                        "apply_authorized": "bool",
+                        "cleanup_not_after": "string",
+                        "founder_apply_required": "bool",
+                        "identity_resource_id": "string",
+                        "mode": "string",
+                        "rehearsal_id": "string",
+                        "teardown_evidence_sha256": "string",
+                    },
+                ],
             },
             "state_boundary": {
                 "value": {
@@ -75,7 +106,15 @@ def _state(policy: dict[str, Any]) -> dict[str, Any]:
                     "resource_group": "cosmaneura-tfstate",
                     "storage_account": "cosmaneuratfstate",
                 },
-                "type": "fixture",
+                "type": [
+                    "object",
+                    {
+                        "container": "string",
+                        "key": "string",
+                        "resource_group": "string",
+                        "storage_account": "string",
+                    },
+                ],
             },
         },
         "resources": [
@@ -90,15 +129,22 @@ def _state(policy: dict[str, Any]) -> dict[str, Any]:
                         "schema_version": 0,
                         "attributes": {
                             "id": "6f6ac9c3-68ec-f69b-8e3b-e466d5bf478e",
-                            "input": {"value": guard, "type": "fixture"},
-                            "output": {"value": guard, "type": "fixture"},
+                            "input": {"value": guard, "type": guard_type},
+                            "output": {"value": guard, "type": guard_type},
                             "triggers_replace": {
                                 "value": {
                                     "cleanup_not_after": cleanup["cleanup_not_after"],
                                     "lifetime_hours": 6,
                                     "rehearsal_id": target["rehearsal_id"],
                                 },
-                                "type": "fixture",
+                                "type": [
+                                    "object",
+                                    {
+                                        "cleanup_not_after": "string",
+                                        "lifetime_hours": "number",
+                                        "rehearsal_id": "string",
+                                    },
+                                ],
                             },
                         },
                         "sensitive_attributes": [],
@@ -123,7 +169,7 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
                 f"/subscriptions/{target['subscription_id']}/resourceGroups/fixture/"
                 f"providers/Microsoft.App/jobs/fixture-{index}"
             ),
-            "identity": None,
+            "identity": {"type": "None"},
         }
         for index in range(authority["subscription_container_apps_job_count"])
     ]
@@ -148,6 +194,18 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         )
+    admins = [
+        {
+            "id": (
+                f"{authority['entra_enabled_postgres_server_id']}/administrators/"
+                "5ff4de97-43ca-4c0b-843a-5930b0da449e"
+            ),
+            "name": "unrelated-database-administrator",
+            "principalName": "unrelated-database-administrator",
+            "principalType": "ServicePrincipal",
+            "tenantId": target["tenant_id"],
+        }
+    ]
     capture_script = "#!/bin/zsh\nset -euo pipefail\n"
     query_contract = {
         "identity": (
@@ -228,27 +286,19 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
         "capture_script": capture_script,
         "query_contract": query_contract,
         "evidence_hashes": {
-            name: hashlib.sha256(name.encode()).hexdigest()
-            for name in (
-                "v1_verification",
-                "identities",
-                "role_assignments",
-                "jobs",
-                "postgres_admins",
-                "isolated_state",
-            )
+            "v1_verification": _pretty_sha(verification),
+            "identities": _pretty_sha([]),
+            "role_assignments": _pretty_sha([]),
+            "jobs": _pretty_sha(jobs),
+            "postgres_admins": _pretty_sha(admins),
+            "isolated_state": hashlib.sha256(_bytes(state)).hexdigest(),
         },
         "verification": verification,
         "raw_evidence": {
             "identities": [],
             "role_assignments": [],
             "jobs": jobs,
-            "postgres_admins": [
-                {
-                    "id": "/subscriptions/fixture/administrators/unrelated",
-                    "name": "unrelated-database-administrator",
-                }
-            ],
+            "postgres_admins": admins,
             "isolated_state": state,
         },
     }
@@ -289,6 +339,106 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _review_response(
+    policy: dict[str, Any], metadata: dict[str, str]
+) -> dict[str, Any]:
+    return {
+        "background": False,
+        "completed_at": 2,
+        "content_filters": [
+            {
+                "blocked": False,
+                "source_type": "prompt",
+                "content_filter_raw": [],
+                "content_filter_results": {},
+                "content_filter_offsets": {
+                    "start_offset": 0,
+                    "end_offset": policy["independent_review"][
+                        "content_filter_end_offset"
+                    ],
+                    "check_offset": 0,
+                },
+            }
+        ],
+        "created_at": 1,
+        "error": None,
+        "frequency_penalty": 0.0,
+        "id": policy["independent_review"]["response_id"],
+        "incomplete_details": None,
+        "instructions": None,
+        "max_output_tokens": policy["independent_review"]["maximum_output_tokens"],
+        "max_tool_calls": None,
+        "metadata": metadata,
+        "model": policy["independent_review"]["model"],
+        "moderation": None,
+        "object": "response",
+        "output": [
+            {
+                "id": "rs_fixture",
+                "type": "reasoning",
+                "content": [],
+                "encrypted_content": "fixture",
+                "summary": [],
+            },
+            {
+                "id": "msg_fixture",
+                "type": "message",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": policy["independent_review"]["verdict"],
+                    }
+                ],
+                "phase": "final_answer",
+                "role": "assistant",
+            },
+        ],
+        "parallel_tool_calls": True,
+        "presence_penalty": 0.0,
+        "previous_response_id": None,
+        "prompt_cache_key": None,
+        "prompt_cache_retention": "24h",
+        "reasoning": {
+            "context": "all_turns",
+            "effort": "high",
+            "mode": "standard",
+            "summary": None,
+        },
+        "safety_identifier": None,
+        "service_tier": "default",
+        "status": "completed",
+        "store": True,
+        "temperature": 1.0,
+        "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        "tool_choice": "auto",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+        "tools": [],
+        "top_logprobs": 0,
+        "top_p": 0.98,
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 1,
+            "input_tokens_details": {"cache_write_tokens": 0, "cached_tokens": 0},
+            "output_tokens": 2,
+            "output_tokens_details": {"reasoning_tokens": 1},
+            "total_tokens": 3,
+        },
+        "user": None,
+    }
+
+
 def _fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -301,38 +451,44 @@ def _fixture(
     evidence = _envelope(policy)
     if mutate_evidence is not None:
         mutate_evidence(evidence)
+    state_raw = _bytes(evidence["prior_envelope"]["raw_evidence"]["isolated_state"])
+    evidence["prior_envelope"]["evidence_hashes"]["isolated_state"] = hashlib.sha256(
+        state_raw
+    ).hexdigest()
     evidence["prior_envelope_sha256"] = _pretty_sha(evidence["prior_envelope"])
     wire_evidence = json.loads(_bytes(evidence))
+    evidence_raw = _bytes(evidence)
+    policy["evidence"]["files"][auth.EVIDENCE_FILE] = _sha(evidence_raw)
+    review_input = "fixture\n\nEVIDENCE V3\n" + json.dumps(
+        wire_evidence, ensure_ascii=True, separators=(",", ":")
+    )
+    policy["independent_review"]["request_input_sha256"] = _sha(review_input.encode())
+    policy["independent_review"]["binding_id"] = grammar.expected_review_binding(
+        evidence_sha256=policy["evidence"]["files"][auth.EVIDENCE_FILE],
+        request_input_sha256=policy["independent_review"]["request_input_sha256"],
+        maximum_output_tokens=policy["independent_review"]["maximum_output_tokens"],
+        model=policy["independent_review"]["model"],
+    )
+    metadata = {
+        "binding_id": policy["independent_review"]["binding_id"],
+        "evidence_sha256": policy["evidence"]["files"][auth.EVIDENCE_FILE],
+        "request_input_sha256": policy["independent_review"]["request_input_sha256"],
+    }
     request = {
         "model": policy["independent_review"]["model"],
         "reasoning": {"effort": "high"},
-        "input": "fixture\n\nEVIDENCE V3\n"
-        + json.dumps(wire_evidence, ensure_ascii=True, separators=(",", ":")),
+        "metadata": metadata,
+        "max_output_tokens": policy["independent_review"]["maximum_output_tokens"],
+        "input": review_input,
     }
     if mutate_request is not None:
         mutate_request(request)
-    response = {
-        "id": policy["independent_review"]["response_id"],
-        "model": policy["independent_review"]["model"],
-        "status": "completed",
-        "error": None,
-        "incomplete_details": None,
-        "output": [
-            {
-                "type": "message",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": policy["independent_review"]["verdict"],
-                    }
-                ],
-            }
-        ],
-    }
+    response = _review_response(policy, metadata)
     if mutate_response is not None:
         mutate_response(response)
     payloads = {
-        auth.EVIDENCE_FILE: _bytes(evidence),
+        auth.EVIDENCE_FILE: evidence_raw,
+        auth.STATE_EVIDENCE_FILE: state_raw,
         auth.REVIEW_REQUEST_FILE: _bytes(request),
         auth.REVIEW_RESPONSE_FILE: _bytes(response),
     }
@@ -405,6 +561,58 @@ def test_authenticates_exact_evidence_without_exposing_identity(
     assert policy["target"]["principal_id"] not in serialized
     assert repr(value) == "<AuthenticatedBootstrapIdentityTeardownEvidence sealed>"
     assert not hasattr(value, "__dict__")
+
+
+def test_provenance_is_closure_bound_against_module_global_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(tmp_path, monkeypatch)
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+
+    monkeypatch.setattr(auth, "_SEAL", object())
+    monkeypatch.setattr(auth, "_authentication_shape", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(auth, "_verify_provenance", lambda _value: False, raising=False)
+    assert value._is_authenticated()
+
+    forged = object.__new__(auth.AuthenticatedBootstrapIdentityTeardownEvidence)
+    for name in (*auth.PUBLIC_FIELDS, *auth.PRIVATE_FIELDS):
+        object.__setattr__(forged, name, getattr(value, name))
+    monkeypatch.setattr(auth, "_authentication_shape", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(auth, "_verify_provenance", lambda _value: True)
+    assert not forged._is_authenticated()
+
+
+def test_authenticated_value_does_not_survive_fork(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(tmp_path, monkeypatch)
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    read_fd, write_fd = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.close(read_fd)
+        exit_code = 0
+        try:
+            os.write(write_fd, b"1" if value._is_authenticated() else b"0")
+        except BaseException:
+            exit_code = 2
+        finally:
+            os.close(write_fd)
+        os._exit(exit_code)
+
+    os.close(write_fd)
+    try:
+        child_result = os.read(read_fd, 1)
+    finally:
+        os.close(read_fd)
+    _waited_pid, status = os.waitpid(child_pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert child_result == b"0"
+    assert value._is_authenticated()
 
 
 @pytest.mark.parametrize(
@@ -491,7 +699,7 @@ def test_review_verdict_mutation_refuses(
     directory, _policy = _fixture(
         tmp_path,
         monkeypatch,
-        mutate_response=lambda value: value["output"][0]["content"][0].update(
+        mutate_response=lambda value: value["output"][-1]["content"][0].update(
             text="APPROVED"
         ),
     )

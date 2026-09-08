@@ -9,19 +9,20 @@ workflow, deployment, or mutation action.
 ## Exact evidence boundary
 
 The policy pins the spent plan and decoded-plan digests, the pre-apply review,
-the three owner-only post-apply artifacts, exact bootstrap-identity IDs, state
-lineage `a0c8b939-2fb2-0604-3e70-d925aeee5950` serial 3, the sole retained
+the four owner-only post-apply artifacts (including the raw isolated state),
+exact bootstrap-identity IDs, state lineage
+`a0c8b939-2fb2-0604-3e70-d925aeee5950` serial 3, the sole retained
 activation-guard tombstone, five passing OpenTofu checks, six Container Apps
 jobs, and five PostgreSQL servers. It requires zero identity, direct or
 inherited RBAC assignment, bootstrap job attachment, or bootstrap database
 administrator match. The caller may select only an absolute 0700 directory
-containing the exact three single-link 0400 files.
+containing the exact four single-link 0400 files.
 
 The evidence was captured from `2026-09-08T17:42:35Z` through
 `2026-09-08T17:42:44Z`, 154–163 seconds after the hard cleanup target. That
 overrun is explicit and cannot become current-live-state proof. Independent
 `codex-auto-review` response
-`resp_0d0eabaf192e71b1006aa04a9ca2fc8190843be3319976c892` records
+`resp_03523e3973d13b5f006aa0708f1c508193bb230fa1f162fb91` records
 `POST-APPLY VERIFIED` for the exact pinned bundle.
 
 ## Output and remaining gate
@@ -29,10 +30,17 @@ overrun is explicit and cannot become current-live-state proof. Independent
 A successful result is sealed, process-local, immutable, non-copyable,
 non-pickleable, tamper-evident, and publicly redacted. Its stable teardown
 binding is
-`sha256:aa2f3f6630ad58ff5ed89aa712ef60d56b46b750d939d62be361aab142a4d283`.
+`sha256:12d56cafbc2edbd5ca8e1a1fee5f7b07e37ed32140eba7fad3bb129e9c6224e4`.
 It proves only the historical deletion, negative-authority observations, and
 state tombstone. Current live state, identity creation or attachment,
 provider/database mutation, workflow integration, and execution remain false.
+
+The process-local provenance registry and verifier are closure-bound. An
+authenticated value inherited by a forked process is invalid, and changing
+lookalike module globals cannot invalidate an issued value or authenticate a
+forged copy. Code with permission to replace the module, class methods, or
+public entry point inside the same interpreter is outside this artifact's
+trust boundary and must not share the verifier process.
 
 Public activation remains terminal at
 `activation.sanitizer_bootstrap_job_attachment_unavailable`. A later reviewed
