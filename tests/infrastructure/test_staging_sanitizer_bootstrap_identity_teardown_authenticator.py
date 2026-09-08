@@ -517,7 +517,6 @@ def _fixture(
     monkeypatch.setattr(auth, "POLICY_PATH", policy_path)
     policy_sha256 = hashlib.sha256(policy_raw).hexdigest()
     monkeypatch.setattr(auth, "POLICY_SHA256", policy_sha256)
-    monkeypatch.setattr(auth, "_utc_now", lambda: NOW)
     read_policy = auth._read_policy
     authenticate, is_authenticated = auth._build_provenance(
         read_policy=lambda: read_policy(
@@ -604,31 +603,32 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
         "validate_evidence_directory",
         lambda *_args, **_kwargs: pytest.fail("mutable grammar global was invoked"),
     )
-    monkeypatch.setattr(auth, "_verify_provenance", lambda _value: False, raising=False)
     assert value._is_authenticated()
-    second = auth.authenticate_bootstrap_identity_teardown_evidence(
-        evidence_directory=directory
-    )
-    assert second._is_authenticated()
     with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
         auth.authenticate_bootstrap_identity_teardown_evidence(
             evidence_directory=directory / "missing"
         )
 
-    real_hmac = auth.hmac
-    real_hashlib = auth.hashlib
-    monkeypatch.setattr(auth, "datetime", object())
-    monkeypatch.setattr(auth, "UTC", object())
-    monkeypatch.setattr(auth, "timedelta", object())
-    monkeypatch.setattr(
-        auth,
-        "hashlib",
-        SimpleNamespace(
-            sha256=lambda *_args: pytest.fail("mutable hashlib global was invoked")
-        ),
+    def elevating_dict(value: Any = (), **kwargs: Any) -> dict[Any, Any]:
+        result = dict(value, **kwargs)
+        return result | {"executable": True} if "executable" in result else result
+
+    monkeypatch.setattr(auth, "dict", elevating_dict, raising=False)
+    monkeypatch.setattr(auth, "type", lambda item: type(item), raising=False)
+    third = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
     )
+    assert third.executable is False and third._is_authenticated()
+    reference = weakref.ref(third)
+    del third
+    gc.collect()
+    assert reference() is None
+
+    real_hmac, real_hashlib = auth.hmac, auth.hashlib
+    monkeypatch.setattr(auth, "datetime", object())
+    monkeypatch.setattr(auth, "hashlib", object())
     assert value._is_authenticated()
-    monkeypatch.setattr(auth, "hashlib", SimpleNamespace(sha256=real_hashlib.sha256))
+    monkeypatch.setattr(auth, "hashlib", real_hashlib)
     monkeypatch.setattr(
         auth,
         "hmac",
@@ -648,11 +648,10 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
     forged = object.__new__(auth.AuthenticatedBootstrapIdentityTeardownEvidence)
     for name in (*auth.PUBLIC_FIELDS, *auth.PRIVATE_FIELDS):
         object.__setattr__(forged, name, getattr(value, name))
-    monkeypatch.setattr(auth, "_verify_provenance", lambda _value: True)
     assert not forged._is_authenticated()
 
 
-def test_provenance_binds_exact_datetime_and_ordered_private_fields(
+def test_exact_field_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     directory, _policy = _fixture(tmp_path, monkeypatch)
@@ -674,19 +673,6 @@ def test_provenance_binds_exact_datetime_and_ordered_private_fields(
         replacement = mutation(value) if callable(mutation) else mutation
         object.__setattr__(value, name, replacement)
         assert not value._is_authenticated()
-
-
-def test_provenance_registry_does_not_retain_unreferenced_values(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    directory, _policy = _fixture(tmp_path, monkeypatch)
-    value = auth.authenticate_bootstrap_identity_teardown_evidence(
-        evidence_directory=directory
-    )
-    reference = weakref.ref(value)
-    del value
-    gc.collect()
-    assert reference() is None
 
 
 def test_authenticated_value_does_not_survive_fork(

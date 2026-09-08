@@ -490,7 +490,8 @@ def _read_policy(
         parsed = load_json_bytes(
             raw, label="bootstrap identity teardown evidence policy"
         )
-        return validate_policy(parsed), raw
+        validate_policy(parsed)
+        return parsed, raw
     except BootstrapIdentityTeardownEvidenceFailure:
         raise
     except Exception:
@@ -513,6 +514,7 @@ def _binding_material(
     *,
     policy_sha256: str = POLICY_SHA256,
     claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
+    to_dict: Callable[..., dict[Any, Any]] = dict,
 ) -> dict[str, Any]:
     return {
         "policy_sha256": f"sha256:{policy_sha256}",
@@ -522,9 +524,9 @@ def _binding_material(
         "rehearsal_id": policy["target"]["rehearsal_id"],
         "evidence_completed_at": policy["cleanup"]["evidence_completed_at"],
         "cleanup_overrun_seconds": policy["cleanup"]["completed_overrun_seconds"],
-        "target": dict(policy["target"]),
-        "evidence_digests": dict(evidence_digests),
-        "claims": dict(claims),
+        "target": to_dict(policy["target"]),
+        "evidence_digests": to_dict(evidence_digests),
+        "claims": to_dict(claims),
     }
 
 
@@ -615,6 +617,8 @@ def _validated_candidate(
     kind: str = KIND,
     claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
     public_fields: tuple[str, ...] = PUBLIC_FIELDS,
+    to_dict: Callable[..., dict[Any, Any]] = dict,
+    to_tuple: Callable[..., tuple[Any, ...]] = tuple,
 ) -> tuple[dict[str, Any], tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
     document = validate_policy(policy)
     before = trusted_now(clock)
@@ -637,6 +641,7 @@ def _validated_candidate(
         evidence_digests,
         policy_sha256=policy_sha256,
         claims=claims,
+        to_dict=to_dict,
     )
     values: dict[str, Any] = {
         "kind": kind,
@@ -649,14 +654,14 @@ def _validated_candidate(
         "authenticated_at": after,
         "evidence_completed_at": completed,
         "cleanup_overrun_seconds": document["cleanup"]["completed_overrun_seconds"],
-        **dict(claims),
+        **to_dict(claims),
     }
     if tuple(values) != public_fields:
         fail("bootstrap_identity_teardown_evidence.output_invalid")
     return (
         values,
-        tuple(document["target"].items()),
-        tuple(evidence_digests.items()),
+        to_tuple(document["target"].items()),
+        to_tuple(evidence_digests.items()),
     )
 
 
@@ -694,7 +699,7 @@ def _build_provenance(
     utc = UTC
     zero_offset = timedelta(0)
     type_of, read_attr, identity, pair_length, any_true = type, getattr, id, len, any
-    tuple_type, scalar_types = tuple, (str, bool, int)
+    tuple_type, mapping_type, scalar_types = tuple, dict, (str, bool, int)
     type_error, value_error, base_error = TypeError, ValueError, Exception
     new_value, set_value = object.__new__, object.__setattr__
     key = random_bytes(32)
@@ -825,7 +830,15 @@ def _build_provenance(
             kind=kind,
             claims=claims,
             public_fields=public_fields,
+            to_dict=mapping_type,
+            to_tuple=tuple_type,
         )
+        if any_true(
+            type_of(mapping_type.get(public, name)) is not type_of(expected)
+            or mapping_type.get(public, name) != expected
+            for name, expected in claims
+        ):
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
         value = new_value(value_type)
         values = {
             **public,
