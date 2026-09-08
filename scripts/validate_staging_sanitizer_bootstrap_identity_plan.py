@@ -30,6 +30,13 @@ VALIDATOR_PATH = Path(__file__).resolve()
 
 EXPECTED_FORMAT_VERSION = "1.2"
 EXPECTED_TOFU_VERSION = "1.12.5"
+EXPECTED_TOFU_SHA256 = (
+    "1334ccf2360fe38460c47fd0924555f411cf714813e541d17d744283c973aa99"
+)
+EXPECTED_PROVIDER_PLATFORM = "darwin_arm64"
+EXPECTED_PROVIDER_SHA256 = (
+    "c983dc4efe57ed9a15162c5b1b6438e597c7f34706498ab6cc6d07b40e854e06"
+)
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
 EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
@@ -48,6 +55,12 @@ EXPECTED_BASE_TAGS: Mapping[str, str] = {
     "lifecycle": "ephemeral",
     "managed-by": "opentofu",
     "purpose": "staging-restore-sanitizer-bootstrap",
+}
+EXPECTED_CONTROL_GROUP_TAGS: Mapping[str, str] = {
+    "data-classification": "non-phi-control-metadata",
+    "environment": "staging",
+    "managed-by": "opentofu",
+    "purpose": "staging-restore-rehearsal-control",
 }
 EXPECTED_VARIABLES = frozenset(
     {
@@ -205,6 +218,75 @@ def _read_protected_file(path: Path, *, label: str) -> bytes:
         os.close(descriptor)
 
 
+def _read_checkout_file(path: Path, *, label: str) -> bytes:
+    """Read one reviewed source file without following or racing its pathname."""
+    _reject_symlink_components(path.parent, label=f"{label} directory")
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0),
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or not 0 < before.st_size <= MAXIMUM_ARTIFACT_BYTES
+        ):
+            raise BootstrapPlanError(f"{label} is not a stable reviewed file")
+        value = bytearray()
+        while len(value) < before.st_size:
+            value.extend(
+                os.read(descriptor, min(1024 * 1024, before.st_size - len(value)))
+            )
+        after = os.fstat(descriptor)
+        linked = os.stat(path.name, dir_fd=directory, follow_symlinks=False)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        identity_linked = (
+            linked.st_dev,
+            linked.st_ino,
+            linked.st_size,
+            linked.st_mtime_ns,
+            linked.st_ctime_ns,
+        )
+        if (
+            len(value) != before.st_size
+            or identity_before != identity_after
+            or identity_after != identity_linked
+        ):
+            raise BootstrapPlanError(f"{label} changed while it was read")
+        return bytes(value)
+    except OSError as exc:
+        raise BootstrapPlanError(f"{label} could not be read safely") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(directory)
+
+
 def _load_json_bytes(value: bytes, *, label: str) -> Mapping[str, Any]:
     try:
         decoded = json.loads(
@@ -220,10 +302,22 @@ def _load_json_bytes(value: bytes, *, label: str) -> Mapping[str, Any]:
 
 
 def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
+    blocked = {
+        "ALL_PROXY",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "OPENSSL_CONF",
+        "REQUESTS_CA_BUNDLE",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    }
     environment = {
         name: value
         for name, value in os.environ.items()
         if not name.startswith(("TF_", "TOFU_", "OPENTOFU_", "GIT_", "ARM_", "AZURE_"))
+        and name.upper() not in blocked
     }
     environment["CHECKPOINT_DISABLE"] = "1"
     environment["GIT_CONFIG_GLOBAL"] = os.devnull
@@ -351,11 +445,19 @@ def _executable_sha256(path: Path, *, label: str) -> str:
             os.close(descriptor)
 
 
+def _require_pinned_executable(path: Path, *, expected: str, label: str) -> str:
+    observed = _executable_sha256(path, label=label)
+    if observed != expected:
+        raise BootstrapPlanError(f"the {label} executable digest is not pinned")
+    return observed
+
+
 def _resolve_and_verify_tofu() -> Path:
     executable = shutil.which("tofu")
     if executable is None:
         raise BootstrapPlanError("the pinned OpenTofu executable is unavailable")
     tofu = _trusted_executable(Path(executable), label="OpenTofu")
+    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
     result = _run_process(
         [str(tofu), "version", "-json"], cwd=REPOSITORY_ROOT, timeout_seconds=30
     )
@@ -365,6 +467,7 @@ def _resolve_and_verify_tofu() -> Path:
         or version.get("terraform_version") != EXPECTED_TOFU_VERSION
     ):
         raise BootstrapPlanError("the OpenTofu executable version is not pinned")
+    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
     return tofu
 
 
@@ -405,17 +508,6 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     ):
         raise BootstrapPlanError("bootstrap plan source paths are not clean")
 
-    terraform_files: dict[str, bytes] = {}
-    for path in sorted(IDENTITY_ROOT.glob("*.tf")):
-        if path.is_symlink() or not path.is_file():
-            raise BootstrapPlanError("bootstrap Terraform source is invalid")
-        terraform_files[path.name] = path.read_bytes()
-    if not terraform_files:
-        raise BootstrapPlanError("bootstrap Terraform source is missing")
-    lock_path = IDENTITY_ROOT / ".terraform.lock.hcl"
-    if lock_path.is_symlink() or not lock_path.is_file():
-        raise BootstrapPlanError("bootstrap provider lockfile is missing")
-    lockfile = lock_path.read_bytes()
     source_root = IDENTITY_ROOT.relative_to(REPOSITORY_ROOT)
     expected_names = set(
         _run_git(
@@ -424,23 +516,40 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
         .decode("utf-8")
         .splitlines()
     )
-    tree_files = {**terraform_files, ".terraform.lock.hcl": lockfile}
-    actual_names = {str(source_root / name) for name in tree_files}
-    if actual_names != {
-        name for name in expected_names if name.endswith((".tf", ".terraform.lock.hcl"))
-    }:
-        raise BootstrapPlanError("bootstrap source file set differs from the commit")
-    for name, value in tree_files.items():
-        if _run_git(["show", f"{expected_commit}:{source_root / name}"]) != value:
+    selected = sorted(
+        name
+        for name in expected_names
+        if Path(name).parent == source_root
+        and (name.endswith(".tf") or Path(name).name == ".terraform.lock.hcl")
+    )
+    if not selected or str(source_root / ".terraform.lock.hcl") not in selected:
+        raise BootstrapPlanError("bootstrap source file set is incomplete")
+    committed = {
+        Path(name).name: _run_git(["show", f"{expected_commit}:{name}"])
+        for name in selected
+    }
+    for name, value in committed.items():
+        if (
+            _read_checkout_file(IDENTITY_ROOT / name, label=f"bootstrap source {name}")
+            != value
+        ):
             raise BootstrapPlanError("bootstrap source differs from the commit")
     validator_name = str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT))
-    validator_bytes = VALIDATOR_PATH.read_bytes()
-    if _run_git(["show", f"{expected_commit}:{validator_name}"]) != validator_bytes:
+    validator_bytes = _run_git(["show", f"{expected_commit}:{validator_name}"])
+    if (
+        _read_checkout_file(VALIDATOR_PATH, label="bootstrap plan validator")
+        != validator_bytes
+    ):
         raise BootstrapPlanError("bootstrap plan validator differs from the commit")
-    tree_files[validator_name] = validator_bytes
+    lockfile = committed.pop(".terraform.lock.hcl")
+    tree_files = {
+        **committed,
+        ".terraform.lock.hcl": lockfile,
+        validator_name: validator_bytes,
+    }
     return SourceSnapshot(
         commit=head,
-        terraform_files=terraform_files,
+        terraform_files=committed,
         lockfile=lockfile,
         tree_sha256=_canonical_file_set_sha256(tree_files),
     )
@@ -451,14 +560,20 @@ def _provider_tree_sha256(data_dir: Path) -> str:
     if len(providers) != 1 or providers[0].is_symlink():
         raise BootstrapPlanError("offline decoder provider set is not exact")
     relative = providers[0].relative_to(data_dir / "providers")
-    expected_prefix = Path("registry.opentofu.org/hashicorp/azurerm/4.73.0")
-    if relative.parts[: len(expected_prefix.parts)] != expected_prefix.parts:
+    expected_parent = Path(
+        "registry.opentofu.org/hashicorp/azurerm/4.73.0",
+        EXPECTED_PROVIDER_PLATFORM,
+    )
+    if relative.parent != expected_parent:
         raise BootstrapPlanError("offline decoder provider path is not pinned")
     provider = _trusted_executable(providers[0], label="AzureRM provider")
-    return _executable_sha256(provider, label="AzureRM provider")
+    return _require_pinned_executable(
+        provider, expected=EXPECTED_PROVIDER_SHA256, label="AzureRM provider"
+    )
 
 
 def _initialize_decoder(*, tofu: Path, data_dir: Path) -> str:
+    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
     result = _run_process(
         [
             str(tofu),
@@ -477,6 +592,7 @@ def _initialize_decoder(*, tofu: Path, data_dir: Path) -> str:
         raise BootstrapPlanError("the offline plan decoder could not be initialized")
     if (data_dir / "terraform.tfstate").exists():
         raise BootstrapPlanError("offline decoder unexpectedly initialized a backend")
+    _require_pinned_executable(tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu")
     return _provider_tree_sha256(data_dir)
 
 
@@ -628,7 +744,9 @@ def _validate_resource_group_state(resource: Any) -> None:
         "name": "control",
         "provider": 'provider["registry.opentofu.org/hashicorp/azurerm"]',
     }
-    if any(resource.get(name) != value for name, value in expected_fields.items()):
+    if set(resource) != {*expected_fields, "instances"} or any(
+        resource.get(name) != value for name, value in expected_fields.items()
+    ):
         raise BootstrapPlanError("refreshed resource-group identity is not exact")
     instances = resource.get("instances")
     if not isinstance(instances, Sequence) or isinstance(instances, (str, bytes)):
@@ -642,13 +760,20 @@ def _validate_resource_group_state(resource: Any) -> None:
         f"{EXPECTED_RESOURCE_GROUP}"
     )
     if (
-        instance.get("index_key") != 0
+        set(instance)
+        != {"index_key", "schema_version", "attributes", "sensitive_attributes"}
+        or instance.get("index_key") != 0
         or instance.get("schema_version") != 0
         or not isinstance(attributes, Mapping)
+        or set(attributes)
+        != {"id", "location", "managed_by", "name", "tags", "timeouts"}
         or str(attributes.get("id", "")).lower() != expected_id.lower()
         or attributes.get("name") != EXPECTED_RESOURCE_GROUP
         or str(attributes.get("location", "")).lower() != EXPECTED_LOCATION
-        or not isinstance(attributes.get("tags"), Mapping)
+        or attributes.get("managed_by") != ""
+        or attributes.get("tags") != EXPECTED_CONTROL_GROUP_TAGS
+        or attributes.get("timeouts") is not None
+        or instance.get("sensitive_attributes") != []
     ):
         raise BootstrapPlanError("refreshed resource-group attributes are not exact")
 
@@ -941,7 +1066,13 @@ def _validate_resource_changes(
 
 def _validate_prior_state(plan: Mapping[str, Any]) -> None:
     prior = plan.get("prior_state")
-    if not isinstance(prior, Mapping) or not isinstance(prior.get("values"), Mapping):
+    if (
+        not isinstance(prior, Mapping)
+        or set(prior) != {"format_version", "terraform_version", "values"}
+        or prior.get("format_version") != "1.0"
+        or prior.get("terraform_version") != EXPECTED_TOFU_VERSION
+        or not isinstance(prior.get("values"), Mapping)
+    ):
         raise BootstrapPlanError("plan prior state is missing")
     values = prior["values"]
     expected_output = {
@@ -960,7 +1091,12 @@ def _validate_prior_state(plan: Mapping[str, Any]) -> None:
         }
     }
     root = values.get("root_module")
-    if values.get("outputs") != expected_output or not isinstance(root, Mapping):
+    if (
+        set(values) != {"outputs", "root_module"}
+        or values.get("outputs") != expected_output
+        or not isinstance(root, Mapping)
+        or set(root) != {"resources"}
+    ):
         raise BootstrapPlanError("plan prior-state boundary is not exact")
     resources = root.get("resources")
     if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes)):
@@ -974,13 +1110,34 @@ def _validate_prior_state(plan: Mapping[str, Any]) -> None:
     )
     values = resource.get("values")
     if (
-        resource.get("address") != "data.azurerm_resource_group.control[0]"
+        set(resource)
+        != {
+            "address",
+            "mode",
+            "type",
+            "name",
+            "index",
+            "provider_name",
+            "schema_version",
+            "values",
+            "sensitive_values",
+        }
+        or resource.get("address") != "data.azurerm_resource_group.control[0]"
         or resource.get("mode") != "data"
+        or resource.get("type") != "azurerm_resource_group"
+        or resource.get("name") != "control"
+        or resource.get("index") != 0
         or resource.get("provider_name") != "registry.opentofu.org/hashicorp/azurerm"
+        or resource.get("schema_version") != 0
         or not isinstance(values, Mapping)
+        or set(values) != {"id", "location", "managed_by", "name", "tags", "timeouts"}
         or str(values.get("id", "")).lower() != expected_id.lower()
         or values.get("name") != EXPECTED_RESOURCE_GROUP
         or str(values.get("location", "")).lower() != EXPECTED_LOCATION
+        or values.get("managed_by") != ""
+        or values.get("tags") != EXPECTED_CONTROL_GROUP_TAGS
+        or values.get("timeouts") is not None
+        or resource.get("sensitive_values") != {"tags": {}}
     ):
         raise BootstrapPlanError("plan prior-state resource group is not exact")
 
@@ -1196,14 +1353,21 @@ def validate_saved_plan(
     saved_plan_bytes = _read_protected_file(saved_plan, label="saved plan")
     source_before = _source_snapshot(expected_source_commit)
     tofu = _resolve_and_verify_tofu()
-    tofu_sha256 = _executable_sha256(tofu, label="OpenTofu")
+    tofu_sha256 = EXPECTED_TOFU_SHA256
     with tempfile.TemporaryDirectory(
         prefix=".cosmaneura-bootstrap-plan-decoder-", dir=saved_plan.parent
     ) as temporary_directory:
         data_dir = Path(temporary_directory)
         provider_sha256 = _initialize_decoder(tofu=tofu, data_dir=data_dir)
+        _require_pinned_executable(
+            tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu"
+        )
+        _provider_tree_sha256(data_dir)
         plan_json_bytes = _show_saved_plan(
             saved_plan_bytes, tofu=tofu, data_dir=data_dir
+        )
+        _require_pinned_executable(
+            tofu, expected=EXPECTED_TOFU_SHA256, label="OpenTofu"
         )
         if (data_dir / "terraform.tfstate").exists():
             raise BootstrapPlanError(

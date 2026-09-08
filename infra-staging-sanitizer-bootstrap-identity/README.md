@@ -61,7 +61,9 @@ python scripts/validate_staging_sanitizer_bootstrap_identity_plan.py \
   --expected-state-serial '<reviewed positive integer>'
 ```
 
-It installs the pinned decoder with `-backend=false`, invokes only `tofu show
--json`, and emits `apply_authorized=false`. It neither creates a plan nor reads,
-initializes, locks, or changes the live backend. Separate founder-controlled
-state capture, live resource readback, review, and apply gates remain required.
+It installs the lockfile-constrained decoder with `-backend=false`, requires the
+reviewed Darwin arm64 OpenTofu and AzureRM executable digests, invokes only
+`tofu show -json`, and emits `apply_authorized=false`. It neither creates a plan
+nor reads, initializes, locks, or changes the live backend. Separate
+founder-controlled state capture, live resource readback, review, and apply
+gates remain required.

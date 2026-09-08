@@ -109,7 +109,7 @@ def _raw_resource_group() -> dict[str, Any]:
                     "location": validator.EXPECTED_LOCATION,
                     "managed_by": "",
                     "name": validator.EXPECTED_RESOURCE_GROUP,
-                    "tags": {"observed": "non-authoritative"},
+                    "tags": dict(validator.EXPECTED_CONTROL_GROUP_TAGS),
                     "timeouts": None,
                 },
                 "sensitive_attributes": [],
@@ -249,10 +249,12 @@ def _valid_plan() -> dict[str, Any]:
             },
         },
         "prior_state": {
+            "format_version": "1.0",
+            "terraform_version": validator.EXPECTED_TOFU_VERSION,
             "values": {
                 "outputs": {"state_boundary": _state_boundary(plan_json=True)},
                 "root_module": {"resources": [_plan_resource_group()]},
-            }
+            },
         },
         "resource_changes": [
             {
@@ -472,6 +474,11 @@ def test_embedded_states_must_be_exact_empty_then_read_only_refresh() -> None:
     with pytest.raises(validator.BootstrapPlanError, match="identity is not exact"):
         _validate(refreshed=wrong_lineage)
 
+    extra = _refreshed_state()
+    extra["resources"][0]["instances"][0]["attributes"]["unexpected"] = True
+    with pytest.raises(validator.BootstrapPlanError, match="attributes are not exact"):
+        _validate(refreshed=extra)
+
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
@@ -538,6 +545,22 @@ def test_security_relevant_plan_mutations_refuse(mutation: Any, message: str) ->
 
     with pytest.raises(validator.BootstrapPlanError, match=message):
         _validate(plan=plan)
+
+
+def test_prior_state_shape_is_closed() -> None:
+    for target in (
+        lambda plan: plan["prior_state"],
+        lambda plan: plan["prior_state"]["values"]["root_module"]["resources"][0],
+        lambda plan: plan["prior_state"]["values"]["root_module"]["resources"][0][
+            "values"
+        ],
+    ):
+        plan = _valid_plan()
+        target(plan)["unexpected"] = True
+        with pytest.raises(
+            validator.BootstrapPlanError, match="prior state|boundary|resource group"
+        ):
+            _validate(plan=plan)
 
 
 def test_plan_timestamp_and_cleanup_are_exact_and_fresh() -> None:
@@ -621,7 +644,7 @@ def test_decoder_initialization_is_backend_free(
     data_dir = tmp_path / "data"
     provider = (
         data_dir
-        / "providers/registry.opentofu.org/hashicorp/azurerm/4.73.0/test"
+        / "providers/registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64"
         / "terraform-provider-azurerm"
     )
     provider.parent.mkdir(parents=True)
@@ -638,6 +661,16 @@ def test_decoder_initialization_is_backend_free(
         return subprocess.CompletedProcess(arguments, 0, b"initialized", b"")
 
     monkeypatch.setattr(validator, "_run_process", fake_run)
+    monkeypatch.setattr(
+        validator,
+        "_require_pinned_executable",
+        lambda *_, expected, **__: expected,
+    )
+    monkeypatch.setattr(
+        validator,
+        "EXPECTED_PROVIDER_SHA256",
+        hashlib.sha256(b"provider").hexdigest(),
+    )
     assert (
         validator._initialize_decoder(tofu=TOFU, data_dir=data_dir)
         == hashlib.sha256(b"provider").hexdigest()
@@ -660,3 +693,37 @@ def test_protected_plan_file_rules(tmp_path: Path) -> None:
     link.symlink_to(plan)
     with pytest.raises(validator.BootstrapPlanError, match="unavailable"):
         validator._read_protected_file(link, label="saved plan")
+
+
+def test_tool_digests_and_decoder_environment_are_pinned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(validator.shutil, "which", lambda _: str(TOFU))
+    monkeypatch.setattr(validator, "_trusted_executable", lambda path, **_: path)
+    monkeypatch.setattr(validator, "_executable_sha256", lambda *_, **__: "0" * 64)
+    monkeypatch.setattr(
+        validator,
+        "_run_process",
+        lambda *_, **__: pytest.fail("an unpinned OpenTofu binary was executed"),
+    )
+    with pytest.raises(validator.BootstrapPlanError, match="digest is not pinned"):
+        validator._resolve_and_verify_tofu()
+
+    for name in ("HTTPS_PROXY", "http_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        monkeypatch.setenv(name, "attacker-controlled")
+    environment = validator._normalized_environment()
+    assert not any(
+        name.upper() in {key.upper() for key in environment}
+        for name in ("HTTPS_PROXY", "http_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE")
+    )
+
+
+def test_checkout_reader_rejects_link_substitution(tmp_path: Path) -> None:
+    source = tmp_path / "source.tf"
+    source.write_bytes(b"reviewed")
+    source.chmod(0o644)
+    assert validator._read_checkout_file(source, label="source") == b"reviewed"
+    link = tmp_path / "linked.tf"
+    link.symlink_to(source)
+    with pytest.raises(validator.BootstrapPlanError, match="safely"):
+        validator._read_checkout_file(link, label="source")

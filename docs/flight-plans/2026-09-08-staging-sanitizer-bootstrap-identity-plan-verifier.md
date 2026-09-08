@@ -11,7 +11,13 @@ state-serial inputs. It reads the plan only from an owner-controlled `0400`
 regular file in an owner-controlled `0700` directory. It binds the archive's
 Terraform files and provider lockfile byte-for-byte to the clean exact source
 commit, then decodes those same in-memory plan bytes with pinned OpenTofu
-1.12.5 and AzureRM 4.73.0.
+1.12.5 and AzureRM 4.73.0. The reviewed source bytes come from the immutable Git
+object while descriptor-based reads separately prove that the checkout matches
+them without symlink, hardlink, or path-replacement ambiguity.
+
+The decoder is deliberately platform-specific: both the Darwin arm64 OpenTofu
+and AzureRM executable SHA-256 values are pinned in reviewed policy and checked
+before and after use. A version string or freshly observed digest is not trust.
 
 The accepted plan has exactly two create actions: one built-in activation guard
 and one exact UAMI in the existing exact staging rehearsal control group. It
@@ -30,9 +36,12 @@ every other expected check must pass.
 
 The verifier intentionally initializes only an offline decoder with
 `tofu init -backend=false` and invokes only `tofu show -json`. It strips all
-Azure and OpenTofu environment overrides and fails if decoder initialization or
-showing the plan creates local backend metadata. It does not contact, initialize,
-lock, read, or change the Azure backend.
+Azure, OpenTofu, proxy, custom-CA, and package-source environment overrides.
+The signed provider package is constrained by the reviewed lockfile and its
+executable must match the separately pinned platform digest before it can be
+loaded. Initialization or showing the plan fails if it creates local backend
+metadata. The verifier does not contact, initialize, lock, read, or change the
+Azure backend.
 
 This boundary is deliberate: a verifier-design probe established that ordinary
 AzureRM backend initialization can materialize an empty state blob even without
