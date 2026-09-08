@@ -33,8 +33,8 @@ TEMPLATE_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-privileged-global-query-templates.sql"
 )
-CONTRACT_SHA256 = "d6d751a71f87936768f153986f087a89ca5edf4cf1a3dc9f5193a225dbe23bb8"
-TEMPLATE_SET_SHA256 = "bd6a985e8101363332de22a753ffde90837c9d8fdd8532a03e1a87066992d3fa"
+CONTRACT_SHA256 = "80930c0516f0c3090d0c80e37c5d33c544443900b71aaa88490700c0daf8ce7e"
+TEMPLATE_SET_SHA256 = "6dbc52487fccdefe28bfa18e08feccc99fe8f433012ec08b5cdc48cca96ea88c"
 OBSERVER_CONTRACT_SHA256 = (
     "040874bb93f30c17168a49284b9255be982f2530e1cf144325ad89ae174a63d0"
 )
@@ -92,7 +92,7 @@ TEMPLATE_SHA256 = {
     "parameter_acl_sources": "32d7a60df6a26f0f01d40e7ad5bdd3e9411a3bf296c1ff165395810ea79889d4",
     "parameter_effective_privileges": "67c266a03a146736092b6150a59e4f898224448541523167a7728833155e6959",
     "database_object_authority": "6c7f90e0a19d4492e5499ff510737be65b9b0880e92e00a7c23231fa088bc430",
-    "system_object_acl_deltas": "821f075a78a4d3f109886b8362de38ab09055747fa66990a589d48d9d40c7a29",
+    "system_object_acl_deltas": "106e0c993b82786fc733c41c31971fb45bc671d1cc0bf23c6b83bb65c9c61566",
 }
 MAXIMUM_ROWS = {
     "entra_principal_mappings": 512,

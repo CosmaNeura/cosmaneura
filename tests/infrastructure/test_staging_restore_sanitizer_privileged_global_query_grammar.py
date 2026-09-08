@@ -106,7 +106,7 @@ def test_requirement_coverage_is_exact_disjoint_and_exhaustive() -> None:
     )
 
 
-def test_postgresql16_builtin_acl_baseline_is_closed_world() -> None:
+def test_acl_baseline_is_closed_world_and_delta_set_ops_are_isolated() -> None:
     baseline = grammar.load_privileged_global_query_grammar_contract()[
         "postgresql16_builtin_acl_baseline"
     ]
@@ -124,6 +124,22 @@ def test_postgresql16_builtin_acl_baseline_is_closed_world() -> None:
     assert baseline["unknown_builtin_or_extension_acl_baseline_permitted"] is False
     for relation in grammar.INFORMATION_SCHEMA_PUBLIC_SELECT_BASELINE:
         assert f"'information_schema.{relation}'" in sql
+
+    current_only_body = sql.split("current_only_entries AS (\n", 1)[1].split(
+        "\n),\nbaseline_only_entries AS", 1
+    )[0]
+    baseline_only_body = sql.split("baseline_only_entries AS (\n", 1)[1].split(
+        "\n),\ndelta_entries AS", 1
+    )[0]
+    delta_body = sql.split("delta_entries AS (\n", 1)[1].split(
+        "\n)\nSELECT delta_entries", 1
+    )[0]
+    assert current_only_body.count("\n    EXCEPT\n") == 1
+    assert baseline_only_body.count("\n    EXCEPT\n") == 1
+    assert "UNION" not in current_only_body
+    assert "UNION" not in baseline_only_body
+    assert delta_body.count("\n    UNION ALL\n") == 1
+    assert "EXCEPT" not in delta_body
 
 
 @pytest.mark.parametrize(

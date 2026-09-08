@@ -524,50 +524,74 @@ baseline_entries AS (
            )
        )
 ),
+current_only_entries AS (
+    SELECT 'current_only'::text AS delta_side,
+           current_entries.object_class,
+           current_entries.object_oid,
+           current_entries.object_sub_id,
+           current_entries.object_identity,
+           current_entries.grantor_role_oid,
+           current_entries.grantee_role_oid,
+           current_entries.privilege_type,
+           current_entries.is_grantable
+    FROM current_entries
+    EXCEPT
+    SELECT 'current_only'::text AS delta_side,
+           baseline_entries.object_class,
+           baseline_entries.object_oid,
+           baseline_entries.object_sub_id,
+           baseline_entries.object_identity,
+           baseline_entries.grantor_role_oid,
+           baseline_entries.grantee_role_oid,
+           baseline_entries.privilege_type,
+           baseline_entries.is_grantable
+    FROM baseline_entries
+),
+baseline_only_entries AS (
+    SELECT 'baseline_only'::text AS delta_side,
+           baseline_entries.object_class,
+           baseline_entries.object_oid,
+           baseline_entries.object_sub_id,
+           baseline_entries.object_identity,
+           baseline_entries.grantor_role_oid,
+           baseline_entries.grantee_role_oid,
+           baseline_entries.privilege_type,
+           baseline_entries.is_grantable
+    FROM baseline_entries
+    EXCEPT
+    SELECT 'baseline_only'::text AS delta_side,
+           current_entries.object_class,
+           current_entries.object_oid,
+           current_entries.object_sub_id,
+           current_entries.object_identity,
+           current_entries.grantor_role_oid,
+           current_entries.grantee_role_oid,
+           current_entries.privilege_type,
+           current_entries.is_grantable
+    FROM current_entries
+),
 delta_entries AS (
-    SELECT 'current_only'::text AS delta_side,
-           current_entries.object_class,
-           current_entries.object_oid,
-           current_entries.object_sub_id,
-           current_entries.object_identity,
-           current_entries.grantor_role_oid,
-           current_entries.grantee_role_oid,
-           current_entries.privilege_type,
-           current_entries.is_grantable
-    FROM current_entries
-    EXCEPT
-    SELECT 'current_only'::text AS delta_side,
-           baseline_entries.object_class,
-           baseline_entries.object_oid,
-           baseline_entries.object_sub_id,
-           baseline_entries.object_identity,
-           baseline_entries.grantor_role_oid,
-           baseline_entries.grantee_role_oid,
-           baseline_entries.privilege_type,
-           baseline_entries.is_grantable
-    FROM baseline_entries
+    SELECT current_only_entries.delta_side,
+           current_only_entries.object_class,
+           current_only_entries.object_oid,
+           current_only_entries.object_sub_id,
+           current_only_entries.object_identity,
+           current_only_entries.grantor_role_oid,
+           current_only_entries.grantee_role_oid,
+           current_only_entries.privilege_type,
+           current_only_entries.is_grantable
+    FROM current_only_entries
     UNION ALL
-    SELECT 'baseline_only'::text AS delta_side,
-           baseline_entries.object_class,
-           baseline_entries.object_oid,
-           baseline_entries.object_sub_id,
-           baseline_entries.object_identity,
-           baseline_entries.grantor_role_oid,
-           baseline_entries.grantee_role_oid,
-           baseline_entries.privilege_type,
-           baseline_entries.is_grantable
-    FROM baseline_entries
-    EXCEPT
-    SELECT 'baseline_only'::text AS delta_side,
-           current_entries.object_class,
-           current_entries.object_oid,
-           current_entries.object_sub_id,
-           current_entries.object_identity,
-           current_entries.grantor_role_oid,
-           current_entries.grantee_role_oid,
-           current_entries.privilege_type,
-           current_entries.is_grantable
-    FROM current_entries
+    SELECT baseline_only_entries.delta_side,
+           baseline_only_entries.object_class,
+           baseline_only_entries.object_oid,
+           baseline_only_entries.object_sub_id,
+           baseline_only_entries.object_identity,
+           baseline_only_entries.grantor_role_oid,
+           baseline_only_entries.grantee_role_oid,
+           baseline_only_entries.privilege_type,
+           baseline_only_entries.is_grantable
+    FROM baseline_only_entries
 )
 SELECT delta_entries.delta_side,
        delta_entries.object_class,
