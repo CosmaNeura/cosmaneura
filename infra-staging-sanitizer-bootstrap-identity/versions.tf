@@ -19,8 +19,8 @@ terraform {
 }
 
 provider "azurerm" {
-  subscription_id = var.subscription_id
-  tenant_id       = var.tenant_id
+  subscription_id = local.approved_subscription_id
+  tenant_id       = local.approved_tenant_id
 
   # Provider registration is an explicit operator prerequisite. This root must
   # not broaden the subscription surface while planning or applying one UAMI.

@@ -120,6 +120,28 @@ run "identity_rejects_wrong_control_group_location" {
   expect_failures = [azurerm_user_assigned_identity.sanitizer_bootstrap[0]]
 }
 
+run "identity_rejects_wrong_subscription_scope" {
+  command = plan
+
+  variables {
+    enable_sanitizer_bootstrap_identity        = true
+    sanitizer_bootstrap_identity_plan_approved = true
+    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
+    sanitizer_bootstrap_cleanup_not_after      = "2099-01-01T00:00:00Z"
+  }
+
+  override_data {
+    target = data.azurerm_resource_group.control
+    values = {
+      id       = "/subscriptions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/resourceGroups/cosmaneura-staging-rehearsal-control"
+      location = "eastus"
+      tags     = {}
+    }
+  }
+
+  expect_failures = [azurerm_user_assigned_identity.sanitizer_bootstrap[0]]
+}
+
 run "approved_identity_foundation" {
   command = plan
 

@@ -1,8 +1,16 @@
 locals {
-  subscription_scope          = "/subscriptions/${var.subscription_id}"
+  approved_subscription_id    = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+  approved_tenant_id          = "d51754d0-bba5-4810-820e-afac542844d6"
+  subscription_scope          = "/subscriptions/${local.approved_subscription_id}"
   control_resource_group_name = "cosmaneura-staging-rehearsal-control"
   control_location            = "eastus"
   bootstrap_identity_name     = "cosmaneura-staging-restore-bootstrap-job"
+  base_tags = {
+    environment         = "staging"
+    managed-by          = "opentofu"
+    purpose             = "staging-restore-sanitizer-bootstrap"
+    data-classification = "non-phi-control-metadata"
+  }
 
   any_bootstrap_input = (
     var.enable_sanitizer_bootstrap_identity ||
@@ -67,7 +75,7 @@ resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
   name                = local.bootstrap_identity_name
   resource_group_name = data.azurerm_resource_group.control[0].name
   location            = data.azurerm_resource_group.control[0].location
-  tags = merge(var.tags, {
+  tags = merge(local.base_tags, {
     lifecycle         = "ephemeral"
     rehearsal-id      = coalesce(var.sanitizer_bootstrap_rehearsal_id, "unconfigured")
     cleanup-not-after = coalesce(var.sanitizer_bootstrap_cleanup_not_after, "unconfigured")

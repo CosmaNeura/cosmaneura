@@ -15,7 +15,9 @@ exact pre-existing `cosmaneura-staging-rehearsal-control` resource group and
 contains no Azure resource other than the one bootstrap UAMI. It therefore
 cannot create, update, or destroy the broader rehearsal control plane,
 federated credentials, RBAC assignments, jobs, networks, storage, or database
-resources.
+resources. The exact subscription, tenant, resource group, location, identity
+name, and complete tag key set are constants rather than caller-controlled
+inputs.
 
 The root creates the identity only when the enable and exact-plan-approval
 switches are both true. It requires an exact 12-character rehearsal ID and a
@@ -49,8 +51,11 @@ The first independent review rejected the shared-root design for three High
 risks. This redesign resolves them by attaching the apply-time expiry check to
 the UAMI itself, protecting an existing UAMI with `prevent_destroy`, and moving
 the identity into an isolated state whose only Azure-managed resource is that
-UAMI. The original review is negative evidence, not acceptance; the remediated
-exact head requires a new independent review and green CI.
+UAMI. A second review identified redirectable subscription/tenant variables
+and case-insensitive collisions between caller tags and lifecycle tags. The
+final design removes all three inputs and pins their values in source. Both
+earlier reviews are negative evidence, not acceptance; the remediated exact
+head requires a new independent review and green CI.
 
 Before any apply, recovery is a code-only revert. After an approved apply,
 recovery is a separately reviewed teardown plan that first authenticates

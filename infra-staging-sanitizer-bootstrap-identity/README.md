@@ -10,7 +10,9 @@ The root contains one Azure resource:
 `cosmaneura-staging-restore-bootstrap-job`. It creates no resource group,
 federated credential, role assignment, compute, network, storage, database
 resource, administrator, workflow binding, or production resource. The exact
-control resource group is a read-only data lookup.
+subscription, tenant, resource group, location, identity name, and complete tag
+key set are pinned in source; callers cannot redirect or relabel the resource.
+The exact control resource group is a read-only data lookup.
 
 Creation requires all four bounded values in one independently reviewed saved
 plan:
