@@ -821,35 +821,52 @@ def _build_provenance(
     utc = UTC
     zero_offset = timedelta(0)
     type_of, type_read_attr = type, type.__getattribute__
-    identity, pair_length, any_true, all_true = id, len, any, all
+    identity, pair_length, any_true = id, len, any
     tuple_type, mapping_type, scalar_types = tuple, dict, (str, bool, int)
     type_error, value_error, base_error = TypeError, ValueError, Exception
     new_value = object.__new__
     key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
     registry_type = weakref.WeakKeyDictionary
-    registry_get = type_read_attr(registry_type, "get")
-    registry_set = type_read_attr(registry_type, "__setitem__")
-    registry_pop = type_read_attr(registry_type, "pop")
-    registry_clear = type_read_attr(registry_type, "clear")
-    guarded_registry_attributes = (
-        ("get", registry_get),
-        ("__setitem__", registry_set),
-        ("pop", registry_pop),
-        ("clear", registry_clear),
+    mappingproxy_type = type_of(type_read_attr(value_type, "__dict__"))
+    namespace_contains = type_read_attr(mappingproxy_type, "__contains__")
+    namespace_getitem = type_read_attr(mappingproxy_type, "__getitem__")
+
+    def capture_namespaces(target: type[Any]) -> tuple[Any, tuple[Any, ...]]:
+        mro = type_read_attr(target, "__mro__")
+        return mro, tuple_type(
+            (owner, type_read_attr(owner, "__dict__")) for owner in mro
+        )
+
+    def raw_resolve(namespaces: tuple[Any, ...], name: str) -> tuple[Any, Any]:
+        for owner, namespace in namespaces:
+            if namespace_contains(namespace, name):
+                return owner, namespace_getitem(namespace, name)
+        raise value_error
+
+    def captured_attributes(
+        namespaces: tuple[Any, ...], names: tuple[str, ...]
+    ) -> tuple[tuple[str, Any, Any], ...]:
+        return tuple_type((name, *raw_resolve(namespaces, name)) for name in names)
+
+    value_mro, value_namespaces = capture_namespaces(value_type)
+    registry_mro, registry_namespaces = capture_namespaces(registry_type)
+    registry_operations = captured_attributes(
+        registry_namespaces, ("get", "__setitem__", "pop", "clear")
+    )
+    registry_get, registry_set, registry_pop, registry_clear = (
+        item[2] for item in registry_operations
     )
     slot_descriptors = tuple_type(
-        (name, type_read_attr(value_type, name))
+        (name, raw_resolve(value_namespaces, name)[1])
         for name in (*public_fields, *private_fields)
     )
     member_descriptor_type = type_of(slot_descriptors[0][1])
     descriptor_get = type_read_attr(member_descriptor_type, "__get__")
     descriptor_set = type_read_attr(member_descriptor_type, "__set__")
-    guarded_class_attributes = (
-        ("__getattribute__", type_read_attr(value_type, "__getattribute__")),
-        ("__hash__", type_read_attr(value_type, "__hash__")),
-        ("__eq__", type_read_attr(value_type, "__eq__")),
-        *slot_descriptors,
+    guarded_class_attributes = captured_attributes(
+        value_namespaces,
+        ("__getattribute__", "__hash__", "__eq__", *public_fields, *private_fields),
     )
     issued: weakref.WeakKeyDictionary[
         AuthenticatedBootstrapIdentityTeardownEvidence,
@@ -858,12 +875,25 @@ def _build_provenance(
 
     def class_shape_intact() -> bool:
         try:
-            return all_true(
-                type_read_attr(value_type, name) is expected
-                for name, expected in guarded_class_attributes
-            ) and all_true(
-                type_read_attr(registry_type, name) is expected
-                for name, expected in guarded_registry_attributes
+
+            def unchanged(
+                target: type[Any],
+                expected_mro: tuple[Any, ...],
+                namespaces: tuple[Any, ...],
+                attributes: tuple[tuple[str, Any, Any], ...],
+            ) -> bool:
+                if type_read_attr(target, "__mro__") is not expected_mro:
+                    return False
+                for name, owner, expected in attributes:
+                    current_owner, current = raw_resolve(namespaces, name)
+                    if current_owner is not owner or current is not expected:
+                        return False
+                return True
+
+            return unchanged(
+                value_type, value_mro, value_namespaces, guarded_class_attributes
+            ) and unchanged(
+                registry_type, registry_mro, registry_namespaces, registry_operations
             )
         except base_error:
             return False

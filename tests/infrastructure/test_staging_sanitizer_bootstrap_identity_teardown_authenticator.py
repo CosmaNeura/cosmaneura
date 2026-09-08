@@ -289,16 +289,13 @@ def test_module_verifier_rejects_replaced_slot_and_getattribute_descriptors(
     executable_slot = vars(value_type)["executable"]
     executable_slot.__set__(value, True)
 
-    class StatefulExecutable:
-        reads = 0
-
-        def __get__(self, _instance: object, _owner: object) -> bool:
-            self.reads += 1
-            return self.reads > 1
+    class MaskingExecutable:
+        def __get__(self, instance: object | None, _owner: object) -> object:
+            return executable_slot if instance is None else True
 
     with monkeypatch.context() as descriptor_patch:
-        descriptor_patch.setattr(value_type, "executable", StatefulExecutable())
-        assert value.executable is False
+        descriptor_patch.setattr(value_type, "executable", MaskingExecutable())
+        assert value_type.executable is executable_slot
         assert value.executable is True
         assert not auth.is_authenticated_bootstrap_identity_teardown_evidence(value)
         with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
