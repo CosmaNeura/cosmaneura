@@ -29,11 +29,11 @@ CONTRACT_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-privileged-global-observation-frames-contract.json"
 )
-CONTRACT_SHA256 = "379f9ea209a1352809b440bce2ab17cc0d049204335eddf9ac4237be1bebf99f"
+CONTRACT_SHA256 = "6cbff47fbd162b52c0bc6e22d71d28adea3d91666ef09c84d8125172b0e1b1bf"
 QUERY_GRAMMAR_CONTRACT_SHA256 = (
-    "d6d751a71f87936768f153986f087a89ca5edf4cf1a3dc9f5193a225dbe23bb8"
+    "80930c0516f0c3090d0c80e37c5d33c544443900b71aaa88490700c0daf8ce7e"
 )
-TEMPLATE_SET_SHA256 = "bd6a985e8101363332de22a753ffde90837c9d8fdd8532a03e1a87066992d3fa"
+TEMPLATE_SET_SHA256 = "6dbc52487fccdefe28bfa18e08feccc99fe8f433012ec08b5cdc48cca96ea88c"
 ACTIVATION_FAILURE = (
     "activation.sanitizer_privileged_global_database_observer_unimplemented"
 )
