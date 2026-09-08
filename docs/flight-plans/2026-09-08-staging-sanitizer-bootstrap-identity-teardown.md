@@ -87,6 +87,13 @@ again prove no federation, RBAC, job attachment, PostgreSQL administrator
 binding, or state change immediately before apply. The saved plan, validator
 receipt, and fresh evidence require independent review. Agents do not apply it.
 
+OpenTofu 1.12.5 preserves the populated pre-refresh snapshot in the plan
+archive's `tfstate-prev` member but uses its canonical local envelope header:
+empty lineage and serial zero. Validation requires that exact header and still
+checks every prior output, resource, provider, identity value, and guard value.
+The refreshed `tfstate` member must carry the authenticated remote lineage and
+serial 2, so the archive convention cannot substitute for remote-state proof.
+
 Azure CLI 2.89 accepts either a subscription or tenant selector for token
 acquisition, but rejects both together. The generator therefore supplies the
 exact subscription and leaves the backend tenant field null. This is not a

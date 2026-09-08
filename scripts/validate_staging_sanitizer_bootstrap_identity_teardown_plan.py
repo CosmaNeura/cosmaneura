@@ -306,11 +306,17 @@ def _validate_embedded_state(state: Mapping[str, Any], *, before_refresh: bool) 
         "check_results",
     }:
         raise BootstrapPlanError("embedded state field set is not exact")
+    # OpenTofu 1.12.5 preserves the populated pre-refresh snapshot in
+    # tfstate-prev but writes that member with its canonical local envelope
+    # header. The refreshed tfstate remains the authenticated remote snapshot.
+    expected_lineage = "" if before_refresh else EXPECTED_STATE_LINEAGE
+    expected_serial = 0 if before_refresh else EXPECTED_STATE_SERIAL
     if (
         state.get("version") != 4
         or state.get("terraform_version") != base.EXPECTED_TOFU_VERSION
-        or state.get("serial") != EXPECTED_STATE_SERIAL
-        or state.get("lineage") != EXPECTED_STATE_LINEAGE
+        or type(state.get("serial")) is not int
+        or state.get("serial") != expected_serial
+        or state.get("lineage") != expected_lineage
     ):
         raise BootstrapPlanError("embedded state lineage or serial is not exact")
     expected_outputs = {
