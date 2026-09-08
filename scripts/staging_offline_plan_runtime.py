@@ -504,9 +504,14 @@ def _remove_flat_private_directory(
 
 
 def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
-    if not files:
+    try:
+        members = tuple(files.items())
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise OfflineRuntimeError("decoder source members could not be read") from exc
+    if not members:
         raise OfflineRuntimeError("decoder source member is invalid")
-    for name, value in files.items():
+    member_names: set[str] = set()
+    for name, value in members:
         if (
             not isinstance(name, str)
             or not name
@@ -517,6 +522,10 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
             or not value
         ):
             raise OfflineRuntimeError("decoder source member is invalid")
+        if name in member_names:
+            raise OfflineRuntimeError("decoder source member is duplicated")
+        member_names.add(name)
+    expected_members = frozenset(member_names)
     reject_symlink_components(
         directory, label="decoder source", allow_missing_leaf=True
     )
@@ -530,7 +539,7 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
         )
         temporary.chmod(0o700)
         target = open_private_directory(temporary, label="temporary decoder source")
-        for name, value in files.items():
+        for name, value in members:
             descriptor = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -565,14 +574,14 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
                 _remove_flat_private_directory(
                     parent=parent,
                     name=directory.name,
-                    allowed_members=frozenset(files),
+                    allowed_members=expected_members,
                     require_exact=True,
                 )
             elif temporary is not None:
                 _remove_flat_private_directory(
                     parent=parent,
                     name=temporary.name,
-                    allowed_members=frozenset(files),
+                    allowed_members=expected_members,
                     require_exact=False,
                 )
                 temporary = None

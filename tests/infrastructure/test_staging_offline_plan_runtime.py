@@ -163,6 +163,36 @@ def test_materialized_source_never_replaces_existing_directory(tmp_path: Path) -
     assert list(tmp_path.iterdir()) == [source]
 
 
+def test_materialized_source_uses_one_validated_member_snapshot(tmp_path: Path) -> None:
+    class ChangingMapping:
+        calls = 0
+
+        def items(self) -> list[tuple[str, bytes]]:
+            self.calls += 1
+            if self.calls == 1:
+                return [("main.tf", b"reviewed")]
+            return [("../escape", b"unreviewed")]
+
+    tmp_path.chmod(0o700)
+    source = tmp_path / "source"
+    changing = ChangingMapping()
+    runtime.materialize_source(source, changing)  # type: ignore[arg-type]
+
+    assert changing.calls == 1
+    assert (source / "main.tf").read_bytes() == b"reviewed"
+    assert not (tmp_path.parent / "escape").exists()
+
+    class DuplicateMapping:
+        def items(self) -> list[tuple[str, bytes]]:
+            return [("main.tf", b"first"), ("main.tf", b"second")]
+
+    with pytest.raises(runtime.OfflineRuntimeError, match="duplicated"):
+        runtime.materialize_source(
+            tmp_path / "duplicate",
+            DuplicateMapping(),  # type: ignore[arg-type]
+        )
+
+
 def test_materialized_source_cleans_published_tree_when_parent_sync_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
