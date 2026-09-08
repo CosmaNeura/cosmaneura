@@ -556,7 +556,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
-            f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
+            f"uv run pytest {SANITIZER_OBSERVER_INTEGRITY_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -1067,7 +1067,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_233_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_234_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -1151,7 +1151,7 @@ def test_sanitizer_observer_shards_partition_all_233_collected_cases_once() -> N
     )
 
     assert all(groups)
-    assert len(primary) == 124
+    assert len(primary) == 125
     assert len(runtime) == 18
     assert len(output) == 1
     assert len(connection_plan) == 5
@@ -1168,7 +1168,7 @@ def test_sanitizer_observer_shards_partition_all_233_collected_cases_once() -> N
     assert len(bootstrap_binding_failure) == 1
     assert len(bootstrap_binding_family) == 27
     assert len(integrity) == 39
-    assert len(family) == 233
+    assert len(family) == 234
     assert all(len(group) == len(set(group)) for group in groups)
     assert len(bootstrap_binding_family) == len(set(bootstrap_binding_family))
     assert len(family) == len(set(family))
@@ -1236,7 +1236,7 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(target_role_offline_authenticator) == 39
     assert len(privileged_global_observer_contract) == 24
     assert len(privileged_global_query_grammar) == 25
-    assert len(privileged_global_observation_frames) == 11
+    assert len(privileged_global_observation_frames) == 12
     assert len(privileged_global_connection_plan) == 24
     assert len(bootstrap_binding_plan) == 27
     assert len(executor) == 21
@@ -1244,7 +1244,7 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 519
+    assert len(family) == 520
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))

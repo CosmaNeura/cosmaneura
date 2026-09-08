@@ -34,9 +34,9 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-bootstrap-binding-plan-contract.json"
 )
-CONTRACT_SHA256 = "88b3ea9e5ca800ddfc50f10a8d83b4372c9239953877d1b52d2865d561dbdcff"
+CONTRACT_SHA256 = "bec46b28d75e2b19c2ab4fbdf5412d846252b14d0bb62d0b15ab729342810926"
 CONNECTION_PLAN_CONTRACT_SHA256 = (
-    "86d3e4ddb0bafffa41438b8f360b84e3ac4a7864604e7372f26e3d6078a15aac"
+    "d7bd6ef34b63a4dd281101ea23b8855b101bb4154e172199c3bf90f0e592dde4"
 )
 TARGET_PLAN_CONTRACT_SHA256 = (
     "d341d653195b9b3d3d941304205f801d952e3195cd0eefafd0e9d6a9131a0dbb"

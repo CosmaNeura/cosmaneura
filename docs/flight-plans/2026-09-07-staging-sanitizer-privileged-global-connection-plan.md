@@ -8,6 +8,6 @@ Non-connectable entries are never silently omitted. Only `template0`, `azure_mai
 
 The resulting plan is immutable, non-copyable, non-serializable public metadata that retains the identical sealed target-role observation plan in process. It selects neither the separate bootstrap identity nor any live adapter. Public activation remains terminal at `activation.sanitizer_privileged_global_database_observer_unimplemented`.
 
-Connection-plan contract SHA-256: `86d3e4ddb0bafffa41438b8f360b84e3ac4a7864604e7372f26e3d6078a15aac`.
+Connection-plan contract SHA-256: `d7bd6ef34b63a4dd281101ea23b8855b101bb4154e172199c3bf90f0e592dde4`.
 
 Recovery is a code-only revert. No cloud, staging, production, or database state is created.
