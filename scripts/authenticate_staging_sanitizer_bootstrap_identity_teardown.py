@@ -690,12 +690,13 @@ def _build_provenance(
     seal: object = _SEAL,
     process_id: Callable[[], int] = os.getpid,
     register_at_fork: Callable[..., None] = os.register_at_fork,
-) -> tuple[Callable[..., Any], Callable[..., bool]]:
+) -> tuple[Callable[..., Any], Callable[..., bool], Callable[..., dict[str, Any]]]:
     random_bytes = os.urandom
     hmac_new = hmac.new
     compare_digest = hmac.compare_digest
     sha256 = hashlib.sha256
     datetime_type = datetime
+    format_datetime = datetime.strftime
     utc = UTC
     zero_offset = timedelta(0)
     type_of, read_attr, identity, pair_length, any_true = type, getattr, id, len, any
@@ -705,7 +706,8 @@ def _build_provenance(
     key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
     issued: weakref.WeakKeyDictionary[
-        AuthenticatedBootstrapIdentityTeardownEvidence, tuple[int, bytes]
+        AuthenticatedBootstrapIdentityTeardownEvidence,
+        tuple[int, bytes, tuple[tuple[str, Any], ...]],
     ] = weakref.WeakKeyDictionary()
 
     def reset_after_fork() -> None:
@@ -783,31 +785,52 @@ def _build_provenance(
         )
         return hmac_new(key, material, sha256).hexdigest()
 
-    def verify(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bool:
+    def verified_record(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    ) -> tuple[int, bytes, tuple[tuple[str, Any], ...]] | None:
         try:
             record = issued.get(value)
             if record is None:
-                return False
-            issued_pid, expected_snapshot = record
+                return None
+            issued_pid, expected_snapshot, _public_projection = record
             current_snapshot = snapshot(value)
-            return (
+            if (
                 issued_pid == process_id()
                 and compare_digest(current_snapshot, expected_snapshot)
                 and type_of(value._proof_sha256) is scalar_types[0]
                 and compare_digest(value._proof_sha256, proof(value, expected_snapshot))
-            )
+            ):
+                return record
         except base_error:
-            return False
+            pass
+        return None
 
     def is_authenticated(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> bool:
         try:
             return (
-                type_of(value) is value_type and value._seal is seal and verify(value)
+                type_of(value) is value_type
+                and value._seal is seal
+                and verified_record(value) is not None
             )
         except base_error:
             return False
+
+    def project(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    ) -> dict[str, Any]:
+        try:
+            record = (
+                verified_record(value)
+                if type_of(value) is value_type and value._seal is seal
+                else None
+            )
+        except base_error:
+            record = None
+        if record is None:
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
+        return mapping_type(record[2])
 
     def authenticate(
         *, evidence_directory: Path
@@ -852,17 +875,26 @@ def _build_provenance(
         for name, item in values.items():
             set_value(value, name, item)
         expected_snapshot = snapshot(value)
+        public_projection = tuple_type(
+            (
+                name,
+                format_datetime(item, "%Y-%m-%dT%H:%M:%SZ")
+                if type_of(item := read_attr(value, name)) is datetime_type
+                else item,
+            )
+            for name in public_fields
+        )
         set_value(value, "_proof_sha256", proof(value, expected_snapshot))
-        issued[value] = (process_id(), expected_snapshot)
+        issued[value] = (process_id(), expected_snapshot, public_projection)
         if not is_authenticated(value):
             issued.pop(value, None)
             fail("bootstrap_identity_teardown_evidence.output_invalid")
         return value
 
-    return authenticate, is_authenticated
+    return authenticate, is_authenticated, project
 
 
-_authenticate, _bound_is_authenticated = _build_provenance()
+_authenticate, _bound_is_authenticated, _bound_public_projection = _build_provenance()
 AuthenticatedBootstrapIdentityTeardownEvidence._is_authenticated = (  # type: ignore[method-assign]
     _bound_is_authenticated
 )
@@ -884,17 +916,9 @@ def authenticate_bootstrap_identity_teardown_evidence(
 
 def _public_projection(
     value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    project: Callable[..., dict[str, Any]] = _bound_public_projection,
 ) -> dict[str, Any]:
-    if not value._is_authenticated():
-        _fail("bootstrap_identity_teardown_evidence.output_invalid")
-    return {
-        name: (
-            getattr(value, name).strftime("%Y-%m-%dT%H:%M:%SZ")
-            if type(getattr(value, name)) is datetime
-            else getattr(value, name)
-        )
-        for name in PUBLIC_FIELDS
-    }
+    return project(value)
 
 
 def main(argv: list[str] | None = None) -> int:

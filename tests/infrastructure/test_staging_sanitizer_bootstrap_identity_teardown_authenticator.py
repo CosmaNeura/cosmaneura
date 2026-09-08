@@ -518,7 +518,7 @@ def _fixture(
     policy_sha256 = hashlib.sha256(policy_raw).hexdigest()
     monkeypatch.setattr(auth, "POLICY_SHA256", policy_sha256)
     read_policy = auth._read_policy
-    authenticate, is_authenticated = auth._build_provenance(
+    authenticate, is_authenticated, project = auth._build_provenance(
         read_policy=lambda: read_policy(
             policy_path=policy_path,
             policy_sha256=policy_sha256,
@@ -533,6 +533,7 @@ def _fixture(
         "_is_authenticated",
         is_authenticated,
     )
+    monkeypatch.setattr(auth, "_public_projection", project)
     return evidence_directory, policy
 
 
@@ -641,12 +642,19 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
         lambda item, name: False if name == "executable" else read_attr(item, name),
         raising=False,
     )
+    expected_fields = auth.PUBLIC_FIELDS
+    expected_public = auth._public_projection(value)
+    monkeypatch.setattr(auth, "PUBLIC_FIELDS", ("_target",))
     assert value._is_authenticated()
+    assert auth._public_projection(value) == expected_public
+    assert "_target" not in expected_public
     object.__setattr__(value, "executable", True)
     assert not value._is_authenticated()
+    with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+        auth._public_projection(value)
 
     forged = object.__new__(auth.AuthenticatedBootstrapIdentityTeardownEvidence)
-    for name in (*auth.PUBLIC_FIELDS, *auth.PRIVATE_FIELDS):
+    for name in (*expected_fields, *auth.PRIVATE_FIELDS):
         object.__setattr__(forged, name, getattr(value, name))
     assert not forged._is_authenticated()
 
