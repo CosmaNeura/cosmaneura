@@ -576,12 +576,17 @@ def _validate_embedded_states(
     expected_lineage: str,
     expected_serial: int,
 ) -> None:
-    for state in (previous, refreshed):
-        _state_header(
-            state,
-            expected_lineage=expected_lineage,
-            expected_serial=expected_serial,
-        )
+    # OpenTofu 1.12.5 writes tfstate-prev as its canonical empty sentinel for
+    # a first plan against an empty remote backend. The refreshed tfstate
+    # carries the authenticated backend identity; it and the decoded plan's
+    # prior_state carry the exact refreshed content. Keep both archive shapes
+    # closed rather than projecting the remote identity onto the sentinel.
+    _state_header(previous, expected_lineage="", expected_serial=0)
+    _state_header(
+        refreshed,
+        expected_lineage=expected_lineage,
+        expected_serial=expected_serial,
+    )
     if previous.get("outputs") != {} or previous.get("resources") != []:
         raise BootstrapPlanError("embedded prior state is not empty")
     expected_output = {

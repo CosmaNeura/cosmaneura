@@ -62,12 +62,12 @@ def _source_snapshot() -> Any:
     )
 
 
-def _empty_state() -> dict[str, Any]:
+def _prior_state_sentinel() -> dict[str, Any]:
     return {
         "version": 4,
         "terraform_version": validator.EXPECTED_TOFU_VERSION,
-        "serial": SERIAL,
-        "lineage": LINEAGE,
+        "serial": 0,
+        "lineage": "",
         "outputs": {},
         "resources": [],
         "check_results": None,
@@ -121,7 +121,9 @@ def _raw_resource_group() -> dict[str, Any]:
 
 
 def _refreshed_state() -> dict[str, Any]:
-    state = _empty_state()
+    state = _prior_state_sentinel()
+    state["serial"] = SERIAL
+    state["lineage"] = LINEAGE
     state["outputs"] = {"state_boundary": _state_boundary(plan_json=False)}
     state["resources"] = [_raw_resource_group()]
     return state
@@ -355,7 +357,9 @@ def _saved_plan_bytes(
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("tfplan", b"opaque-open-tofu-plan")
         archive.writestr("tfstate", json.dumps(refreshed or _refreshed_state()))
-        archive.writestr("tfstate-prev", json.dumps(previous or _empty_state()))
+        archive.writestr(
+            "tfstate-prev", json.dumps(previous or _prior_state_sentinel())
+        )
         archive.writestr("tfconfig/modules.json", '[{"Key":"","Dir":"."}]')
         archive.writestr(".terraform.lock.hcl", snapshot.lockfile)
         for name, value in snapshot.terraform_files.items():
@@ -463,10 +467,16 @@ def test_json_rejects_duplicate_keys_and_nonfinite_numbers() -> None:
 
 
 def test_embedded_states_must_be_exact_empty_then_read_only_refresh() -> None:
-    previous = _empty_state()
+    previous = _prior_state_sentinel()
     previous["resources"] = [_raw_resource_group()]
     with pytest.raises(validator.BootstrapPlanError, match="prior state is not empty"):
         _validate(previous=previous)
+
+    for field, value in (("serial", SERIAL), ("lineage", LINEAGE)):
+        previous = _prior_state_sentinel()
+        previous[field] = value
+        with pytest.raises(validator.BootstrapPlanError, match="identity is not exact"):
+            _validate(previous=previous)
 
     refreshed = _refreshed_state()
     refreshed["resources"].append({"mode": "managed"})
