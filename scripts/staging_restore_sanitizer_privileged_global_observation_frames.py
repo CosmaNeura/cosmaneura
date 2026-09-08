@@ -29,11 +29,11 @@ CONTRACT_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-privileged-global-observation-frames-contract.json"
 )
-CONTRACT_SHA256 = "379f9ea209a1352809b440bce2ab17cc0d049204335eddf9ac4237be1bebf99f"
+CONTRACT_SHA256 = "6cbff47fbd162b52c0bc6e22d71d28adea3d91666ef09c84d8125172b0e1b1bf"
 QUERY_GRAMMAR_CONTRACT_SHA256 = (
-    "d6d751a71f87936768f153986f087a89ca5edf4cf1a3dc9f5193a225dbe23bb8"
+    "80930c0516f0c3090d0c80e37c5d33c544443900b71aaa88490700c0daf8ce7e"
 )
-TEMPLATE_SET_SHA256 = "bd6a985e8101363332de22a753ffde90837c9d8fdd8532a03e1a87066992d3fa"
+TEMPLATE_SET_SHA256 = "6dbc52487fccdefe28bfa18e08feccc99fe8f433012ec08b5cdc48cca96ea88c"
 ACTIVATION_FAILURE = (
     "activation.sanitizer_privileged_global_database_observer_unimplemented"
 )
@@ -363,11 +363,18 @@ def _decode_frame_group(
     *,
     specs: tuple[FrameSpec, ...],
     maximum_row_bytes: int,
-) -> tuple[DecodedFrames, int]:
+    maximum_rows_total: int,
+    rows_already_decoded: int,
+    maximum_output_bytes: int,
+    encoded_bytes_already: int,
+    maximum_roles: int,
+    role_oids: set[int],
+) -> tuple[DecodedFrames, int, int]:
     if type(raw_frames) is not tuple or len(raw_frames) != len(specs):
         _fail("privileged_global_observation_frames.input_invalid")
     decoded_frames: list[DecodedFrame] = []
     total_rows = 0
+    encoded_bytes = 0
     for raw_frame, (expected_name, maximum_rows, columns) in zip(
         raw_frames, specs, strict=True
     ):
@@ -380,6 +387,8 @@ def _decode_frame_group(
             or len(raw_frame[1]) > maximum_rows
         ):
             _fail("privileged_global_observation_frames.input_invalid")
+        if rows_already_decoded + total_rows + len(raw_frame[1]) > maximum_rows_total:
+            _fail("privileged_global_observation_frames.bounds_invalid")
         rows: list[DecodedRow] = []
         row_digests: set[bytes] = set()
         for raw_row in raw_frame[1]:
@@ -394,14 +403,30 @@ def _decode_frame_group(
             encoded_row = _canonical(row)
             if len(encoded_row) > maximum_row_bytes:
                 _fail("privileged_global_observation_frames.bounds_invalid")
+            if (
+                encoded_bytes_already + encoded_bytes + len(encoded_row)
+                > maximum_output_bytes
+            ):
+                _fail("privileged_global_observation_frames.bounds_invalid")
+            row_role_oids = {
+                value
+                for value, (name, _logical_type, _nullable) in zip(
+                    row, columns, strict=True
+                )
+                if name.endswith("role_oid") and type(value) is int
+            }
+            if len(role_oids | row_role_oids) > maximum_roles:
+                _fail("privileged_global_observation_frames.bounds_invalid")
             digest = hashlib.sha256(encoded_row).digest()
             if digest in row_digests:
                 _fail("privileged_global_observation_frames.input_invalid")
             row_digests.add(digest)
+            role_oids.update(row_role_oids)
+            encoded_bytes += len(encoded_row)
             rows.append(row)
         total_rows += len(rows)
         decoded_frames.append((expected_name, tuple(rows)))
-    return tuple(decoded_frames), total_rows
+    return tuple(decoded_frames), total_rows, encoded_bytes
 
 
 def _decode_bundle(
@@ -415,6 +440,8 @@ def _decode_bundle(
         or any(
             type(section) is not tuple or len(section) != 2 for section in raw_bundle
         )
+        or type(raw_bundle[0][0]) is not str
+        or type(raw_bundle[1][0]) is not str
         or raw_bundle[0][0] != "server_once"
         or raw_bundle[1][0] != "per_database"
         or type(raw_bundle[0][1]) is not tuple
@@ -424,10 +451,17 @@ def _decode_bundle(
     bounds = grammar["resource_bounds"]
     server_specs = _frame_specs(grammar, query_grammar.SERVER_ONCE_FRAME_NAMES)
     database_specs = _frame_specs(grammar, query_grammar.PER_DATABASE_FRAME_NAMES)
-    server_frames, total_rows = _decode_frame_group(
+    role_oids: set[int] = set()
+    server_frames, total_rows, encoded_bytes = _decode_frame_group(
         raw_bundle[0][1],
         specs=server_specs,
         maximum_row_bytes=bounds["maximum_row_bytes"],
+        maximum_rows_total=bounds["maximum_rows_total"],
+        rows_already_decoded=0,
+        maximum_output_bytes=bounds["maximum_output_bytes"],
+        encoded_bytes_already=0,
+        maximum_roles=bounds["maximum_roles"],
+        role_oids=role_oids,
     )
     if len(raw_bundle[1][1]) > bounds["maximum_database_entries"]:
         _fail("privileged_global_observation_frames.bounds_invalid")
@@ -452,19 +486,28 @@ def _decode_bundle(
             or database_name in database_names
         ):
             _fail("privileged_global_observation_frames.input_invalid")
-        if len(_canonical((database_oid, database_name))) > bounds["maximum_row_bytes"]:
+        encoded_database_key = _canonical((database_oid, database_name))
+        if len(encoded_database_key) > bounds["maximum_row_bytes"]:
             _fail("privileged_global_observation_frames.bounds_invalid")
+        if encoded_bytes + len(encoded_database_key) > bounds["maximum_output_bytes"]:
+            _fail("privileged_global_observation_frames.bounds_invalid")
+        encoded_bytes += len(encoded_database_key)
         database_oids.add(database_oid)
         database_names.add(database_name)
-        frames, row_count = _decode_frame_group(
+        frames, row_count, frame_bytes = _decode_frame_group(
             raw_database[2],
             specs=database_specs,
             maximum_row_bytes=bounds["maximum_row_bytes"],
+            maximum_rows_total=bounds["maximum_rows_total"],
+            rows_already_decoded=total_rows,
+            maximum_output_bytes=bounds["maximum_output_bytes"],
+            encoded_bytes_already=encoded_bytes,
+            maximum_roles=bounds["maximum_roles"],
+            role_oids=role_oids,
         )
         total_rows += row_count
+        encoded_bytes += frame_bytes
         database_frames.append((database_oid, database_name, frames))
-    if total_rows > bounds["maximum_rows_total"]:
-        _fail("privileged_global_observation_frames.bounds_invalid")
     query_count = len(server_frames) + len(database_frames) * len(database_specs)
     if query_count > bounds["maximum_queries"]:
         _fail("privileged_global_observation_frames.bounds_invalid")

@@ -13,11 +13,11 @@
     },
     "privileged_global_query_grammar": {
       "policy_id": "cosmaneura-staging-sanitizer-privileged-global-query-grammar-v1",
-      "sha256": "sha256:d6d751a71f87936768f153986f087a89ca5edf4cf1a3dc9f5193a225dbe23bb8"
+      "sha256": "sha256:80930c0516f0c3090d0c80e37c5d33c544443900b71aaa88490700c0daf8ce7e"
     },
     "privileged_global_observation_frames": {
       "policy_id": "cosmaneura-staging-sanitizer-privileged-global-observation-frames-v1",
-      "sha256": "sha256:379f9ea209a1352809b440bce2ab17cc0d049204335eddf9ac4237be1bebf99f"
+      "sha256": "sha256:6cbff47fbd162b52c0bc6e22d71d28adea3d91666ef09c84d8125172b0e1b1bf"
     }
   },
   "input": {
