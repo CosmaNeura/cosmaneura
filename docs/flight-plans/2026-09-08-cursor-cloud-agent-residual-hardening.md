@@ -9,7 +9,8 @@
 ## Outcome and gates
 
 - Replace the world-writable Docker socket with an exact root/current-group
-  `0660` socket and fail closed on an unexpected socket object or metadata.
+  `0660` socket, bind every client to that local endpoint, verify the running
+  storage driver, and fail closed on unexpected socket, context, or metadata.
 - Execute the digest-verified Localias binary through a minimal environment and
   trust its generated CA only in the agent's isolated Chromium/NSS profile.
 - Reject incomplete or symlinked nested-Docker configuration and missing engine
@@ -25,7 +26,9 @@ payloads, Playwright browser archive, writable dependencies, and platform-owned
 outer interpreter remain trusted development inputs. This disposable host is
 credential-neutral and synthetic-only; it is not an OS sandbox. Direnv approval
 does not create a meaningful boundary because the platform has already executed
-the same checked-out `.cursor` code before Direnv starts.
+the same checked-out `.cursor` code before Direnv starts. The NSS database lives
+beneath the dispatcher-managed runtime `HOME`; it is isolated from the account's
+ordinary home but shared by processes intentionally launched in that environment.
 
 On failure, disable the Cursor entrypoints, discard and rebuild affected Cloud
 Agents, and roll forward. Never restore PR #257's world-writable socket,

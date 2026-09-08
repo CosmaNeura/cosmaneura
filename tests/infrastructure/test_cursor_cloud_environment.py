@@ -250,7 +250,7 @@ def test_cursor_docker_socket_and_daemon_config_fail_closed() -> None:
     assert "chmod 666" not in services
     assert "chmod 0660" in services
     assert 'chown "root:${socket_gid}"' in services
-    assert "! -S /var/run/docker.sock" in services
+    assert '! -S "$CURSOR_DOCKER_SOCKET"' in services
     assert "usermod" not in system_setup
     assert "! -x /usr/bin/dockerd" in system_setup
     assert "/usr/bin/docker compose version" in system_setup
@@ -259,8 +259,75 @@ def test_cursor_docker_socket_and_daemon_config_fail_closed() -> None:
     assert '.features."containerd-snapshotter" == false' in system_setup
 
 
+def test_cursor_docker_helpers_force_local_socket_and_live_driver(
+    tmp_path: Path,
+) -> None:
+    fake_docker = tmp_path / "docker"
+    docker_log = tmp_path / "docker.log"
+    _write_executable(
+        fake_docker,
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf 'docker_host=%s\n' "${{DOCKER_HOST-unset}}" >> {shlex.quote(str(docker_log))}
+printf 'docker_context=%s\n' "${{DOCKER_CONTEXT-unset}}" >> {shlex.quote(str(docker_log))}
+printf 'arguments=%s\n' "$*" >> {shlex.quote(str(docker_log))}
+if [[ "$*" == *"--format {{{{.Driver}}}}"* ]]; then
+  printf 'fuse-overlayfs\n'
+fi
+""",
+    )
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(ROOT / '.cursor/services.sh'))}",
+            'sudo() { "$@"; }',
+            f"CURSOR_DOCKER_BIN={shlex.quote(str(fake_docker))}",
+            "docker_local info",
+            "docker_local_as_root info",
+            "require_live_docker_configuration",
+        )
+    )
+    environment = os.environ | {
+        "DOCKER_HOST": "tcp://hostile.example:2375",
+        "DOCKER_CONTEXT": "hostile-context",
+    }
+    result = _run(["bash", "-c", shell], environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    recorded = docker_log.read_text(encoding="utf-8")
+    assert "tcp://hostile.example:2375" not in recorded
+    assert "hostile-context" not in recorded
+    assert recorded.count("docker_host=unset") == 3
+    assert recorded.count("docker_context=unset") == 3
+    assert (
+        recorded.splitlines().count("arguments=--host unix:///var/run/docker.sock info")
+        == 2
+    )
+    assert (
+        "arguments=--host unix:///var/run/docker.sock info --format {{.Driver}}"
+        in recorded
+    )
+
+
+def test_cursor_live_docker_driver_rejects_incompatible_daemon(tmp_path: Path) -> None:
+    fake_docker = tmp_path / "docker"
+    _write_executable(fake_docker, "#!/bin/sh\nprintf 'overlay2\\n'\n")
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(ROOT / '.cursor/services.sh'))}",
+            'sudo() { "$@"; }',
+            f"CURSOR_DOCKER_BIN={shlex.quote(str(fake_docker))}",
+            "require_live_docker_configuration",
+        )
+    )
+    result = _run(["bash", "-c", shell])
+
+    assert result.returncode != 0
+    assert "not using the required fuse-overlayfs driver" in result.stderr
+
+
 def test_cursor_localias_never_receives_ambient_env_or_system_ca_trust() -> None:
     services = (ROOT / ".cursor/services.sh").read_text(encoding="utf-8")
+    system_setup = (ROOT / ".cursor/system-setup.sh").read_text(encoding="utf-8")
     installer = (ROOT / "scripts/install_pinned_localias.sh").read_text(
         encoding="utf-8"
     )
@@ -272,7 +339,10 @@ def test_cursor_localias_never_receives_ambient_env_or_system_ca_trust() -> None
     assert "sudo cp" not in services
     assert (
         "sudo /bin/rm -f -- /usr/local/share/ca-certificates/localias-root.crt"
-        in services
+        in system_setup
+    )
+    assert system_setup.index("remove legacy host-wide Localias trust") < (
+        system_setup.index('echo "== [system] apt packages =="')
     )
     assert (
         'localias_root_crt="${XDG_STATE_HOME:?}/localias/caddy/pki/authorities/local/root.crt"'
@@ -282,6 +352,52 @@ def test_cursor_localias_never_receives_ambient_env_or_system_ca_trust() -> None
     assert 'certutil -d "sql:$HOME/.pki/nssdb" -D' in services
     assert "localias_install_is_exact" in installer
     assert "0:755" in installer
+
+
+def test_cursor_localias_helper_executes_with_only_explicit_environment(
+    tmp_path: Path,
+) -> None:
+    fake_localias = tmp_path / "localias"
+    _write_executable(
+        fake_localias,
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'home=%s\n' "$HOME"
+printf 'xdg_config=%s\n' "$XDG_CONFIG_HOME"
+printf 'xdg_state=%s\n' "$XDG_STATE_HOME"
+printf 'tmp=%s\n' "$TMPDIR"
+printf 'sentinel=%s\n' "${INHERITED_SENTINEL_SECRET-unset}"
+printf 'arguments=%s\n' "$*"
+""",
+    )
+    runtime_home = tmp_path / "runtime-home"
+    runtime_home.mkdir()
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(ROOT / '.cursor/services.sh'))}",
+            'sudo() { "$@"; }',
+            f"CURSOR_LOCALIAS_BIN={shlex.quote(str(fake_localias))}",
+            "run_localias_as_root status",
+        )
+    )
+    environment = os.environ | {
+        "HOME": str(runtime_home),
+        "USER": "cursor-user",
+        "LOGNAME": "cursor-user",
+        "XDG_CONFIG_HOME": str(runtime_home / "config"),
+        "XDG_STATE_HOME": str(runtime_home / "state"),
+        "TMPDIR": str(runtime_home / "tmp"),
+        "INHERITED_SENTINEL_SECRET": "must-not-survive",
+    }
+    result = _run(["bash", "-c", shell], environment=environment)
+
+    assert result.returncode == 0, result.stderr
+    assert f"home={runtime_home}" in result.stdout
+    assert f"xdg_config={runtime_home / 'config'}" in result.stdout
+    assert f"xdg_state={runtime_home / 'state'}" in result.stdout
+    assert f"tmp={runtime_home / 'tmp'}" in result.stdout
+    assert "sentinel=unset" in result.stdout
+    assert "arguments=status" in result.stdout
 
 
 def test_cursor_start_migrates_both_local_databases() -> None:
@@ -1085,7 +1201,9 @@ def test_cursor_compose_path_uses_only_immutable_image_refs() -> None:
     services = (ROOT / ".cursor/services.sh").read_text(encoding="utf-8")
     assert '--file "$REPO_ROOT/docker-compose.yml"' in services
     assert '--file "$REPO_ROOT/.cursor/docker-compose.yml"' in services
-    assert services.count("denv /usr/bin/docker compose") == 1
+    assert (
+        services.count('"$CURSOR_DOCKER_BIN" --host "$CURSOR_DOCKER_HOST" compose') == 1
+    )
 
 
 def test_cursor_backend_runs_python_via_uv_without_sync(tmp_path: Path) -> None:

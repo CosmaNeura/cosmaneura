@@ -15,7 +15,8 @@ stays disabled because it reaches unlocked `pnpm dlx`.
 
 Compose images are tag-and-digest pinned. A validated Mise Python runs the DB
 guard after Direnv; only exact local targets pass. Docker access is limited to
-the current agent's primary group, and Localias trust is installed only in its
-isolated browser profile. This is not an OS sandbox: the checked-out branch and
-outer interpreter remain trusted. Keep the host credential-neutral; staging,
-production, PHI, and restores remain out of scope.
+the current agent's primary group, and Localias trust is installed only in the
+dedicated NSS database beneath the credential-neutral runtime `HOME`. This is
+not an OS sandbox: the checked-out branch and outer interpreter remain trusted.
+Keep the host credential-neutral; staging, production, PHI, and restores remain
+out of scope.

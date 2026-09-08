@@ -15,6 +15,12 @@ CURSOR_SETUP_DIR="$(cd -P "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P
 source "$CURSOR_SETUP_DIR/credential-neutral.sh"
 cursor_require_credential_neutral
 
+echo "== [system] remove legacy host-wide Localias trust =="
+sudo /bin/rm -f -- /usr/local/share/ca-certificates/localias-root.crt
+if [[ -x /usr/sbin/update-ca-certificates ]]; then
+  sudo /usr/sbin/update-ca-certificates --fresh >/dev/null 2>&1 </dev/null
+fi
+
 echo "== [system] apt packages =="
 APT_PACKAGES=(
   zsh libnss3-tools poppler-utils ffmpeg
