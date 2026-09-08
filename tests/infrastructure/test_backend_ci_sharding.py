@@ -1425,7 +1425,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
 
     assert quality["name"] in {"Backend quality", "Candidate backend quality"}
     assert quality["timeout-minutes"] == 20
-    assert tests["timeout-minutes"] == 20
+    assert tests["timeout-minutes"] == 30
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
