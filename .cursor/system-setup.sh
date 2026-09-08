@@ -23,7 +23,7 @@ fi
 
 echo "== [system] apt packages =="
 APT_PACKAGES=(
-  zsh libnss3-tools poppler-utils ffmpeg
+  zsh acl libnss3-tools poppler-utils ffmpeg
   ca-certificates curl gnupg lsb-release jq
   postgresql-client redis-tools
   libpq-dev build-essential lsof
@@ -51,22 +51,28 @@ if [[ ! -x /usr/bin/docker || ! -x /usr/bin/dockerd ]] \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
 
-# Nested overlayfs cannot convert whiteout files; use fuse-overlayfs and the
-# classic graphdriver instead of the containerd snapshotter. Never silently
-# accept a pre-existing configuration that lacks either required setting.
-if sudo test -L /etc/docker/daemon.json; then
-  echo "Docker daemon configuration must not be a symlink." >&2
-  exit 1
-elif ! sudo test -e /etc/docker/daemon.json; then
-  sudo mkdir -p /etc/docker
-  echo '{ "features": { "containerd-snapshotter": false }, "storage-driver": "fuse-overlayfs" }' \
-    | sudo tee /etc/docker/daemon.json >/dev/null
-fi
-if ! sudo /usr/bin/jq -e \
-  '."storage-driver" == "fuse-overlayfs" and .features."containerd-snapshotter" == false' \
-  /etc/docker/daemon.json >/dev/null; then
-  echo "Docker daemon configuration lacks the required nested-engine settings." >&2
-  exit 1
+# A running platform-managed daemon keeps its own effective configuration. Only
+# provision the nested-agent configuration when no daemon owns the exact local
+# socket; services.sh separately rejects non-local listeners. Nested overlayfs
+# cannot convert whiteouts, so a daemon started by this bootstrap must use
+# fuse-overlayfs and the classic graphdriver.
+if ! sudo /usr/bin/env -i \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/bin/docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; then
+  if sudo test -L /etc/docker/daemon.json; then
+    echo "Docker daemon configuration must not be a symlink." >&2
+    exit 1
+  elif ! sudo test -e /etc/docker/daemon.json; then
+    sudo mkdir -p /etc/docker
+    echo '{ "features": { "containerd-snapshotter": false }, "storage-driver": "fuse-overlayfs" }' \
+      | sudo tee /etc/docker/daemon.json >/dev/null
+  fi
+  if ! sudo /usr/bin/jq -e \
+    '."storage-driver" == "fuse-overlayfs" and .features."containerd-snapshotter" == false and .hosts == null' \
+    /etc/docker/daemon.json >/dev/null; then
+    echo "Docker daemon configuration is not the required local-only nested setup." >&2
+    exit 1
+  fi
 fi
 
 echo "== [system] mise (pinned toolchain manager) =="

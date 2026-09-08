@@ -7,8 +7,14 @@
 # All idempotent and safe to re-run on every boot.
 
 CURSOR_DOCKER_BIN="/usr/bin/docker"
+CURSOR_DOCKER_CONFIG_FILE="/etc/docker/daemon.json"
 CURSOR_DOCKER_HOST="unix:///var/run/docker.sock"
+CURSOR_DOCKER_PID_FILE="/var/run/docker.pid"
 CURSOR_DOCKER_SOCKET="/var/run/docker.sock"
+CURSOR_DOCKERD_BIN="/usr/bin/dockerd"
+CURSOR_DOCKER_SOCKET_OWNER="root"
+CURSOR_DOCKER_SOCKET_OWNER_UID="0"
+CURSOR_PROC_ROOT="/proc"
 CURSOR_LOCALIAS_BIN="/usr/local/bin/localias"
 CURSOR_LOCALIAS_SHA256="e7e8ae3a6cf2b1d7b637b6d871ea615b66509096f35ed8f4cc2c370a812193aa"
 
@@ -56,16 +62,22 @@ secure_docker_socket_for_current_user() {
     return 1
   fi
   socket_gid="$(/usr/bin/id -g)"
-  sudo /usr/bin/chown "root:${socket_gid}" -- "$CURSOR_DOCKER_SOCKET"
+  sudo /usr/bin/setfacl --remove-all -- "$CURSOR_DOCKER_SOCKET"
+  sudo /usr/bin/chown "${CURSOR_DOCKER_SOCKET_OWNER}:${socket_gid}" -- "$CURSOR_DOCKER_SOCKET"
   sudo /usr/bin/chmod 0660 -- "$CURSOR_DOCKER_SOCKET"
   socket_metadata="$(/usr/bin/stat -c '%u:%g:%a' -- "$CURSOR_DOCKER_SOCKET")"
-  if [[ "$socket_metadata" != "0:${socket_gid}:660" ]]; then
+  if [[ "$socket_metadata" != "${CURSOR_DOCKER_SOCKET_OWNER_UID}:${socket_gid}:660" ]]; then
     echo "Docker socket ownership or permissions are not narrowly scoped." >&2
+    return 1
+  fi
+  if [[ "$(/usr/bin/getfacl --absolute-names --numeric --omit-header -- "$CURSOR_DOCKER_SOCKET" \
+    | /usr/bin/awk -F: 'NF >= 3 { count += 1 } END { print count + 0 }')" != "3" ]]; then
+    echo "Docker socket retains an extended access-control entry." >&2
     return 1
   fi
 }
 
-require_live_docker_configuration() {
+require_managed_docker_storage_driver() {
   local storage_driver
 
   storage_driver="$(docker_local info --format '{{.Driver}}')" || return 1
@@ -75,10 +87,86 @@ require_live_docker_configuration() {
   fi
 }
 
+require_local_docker_listener() {
+  local argument daemon_executable daemon_pid expect_host_value host_count pid_metadata
+
+  if [[ -L "$CURSOR_DOCKER_PID_FILE" || ! -f "$CURSOR_DOCKER_PID_FILE" ]]; then
+    echo "Docker daemon PID file is missing or not a regular file." >&2
+    return 1
+  fi
+  pid_metadata="$(/usr/bin/stat -c '%u:%a' -- "$CURSOR_DOCKER_PID_FILE")"
+  case "$pid_metadata" in
+    "${CURSOR_DOCKER_SOCKET_OWNER_UID}:600" | "${CURSOR_DOCKER_SOCKET_OWNER_UID}:640" | "${CURSOR_DOCKER_SOCKET_OWNER_UID}:644") ;;
+    *)
+      echo "Docker daemon PID file has unexpected ownership or permissions." >&2
+      return 1
+      ;;
+  esac
+  daemon_pid="$(/bin/cat -- "$CURSOR_DOCKER_PID_FILE")"
+  if [[ ! "$daemon_pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Docker daemon PID is not canonical." >&2
+    return 1
+  fi
+  daemon_executable="$(/usr/bin/readlink -f -- "$CURSOR_PROC_ROOT/$daemon_pid/exe")"
+  if [[ "$daemon_executable" != "$CURSOR_DOCKERD_BIN" ]]; then
+    echo "Docker daemon PID does not identify the approved executable." >&2
+    return 1
+  fi
+
+  expect_host_value=0
+  host_count=0
+  while IFS= read -r -d '' argument; do
+    if [[ "$expect_host_value" == "1" ]]; then
+      if [[ "$argument" != "$CURSOR_DOCKER_HOST" ]]; then
+        echo "Docker daemon has a non-local listener argument." >&2
+        return 1
+      fi
+      expect_host_value=0
+      host_count=$((host_count + 1))
+      continue
+    fi
+    case "$argument" in
+      -H | --host) expect_host_value=1 ;;
+      "-H=$CURSOR_DOCKER_HOST" | "--host=$CURSOR_DOCKER_HOST")
+        host_count=$((host_count + 1))
+        ;;
+      -H* | --host=*)
+        echo "Docker daemon has a non-local listener argument." >&2
+        return 1
+        ;;
+    esac
+  done < "$CURSOR_PROC_ROOT/$daemon_pid/cmdline"
+  if [[ "$expect_host_value" == "1" || "$host_count" -gt 1 ]]; then
+    echo "Docker daemon listener arguments are ambiguous." >&2
+    return 1
+  fi
+
+  if [[ -L "$CURSOR_DOCKER_CONFIG_FILE" ]]; then
+    echo "Docker daemon configuration must not be a symlink." >&2
+    return 1
+  fi
+  if [[ -f "$CURSOR_DOCKER_CONFIG_FILE" ]] \
+    && ! sudo /usr/bin/jq -e \
+      '(.hosts == null or .hosts == ["unix:///var/run/docker.sock"])' \
+      "$CURSOR_DOCKER_CONFIG_FILE" >/dev/null; then
+    echo "Docker daemon configuration permits a non-local listener." >&2
+    return 1
+  fi
+  if [[ ! -x /usr/bin/lsof ]]; then
+    echo "lsof is required to verify Docker listeners." >&2
+    return 1
+  fi
+  if sudo /usr/bin/lsof -nP -a -p "$daemon_pid" -iTCP -sTCP:LISTEN -Fn 2>/dev/null \
+    | /usr/bin/grep -q '^n'; then
+    echo "Docker daemon has an active TCP listener." >&2
+    return 1
+  fi
+}
+
 ensure_dockerd() {
   if docker_local_as_root info >/dev/null 2>&1; then
+    require_local_docker_listener
     secure_docker_socket_for_current_user
-    require_live_docker_configuration
     docker_local info >/dev/null 2>&1
     return 0
   fi
@@ -87,13 +175,18 @@ ensure_dockerd() {
   # The redirect intentionally belongs to the credential-neutral user; the
   # privileged daemon does not need write access to any additional path.
   # shellcheck disable=SC2024
-  sudo /usr/bin/nohup /usr/bin/dockerd --group "$(/usr/bin/id -gn)" >/tmp/dockerd.log 2>&1 &
+  sudo /usr/bin/nohup "$CURSOR_DOCKERD_BIN" \
+    --host "$CURSOR_DOCKER_HOST" \
+    --group "$(/usr/bin/id -gn)" \
+    --pidfile "$CURSOR_DOCKER_PID_FILE" \
+    >/tmp/dockerd.log 2>&1 &
   for _ in $(/usr/bin/seq 1 30); do
     if docker_local_as_root info >/dev/null 2>&1; then break; fi
     /usr/bin/sleep 1
   done
+  require_local_docker_listener
   secure_docker_socket_for_current_user
-  require_live_docker_configuration
+  require_managed_docker_storage_driver
   docker_local info >/dev/null 2>&1 || {
     echo "[services] dockerd failed to start"
     /usr/bin/tail -20 /tmp/dockerd.log
@@ -128,6 +221,19 @@ run_localias_as_root() {
     "$CURSOR_LOCALIAS_BIN" "$@"
 }
 
+restart_localias_as_root() {
+  if run_localias_as_root status 2>/dev/null | /usr/bin/grep -q "daemon running"; then
+    echo "[services] stopping existing localias before clean restart..."
+    run_localias_as_root stop
+  fi
+  echo "[services] starting localias..."
+  run_localias_as_root start
+  if ! run_localias_as_root status 2>/dev/null | /usr/bin/grep -q "daemon running"; then
+    echo "Localias did not become ready under the minimal environment." >&2
+    return 1
+  fi
+}
+
 ensure_localias() {
   require_exact_localias_binary
   local localias_root_crt
@@ -135,12 +241,7 @@ ensure_localias() {
   # xdg.StateFile("localias/caddy") and appends this fixed PKI path.
   localias_root_crt="${XDG_STATE_HOME:?}/localias/caddy/pki/authorities/local/root.crt"
 
-  if run_localias_as_root status 2>/dev/null | /usr/bin/grep -q "daemon running"; then
-    echo "[services] localias already running"
-  else
-    echo "[services] starting localias..."
-    run_localias_as_root start
-  fi
+  restart_localias_as_root
 
   if [[ -L "$localias_root_crt" || ! -f "$localias_root_crt" ]]; then
     echo "Localias did not create its CA at the exact isolated state path." >&2

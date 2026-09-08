@@ -9,10 +9,12 @@
 ## Outcome and gates
 
 - Replace the world-writable Docker socket with an exact root/current-group
-  `0660` socket, bind every client to that local endpoint, verify the running
-  storage driver, and fail closed on unexpected socket, context, or metadata.
+  `0660` socket with no extended ACL, bind every client and daemon listener to
+  that local endpoint, verify bootstrap-managed storage, and fail closed on an
+  unexpected socket, context, process, listener, or metadata.
 - Execute the digest-verified Localias binary through a minimal environment and
-  trust its generated CA only in the agent's isolated Chromium/NSS profile.
+  restart any persistent daemon before reuse. Trust its generated CA only in
+  the agent's isolated Chromium/NSS profile.
 - Reject incomplete or symlinked nested-Docker configuration and missing engine
   components instead of silently accepting them.
 - Reconcile both synthetic development and test schemas after branch changes.
