@@ -314,6 +314,7 @@ def _validate_embedded_state(state: Mapping[str, Any], *, before_refresh: bool) 
     if (
         state.get("version") != 4
         or state.get("terraform_version") != base.EXPECTED_TOFU_VERSION
+        or type(state.get("serial")) is not int
         or state.get("serial") != expected_serial
         or state.get("lineage") != expected_lineage
     ):

@@ -454,6 +454,8 @@ def test_embedded_state_lineage_serial_and_uami_are_exact() -> None:
     for field, value in (
         ("lineage", "11111111-1111-4111-8111-111111111111"),
         ("serial", validator.EXPECTED_STATE_SERIAL),
+        ("serial", False),
+        ("serial", 0.0),
     ):
         previous = _raw_state(before_refresh=True)
         previous[field] = value
@@ -463,6 +465,8 @@ def test_embedded_state_lineage_serial_and_uami_are_exact() -> None:
     for field, value in (
         ("lineage", ""),
         ("serial", 0),
+        ("serial", False),
+        ("serial", float(validator.EXPECTED_STATE_SERIAL)),
     ):
         refreshed = _raw_state(before_refresh=False)
         refreshed[field] = value
