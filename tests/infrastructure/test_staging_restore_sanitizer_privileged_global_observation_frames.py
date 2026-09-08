@@ -188,7 +188,17 @@ def test_output_is_immutable_nonserializable_and_tamper_evident() -> None:
     with pytest.raises(TypeError):
         vars(value)
 
+    original_database_count = value.database_count
     object.__setattr__(value, "database_count", 0)
+    assert not value._is_valid()
+    object.__setattr__(value, "database_count", original_database_count)
+    assert value._is_valid()
+
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+    object.__setattr__(value, "database_connection_authority", EqualitySpoof())
     assert not value._is_valid()
 
 

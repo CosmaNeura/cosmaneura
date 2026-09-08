@@ -31,6 +31,10 @@ SHARDS = (
     "infrastructure-sanitizer-observer",
     "infrastructure-sanitizer-observer-runtime",
     "infrastructure-sanitizer-observer-output",
+    "infrastructure-sanitizer-observer-connection-plan",
+    "infrastructure-sanitizer-observer-connection-plan-state",
+    "infrastructure-sanitizer-observer-connection-plan-output",
+    "infrastructure-sanitizer-observer-connection-plan-contract",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-sanitizer-source-snapshot",
@@ -44,6 +48,9 @@ FILE_SHARDS = tuple(
     not in {
         "infrastructure-sanitizer-evidence-integrity",
         "infrastructure-sanitizer-observer-output",
+        "infrastructure-sanitizer-observer-connection-plan-state",
+        "infrastructure-sanitizer-observer-connection-plan-output",
+        "infrastructure-sanitizer-observer-connection-plan-contract",
     }
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
@@ -160,6 +167,10 @@ SANITIZER_PRIVILEGED_GLOBAL_OBSERVATION_FRAMES_SELECTOR = (
     "tests/infrastructure/"
     "test_staging_restore_sanitizer_privileged_global_observation_frames.py"
 )
+SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR = (
+    "tests/infrastructure/"
+    "test_staging_restore_sanitizer_privileged_global_connection_plan.py"
+)
 SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs",
@@ -187,6 +198,27 @@ SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
 SANITIZER_OBSERVER_OUTPUT_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_output_is_sealed_redacted_nonserializable_and_tamper_evident",
 )
+SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS = (
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_and_dormant",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_connection_strategy_is_exact_bounded_and_fail_closed",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_real_chain_mints_only_sealed_public_metadata",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_plan_api_accepts_only_one_keyword_only_exact_sealed_plan",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_target_plan_identity_and_nested_lineage_are_retained",
+)
+SANITIZER_OBSERVER_CONNECTION_PLAN_STATE_SELECTORS = (
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_clock_requires_exact_whole_second_utc",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_clock_regression_expiry_and_between_read_mutation_refuse",
+)
+SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS = (
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_output_is_redacted_nonserializable_and_tamper_evident",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
+)
+SANITIZER_OBSERVER_CONNECTION_PLAN_CONTRACT_SELECTORS = (
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_security_relevant_contract_mutations_fail_closed",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_module_has_no_database_network_provider_or_process_surface",
+    f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_public_factory_remains_terminal",
+)
 SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
     SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
 )
@@ -210,6 +242,7 @@ SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
     SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_PRIVILEGED_GLOBAL_OBSERVATION_FRAMES_SELECTOR,
+    SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
@@ -255,6 +288,8 @@ def _infrastructure_shard(path: Path) -> str:
             return "infrastructure-sanitizer-observer"
         if path == Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR):
             return "infrastructure-sanitizer-observer-runtime"
+        if path == Path(SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR):
+            return "infrastructure-sanitizer-observer-connection-plan"
         if path == Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR):
             return "infrastructure-sanitizer-observer-integrity"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
@@ -399,7 +434,44 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-output": (
-            f"uv run pytest {SANITIZER_OBSERVER_OUTPUT_SELECTORS[0]} --verbosity=2"
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_OUTPUT_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-connection-plan": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-connection-plan-state": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_CONNECTION_PLAN_STATE_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-connection-plan-output": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-connection-plan-contract": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_CONNECTION_PLAN_CONTRACT_SELECTORS
+            )
+            + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
             f"uv run pytest {SANITIZER_OBSERVER_INTEGRITY_SELECTORS[0]} --verbosity=2"
@@ -465,6 +537,18 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_observer_output_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-output:"
     )
+    infrastructure_sanitizer_observer_connection_plan_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan:"
+    )
+    infrastructure_sanitizer_observer_connection_plan_state_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan-state:"
+    )
+    infrastructure_sanitizer_observer_connection_plan_output_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan-output:"
+    )
+    infrastructure_sanitizer_observer_connection_plan_contract_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract:"
+    )
     infrastructure_sanitizer_observer_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-integrity:"
     )
@@ -516,7 +600,19 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_observer_runtime_start:infrastructure_sanitizer_observer_output_start
     ]
     infrastructure_sanitizer_observer_output_recipe = source[
-        infrastructure_sanitizer_observer_output_start:infrastructure_sanitizer_observer_integrity_start
+        infrastructure_sanitizer_observer_output_start:infrastructure_sanitizer_observer_connection_plan_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_start:infrastructure_sanitizer_observer_connection_plan_state_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_state_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_state_start:infrastructure_sanitizer_observer_connection_plan_output_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_output_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_output_start:infrastructure_sanitizer_observer_connection_plan_contract_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_contract_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_contract_start:infrastructure_sanitizer_observer_integrity_start
     ]
     infrastructure_sanitizer_observer_integrity_recipe = source[
         infrastructure_sanitizer_observer_integrity_start:infrastructure_sanitizer_data_contract_executor_start
@@ -552,6 +648,21 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_runtime_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_output_recipe
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_observer_connection_plan_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_observer_connection_plan_state_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_observer_connection_plan_output_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_observer_connection_plan_contract_recipe
+    )
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_integrity_recipe
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_data_contract_executor_recipe
@@ -688,6 +799,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-observer-integrity",
         ),
         (
+            Path(SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR),
+            "infrastructure-sanitizer-observer-connection-plan",
+        ),
+        (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
             "infrastructure-sanitizer-data-contract-executor",
         ),
@@ -793,10 +908,20 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_183_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_207_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
+    connection_plan = _collect_nodeids(*SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS)
+    connection_plan_state = _collect_nodeids(
+        *SANITIZER_OBSERVER_CONNECTION_PLAN_STATE_SELECTORS
+    )
+    connection_plan_output = _collect_nodeids(
+        *SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS
+    )
+    connection_plan_contract = _collect_nodeids(
+        *SANITIZER_OBSERVER_CONNECTION_PLAN_CONTRACT_SELECTORS
+    )
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
         SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
@@ -808,29 +933,68 @@ def test_sanitizer_observer_shards_partition_all_183_collected_cases_once() -> N
         SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
         SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
         SANITIZER_PRIVILEGED_GLOBAL_OBSERVATION_FRAMES_SELECTOR,
+        SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR,
     )
 
     assert primary
     assert runtime
     assert output
+    assert connection_plan
+    assert connection_plan_state
+    assert connection_plan_output
+    assert connection_plan_contract
     assert integrity
     assert len(primary) == 125
     assert len(runtime) == 18
     assert len(output) == 1
+    assert len(connection_plan) == 5
+    assert len(connection_plan_state) == 4
+    assert len(connection_plan_output) == 2
+    assert len(connection_plan_contract) == 13
     assert len(integrity) == 39
-    assert len(family) == 183
+    assert len(family) == 207
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
+    assert len(connection_plan) == len(set(connection_plan))
+    assert len(connection_plan_state) == len(set(connection_plan_state))
+    assert len(connection_plan_output) == len(set(connection_plan_output))
+    assert len(connection_plan_contract) == len(set(connection_plan_contract))
     assert len(integrity) == len(set(integrity))
     assert len(family) == len(set(family))
     assert set(primary).isdisjoint(runtime)
     assert set(primary).isdisjoint(output)
     assert set(primary).isdisjoint(integrity)
+    assert set(primary).isdisjoint(connection_plan)
+    assert set(primary).isdisjoint(connection_plan_state)
+    assert set(primary).isdisjoint(connection_plan_output)
+    assert set(primary).isdisjoint(connection_plan_contract)
     assert set(runtime).isdisjoint(output)
+    assert set(runtime).isdisjoint(connection_plan)
+    assert set(runtime).isdisjoint(connection_plan_state)
+    assert set(runtime).isdisjoint(connection_plan_output)
+    assert set(runtime).isdisjoint(connection_plan_contract)
     assert set(runtime).isdisjoint(integrity)
+    assert set(output).isdisjoint(connection_plan)
+    assert set(output).isdisjoint(connection_plan_state)
+    assert set(output).isdisjoint(connection_plan_output)
+    assert set(output).isdisjoint(connection_plan_contract)
     assert set(output).isdisjoint(integrity)
-    assert set(primary) | set(runtime) | set(output) | set(integrity) == set(family)
+    assert set(connection_plan).isdisjoint(integrity)
+    assert set(connection_plan).isdisjoint(connection_plan_state)
+    assert set(connection_plan).isdisjoint(connection_plan_output)
+    assert set(connection_plan).isdisjoint(connection_plan_contract)
+    assert set(connection_plan_state).isdisjoint(connection_plan_output)
+    assert set(connection_plan_state).isdisjoint(connection_plan_contract)
+    assert set(connection_plan_state).isdisjoint(integrity)
+    assert set(connection_plan_output).isdisjoint(connection_plan_contract)
+    assert set(connection_plan_output).isdisjoint(integrity)
+    assert set(connection_plan_contract).isdisjoint(integrity)
+    assert set(primary) | set(runtime) | set(output) | set(connection_plan) | set(
+        connection_plan_state
+    ) | set(connection_plan_output) | set(connection_plan_contract) | set(
+        integrity
+    ) == set(family)
 
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
@@ -863,6 +1027,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     privileged_global_observation_frames = _collect_nodeids(
         SANITIZER_PRIVILEGED_GLOBAL_OBSERVATION_FRAMES_SELECTOR
     )
+    privileged_global_connection_plan = _collect_nodeids(
+        SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR
+    )
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -885,12 +1052,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(privileged_global_observer_contract) == 24
     assert len(privileged_global_query_grammar) == 25
     assert len(privileged_global_observation_frames) == 12
+    assert len(privileged_global_connection_plan) == 24
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 469
+    assert len(family) == 493
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
@@ -911,6 +1079,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     )
     assert len(privileged_global_observation_frames) == len(
         set(privileged_global_observation_frames)
+    )
+    assert len(privileged_global_connection_plan) == len(
+        set(privileged_global_connection_plan)
     )
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
@@ -1014,6 +1185,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert set(privileged_global_observation_frames).isdisjoint(
         set(family) - set(privileged_global_observation_frames)
     )
+    assert set(privileged_global_connection_plan).isdisjoint(
+        set(family) - set(privileged_global_connection_plan)
+    )
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
@@ -1045,9 +1219,11 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
         target_role_offline_authenticator
     ) | set(privileged_global_observer_contract) | set(
         privileged_global_query_grammar
-    ) | set(privileged_global_observation_frames) | set(data_contract_executor) | set(
-        source_snapshot
-    ) | set(post_projection) == set(family)
+    ) | set(privileged_global_observation_frames) | set(
+        privileged_global_connection_plan
+    ) | set(data_contract_executor) | set(source_snapshot) | set(
+        post_projection
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)

@@ -702,16 +702,21 @@ class DecodedSanitizerPrivilegedGlobalObservationFrames:
                 database_count=len(bundle[1]),
                 row_count=row_count,
             )
+            actual_public = {name: getattr(self, name) for name in PUBLIC_FIELDS}
             return (
                 type(self) is DecodedSanitizerPrivilegedGlobalObservationFrames
                 and self._seal is _FRAME_SEAL
                 and bundle == self._bundle
                 and tuple(public) == PUBLIC_FIELDS
-                and all(getattr(self, name) == value for name, value in public.items())
+                and all(
+                    type(actual_public[name]) is type(value)
+                    and actual_public[name] == value
+                    for name, value in public.items()
+                )
                 and hmac.compare_digest(
                     self._proof_sha256,
                     _private_proof(
-                        public=public, value_identity=id(self), bundle=bundle
+                        public=actual_public, value_identity=id(self), bundle=bundle
                     ),
                 )
             )

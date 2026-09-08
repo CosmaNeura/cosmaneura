@@ -637,7 +637,17 @@ def test_output_is_redacted_immutable_nonserializable_and_tamper_evident(
         json.dumps(authority)
     with pytest.raises(TypeError):
         vars(authority)
+    original_relation_count = getattr(authority, "relation_count")
     object.__setattr__(authority, "relation_count", 0)
+    assert not authority._is_authenticated()
+    object.__setattr__(authority, "relation_count", original_relation_count)
+    assert authority._is_authenticated()
+
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+    object.__setattr__(authority, "database_connection_authority", EqualitySpoof())
     assert not authority._is_authenticated()
 
 

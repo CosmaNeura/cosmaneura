@@ -496,16 +496,21 @@ class DecodedSanitizerTargetRoleObservationFrames:
                 canonical=canonical,
                 row_count=sum(len(rows) for _frame, rows in frames),
             )
+            actual_public = {name: getattr(self, name) for name in PUBLIC_FIELDS}
             return (
                 type(self) is DecodedSanitizerTargetRoleObservationFrames
                 and self._seal is _FRAME_SEAL
                 and frames == self._frames
                 and tuple(public) == PUBLIC_FIELDS
-                and all(getattr(self, name) == value for name, value in public.items())
+                and all(
+                    type(actual_public[name]) is type(value)
+                    and actual_public[name] == value
+                    for name, value in public.items()
+                )
                 and hmac.compare_digest(
                     self._proof_sha256,
                     _private_proof(
-                        public=public,
+                        public=actual_public,
                         value_identity=id(self),
                         frames=frames,
                     ),
