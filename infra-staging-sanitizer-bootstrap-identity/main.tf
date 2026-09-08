@@ -5,6 +5,10 @@ locals {
   control_resource_group_name = "cosmaneura-staging-rehearsal-control"
   control_location            = "eastus"
   bootstrap_identity_name     = "cosmaneura-staging-restore-bootstrap-job"
+  bootstrap_cleanup_not_after = var.sanitizer_bootstrap_lifetime_hours == null ? null : timeadd(
+    plantimestamp(),
+    format("%dh", var.sanitizer_bootstrap_lifetime_hours),
+  )
   base_tags = {
     environment         = "staging"
     managed-by          = "opentofu"
@@ -16,7 +20,7 @@ locals {
     var.enable_sanitizer_bootstrap_identity ||
     var.sanitizer_bootstrap_identity_plan_approved ||
     var.sanitizer_bootstrap_rehearsal_id != null ||
-    var.sanitizer_bootstrap_cleanup_not_after != null
+    var.sanitizer_bootstrap_lifetime_hours != null
   )
 }
 
@@ -34,7 +38,8 @@ resource "terraform_data" "activation_guard" {
     enabled             = var.enable_sanitizer_bootstrap_identity
     exact_plan_approved = var.sanitizer_bootstrap_identity_plan_approved
     rehearsal_id        = var.sanitizer_bootstrap_rehearsal_id
-    cleanup_not_after   = var.sanitizer_bootstrap_cleanup_not_after
+    lifetime_hours      = var.sanitizer_bootstrap_lifetime_hours
+    cleanup_not_after   = local.bootstrap_cleanup_not_after
   }
 
   lifecycle {
@@ -49,20 +54,12 @@ resource "terraform_data" "activation_guard" {
     precondition {
       condition = var.enable_sanitizer_bootstrap_identity ? (
         var.sanitizer_bootstrap_rehearsal_id != null &&
-        var.sanitizer_bootstrap_cleanup_not_after != null
+        var.sanitizer_bootstrap_lifetime_hours != null
         ) : (
         var.sanitizer_bootstrap_rehearsal_id == null &&
-        var.sanitizer_bootstrap_cleanup_not_after == null
+        var.sanitizer_bootstrap_lifetime_hours == null
       )
       error_message = "Bootstrap lifecycle metadata must be present exactly when the identity is enabled"
-    }
-
-    precondition {
-      condition = var.enable_sanitizer_bootstrap_identity ? try(
-        timecmp(var.sanitizer_bootstrap_cleanup_not_after, plantimestamp()) > 0,
-        false,
-      ) : true
-      error_message = "The bootstrap identity cleanup deadline must be later than the exact plan timestamp"
     }
   }
 }
@@ -78,7 +75,7 @@ resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
   tags = merge(local.base_tags, {
     lifecycle         = "ephemeral"
     rehearsal-id      = coalesce(var.sanitizer_bootstrap_rehearsal_id, "unconfigured")
-    cleanup-not-after = coalesce(var.sanitizer_bootstrap_cleanup_not_after, "unconfigured")
+    cleanup-not-after = coalesce(local.bootstrap_cleanup_not_after, "unconfigured")
   })
 
   depends_on = [terraform_data.activation_guard]
@@ -104,7 +101,7 @@ resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
     # this resource is created, so an expired saved plan cannot create the UAMI.
     precondition {
       condition = try(
-        timecmp(var.sanitizer_bootstrap_cleanup_not_after, timestamp()) > 0,
+        timecmp(local.bootstrap_cleanup_not_after, timestamp()) > 0,
         false,
       )
       error_message = "A saved bootstrap identity plan cannot be applied after its cleanup deadline"

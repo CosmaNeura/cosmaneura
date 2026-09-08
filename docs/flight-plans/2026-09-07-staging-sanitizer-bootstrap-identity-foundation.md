@@ -20,12 +20,13 @@ name, and complete tag key set are constants rather than caller-controlled
 inputs.
 
 The root creates the identity only when the enable and exact-plan-approval
-switches are both true. It requires an exact 12-character rehearsal ID and a
-valid, future-dated whole-second UTC cleanup deadline. The resource itself
-rechecks the deadline against apply time, so a saved plan cannot create the
-identity after expiry. `prevent_destroy` rejects disabling or removing the
-managed identity through this foundation; teardown requires a later bounded
-change with authenticated absence proofs.
+switches are both true. It requires an exact 12-character rehearsal ID and an
+integer lifetime from 1 through 24 hours, matching the restore envelope's
+maximum lifetime. The exact cleanup deadline is derived from the immutable
+plan timestamp. The resource itself rechecks that deadline against apply time,
+so a saved plan cannot create the identity after expiry. `prevent_destroy`
+rejects disabling or removing the managed identity through this foundation;
+teardown requires a later bounded change with authenticated absence proofs.
 
 ## Deliberate non-authority
 
@@ -54,8 +55,8 @@ the identity into an isolated state whose only Azure-managed resource is that
 UAMI. A second review identified redirectable subscription/tenant variables
 and case-insensitive collisions between caller tags and lifecycle tags. The
 final design removes all three inputs and pins their values in source. Both
-earlier reviews are negative evidence, not acceptance; the remediated exact
-head requires a new independent review and green CI.
+earlier reviews are negative evidence, not acceptance; only a new independent
+review of the remediated exact head and green CI can satisfy the gate.
 
 Before any apply, recovery is a code-only revert. After an approved apply,
 recovery is a separately reviewed teardown plan that first authenticates

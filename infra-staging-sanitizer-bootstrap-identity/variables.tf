@@ -22,17 +22,18 @@ variable "sanitizer_bootstrap_rehearsal_id" {
   }
 }
 
-variable "sanitizer_bootstrap_cleanup_not_after" {
-  description = "Whole-second UTC deadline after which a saved plan must not create the bootstrap UAMI."
-  type        = string
+variable "sanitizer_bootstrap_lifetime_hours" {
+  description = "Whole-hour bootstrap lifetime from the exact plan timestamp; limited to an integer from 1 through 24."
+  type        = number
   default     = null
   nullable    = true
 
   validation {
-    condition = var.sanitizer_bootstrap_cleanup_not_after == null || (
-      can(regex("^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.sanitizer_bootstrap_cleanup_not_after)) &&
-      can(timecmp(var.sanitizer_bootstrap_cleanup_not_after, var.sanitizer_bootstrap_cleanup_not_after))
+    condition = var.sanitizer_bootstrap_lifetime_hours == null ? true : (
+      var.sanitizer_bootstrap_lifetime_hours >= 1 &&
+      var.sanitizer_bootstrap_lifetime_hours <= 24 &&
+      floor(var.sanitizer_bootstrap_lifetime_hours) == var.sanitizer_bootstrap_lifetime_hours
     )
-    error_message = "sanitizer_bootstrap_cleanup_not_after must be null or a valid whole-second UTC timestamp"
+    error_message = "sanitizer_bootstrap_lifetime_hours must be null or an integer from 1 through 24"
   }
 }

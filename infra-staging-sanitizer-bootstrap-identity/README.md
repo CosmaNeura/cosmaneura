@@ -21,10 +21,11 @@ plan:
 enable_sanitizer_bootstrap_identity         = true
 sanitizer_bootstrap_identity_plan_approved  = true
 sanitizer_bootstrap_rehearsal_id            = "<12 lowercase hex>"
-sanitizer_bootstrap_cleanup_not_after       = "<future whole-second UTC>"
+sanitizer_bootstrap_lifetime_hours          = 6 # integer from 1 through 24
 ```
 
-The deadline is checked at plan time and again on the UAMI immediately before
+The exact cleanup deadline is derived from the immutable plan timestamp and
+the bounded lifetime, then checked again on the UAMI immediately before
 creation. `prevent_destroy` deliberately rejects turning the switch off after
 creation. A later teardown change may remove that protection only after exact
 live readback proves no federation, RBAC, job attachment, active execution,

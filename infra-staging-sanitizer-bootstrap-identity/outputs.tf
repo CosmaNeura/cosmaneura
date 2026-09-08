@@ -18,7 +18,7 @@ output "sanitizer_bootstrap_identity_foundation" {
     tenant_id                    = azurerm_user_assigned_identity.sanitizer_bootstrap[0].tenant_id
     lifecycle                    = "ephemeral"
     rehearsal_id                 = var.sanitizer_bootstrap_rehearsal_id
-    cleanup_not_after            = var.sanitizer_bootstrap_cleanup_not_after
+    cleanup_not_after            = local.bootstrap_cleanup_not_after
     federated_credential_ids     = []
     role_assignment_ids          = []
     attached_job_resource_ids    = []

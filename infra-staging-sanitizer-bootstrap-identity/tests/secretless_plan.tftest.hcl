@@ -35,9 +35,9 @@ run "identity_requires_exact_plan_approval" {
   command = plan
 
   variables {
-    enable_sanitizer_bootstrap_identity   = true
-    sanitizer_bootstrap_rehearsal_id      = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after = "2099-01-01T00:00:00Z"
+    enable_sanitizer_bootstrap_identity = true
+    sanitizer_bootstrap_rehearsal_id    = "abcdef123456"
+    sanitizer_bootstrap_lifetime_hours  = 6
   }
 
   expect_failures = [terraform_data.activation_guard[0]]
@@ -53,14 +53,34 @@ run "approval_requires_enable_switch" {
   expect_failures = [terraform_data.activation_guard[0]]
 }
 
-run "identity_rejects_invalid_cleanup_timestamp" {
+run "identity_rejects_excessive_lifetime" {
   command = plan
 
   variables {
-    sanitizer_bootstrap_cleanup_not_after = "2026-99-99T99:99:99Z"
+    sanitizer_bootstrap_lifetime_hours = 25
   }
 
-  expect_failures = [var.sanitizer_bootstrap_cleanup_not_after]
+  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
+}
+
+run "identity_rejects_zero_lifetime" {
+  command = plan
+
+  variables {
+    sanitizer_bootstrap_lifetime_hours = 0
+  }
+
+  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
+}
+
+run "identity_rejects_fractional_lifetime" {
+  command = plan
+
+  variables {
+    sanitizer_bootstrap_lifetime_hours = 1.5
+  }
+
+  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
 }
 
 run "identity_requires_lifecycle_metadata" {
@@ -78,21 +98,8 @@ run "dormant_root_rejects_lifecycle_metadata" {
   command = plan
 
   variables {
-    sanitizer_bootstrap_rehearsal_id      = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after = "2099-01-01T00:00:00Z"
-  }
-
-  expect_failures = [terraform_data.activation_guard[0]]
-}
-
-run "identity_rejects_expired_cleanup_deadline" {
-  command = plan
-
-  variables {
-    enable_sanitizer_bootstrap_identity        = true
-    sanitizer_bootstrap_identity_plan_approved = true
-    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after      = "2020-01-01T00:00:00Z"
+    sanitizer_bootstrap_rehearsal_id   = "abcdef123456"
+    sanitizer_bootstrap_lifetime_hours = 6
   }
 
   expect_failures = [terraform_data.activation_guard[0]]
@@ -105,7 +112,7 @@ run "identity_rejects_wrong_control_group_location" {
     enable_sanitizer_bootstrap_identity        = true
     sanitizer_bootstrap_identity_plan_approved = true
     sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after      = "2099-01-01T00:00:00Z"
+    sanitizer_bootstrap_lifetime_hours         = 6
   }
 
   override_data {
@@ -127,7 +134,7 @@ run "identity_rejects_wrong_subscription_scope" {
     enable_sanitizer_bootstrap_identity        = true
     sanitizer_bootstrap_identity_plan_approved = true
     sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after      = "2099-01-01T00:00:00Z"
+    sanitizer_bootstrap_lifetime_hours         = 6
   }
 
   override_data {
@@ -149,7 +156,7 @@ run "approved_identity_foundation" {
     enable_sanitizer_bootstrap_identity        = true
     sanitizer_bootstrap_identity_plan_approved = true
     sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after      = "2099-01-01T00:00:00Z"
+    sanitizer_bootstrap_lifetime_hours         = 6
   }
 
   assert {
@@ -158,12 +165,12 @@ run "approved_identity_foundation" {
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == "cosmaneura-staging-rehearsal-control" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == "2099-01-01T00:00:00Z"
+    condition     = azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == "cosmaneura-staging-rehearsal-control" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == timeadd(plantimestamp(), "6h")
     error_message = "The approved plan must create exactly the named East US UAMI with bounded orphan-detection tags"
   }
 
   assert {
-    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == "2099-01-01T00:00:00Z" && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented && output.sanitizer_bootstrap_identity_foundation.destruction_protected
+    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented && output.sanitizer_bootstrap_identity_foundation.destruction_protected
     error_message = "The output must remain explicit non-authoritative, destruction-protected desired-state metadata"
   }
 }
