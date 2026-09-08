@@ -1,9 +1,59 @@
 # Staging sanitizer bootstrap identity foundation
 
-This Tier 2 slice is stacked on exact bootstrap-binding-plan commit `c7f0c730f77f86c13809558daed58ed60d10410b`. It models one separately approved, default-off user-assigned managed identity named `cosmaneura-staging-restore-bootstrap-job` in the isolated rehearsal control group. It creates no resource unless both the enable and exact-plan-approval switches are true and the plan supplies an exact 12-character rehearsal ID plus a valid whole-second UTC cleanup deadline. The deadline must still be future-dated both when the plan is created and when the saved plan is applied. Those two values become non-PHI resource tags for orphan detection and must both be absent while the identity is disabled.
+This Tier 2 slice is stacked on the exact merged bootstrap-binding-plan
+checkpoint recorded in the pull request. It models one default-off,
+separately approved user-assigned managed identity named
+`cosmaneura-staging-restore-bootstrap-job` in the existing rehearsal control
+resource group.
 
-The identity is deliberately outside the persistent provision and cleanup job-identity map. This slice adds no federated credential, RBAC assignment, Container Apps environment or job, compute attachment, token acquisition, provider or database call, PostgreSQL administrator, workflow binding, runtime authority, sanitizer authority, or production change. Its non-secret output reports desired-state identifiers while keeping exact-ID authentication and every authority or attachment claim false.
+## Isolation and blast radius
 
-A future reviewed rung must authenticate the live resource, prove there are no federated credentials or role assignments, and attach it only to a single-use bootstrap job. The later bootstrap lifecycle must hold external stability authority from the first provider mutation through final administrator-absence readback, close the database session before teardown, prove all job and database authority absent, and only then remove this identity. Turning the Terraform switch off does not substitute for those proofs.
+The identity is owned by the dedicated
+`infra-staging-sanitizer-bootstrap-identity/` root and the independent
+`staging-sanitizer-bootstrap-identity.tfstate` backend key. The root reads the
+exact pre-existing `cosmaneura-staging-rehearsal-control` resource group and
+contains no Azure resource other than the one bootstrap UAMI. It therefore
+cannot create, update, or destroy the broader rehearsal control plane,
+federated credentials, RBAC assignments, jobs, networks, storage, or database
+resources.
 
-Recovery before any apply is a code-only revert. After an approved apply, recovery is a separately reviewed plan that first authenticates absence of all federation, RBAC, job attachment, PostgreSQL administrator, and active execution state, then removes only this exact identity. No agent executes that plan.
+The root creates the identity only when the enable and exact-plan-approval
+switches are both true. It requires an exact 12-character rehearsal ID and a
+valid, future-dated whole-second UTC cleanup deadline. The resource itself
+rechecks the deadline against apply time, so a saved plan cannot create the
+identity after expiry. `prevent_destroy` rejects disabling or removing the
+managed identity through this foundation; teardown requires a later bounded
+change with authenticated absence proofs.
+
+## Deliberate non-authority
+
+The identity is outside the persistent provision and cleanup job-identity map.
+This slice adds no federated credential, RBAC assignment, Container Apps
+environment or job, compute attachment, token acquisition, provider or
+database call, PostgreSQL administrator, workflow binding, runtime authority,
+sanitizer authority, or production change. Its non-secret output reports
+desired-state identifiers while keeping exact-ID authentication and every
+authority or attachment claim false.
+
+A future reviewed rung must authenticate the live resource, prove there are no
+federated credentials or role assignments, and attach it only to one
+single-use bootstrap job. The later bootstrap lifecycle must hold external
+stability authority from the first provider mutation through final
+administrator-absence readback, close the database session before teardown,
+prove all job and database authority absent, and only then remove this
+identity.
+
+## Review findings resolved
+
+The first independent review rejected the shared-root design for three High
+risks. This redesign resolves them by attaching the apply-time expiry check to
+the UAMI itself, protecting an existing UAMI with `prevent_destroy`, and moving
+the identity into an isolated state whose only Azure-managed resource is that
+UAMI. The original review is negative evidence, not acceptance; the remediated
+exact head requires a new independent review and green CI.
+
+Before any apply, recovery is a code-only revert. After an approved apply,
+recovery is a separately reviewed teardown plan that first authenticates
+absence of all federation, RBAC, job attachment, PostgreSQL administrator, and
+active execution state, then removes only this exact identity. No automation in
+this slice applies either plan.

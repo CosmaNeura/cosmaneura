@@ -42,30 +42,6 @@ cosmaneura-staging-rehearsal` to be empty before a restore. The policy and role
 assignments are target-scoped extension resources. A credentialed readback must
 still prove that the exact controller command returns `[]` before activation.
 
-## Sanitizer bootstrap identity foundation
-
-The bootstrap UAMI is a separate, default-off rehearsal resource. It is not a
-member of the persistent provision/cleanup job identity map and is created only
-when both `enable_sanitizer_bootstrap_identity=true` and
-`sanitizer_bootstrap_identity_plan_approved=true` are present in the same
-reviewed plan. Either switch without the other fails closed. A 12-character
-rehearsal ID and valid whole-second UTC cleanup deadline are required with the
-identity and become resource tags for orphan detection. The deadline must be
-future-dated both when the plan is created and when the saved plan is applied;
-an expired plan fails before resource creation. Both lifecycle values must be
-absent while the identity is disabled. The exact name is
-`cosmaneura-staging-restore-bootstrap-job` in the isolated control group.
-
-This rung creates only the UAMI. It adds no federated credential, role
-assignment, job, compute attachment, token path, provider authority, database
-administrator, database connection, workflow binding, or activation claim.
-Its output is desired-state metadata and explicitly leaves exact-ID
-authentication and every authority claim false. A later reviewed lifecycle must
-authenticate the live IDs, attach the UAMI only to one single-use bootstrap
-job, and prove job attachment plus temporary PostgreSQL administrator authority
-absent before the UAMI is removed. Disabling this switch is not by itself that
-proof.
-
 ## Private-executor network foundation
 
 The network-only rung is present in source but defaults off. It requires the
