@@ -642,15 +642,20 @@ class SanitizerBootstrapBindingPlan:
                 "bootstrap_binding_plan_sha256": _plan_digest(public_without_digest),
                 **projection,
             }
+            actual_public = {name: getattr(self, name) for name in PUBLIC_FIELDS}
             return (
                 type(self) is SanitizerBootstrapBindingPlan
                 and self._seal is _PLAN_SEAL
                 and tuple(public) == PUBLIC_FIELDS
-                and all(getattr(self, name) == item for name, item in public.items())
+                and all(
+                    type(actual_public[name]) is type(item)
+                    and actual_public[name] == item
+                    for name, item in public.items()
+                )
                 and hmac.compare_digest(
                     self._proof_sha256,
                     _private_proof(
-                        public=public,
+                        public=actual_public,
                         value_identity=id(self),
                         retained=self._connection_plan,
                     ),

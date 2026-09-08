@@ -977,15 +977,20 @@ class SanitizerTargetRoleDatabaseObservation:
             public = _public_projection(
                 plan=plan, decoded=self._frames, observed_at=self.observed_at
             )
+            actual_public = {name: getattr(self, name) for name in PUBLIC_FIELDS}
             return (
                 type(self) is SanitizerTargetRoleDatabaseObservation
                 and self._seal is _OBSERVATION_SEAL
                 and tuple(public) == PUBLIC_FIELDS
-                and all(getattr(self, name) == item for name, item in public.items())
+                and all(
+                    type(actual_public[name]) is type(item)
+                    and actual_public[name] == item
+                    for name, item in public.items()
+                )
                 and hmac.compare_digest(
                     self._proof_sha256,
                     _proof(
-                        public=public,
+                        public=actual_public,
                         output_identity=id(self),
                         plan=self._plan,
                         decoded=self._frames,

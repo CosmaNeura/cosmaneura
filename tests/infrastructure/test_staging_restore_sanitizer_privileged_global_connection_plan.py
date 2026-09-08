@@ -299,6 +299,18 @@ def test_output_is_redacted_nonserializable_and_tamper_evident(
     object.__setattr__(result, "database_connection_authority", True)
     assert result._is_authenticated() is False
 
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+        def __bool__(self) -> bool:
+            return True
+
+    spoofed = _make(real_chain)
+    object.__setattr__(spoofed, "database_connection_authority", EqualitySpoof())
+    assert bool(spoofed.database_connection_authority) is True
+    assert spoofed._is_authenticated() is False
+
 
 @pytest.mark.parametrize(
     ("path", "replacement"),

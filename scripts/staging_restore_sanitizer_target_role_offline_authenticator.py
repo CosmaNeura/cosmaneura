@@ -960,6 +960,7 @@ class AuthenticatedSanitizerTargetRoleObservation:
                 authenticated_at=self.authenticated_at,
                 counts=counts,
             )
+            actual_public = {name: getattr(self, name) for name in PUBLIC_FIELDS}
             return (
                 type(self) is AuthenticatedSanitizerTargetRoleObservation
                 and self._seal is _AUTHORITY_SEAL
@@ -970,12 +971,16 @@ class AuthenticatedSanitizerTargetRoleObservation:
                     _observation_guard(observation),
                 )
                 and tuple(public) == PUBLIC_FIELDS
-                and all(getattr(self, name) == value for name, value in public.items())
+                and all(
+                    type(actual_public[name]) is type(value)
+                    and actual_public[name] == value
+                    for name, value in public.items()
+                )
                 and hmac.compare_digest(
                     self._proof_sha256,
                     _proof(
                         authority_identity=id(self),
-                        public=public,
+                        public=actual_public,
                         observation=observation,
                         observation_guard=self._observation_guard_sha256,
                     ),
