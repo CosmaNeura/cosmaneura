@@ -1,29 +1,23 @@
 # Staging sanitizer bootstrap identity evidence authenticator
 
-Tier 2, based on protected `master`
-`9928fcc5eb5625381efdd31b0610d76191118c90`. This bounded offline slice
-authenticates the exact founder-applied bootstrap-identity checkpoint for
-rehearsal `21506aaeec3c`. It performs no network, credential, provider,
-database, workflow, deployment, or mutation action.
+Tier 2, based on protected `master` `9928fcc5eb5625381efdd31b0610d76191118c90`.
+This bounded offline slice authenticates the exact founder-applied bootstrap
+identity checkpoint for rehearsal `21506aaeec3c`. It performs no network,
+credential, provider, database, workflow, deployment, or mutation action.
 
 ## Exact evidence boundary
 
-The checked-in policy pins the spent plan, reviewed post-apply receipt, raw and
-normalized isolated state, live UAMI readback, empty federated-credential and
-role-assignment arrays, the complete six-job subscription inventory, and each
-job's identity projection. Evidence files must be regular, single-link,
-owner-only files and must match their exact SHA-256 values. The caller may
-select only the containing directory, not any filename, identifier, claim, or
-digest.
+The checked-in policy pins the spent plan, reviewed post-apply receipt, isolated
+state, live UAMI readback, empty federation/role arrays, complete six-job
+inventory, and every job identity projection. Files must be regular,
+single-link, owner-only, and exact-hash matched. The caller selects only the
+containing directory—not a filename, identifier, claim, or digest.
 
-The verifier requires state lineage
-`a0c8b939-2fb2-0604-3e70-d925aeee5950` to advance exactly from serial 1 to 2,
-with only the existing resource-group read, the bootstrap UAMI, and the
-built-in activation guard. It cross-checks the exact resource, client,
-principal, and tenant IDs; the complete controlled tag set; four passing
-OpenTofu checks; zero federation; zero direct or inherited role assignments;
-and zero bootstrap-UAMI attachments across all six observed Container Apps
-jobs. Azure resource IDs are compared case-insensitively.
+The verifier requires lineage `a0c8b939-2fb2-0604-3e70-d925aeee5950` to advance
+exactly from serial 1 to 2 with only the resource-group read, bootstrap UAMI,
+and activation guard. It cross-checks exact IDs, tags, four passing OpenTofu
+checks, zero federation or roles, and zero bootstrap-UAMI attachments across
+all six jobs. Azure resource IDs are compared case-insensitively.
 
 ## Claims and expiry
 

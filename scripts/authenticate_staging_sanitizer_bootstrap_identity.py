@@ -1108,7 +1108,7 @@ def _validated_candidate(
 
 def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
     key = os.urandom(32)
-    issued: dict[int, object] = {}
+    issued: dict[tuple[int, int], object] = {}
 
     def proof(value: AuthenticatedBootstrapIdentityEvidence) -> str:
         material = _canonical(
@@ -1125,7 +1125,7 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
         return hmac.new(key, material, hashlib.sha256).hexdigest()
 
     def verify(value: AuthenticatedBootstrapIdentityEvidence) -> bool:
-        return issued.get(id(value)) is value and hmac.compare_digest(
+        return issued.get((os.getpid(), id(value))) is value and hmac.compare_digest(
             value._proof_sha256, proof(value)
         )
 
@@ -1137,9 +1137,9 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
             policy=policy, evidence_directory=evidence_directory, clock=_utc_now
         )
         object.__setattr__(value, "_proof_sha256", proof(value))
-        issued[id(value)] = value
+        issued[os.getpid(), id(value)] = value
         if not value._is_authenticated():
-            issued.pop(id(value), None)
+            issued.pop((os.getpid(), id(value)), None)
             _fail("bootstrap_identity_evidence.output_invalid")
         return value
 

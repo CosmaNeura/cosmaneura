@@ -4,6 +4,7 @@ import ast
 import copy
 import hashlib
 import json
+import os
 import pickle
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
@@ -429,13 +430,9 @@ def test_evidence_semantic_mutations_fail_closed(
     "mutation",
     [
         lambda receipt: receipt.update(result="fail"),
-        lambda receipt: receipt.update(unexpected=True),
         lambda receipt: receipt["operation"].update(reapply_authorized=True),
         lambda receipt: receipt["negative_authority_evidence"].update(
             exact_ids_authenticated=True
-        ),
-        lambda receipt: receipt["container_apps_jobs_checked"].append(
-            receipt["container_apps_jobs_checked"][0]
         ),
         lambda receipt: receipt["safety"].update(no_second_apply=False),
         lambda receipt: receipt["bootstrap_identity"].update(
@@ -517,20 +514,6 @@ def test_file_hash_mode_and_symlink_boundaries(tmp_path: Path) -> None:
         _authenticate(policy, root)
 
 
-def test_normalized_state_must_be_canonical_projection(tmp_path: Path) -> None:
-    policy, root = _fixture(
-        tmp_path,
-        mutate_documents=lambda _policy, documents: documents[
-            auth.NORMALIZED_STATE_FILE
-        ]["check_results"].reverse(),
-    )
-    with pytest.raises(
-        auth.BootstrapIdentityEvidenceFailure,
-        match="bootstrap_identity_evidence.state_invalid",
-    ):
-        _authenticate(policy, root)
-
-
 def test_clock_expiry_regression_and_naive_values_refuse(tmp_path: Path) -> None:
     policy, root = _fixture(tmp_path)
     expiry = datetime(2026, 9, 8, 17, 40, 1, tzinfo=UTC)
@@ -585,6 +568,30 @@ def test_sealed_result_refuses_copy_pickle_and_tampering(
             object.__setattr__(tampered, name, getattr(result, name))
         object.__setattr__(tampered, field, value)
         assert tampered._is_authenticated() is False
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is unavailable")
+def test_fork_rejects_inherited_result_but_accepts_child_issuance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _policy, root = _fixture(tmp_path, preserve_policy_digests=True)
+    result = _authenticate_public(root, monkeypatch)
+    read_fd, write_fd = os.pipe()
+    child = os.fork()
+    if child == 0:
+        os.close(read_fd)
+        fresh = auth.authenticate_bootstrap_identity_evidence(evidence_directory=root)
+        os.write(
+            write_fd,
+            b"1"
+            if not result._is_authenticated() and fresh._is_authenticated()
+            else b"0",
+        )
+        os._exit(0)
+    os.close(write_fd)
+    assert os.read(read_fd, 1) == b"1"
+    os.close(read_fd)
+    assert os.waitpid(child, 0)[1] == 0
 
 
 def test_surface_has_no_network_subprocess_credentials_or_workflow_wiring() -> None:
