@@ -42,6 +42,15 @@ resource "terraform_data" "activation_guard" {
     cleanup_not_after   = local.bootstrap_cleanup_not_after
   }
 
+  # The immutable plan-derived deadline changes on every new enabled plan.
+  # Replacing this guard therefore makes the UAMI replacement-only after its
+  # first creation; the UAMI's prevent_destroy then rejects deadline refreshes.
+  triggers_replace = {
+    rehearsal_id      = var.sanitizer_bootstrap_rehearsal_id
+    lifetime_hours    = var.sanitizer_bootstrap_lifetime_hours
+    cleanup_not_after = local.bootstrap_cleanup_not_after
+  }
+
   lifecycle {
     precondition {
       condition = (
@@ -84,6 +93,9 @@ resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
     # A later teardown slice must first authenticate that every temporary
     # attachment and authority is absent, then deliberately change this guard.
     prevent_destroy = true
+    replace_triggered_by = [
+      terraform_data.activation_guard[0],
+    ]
 
     precondition {
       condition = lower(data.azurerm_resource_group.control[0].id) == lower(

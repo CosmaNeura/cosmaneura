@@ -24,9 +24,11 @@ switches are both true. It requires an exact 12-character rehearsal ID and an
 integer lifetime from 1 through 24 hours, matching the restore envelope's
 maximum lifetime. The exact cleanup deadline is derived from the immutable
 plan timestamp. The resource itself rechecks that deadline against apply time,
-so a saved plan cannot create the identity after expiry. `prevent_destroy`
-rejects disabling or removing the managed identity through this foundation;
-teardown requires a later bounded change with authenticated absence proofs.
+so a saved plan cannot create the identity after expiry. The lifecycle metadata
+is replacement-only and triggers UAMI replacement; `prevent_destroy` therefore
+rejects a later plan that tries to refresh the deadline or rehearsal ID, as well
+as disabling or removing the managed identity through this foundation. Teardown
+requires a later bounded change with authenticated absence proofs.
 
 ## Deliberate non-authority
 

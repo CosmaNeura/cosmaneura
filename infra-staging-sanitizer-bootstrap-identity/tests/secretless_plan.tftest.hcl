@@ -165,6 +165,11 @@ run "approved_identity_foundation" {
   }
 
   assert {
+    condition     = terraform_data.activation_guard[0].triggers_replace.rehearsal_id == "abcdef123456" && terraform_data.activation_guard[0].triggers_replace.lifetime_hours == 6 && terraform_data.activation_guard[0].triggers_replace.cleanup_not_after == timeadd(plantimestamp(), "6h")
+    error_message = "Lifecycle metadata must be replacement-only and bound to the exact plan timestamp"
+  }
+
+  assert {
     condition     = azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == "cosmaneura-staging-rehearsal-control" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == timeadd(plantimestamp(), "6h")
     error_message = "The approved plan must create exactly the named East US UAMI with bounded orphan-detection tags"
   }

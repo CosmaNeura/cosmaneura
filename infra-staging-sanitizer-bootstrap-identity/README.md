@@ -26,10 +26,13 @@ sanitizer_bootstrap_lifetime_hours          = 6 # integer from 1 through 24
 
 The exact cleanup deadline is derived from the immutable plan timestamp and
 the bounded lifetime, then checked again on the UAMI immediately before
-creation. `prevent_destroy` deliberately rejects turning the switch off after
-creation. A later teardown change may remove that protection only after exact
-live readback proves no federation, RBAC, job attachment, active execution,
-PostgreSQL administrator, session, provider authority, or database authority.
+creation. Lifecycle metadata is replacement-only, and its guard is a UAMI
+replacement trigger. Consequently, a later plan cannot refresh the deadline or
+rehearsal ID in place: `prevent_destroy` rejects that replacement as well as
+turning the switch off. A later teardown change may remove that protection only
+after exact live readback proves no federation, RBAC, job attachment, active
+execution, PostgreSQL administrator, session, provider authority, or database
+authority.
 
 Pull-request verification is credential-free:
 
