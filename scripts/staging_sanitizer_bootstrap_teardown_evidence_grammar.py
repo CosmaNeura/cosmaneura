@@ -1010,13 +1010,14 @@ def _validate_review_response(
     ):
         if type(item) is not int or item < 0:
             _fail(code)
-    if usage["total_tokens"] != usage["input_tokens"] + usage["output_tokens"]:
-        _fail(code)
     if (
-        input_details["cache_write_tokens"] + input_details["cached_tokens"]
+        usage["total_tokens"] != usage["input_tokens"] + usage["output_tokens"]
+        or usage["input_tokens"] == 0
+        or usage["output_tokens"] == 0
+        or input_details["cache_write_tokens"] + input_details["cached_tokens"]
         > usage["input_tokens"]
         or usage["output_tokens"] > review["maximum_output_tokens"]
-        or output_details["reasoning_tokens"] > usage["output_tokens"]
+        or output_details["reasoning_tokens"] >= usage["output_tokens"]
     ):
         _fail(code)
     if (
@@ -1169,24 +1170,24 @@ def expected_review_binding(
 def validate_evidence_directory(
     directory: Path, policy: Mapping[str, Any]
 ) -> dict[str, bytes]:
-    """Read and validate the exact closed-world evidence and review bundle."""
-
-    raw = _read_evidence_files(directory, policy)
     try:
+        raw = _read_evidence_files(directory, policy)
         parsed = {
             name: offline.load_json_bytes(value, label=name)
             for name, value in raw.items()
         }
+        _validate_evidence(parsed[EVIDENCE_FILE], policy, raw)
+        request_binding, review_input_length = _validate_review_request(
+            parsed[REVIEW_REQUEST_FILE], parsed[EVIDENCE_FILE], policy
+        )
+        _validate_review_response(
+            parsed[REVIEW_RESPONSE_FILE],
+            policy,
+            request_binding=request_binding,
+            review_input_length=review_input_length,
+        )
+        return raw
+    except EvidenceGrammarFailure:
+        raise
     except Exception:
-        _fail("bootstrap_identity_teardown_evidence.file_invalid")
-    _validate_evidence(parsed[EVIDENCE_FILE], policy, raw)
-    request_binding, review_input_length = _validate_review_request(
-        parsed[REVIEW_REQUEST_FILE], parsed[EVIDENCE_FILE], policy
-    )
-    _validate_review_response(
-        parsed[REVIEW_RESPONSE_FILE],
-        policy,
-        request_binding=request_binding,
-        review_input_length=review_input_length,
-    )
-    return raw
+        _fail("bootstrap_identity_teardown_evidence.evidence_invalid")

@@ -433,6 +433,12 @@ def _review_response(
     }
 
 
+def _zero_usage(value: dict[str, Any]) -> None:
+    usage = value["usage"]
+    usage.update(input_tokens=0, output_tokens=0, total_tokens=0)
+    usage["output_tokens_details"]["reasoning_tokens"] = 0
+
+
 def _policy() -> dict[str, Any]:
     subscription = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
     tenant = "d51754d0-bba5-4810-820e-afac542844d6"
@@ -671,6 +677,13 @@ def test_scope_hash_and_closed_world_mutations_refuse(
                 cached_tokens=2
             ),
         ),
+        (None, _zero_usage),
+        (
+            None,
+            lambda value: value["usage"]["output_tokens_details"].update(
+                reasoning_tokens=2
+            ),
+        ),
         (
             None,
             lambda value: value["output"][-1]["content"][0].update(text="APPROVED"),
@@ -717,9 +730,7 @@ def test_consistently_replaced_model_with_stale_binding_refuses(tmp_path: Path) 
 
 
 @pytest.mark.parametrize("identity_type", [[], {}, 1, False, None])
-def test_malformed_job_identity_type_has_bounded_refusal(
-    tmp_path: Path, identity_type: Any
-) -> None:
+def test_bad_job_identity_type_refuses(tmp_path: Path, identity_type: Any) -> None:
     directory, policy = _bundle(
         tmp_path,
         mutate_evidence=lambda value: value["prior_envelope"]["raw_evidence"]["jobs"][
@@ -731,9 +742,7 @@ def test_malformed_job_identity_type_has_bounded_refusal(
 
 
 @pytest.mark.parametrize("servers", [None, False, 1, {}])
-def test_malformed_postgres_servers_has_bounded_refusal(
-    tmp_path: Path, servers: Any
-) -> None:
+def test_bad_postgres_servers_refuses(tmp_path: Path, servers: Any) -> None:
     def mutate(value: dict[str, Any]) -> None:
         value["remediation"]["postgres_server_inventory"]["servers"] = servers
 
@@ -742,22 +751,22 @@ def test_malformed_postgres_servers_has_bounded_refusal(
         grammar.validate_evidence_directory(directory, policy)
 
 
-@pytest.mark.parametrize("offset", ["missing", None, False, "53234", 53234.0])
-def test_malformed_policy_filter_offset_refuses(tmp_path: Path, offset: Any) -> None:
-    directory, policy = _bundle(tmp_path)
-    review = policy["independent_review"]
-    if offset == "missing":
-        review.pop("content_filter_end_offset")
+@pytest.mark.parametrize("field", ["offset", "digest"])
+@pytest.mark.parametrize("value", ["missing", None, False, "53234", 53234.0])
+def test_bad_policy_values_refuse(tmp_path: Path, field: str, value: Any) -> None:
+    directory, p = _bundle(tmp_path)
+    target = p["independent_review"] if field == "offset" else p["evidence"]["files"]
+    key = "content_filter_end_offset" if field == "offset" else grammar.EVIDENCE_FILE
+    if value == "missing":
+        target.pop(key)
     else:
-        review["content_filter_end_offset"] = offset
+        target[key] = value
     with pytest.raises(grammar.EvidenceGrammarFailure):
-        grammar.validate_evidence_directory(directory, policy)
+        grammar.validate_evidence_directory(directory, p)
 
 
 @pytest.mark.parametrize("invalid_hash", [[], None, 1, False])
-def test_malformed_component_hash_has_bounded_refusal(
-    tmp_path: Path, invalid_hash: Any
-) -> None:
+def test_bad_component_hash_refuses(tmp_path: Path, invalid_hash: Any) -> None:
     directory, policy = _bundle(
         tmp_path,
         mutate_evidence=lambda value: value["prior_envelope"]["evidence_hashes"].update(
