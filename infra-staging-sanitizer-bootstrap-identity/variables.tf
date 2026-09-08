@@ -37,3 +37,33 @@ variable "sanitizer_bootstrap_lifetime_hours" {
     error_message = "sanitizer_bootstrap_lifetime_hours must be null or an integer from 1 through 24"
   }
 }
+
+variable "authorize_sanitizer_bootstrap_identity_teardown" {
+  description = "Explicitly authorize destruction of the exact expired-or-abandoned bootstrap UAMI after reviewed absence evidence."
+  type        = bool
+  default     = false
+}
+
+variable "sanitizer_bootstrap_teardown_rehearsal_id" {
+  description = "Exact reviewed rehearsal whose authority-free bootstrap identity is being destroyed."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.sanitizer_bootstrap_teardown_rehearsal_id == null || can(regex("^[0-9a-f]{12}$", var.sanitizer_bootstrap_teardown_rehearsal_id))
+    error_message = "sanitizer_bootstrap_teardown_rehearsal_id must be null or exactly 12 lowercase hexadecimal characters"
+  }
+}
+
+variable "sanitizer_bootstrap_teardown_evidence_sha256" {
+  description = "Exact independently reviewed live-readback bundle digest authorizing only teardown planning."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.sanitizer_bootstrap_teardown_evidence_sha256 == null || can(regex("^sha256:[0-9a-f]{64}$", var.sanitizer_bootstrap_teardown_evidence_sha256))
+    error_message = "sanitizer_bootstrap_teardown_evidence_sha256 must be null or a lowercase sha256 digest"
+  }
+}

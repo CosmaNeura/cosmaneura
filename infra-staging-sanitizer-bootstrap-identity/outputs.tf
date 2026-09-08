@@ -9,24 +9,19 @@ output "state_boundary" {
 }
 
 output "sanitizer_bootstrap_identity_foundation" {
-  description = "Non-secret desired-state identity metadata only; no live binding, attachment, federation, role, or database authority is implied."
-  value = var.enable_sanitizer_bootstrap_identity ? {
-    name                         = azurerm_user_assigned_identity.sanitizer_bootstrap[0].name
-    client_id                    = azurerm_user_assigned_identity.sanitizer_bootstrap[0].client_id
-    principal_id                 = azurerm_user_assigned_identity.sanitizer_bootstrap[0].principal_id
-    resource_id                  = azurerm_user_assigned_identity.sanitizer_bootstrap[0].id
-    tenant_id                    = azurerm_user_assigned_identity.sanitizer_bootstrap[0].tenant_id
-    lifecycle                    = "ephemeral"
-    rehearsal_id                 = var.sanitizer_bootstrap_rehearsal_id
-    cleanup_not_after            = local.bootstrap_cleanup_not_after
-    federated_credential_ids     = []
-    role_assignment_ids          = []
-    attached_job_resource_ids    = []
-    exact_ids_authenticated      = false
-    single_use_job_bound         = false
-    provider_authority_bound     = false
-    database_authority_bound     = false
-    workflow_binding_implemented = false
-    destruction_protected        = true
+  description = "Creation is permanently disabled in this teardown-only source."
+  value       = null
+}
+
+output "sanitizer_bootstrap_identity_teardown" {
+  description = "Non-secret teardown tombstone; it grants no Azure mutation authority."
+  value = var.authorize_sanitizer_bootstrap_identity_teardown ? {
+    mode                     = "teardown-only"
+    identity_resource_id     = local.bootstrap_identity_resource_id
+    rehearsal_id             = var.sanitizer_bootstrap_teardown_rehearsal_id
+    cleanup_not_after        = local.bootstrap_cleanup_not_after
+    teardown_evidence_sha256 = var.sanitizer_bootstrap_teardown_evidence_sha256
+    founder_apply_required   = true
+    apply_authorized         = false
   } : null
 }
