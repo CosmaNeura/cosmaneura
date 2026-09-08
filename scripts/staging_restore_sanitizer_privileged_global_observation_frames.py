@@ -128,6 +128,29 @@ def _canonical(value: Any) -> bytes:
         _fail("privileged_global_observation_frames.input_invalid")
 
 
+def _canonical_bounded(value: Any, *, maximum_bytes: int) -> bytes:
+    if type(maximum_bytes) is not int or maximum_bytes < 1:
+        _fail("privileged_global_observation_frames.bounds_invalid")
+    encoded = bytearray()
+    try:
+        chunks = json.JSONEncoder(
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).iterencode(value)
+        for chunk in chunks:
+            chunk_bytes = chunk.encode("ascii")
+            if len(encoded) + len(chunk_bytes) > maximum_bytes:
+                _fail("privileged_global_observation_frames.bounds_invalid")
+            encoded.extend(chunk_bytes)
+    except SanitizerPrivilegedGlobalObservationFramesFailure:
+        raise
+    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+        _fail("privileged_global_observation_frames.input_invalid")
+    return bytes(encoded)
+
+
 def _parse_contract(raw: bytes, *, expected_sha256: str) -> dict[str, Any]:
     if (
         type(raw) is not bytes
@@ -331,7 +354,13 @@ def _frame_specs(
     return specs
 
 
-def _decode_scalar(value: object, *, logical_type: str, nullable: bool) -> Scalar:
+def _decode_scalar(
+    value: object,
+    *,
+    logical_type: str,
+    nullable: bool,
+    maximum_text_bytes: int,
+) -> Scalar:
     if value is None:
         if nullable:
             return None
@@ -348,12 +377,22 @@ def _decode_scalar(value: object, *, logical_type: str, nullable: bool) -> Scala
             _fail("privileged_global_observation_frames.input_invalid")
         return value
     if logical_type == "text":
-        if type(value) is not str or "\x00" in value:
+        if type(value) is not str:
+            _fail("privileged_global_observation_frames.input_invalid")
+        if (
+            type(maximum_text_bytes) is not int
+            or maximum_text_bytes < 1
+            or len(value) > maximum_text_bytes
+        ):
+            _fail("privileged_global_observation_frames.bounds_invalid")
+        if "\x00" in value:
             _fail("privileged_global_observation_frames.input_invalid")
         try:
-            value.encode("utf-8", errors="strict")
+            encoded = value.encode("utf-8", errors="strict")
         except UnicodeEncodeError:
             _fail("privileged_global_observation_frames.input_invalid")
+        if len(encoded) > maximum_text_bytes:
+            _fail("privileged_global_observation_frames.bounds_invalid")
         return value
     _fail("privileged_global_observation_frames.contract_invalid")
 
@@ -395,14 +434,17 @@ def _decode_frame_group(
             if type(raw_row) is not tuple or len(raw_row) != len(columns):
                 _fail("privileged_global_observation_frames.input_invalid")
             row = tuple(
-                _decode_scalar(value, logical_type=logical_type, nullable=nullable)
+                _decode_scalar(
+                    value,
+                    logical_type=logical_type,
+                    nullable=nullable,
+                    maximum_text_bytes=maximum_row_bytes,
+                )
                 for value, (_name, logical_type, nullable) in zip(
                     raw_row, columns, strict=True
                 )
             )
-            encoded_row = _canonical(row)
-            if len(encoded_row) > maximum_row_bytes:
-                _fail("privileged_global_observation_frames.bounds_invalid")
+            encoded_row = _canonical_bounded(row, maximum_bytes=maximum_row_bytes)
             if (
                 encoded_bytes_already + encoded_bytes + len(encoded_row)
                 > maximum_output_bytes
@@ -472,10 +514,16 @@ def _decode_bundle(
         if type(raw_database) is not tuple or len(raw_database) != 3:
             _fail("privileged_global_observation_frames.input_invalid")
         database_oid = _decode_scalar(
-            raw_database[0], logical_type="int64", nullable=False
+            raw_database[0],
+            logical_type="int64",
+            nullable=False,
+            maximum_text_bytes=bounds["maximum_row_bytes"],
         )
         database_name = _decode_scalar(
-            raw_database[1], logical_type="text", nullable=False
+            raw_database[1],
+            logical_type="text",
+            nullable=False,
+            maximum_text_bytes=bounds["maximum_row_bytes"],
         )
         if (
             type(database_oid) is not int
@@ -486,9 +534,10 @@ def _decode_bundle(
             or database_name in database_names
         ):
             _fail("privileged_global_observation_frames.input_invalid")
-        encoded_database_key = _canonical((database_oid, database_name))
-        if len(encoded_database_key) > bounds["maximum_row_bytes"]:
-            _fail("privileged_global_observation_frames.bounds_invalid")
+        encoded_database_key = _canonical_bounded(
+            (database_oid, database_name),
+            maximum_bytes=bounds["maximum_row_bytes"],
+        )
         if encoded_bytes + len(encoded_database_key) > bounds["maximum_output_bytes"]:
             _fail("privileged_global_observation_frames.bounds_invalid")
         encoded_bytes += len(encoded_database_key)
@@ -512,7 +561,7 @@ def _decode_bundle(
     if query_count > bounds["maximum_queries"]:
         _fail("privileged_global_observation_frames.bounds_invalid")
     bundle: DecodedBundle = (server_frames, tuple(database_frames))
-    canonical = _canonical(
+    canonical = _canonical_bounded(
         {
             "server_once": tuple(
                 {"frame": frame, "rows": rows} for frame, rows in server_frames
@@ -527,10 +576,9 @@ def _decode_bundle(
                 }
                 for database_oid, database_name, frames in database_frames
             ),
-        }
+        },
+        maximum_bytes=bounds["maximum_output_bytes"],
     )
-    if len(canonical) > bounds["maximum_output_bytes"]:
-        _fail("privileged_global_observation_frames.bounds_invalid")
     return bundle, canonical, total_rows
 
 
