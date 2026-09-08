@@ -6,20 +6,68 @@
 #   - localias reverse proxy for https://*.cosma.localhost routing + local TLS
 # All idempotent and safe to re-run on every boot.
 
+CURSOR_LOCALIAS_BIN="/usr/local/bin/localias"
+CURSOR_LOCALIAS_SHA256="e7e8ae3a6cf2b1d7b637b6d871ea615b66509096f35ed8f4cc2c370a812193aa"
+
+require_exact_localias_binary() {
+  local digest metadata
+
+  if [[ -L "$CURSOR_LOCALIAS_BIN" || ! -f "$CURSOR_LOCALIAS_BIN" || ! -x "$CURSOR_LOCALIAS_BIN" ]]; then
+    echo "Localias must be a real executable at $CURSOR_LOCALIAS_BIN." >&2
+    return 1
+  fi
+  metadata="$(/usr/bin/stat -c '%u:%a' -- "$CURSOR_LOCALIAS_BIN")"
+  if [[ "$metadata" != "0:755" ]]; then
+    echo "Localias must be root-owned with mode 0755." >&2
+    return 1
+  fi
+  digest="$(/usr/bin/sha256sum -- "$CURSOR_LOCALIAS_BIN")"
+  digest="${digest%% *}"
+  if [[ "$digest" != "$CURSOR_LOCALIAS_SHA256" ]]; then
+    echo "Localias does not match the reviewed digest." >&2
+    return 1
+  fi
+}
+
+secure_docker_socket_for_current_user() {
+  local socket_gid socket_metadata
+
+  if [[ -L /var/run/docker.sock || ! -S /var/run/docker.sock ]]; then
+    echo "Docker did not create the expected real Unix socket." >&2
+    return 1
+  fi
+  socket_gid="$(/usr/bin/id -g)"
+  sudo /usr/bin/chown "root:${socket_gid}" -- /var/run/docker.sock
+  sudo /usr/bin/chmod 0660 -- /var/run/docker.sock
+  socket_metadata="$(/usr/bin/stat -c '%u:%g:%a' -- /var/run/docker.sock)"
+  if [[ "$socket_metadata" != "0:${socket_gid}:660" ]]; then
+    echo "Docker socket ownership or permissions are not narrowly scoped." >&2
+    return 1
+  fi
+}
+
 ensure_dockerd() {
-  if docker info >/dev/null 2>&1; then
+  if sudo /usr/bin/docker info >/dev/null 2>&1; then
+    secure_docker_socket_for_current_user
+    /usr/bin/docker info >/dev/null 2>&1
     return 0
   fi
   echo "[services] starting dockerd..."
   # Cloud Agent VMs have no systemd service manager; run the daemon directly.
-  sudo nohup dockerd >/tmp/dockerd.log 2>&1 &
-  for _ in $(seq 1 30); do
-    if sudo docker info >/dev/null 2>&1; then break; fi
-    sleep 1
+  # The redirect intentionally belongs to the credential-neutral user; the
+  # privileged daemon does not need write access to any additional path.
+  # shellcheck disable=SC2024
+  sudo /usr/bin/nohup /usr/bin/dockerd --group "$(/usr/bin/id -gn)" >/tmp/dockerd.log 2>&1 &
+  for _ in $(/usr/bin/seq 1 30); do
+    if sudo /usr/bin/docker info >/dev/null 2>&1; then break; fi
+    /usr/bin/sleep 1
   done
-  # Let the non-root user talk to the daemon without sudo.
-  sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
-  docker info >/dev/null 2>&1 || { echo "[services] dockerd failed to start"; tail -20 /tmp/dockerd.log; return 1; }
+  secure_docker_socket_for_current_user
+  /usr/bin/docker info >/dev/null 2>&1 || {
+    echo "[services] dockerd failed to start"
+    /usr/bin/tail -20 /tmp/dockerd.log
+    return 1
+  }
 }
 
 ensure_infra() {
@@ -32,31 +80,52 @@ ensure_infra() {
 }
 
 ensure_localias() {
-  if sudo -E localias status 2>/dev/null | grep -q "daemon running"; then
+  require_exact_localias_binary
+  local localias_root_crt
+  # The pinned Localias source defines CaddyStatePath as
+  # xdg.StateFile("localias/caddy") and appends this fixed PKI path.
+  localias_root_crt="${XDG_STATE_HOME:?}/localias/caddy/pki/authorities/local/root.crt"
+
+  local -a localias_command=(
+    sudo /usr/bin/env -i
+    "HOME=${HOME:?}"
+    "USER=${USER:?}"
+    "LOGNAME=${LOGNAME:?}"
+    "XDG_CONFIG_HOME=${XDG_CONFIG_HOME:?}"
+    "XDG_STATE_HOME=${XDG_STATE_HOME:?}"
+    "TMPDIR=${TMPDIR:?}"
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    "$CURSOR_LOCALIAS_BIN"
+  )
+
+  if "${localias_command[@]}" status 2>/dev/null | /usr/bin/grep -q "daemon running"; then
     echo "[services] localias already running"
   else
     echo "[services] starting localias..."
-    sudo -E localias start
+    "${localias_command[@]}" start
   fi
-  # Ensure the localias root CA is trusted by the system and by Chromium (NSS),
-  # so the browser can load https://*.cosma.localhost without warnings.
-  # `|| true` guards against SIGPIPE from head closing the find pipeline early
-  # (lib.sh enables pipefail + set -e).
-  local root_crt
-  root_crt="$(sudo find "$HOME/.local/state/localias" /root/.local/state/localias \
-    -name root.crt -path '*authorities/local*' 2>/dev/null | head -1 || true)"
-  if [ -n "${root_crt:-}" ]; then
-    sudo cp "$root_crt" /usr/local/share/ca-certificates/localias-root.crt </dev/null
-    sudo update-ca-certificates >/dev/null 2>&1 </dev/null || true
-    # Chromium trusts certs from the NSS db. Initialize it only when missing;
-    # `certutil -N` prompts (and would hang) if the db already exists. Redirect
-    # stdin from /dev/null throughout so nothing can block on a prompt.
-    mkdir -p "$HOME/.pki/nssdb"
-    if [ ! -f "$HOME/.pki/nssdb/cert9.db" ]; then
-      certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password >/dev/null 2>&1 </dev/null || true
-    fi
-    if ! certutil -d "sql:$HOME/.pki/nssdb" -L </dev/null 2>/dev/null | grep -q localias-root; then
-      certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n localias-root -i "$root_crt" >/dev/null 2>&1 </dev/null || true
-    fi
+
+  # Undo the legacy host-wide trust installed by PR #257. Localias is trusted
+  # only in this disposable agent's isolated Chromium/NSS profile.
+  sudo /bin/rm -f -- /usr/local/share/ca-certificates/localias-root.crt
+  sudo /usr/sbin/update-ca-certificates >/dev/null 2>&1 </dev/null
+
+  if [[ -L "$localias_root_crt" || ! -f "$localias_root_crt" ]]; then
+    echo "Localias did not create its CA at the exact isolated state path." >&2
+    return 1
   fi
+  /usr/bin/openssl x509 -in "$localias_root_crt" -noout >/dev/null
+
+  # Chromium trusts certificates from the isolated NSS database. Replace the
+  # nickname on every run so a legitimate Localias CA rotation cannot leave a
+  # stale certificate trusted.
+  /bin/mkdir -p "$HOME/.pki/nssdb"
+  if [[ ! -f "$HOME/.pki/nssdb/cert9.db" ]]; then
+    /usr/bin/certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password </dev/null
+  fi
+  if /usr/bin/certutil -d "sql:$HOME/.pki/nssdb" -L -n localias-root >/dev/null 2>&1 </dev/null; then
+    /usr/bin/certutil -d "sql:$HOME/.pki/nssdb" -D -n localias-root </dev/null
+  fi
+  /usr/bin/certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n localias-root \
+    -i "$localias_root_crt" </dev/null
 }

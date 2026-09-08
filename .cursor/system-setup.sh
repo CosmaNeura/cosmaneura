@@ -33,22 +33,34 @@ if [ "${#missing[@]}" -gt 0 ]; then
 fi
 
 echo "== [system] docker engine =="
-if ! command -v docker >/dev/null 2>&1; then
+if [[ ! -x /usr/bin/docker || ! -x /usr/bin/dockerd ]] \
+  || ! /usr/bin/docker compose version >/dev/null 2>&1; then
   bash "$CURSOR_SETUP_DIR/../scripts/install_verified_docker_apt_key.sh"
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME:?} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
   sudo apt-get "${APT_CONFOLD[@]}" -o Acquire::Retries=3 update -qq
   sudo apt-get "${APT_CONFOLD[@]}" -o Acquire::Retries=3 install -y --no-install-recommends \
     docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 fi
-sudo usermod -aG docker "$USER" 2>/dev/null || true
 
 # Nested overlayfs cannot convert whiteout files; use fuse-overlayfs and the
-# classic graphdriver instead of the containerd snapshotter.
-if [ ! -f /etc/docker/daemon.json ]; then
+# classic graphdriver instead of the containerd snapshotter. Never silently
+# accept a pre-existing configuration that lacks either required setting.
+if sudo test -L /etc/docker/daemon.json; then
+  echo "Docker daemon configuration must not be a symlink." >&2
+  exit 1
+elif ! sudo test -e /etc/docker/daemon.json; then
   sudo mkdir -p /etc/docker
   echo '{ "features": { "containerd-snapshotter": false }, "storage-driver": "fuse-overlayfs" }' \
     | sudo tee /etc/docker/daemon.json >/dev/null
+fi
+if ! sudo /usr/bin/jq -e \
+  '."storage-driver" == "fuse-overlayfs" and .features."containerd-snapshotter" == false' \
+  /etc/docker/daemon.json >/dev/null; then
+  echo "Docker daemon configuration lacks the required nested-engine settings." >&2
+  exit 1
 fi
 
 echo "== [system] mise (pinned toolchain manager) =="
