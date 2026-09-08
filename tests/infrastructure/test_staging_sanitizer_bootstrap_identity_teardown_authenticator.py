@@ -23,6 +23,12 @@ def _sha(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
+def _pretty_sha(value: Any) -> str:
+    return hashlib.sha256(
+        (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+    ).hexdigest()
+
+
 def _state(policy: dict[str, Any]) -> dict[str, Any]:
     target = policy["target"]
     state = policy["state"]
@@ -270,7 +276,7 @@ def _envelope(policy: dict[str, Any]) -> dict[str, Any]:
                     "az postgres flexible-server list scoped to exact subscription "
                     f"{target['subscription_id']}"
                 ),
-                "evidence_sha256": hashlib.sha256(b"servers\n").hexdigest(),
+                "evidence_sha256": _pretty_sha(servers),
                 "servers": servers,
                 "count": len(servers),
                 "entra_enabled_count": 1,
@@ -288,13 +294,23 @@ def _fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
     mutate_evidence: Callable[[dict[str, Any]], None] | None = None,
+    mutate_request: Callable[[dict[str, Any]], None] | None = None,
     mutate_response: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     policy = copy.deepcopy(auth.load_bootstrap_identity_teardown_evidence_policy())
     evidence = _envelope(policy)
     if mutate_evidence is not None:
         mutate_evidence(evidence)
-    request = {"model": policy["independent_review"]["model"], "input": "fixture"}
+    evidence["prior_envelope_sha256"] = _pretty_sha(evidence["prior_envelope"])
+    wire_evidence = json.loads(_bytes(evidence))
+    request = {
+        "model": policy["independent_review"]["model"],
+        "reasoning": {"effort": "high"},
+        "input": "fixture\n\nEVIDENCE V3\n"
+        + json.dumps(wire_evidence, ensure_ascii=True, separators=(",", ":")),
+    }
+    if mutate_request is not None:
+        mutate_request(request)
     response = {
         "id": policy["independent_review"]["response_id"],
         "model": policy["independent_review"]["model"],
@@ -478,6 +494,23 @@ def test_review_verdict_mutation_refuses(
         mutate_response=lambda value: value["output"][0]["content"][0].update(
             text="APPROVED"
         ),
+    )
+    with pytest.raises(
+        auth.BootstrapIdentityTeardownEvidenceFailure,
+        match="bootstrap_identity_teardown_evidence.review_invalid",
+    ):
+        auth.authenticate_bootstrap_identity_teardown_evidence(
+            evidence_directory=directory
+        )
+
+
+def test_review_request_must_contain_exact_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(
+        tmp_path,
+        monkeypatch,
+        mutate_request=lambda value: value.update(input="unrelated evidence"),
     )
     with pytest.raises(
         auth.BootstrapIdentityTeardownEvidenceFailure,

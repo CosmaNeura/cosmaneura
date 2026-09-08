@@ -100,6 +100,11 @@ def _digest(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
+def _pretty_file_digest(value: Any) -> str:
+    raw = (json.dumps(value, ensure_ascii=True, indent=2) + "\n").encode("ascii")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _mapping(value: Any, fields: set[str], code: str) -> Mapping[str, Any]:
     if type(value) is not dict or set(value) != fields:
         _fail(code)
@@ -738,6 +743,7 @@ def _validate_evidence(value: Any, policy: Mapping[str, Any]) -> None:
         != "cosmaneura-staging-sanitizer-bootstrap-identity-post-apply-v3"
         or envelope["pass"] is not True
         or HEX_DIGEST_RE.fullmatch(envelope["prior_envelope_sha256"]) is None
+        or envelope["prior_envelope_sha256"] != _pretty_file_digest(prior)
         or prior["schema_version"] != 2
         or prior["policy_id"]
         != "cosmaneura-staging-sanitizer-bootstrap-identity-post-apply-v2"
@@ -800,12 +806,12 @@ def _validate_evidence(value: Any, policy: Mapping[str, Any]) -> None:
         != authority["bootstrap_identity_postgres_administrator_count"]
         or _serialized_contains(admins, needles)
         or inherited["command"] != expected_rbac_command
-        or HEX_DIGEST_RE.fullmatch(inherited["evidence_sha256"]) is None
+        or inherited["evidence_sha256"] != _pretty_file_digest(inherited["assignments"])
         or inherited["assignments"] != []
         or inherited["count"] != authority["direct_or_inherited_role_assignment_count"]
         or not completed <= rbac_started <= rbac_completed
         or type(servers) is not list
-        or HEX_DIGEST_RE.fullmatch(postgres["evidence_sha256"]) is None
+        or postgres["evidence_sha256"] != _pretty_file_digest(servers)
         or postgres["query"]
         != (
             "az postgres flexible-server list scoped to exact subscription "
@@ -865,6 +871,24 @@ def _validate_review_response(value: Any, policy: Mapping[str, Any]) -> None:
         or value.get("error") is not None
         or value.get("incomplete_details") is not None
         or texts != [review["verdict"]]
+    ):
+        _fail(code)
+
+
+def _validate_review_request(
+    value: Any, evidence: Mapping[str, Any], policy: Mapping[str, Any]
+) -> None:
+    code = "bootstrap_identity_teardown_evidence.review_invalid"
+    request = _mapping(value, {"model", "reasoning", "input"}, code)
+    reasoning = _mapping(request["reasoning"], {"effort"}, code)
+    evidence_text = json.dumps(evidence, ensure_ascii=True, separators=(",", ":"))
+    review_input = request["input"]
+    if (
+        request["model"] != policy["independent_review"]["model"]
+        or reasoning["effort"] != "high"
+        or type(review_input) is not str
+        or not review_input.endswith(f"\n\nEVIDENCE V3\n{evidence_text}")
+        or review_input.count(evidence_text) != 1
     ):
         _fail(code)
 
@@ -1013,9 +1037,9 @@ def _validated_candidate(
     except Exception:
         _fail("bootstrap_identity_teardown_evidence.file_invalid")
     _validate_evidence(parsed[EVIDENCE_FILE], document)
-    request = parsed[REVIEW_REQUEST_FILE]
-    if request.get("model") != document["independent_review"]["model"]:
-        _fail("bootstrap_identity_teardown_evidence.review_invalid")
+    _validate_review_request(
+        parsed[REVIEW_REQUEST_FILE], parsed[EVIDENCE_FILE], document
+    )
     _validate_review_response(parsed[REVIEW_RESPONSE_FILE], document)
     after = _trusted_now(clock)
     if after < before:
