@@ -13,7 +13,12 @@ CURSOR_LOCALIAS_BIN="/usr/local/bin/localias"
 CURSOR_LOCALIAS_SHA256="e7e8ae3a6cf2b1d7b637b6d871ea615b66509096f35ed8f4cc2c370a812193aa"
 
 docker_local() {
-  /usr/bin/env -u DOCKER_CONTEXT -u DOCKER_HOST \
+  /usr/bin/env \
+    -u DOCKER_API_VERSION \
+    -u DOCKER_CERT_PATH \
+    -u DOCKER_CONTEXT \
+    -u DOCKER_HOST \
+    -u DOCKER_TLS_VERIFY \
     "$CURSOR_DOCKER_BIN" --host "$CURSOR_DOCKER_HOST" "$@"
 }
 
@@ -98,7 +103,12 @@ ensure_dockerd() {
 
 ensure_infra() {
   echo "[services] bringing up postgres/redis/mailpit..."
-  denv /usr/bin/env -u DOCKER_CONTEXT -u DOCKER_HOST \
+  denv /usr/bin/env \
+    -u DOCKER_API_VERSION \
+    -u DOCKER_CERT_PATH \
+    -u DOCKER_CONTEXT \
+    -u DOCKER_HOST \
+    -u DOCKER_TLS_VERIFY \
     "$CURSOR_DOCKER_BIN" --host "$CURSOR_DOCKER_HOST" compose \
     --project-directory "$REPO_ROOT" \
     --file "$REPO_ROOT/docker-compose.yml" \

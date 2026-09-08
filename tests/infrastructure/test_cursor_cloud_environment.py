@@ -270,6 +270,7 @@ def test_cursor_docker_helpers_force_local_socket_and_live_driver(
 set -euo pipefail
 printf 'docker_host=%s\n' "${{DOCKER_HOST-unset}}" >> {shlex.quote(str(docker_log))}
 printf 'docker_context=%s\n' "${{DOCKER_CONTEXT-unset}}" >> {shlex.quote(str(docker_log))}
+printf 'docker_tls=%s\n' "${{DOCKER_TLS_VERIFY-unset}}" >> {shlex.quote(str(docker_log))}
 printf 'arguments=%s\n' "$*" >> {shlex.quote(str(docker_log))}
 if [[ "$*" == *"--format {{{{.Driver}}}}"* ]]; then
   printf 'fuse-overlayfs\n'
@@ -284,11 +285,15 @@ fi
             "docker_local info",
             "docker_local_as_root info",
             "require_live_docker_configuration",
+            'denv() { "$@"; }',
+            f"REPO_ROOT={shlex.quote(str(ROOT))}",
+            "ensure_infra",
         )
     )
     environment = os.environ | {
         "DOCKER_HOST": "tcp://hostile.example:2375",
         "DOCKER_CONTEXT": "hostile-context",
+        "DOCKER_TLS_VERIFY": "1",
     }
     result = _run(["bash", "-c", shell], environment=environment)
 
@@ -296,8 +301,9 @@ fi
     recorded = docker_log.read_text(encoding="utf-8")
     assert "tcp://hostile.example:2375" not in recorded
     assert "hostile-context" not in recorded
-    assert recorded.count("docker_host=unset") == 3
-    assert recorded.count("docker_context=unset") == 3
+    assert recorded.count("docker_host=unset") == 4
+    assert recorded.count("docker_context=unset") == 4
+    assert recorded.count("docker_tls=unset") == 4
     assert (
         recorded.splitlines().count("arguments=--host unix:///var/run/docker.sock info")
         == 2
@@ -305,6 +311,11 @@ fi
     assert (
         "arguments=--host unix:///var/run/docker.sock info --format {{.Driver}}"
         in recorded
+    )
+    assert (
+        "arguments=--host unix:///var/run/docker.sock compose "
+        f"--project-directory {ROOT} --file {ROOT / 'docker-compose.yml'} "
+        f"--file {ROOT / '.cursor/docker-compose.yml'} up -d --wait" in recorded
     )
 
 
