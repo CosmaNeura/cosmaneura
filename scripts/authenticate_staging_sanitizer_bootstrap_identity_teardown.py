@@ -83,13 +83,21 @@ class BootstrapIdentityTeardownEvidenceFailure(RuntimeError):
     """Bounded refusal without emitting raw identity or provider evidence."""
 
 
-def _fail(code: str) -> NoReturn:
-    raise BootstrapIdentityTeardownEvidenceFailure(code) from None
+def _fail(
+    code: str,
+    failure: type[RuntimeError] = BootstrapIdentityTeardownEvidenceFailure,
+) -> NoReturn:
+    raise failure(code) from None
 
 
-def _canonical(value: Any) -> bytes:
+def _canonical(
+    value: Any,
+    *,
+    dumps: Callable[..., str] = json.dumps,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> bytes:
     try:
-        return json.dumps(
+        return dumps(
             value,
             allow_nan=False,
             ensure_ascii=True,
@@ -97,11 +105,11 @@ def _canonical(value: Any) -> bytes:
             sort_keys=True,
         ).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
-        _fail("bootstrap_identity_teardown_evidence.json_invalid")
+        fail("bootstrap_identity_teardown_evidence.json_invalid")
 
 
-def _digest(value: bytes) -> str:
-    return f"sha256:{hashlib.sha256(value).hexdigest()}"
+def _digest(value: bytes, sha256: Callable[..., Any] = hashlib.sha256) -> str:
+    return f"sha256:{sha256(value).hexdigest()}"
 
 
 def _pretty_file_digest(value: Any) -> str:
@@ -467,6 +475,9 @@ def _read_policy(
     read_checkout_file: Callable[..., bytes] = offline.read_checkout_file,
     load_json_bytes: Callable[..., Any] = offline.load_json_bytes,
     validate_policy: Callable[[Any], dict[str, Any]] = _validate_policy,
+    sha256: Callable[..., Any] = hashlib.sha256,
+    compare_digest: Callable[[str, str], bool] = hmac.compare_digest,
+    fail: Callable[[str], NoReturn] = _fail,
 ) -> tuple[dict[str, Any], bytes]:
     try:
         raw = read_checkout_file(
@@ -474,8 +485,8 @@ def _read_policy(
             label="bootstrap identity teardown evidence policy",
             maximum_bytes=MAXIMUM_POLICY_BYTES,
         )
-        if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), policy_sha256):
-            _fail("bootstrap_identity_teardown_evidence.policy_invalid")
+        if not compare_digest(sha256(raw).hexdigest(), policy_sha256):
+            fail("bootstrap_identity_teardown_evidence.policy_invalid")
         parsed = load_json_bytes(
             raw, label="bootstrap identity teardown evidence policy"
         )
@@ -483,7 +494,7 @@ def _read_policy(
     except BootstrapIdentityTeardownEvidenceFailure:
         raise
     except Exception:
-        _fail("bootstrap_identity_teardown_evidence.policy_invalid")
+        fail("bootstrap_identity_teardown_evidence.policy_invalid")
 
 
 def load_bootstrap_identity_teardown_evidence_policy() -> dict[str, Any]:
@@ -600,6 +611,7 @@ def _validated_candidate(
     binding_material: Callable[..., dict[str, Any]] = _binding_material,
     canonical: Callable[[Any], bytes] = _canonical,
     digest: Callable[[bytes], str] = _digest,
+    fail: Callable[[str], NoReturn] = _fail,
     kind: str = KIND,
     claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
     public_fields: tuple[str, ...] = PUBLIC_FIELDS,
@@ -611,14 +623,14 @@ def _validated_candidate(
         "bootstrap_identity_teardown_evidence.policy_invalid",
     )
     if before < completed:
-        _fail("bootstrap_identity_teardown_evidence.evidence_from_future")
+        fail("bootstrap_identity_teardown_evidence.evidence_from_future")
     try:
         validate_evidence_directory(evidence_directory, document)
     except evidence_failure as error:
-        _fail(str(error))
+        fail(str(error))
     after = trusted_now(clock)
     if after < before:
-        _fail("bootstrap_identity_teardown_evidence.clock_regressed")
+        fail("bootstrap_identity_teardown_evidence.clock_regressed")
     evidence_digests = document["evidence"]["files"]
     material = binding_material(
         document,
@@ -640,7 +652,7 @@ def _validated_candidate(
         **dict(claims),
     }
     if tuple(values) != public_fields:
-        _fail("bootstrap_identity_teardown_evidence.output_invalid")
+        fail("bootstrap_identity_teardown_evidence.output_invalid")
     return (
         values,
         tuple(document["target"].items()),
@@ -672,7 +684,15 @@ def _build_provenance(
     provenance_domain: str = PROVENANCE_DOMAIN,
     seal: object = _SEAL,
 ) -> tuple[Callable[..., Any], Callable[..., bool]]:
-    key = os.urandom(32)
+    random_bytes = os.urandom
+    process_id = os.getpid
+    hmac_new = hmac.new
+    compare_digest = hmac.compare_digest
+    sha256 = hashlib.sha256
+    datetime_type = datetime
+    utc = UTC
+    zero_offset = timedelta(0)
+    key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
     issued: weakref.WeakKeyDictionary[
         AuthenticatedBootstrapIdentityTeardownEvidence, tuple[int, bytes]
@@ -685,10 +705,10 @@ def _build_provenance(
         encoded_public: list[dict[str, Any]] = []
         for name in public_fields:
             item = getattr(value, name)
-            if type(item) is datetime:
+            if type(item) is datetime_type:
                 if (
-                    item.tzinfo is not UTC
-                    or item.utcoffset() != timedelta(0)
+                    item.tzinfo is not utc
+                    or item.utcoffset() != zero_offset
                     or item.microsecond
                     or item.fold
                 ):
@@ -735,13 +755,13 @@ def _build_provenance(
         material = canonical(
             {
                 "domain": provenance_domain,
-                "pid": os.getpid(),
+                "pid": process_id(),
                 "object_identity": id(value),
-                "snapshot_sha256": hashlib.sha256(expected_snapshot).hexdigest(),
+                "snapshot_sha256": sha256(expected_snapshot).hexdigest(),
                 "seal_identity": id(seal),
             }
         )
-        return hmac.new(key, material, hashlib.sha256).hexdigest()
+        return hmac_new(key, material, sha256).hexdigest()
 
     def verify(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bool:
         try:
@@ -751,12 +771,10 @@ def _build_provenance(
             issued_pid, expected_snapshot = record
             current_snapshot = snapshot(value)
             return (
-                issued_pid == os.getpid()
-                and hmac.compare_digest(current_snapshot, expected_snapshot)
+                issued_pid == process_id()
+                and compare_digest(current_snapshot, expected_snapshot)
                 and type(value._proof_sha256) is str
-                and hmac.compare_digest(
-                    value._proof_sha256, proof(value, expected_snapshot)
-                )
+                and compare_digest(value._proof_sha256, proof(value, expected_snapshot))
             )
         except Exception:
             return False
@@ -786,6 +804,7 @@ def _build_provenance(
             binding_material=binding_material,
             canonical=canonical,
             digest=digest,
+            fail=fail,
             kind=kind,
             claims=claims,
             public_fields=public_fields,
@@ -804,7 +823,7 @@ def _build_provenance(
             object.__setattr__(value, name, item)
         expected_snapshot = snapshot(value)
         object.__setattr__(value, "_proof_sha256", proof(value, expected_snapshot))
-        issued[value] = (os.getpid(), expected_snapshot)
+        issued[value] = (process_id(), expected_snapshot)
         if not is_authenticated(value):
             issued.pop(value, None)
             fail("bootstrap_identity_teardown_evidence.output_invalid")

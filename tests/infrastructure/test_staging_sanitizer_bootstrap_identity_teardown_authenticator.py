@@ -9,6 +9,7 @@ import pickle
 import weakref
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
@@ -590,6 +591,7 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
     )
 
     monkeypatch.setattr(auth, "_SEAL", object())
+    monkeypatch.setattr(auth, "_fail", lambda _code: None)
     monkeypatch.setattr(
         auth,
         "_validated_candidate",
@@ -610,6 +612,29 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
         auth.authenticate_bootstrap_identity_teardown_evidence(
             evidence_directory=directory / "missing"
         )
+
+    real_hmac = auth.hmac
+    real_hashlib = auth.hashlib
+    monkeypatch.setattr(auth, "datetime", object())
+    monkeypatch.setattr(auth, "UTC", object())
+    monkeypatch.setattr(auth, "timedelta", object())
+    monkeypatch.setattr(
+        auth,
+        "hashlib",
+        SimpleNamespace(
+            sha256=lambda *_args: pytest.fail("mutable hashlib global was invoked")
+        ),
+    )
+    assert value._is_authenticated()
+    monkeypatch.setattr(auth, "hashlib", SimpleNamespace(sha256=real_hashlib.sha256))
+    monkeypatch.setattr(
+        auth,
+        "hmac",
+        SimpleNamespace(new=real_hmac.new, compare_digest=lambda *_args: True),
+    )
+    assert value._is_authenticated()
+    object.__setattr__(value, "executable", True)
+    assert not value._is_authenticated()
 
     forged = object.__new__(auth.AuthenticatedBootstrapIdentityTeardownEvidence)
     for name in (*auth.PUBLIC_FIELDS, *auth.PRIVATE_FIELDS):
@@ -662,12 +687,14 @@ def test_authenticated_value_does_not_survive_fork(
     value = auth.authenticate_bootstrap_identity_teardown_evidence(
         evidence_directory=directory
     )
+    parent_pid = os.getpid()
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
         os.close(read_fd)
         exit_code = 0
         try:
+            auth.os.getpid = lambda: parent_pid
             os.write(write_fd, b"1" if value._is_authenticated() else b"0")
         except BaseException:
             exit_code = 2
