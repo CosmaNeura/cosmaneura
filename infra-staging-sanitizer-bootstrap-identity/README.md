@@ -60,8 +60,10 @@ founder. An immediate second read-only authority/attachment sweep is required
 before that apply; any changed state invalidates the plan and evidence.
 
 The existing creation-plan verifier cannot authorize teardown and must not be
-used for this plan. The teardown-specific validator is mandatory: it binds the
-saved archive to exact protected source, the isolated backend tuple, lineage
+used for this plan. The teardown-specific generator/validator is mandatory: it
+initializes the exact backend and creates the full-refresh saved plan in the
+same fresh execution directory before binding the archive to protected source,
+the isolated backend tuple, lineage
 `a0c8b939-2fb2-0604-3e70-d925aeee5950` at serial 2, exact UAMI IDs/tags,
 complete outputs, and exactly one UAMI delete plus one guard update. It rejects
 targeted plans because they omit the
@@ -69,7 +71,13 @@ complete action or output contract. Its receipt remains non-authoritative with
 `apply_authorized=false`; the founder-only apply decision remains separate. The
 spent creation plan must never be reused for teardown.
 
-Pass the mode-0600 `.terraform/terraform.tfstate` from the same initialized
-execution data directory as `--backend-metadata`; any backend coordinate
-override or nonempty credential setting is rejected and its digest is included
-in the receipt.
+Pass only a new protected plan path, a new sibling execution-data directory,
+and the exact protected `master` SHA. There is no external-plan validation mode.
+Any backend coordinate override or nonempty credential setting is rejected,
+and the exact backend-metadata digest is included in the receipt.
+
+```sh
+python scripts/validate_staging_sanitizer_bootstrap_identity_teardown_plan.py \
+  --saved-plan "$RUN/teardown.tfplan" --execution-data-dir "$RUN/tfdata" \
+  --expected-source-commit "$EXACT_MASTER_SHA"
+```

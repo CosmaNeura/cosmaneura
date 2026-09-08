@@ -52,6 +52,9 @@ def _source_snapshot() -> Any:
         str(SCRIPT.relative_to(ROOT)): SCRIPT.read_bytes(),
         str(TEARDOWN_SCRIPT.relative_to(ROOT)): TEARDOWN_SCRIPT.read_bytes(),
         str(
+            validator.RECOVERY_PLAN_HELPERS_PATH.relative_to(ROOT)
+        ): validator.RECOVERY_PLAN_HELPERS_PATH.read_bytes(),
+        str(
             validator.RUNTIME_PATH.relative_to(ROOT)
         ): validator.RUNTIME_PATH.read_bytes(),
         str(
@@ -675,6 +678,7 @@ def test_git_reader_allowlist_covers_only_required_source_reads() -> None:
         for path in (
             validator.VALIDATOR_PATH,
             validator.TEARDOWN_VALIDATOR_PATH,
+            validator.RECOVERY_PLAN_HELPERS_PATH,
             validator.RUNTIME_PATH,
             validator.DECODER_PATH,
         )

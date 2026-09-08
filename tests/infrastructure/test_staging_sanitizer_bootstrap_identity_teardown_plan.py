@@ -478,44 +478,6 @@ def test_saved_plan_digest_is_exact() -> None:
         )
 
 
-def test_invalid_archive_is_rejected_before_decoder(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    tmp_path.chmod(0o700)
-    plan = tmp_path / "teardown.tfplan"
-    plan.write_bytes(b"not-a-plan-archive")
-    plan.chmod(0o400)
-    backend = tmp_path / "terraform.tfstate"
-    backend.write_text(
-        json.dumps(
-            {
-                "backend": {
-                    "type": "azurerm",
-                    "config": dict(validator.EXPECTED_BACKEND_CONFIG),
-                }
-            }
-        )
-    )
-    backend.chmod(0o600)
-    monkeypatch.setattr(
-        validator.base, "_source_snapshot", lambda _commit: _source_snapshot()
-    )
-    monkeypatch.setattr(
-        validator.base,
-        "_decode_saved_plan",
-        lambda *_args, **_kwargs: pytest.fail("decoder must not receive bad archive"),
-    )
-
-    with pytest.raises(validator.BootstrapPlanError, match="archive"):
-        validator.validate_saved_plan(
-            saved_plan=plan,
-            provider_package=tmp_path,
-            backend_metadata=backend,
-            expected_saved_plan_sha256=hashlib.sha256(plan.read_bytes()).hexdigest(),
-            expected_source_commit="a" * 40,
-        )
-
-
 def test_backend_metadata_rejects_redirects_and_credentials() -> None:
     config = {**validator.EXPECTED_BACKEND_CONFIG, "access_key": None}
     assert validator._validate_backend_metadata(

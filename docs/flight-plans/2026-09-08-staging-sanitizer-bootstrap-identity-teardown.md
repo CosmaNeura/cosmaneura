@@ -64,8 +64,10 @@ and `a846cda81c7bd0e7c1cff0caace8232ebbc9903ddb3f8608ccdf695fee5b5653`.
 Neither artifact is a live or apply-authorized plan; every local plan is marked
 never-apply and must never be used against Azure.
 
-The teardown-specific saved-plan validator is the mandatory execution gate.
-It decodes with the pinned OpenTofu and AzureRM binaries and requires the exact
+The teardown-specific plan generator/validator is the mandatory execution gate.
+It initializes the exact AzureRM backend, creates the sole full-refresh plan in
+the same fresh locked execution directory, then decodes with the pinned OpenTofu
+and AzureRM binaries. It requires the exact
 protected source archive, backend tuple, lineage `a0c8b939-2fb2-0604-3e70-d925aeee5950`,
 serial 2, UAMI resource/client/principal/tenant IDs and tags, guard state,
 variables, checks, full output transition, and the sole action set of one UAMI
@@ -76,11 +78,11 @@ receipt difference is an abort.
 After merge, the founder may prepare a fresh saved plan from exact protected
 `master` and the isolated backend. The plan must show only destruction of the
 exact UAMI, an in-place guard-tombstone update, and the expected output
-transition. Run
+transition. Run only
 `scripts/validate_staging_sanitizer_bootstrap_identity_teardown_plan.py`
-against that protected 0400 saved plan, its exact SHA-256, the exact merged
-`master` SHA, the pinned provider package, and the mode-0600 backend metadata
-file from the same initialized execution data directory. A fresh read-only sweep must
+with a new plan path, a new sibling execution-data directory, and the exact
+merged `master` SHA; it creates the protected 0400 saved plan only after the
+same-process backend, state, source, provider, and plan checks pass. A fresh read-only sweep must
 again prove no federation, RBAC, job attachment, PostgreSQL administrator
 binding, or state change immediately before apply. The saved plan, validator
 receipt, and fresh evidence require independent review. Agents do not apply it.

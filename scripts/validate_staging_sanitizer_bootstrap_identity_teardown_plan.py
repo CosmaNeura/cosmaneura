@@ -7,14 +7,17 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 try:
+    from scripts import validate_staging_rehearsal_base_recovery_plan as recovery
     from scripts import validate_staging_sanitizer_bootstrap_identity_plan as base
 except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
+    import validate_staging_rehearsal_base_recovery_plan as recovery
     import validate_staging_sanitizer_bootstrap_identity_plan as base
 
 BootstrapPlanError = base.BootstrapPlanError
@@ -34,11 +37,16 @@ EXPECTED_RESOURCE_ID = (
     f"{base.EXPECTED_RESOURCE_GROUP}/providers/Microsoft.ManagedIdentity/"
     f"userAssignedIdentities/{base.EXPECTED_IDENTITY_NAME}"
 )
-EXPECTED_BACKEND_CONFIG: Mapping[str, str] = {
+EXPECTED_BACKEND_CONFIG: Mapping[str, Any] = {
     "resource_group_name": "cosmaneura-tfstate",
     "storage_account_name": "cosmaneuratfstate",
     "container_name": "cosmaneura-tfstate",
     "key": "staging-sanitizer-bootstrap-identity.tfstate",
+    "subscription_id": base.EXPECTED_SUBSCRIPTION_ID,
+    "tenant_id": base.EXPECTED_TENANT_ID,
+    "environment": "public",
+    "use_azuread_auth": True,
+    "use_cli": True,
 }
 EXPECTED_VARIABLES = frozenset(
     {
@@ -806,65 +814,118 @@ def _build_receipt(
     }
 
 
-def validate_saved_plan(
-    *,
-    saved_plan: Path,
-    provider_package: Path,
-    backend_metadata: Path,
-    expected_saved_plan_sha256: str,
-    expected_source_commit: str,
+def create_and_validate_teardown_plan(
+    *, saved_plan: Path, execution_data_dir: Path, expected_source_commit: str
 ) -> Mapping[str, Any]:
-    if re.fullmatch(r"[0-9a-f]{64}", expected_saved_plan_sha256) is None:
-        raise BootstrapPlanError("expected saved teardown-plan digest is invalid")
-    saved_plan_bytes = base._read_protected_file(
-        saved_plan,
-        label="saved teardown plan",
-        maximum_bytes=base.MAXIMUM_ARTIFACT_BYTES,
-    )
-    if base._sha256_bytes(saved_plan_bytes) != expected_saved_plan_sha256:
-        raise BootstrapPlanError("saved teardown plan digest does not match evidence")
-    source_before = base._source_snapshot(expected_source_commit)
-    backend_before = base._read_protected_file(
-        backend_metadata, label="backend metadata", required_mode=0o600
-    )
-    backend_metadata_sha256 = _validate_backend_metadata(backend_before)
-    archive = _validate_archive(
-        saved_plan_bytes=saved_plan_bytes,
-        expected_saved_plan_sha256=expected_saved_plan_sha256,
-        source=source_before,
-    )
-    decoded = base._decode_saved_plan(
-        saved_plan_bytes, source=source_before, provider_package=provider_package
-    )
-    receipt = _build_receipt(
-        saved_plan_bytes=saved_plan_bytes,
-        source=source_before,
-        archive=archive,
-        plan_json_bytes=decoded.plan_json,
-        tofu_sha256=decoded.tofu_sha256,
-        provider_sha256=decoded.provider_sha256,
-        provider_package_h1=decoded.provider_package_h1,
-        backend_metadata_sha256=backend_metadata_sha256,
-        now=_utc_now(),
-    )
-    if base._source_snapshot(expected_source_commit) != source_before:
-        raise BootstrapPlanError("teardown plan source changed during validation")
-    if (
-        base._read_protected_file(
-            backend_metadata, label="backend metadata", required_mode=0o600
+    try:
+        if saved_plan.exists() or execution_data_dir.parent != saved_plan.parent:
+            raise BootstrapPlanError(
+                "saved plan must be absent beside its fresh execution directory"
+            )
+        recovery._require_protected_directory(
+            saved_plan.parent, label="saved plan directory"
         )
-        != backend_before
-    ):
-        raise BootstrapPlanError("backend metadata changed during validation")
-    return receipt
+        recovery._create_protected_directory(
+            execution_data_dir, label="execution data directory"
+        )
+        source = base._source_snapshot(expected_source_commit)
+        tofu = recovery._resolve_and_verify_tofu()
+        if (
+            recovery._executable_sha256(tofu, label="OpenTofu")
+            != base.EXPECTED_TOFU_SHA256
+        ):
+            raise BootstrapPlanError("the OpenTofu executable digest is not pinned")
+        init = recovery._run_process(
+            [
+                str(tofu),
+                f"-chdir={base.IDENTITY_ROOT}",
+                "init",
+                "-backend=true",
+                "-input=false",
+                "-lockfile=readonly",
+                "-reconfigure",
+                *(
+                    f"-backend-config={key}={str(value).lower()}"
+                    for key, value in EXPECTED_BACKEND_CONFIG.items()
+                ),
+            ],
+            cwd=base.REPOSITORY_ROOT,
+            timeout_seconds=300,
+            data_dir=execution_data_dir,
+        )
+        if init.returncode != 0:
+            raise BootstrapPlanError(
+                "the exact isolated backend could not be initialized"
+            )
+        backend_path = execution_data_dir / "terraform.tfstate"
+        backend_before = base._read_protected_file(
+            backend_path, label="backend metadata", required_mode=0o600
+        )
+        backend_sha256 = _validate_backend_metadata(backend_before)
+        with tempfile.TemporaryDirectory(
+            prefix=".bootstrap-teardown-", dir=saved_plan.parent
+        ) as temporary:
+            candidate = Path(temporary) / "candidate.tfplan"
+            result = recovery._run_process(
+                [
+                    str(tofu),
+                    f"-chdir={base.IDENTITY_ROOT}",
+                    "plan",
+                    "-input=false",
+                    "-lock=true",
+                    "-lock-timeout=5m",
+                    "-refresh=true",
+                    "-detailed-exitcode",
+                    "-no-color",
+                    f"-out={candidate}",
+                    "-var=authorize_sanitizer_bootstrap_identity_teardown=true",
+                    f"-var=sanitizer_bootstrap_teardown_rehearsal_id={EXPECTED_REHEARSAL_ID}",
+                    f"-var=sanitizer_bootstrap_teardown_evidence_sha256={EXPECTED_EVIDENCE_SHA256}",
+                ],  # fmt: skip
+                cwd=base.REPOSITORY_ROOT,
+                timeout_seconds=900,
+                data_dir=execution_data_dir,
+            )
+            if result.returncode != 2:
+                raise BootstrapPlanError("the fixed full-refresh teardown plan failed")
+            plan_bytes = recovery._read_protected_file(
+                candidate, label="generated teardown plan", required_mode=0o600
+            )
+        archive = _validate_archive(
+            saved_plan_bytes=plan_bytes,
+            expected_saved_plan_sha256=base._sha256_bytes(plan_bytes),
+            source=source,
+        )
+        provider = (
+            execution_data_dir
+            / "providers/registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64"
+        )
+        decoded = base._decode_saved_plan(
+            plan_bytes, source=source, provider_package=provider
+        )
+        receipt = _build_receipt(
+            saved_plan_bytes=plan_bytes, source=source, archive=archive,
+            plan_json_bytes=decoded.plan_json, tofu_sha256=decoded.tofu_sha256,
+            provider_sha256=decoded.provider_sha256,
+            provider_package_h1=decoded.provider_package_h1,
+            backend_metadata_sha256=backend_sha256, now=_utc_now(),
+        )  # fmt: skip
+        if base._source_snapshot(expected_source_commit) != source:
+            raise BootstrapPlanError("teardown plan source changed during generation")
+        if base._read_protected_file(backend_path, label="backend metadata", required_mode=0o600) != backend_before:  # fmt: skip
+            raise BootstrapPlanError("backend metadata changed during plan generation")
+        recovery._write_protected_file(
+            saved_plan, plan_bytes, label="saved teardown plan"
+        )
+        return {**receipt, "execution_data_dir": str(execution_data_dir)}
+    except recovery.RecoveryPlanError as exc:
+        raise BootstrapPlanError(str(exc)) from exc
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--saved-plan", required=True, type=Path)
-    parser.add_argument("--provider-package-dir", required=True, type=Path)
-    parser.add_argument("--backend-metadata", required=True, type=Path)
-    parser.add_argument("--expected-saved-plan-sha256", required=True)
+    parser.add_argument("--execution-data-dir", required=True, type=Path)
     parser.add_argument("--expected-source-commit", required=True)
     return parser
 
@@ -872,11 +933,9 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        receipt = validate_saved_plan(
+        receipt = create_and_validate_teardown_plan(
             saved_plan=args.saved_plan,
-            provider_package=args.provider_package_dir,
-            backend_metadata=args.backend_metadata,
-            expected_saved_plan_sha256=args.expected_saved_plan_sha256,
+            execution_data_dir=args.execution_data_dir,
             expected_source_commit=args.expected_source_commit,
         )
     except BootstrapPlanError as exc:

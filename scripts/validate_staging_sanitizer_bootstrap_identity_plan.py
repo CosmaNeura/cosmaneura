@@ -36,6 +36,9 @@ TEARDOWN_VALIDATOR_PATH = (
     REPOSITORY_ROOT
     / "scripts/validate_staging_sanitizer_bootstrap_identity_teardown_plan.py"
 )
+RECOVERY_PLAN_HELPERS_PATH = (
+    REPOSITORY_ROOT / "scripts/validate_staging_rehearsal_base_recovery_plan.py"
+)
 RUNTIME_PATH = REPOSITORY_ROOT / "scripts/staging_offline_plan_runtime.py"
 DECODER_PATH = REPOSITORY_ROOT / "scripts/staging_offline_tofu_decoder.py"
 
@@ -211,6 +214,7 @@ def _git_arguments_are_read_only(arguments: tuple[str, ...]) -> bool:
     support_paths = (
         str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
         str(TEARDOWN_VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
+        str(RECOVERY_PLAN_HELPERS_PATH.relative_to(REPOSITORY_ROOT)),
         str(RUNTIME_PATH.relative_to(REPOSITORY_ROOT)),
         str(DECODER_PATH.relative_to(REPOSITORY_ROOT)),
     )
@@ -335,6 +339,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
         str(IDENTITY_ROOT.relative_to(REPOSITORY_ROOT)),
         str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
         str(TEARDOWN_VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
+        str(RECOVERY_PLAN_HELPERS_PATH.relative_to(REPOSITORY_ROOT)),
         str(RUNTIME_PATH.relative_to(REPOSITORY_ROOT)),
         str(DECODER_PATH.relative_to(REPOSITORY_ROOT)),
     )
@@ -373,6 +378,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     for support_path, label in (
         (VALIDATOR_PATH, "bootstrap plan validator"),
         (TEARDOWN_VALIDATOR_PATH, "bootstrap teardown plan validator"),
+        (RECOVERY_PLAN_HELPERS_PATH, "recovery plan process helpers"),
         (RUNTIME_PATH, "offline plan runtime"),
         (DECODER_PATH, "offline OpenTofu decoder"),
     ):
