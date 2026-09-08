@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
+import math
 import os
-import shutil
 import stat
+import sys
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 MAX_FILE_BYTES = 128 * 1024 * 1024
+MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024
 
 
 class OfflineRuntimeError(ValueError):
@@ -48,12 +51,20 @@ def reject_nonfinite_json(_value: str) -> None:
     raise OfflineRuntimeError("JSON contains a non-finite number")
 
 
+def parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise OfflineRuntimeError("JSON contains a non-finite number")
+    return parsed
+
+
 def load_json_bytes(value: bytes, *, label: str) -> Mapping[str, Any]:
     try:
         decoded = json.loads(
             value,
             object_pairs_hook=unique_json_object,
             parse_constant=reject_nonfinite_json,
+            parse_float=parse_finite_json_float,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise OfflineRuntimeError(f"{label} is not valid JSON") from exc
@@ -233,21 +244,34 @@ def _resolve_executable_source(path: Path, *, label: str) -> Path:
     return resolved
 
 
-def executable_sha256(path: Path, *, label: str) -> str:
+def executable_sha256(
+    path: Path, *, label: str, maximum_bytes: int = MAX_EXECUTABLE_BYTES
+) -> str:
     descriptor: int | None = None
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
         before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode) or not before.st_mode & 0o111:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or not before.st_mode & 0o111
+            or not 0 < before.st_size <= maximum_bytes
+        ):
             raise OfflineRuntimeError(f"the {label} executable is invalid")
         digest = hashlib.sha256()
+        total = 0
         while chunk := os.read(descriptor, 1024 * 1024):
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise OfflineRuntimeError(f"the {label} executable is too large")
             digest.update(chunk)
         after = os.fstat(descriptor)
-        if _identity(before) != _identity(after):
+        if total != before.st_size or _identity(before) != _identity(after):
             raise OfflineRuntimeError(f"the {label} executable changed while hashed")
         return digest.hexdigest()
     except OSError as exc:
@@ -282,7 +306,12 @@ def verify_private_executable(path: Path, *, expected: str, label: str) -> str:
 
 
 def copy_pinned_executable(
-    source: Path, destination: Path, *, expected: str, label: str
+    source: Path,
+    destination: Path,
+    *,
+    expected: str,
+    label: str,
+    maximum_bytes: int = MAX_EXECUTABLE_BYTES,
 ) -> Path:
     if len(expected) != 64 or any(
         character not in "0123456789abcdef" for character in expected
@@ -297,11 +326,25 @@ def copy_pinned_executable(
     created = False
     complete = False
     try:
+        source_path_metadata = source.stat()
         source_fd = os.open(
             source,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
         source_before = os.fstat(source_fd)
+        if (
+            _identity(source_path_metadata) != _identity(source_before)
+            or not stat.S_ISREG(source_before.st_mode)
+            or source_before.st_uid not in {0, os.geteuid()}
+            or source_before.st_nlink != 1
+            or stat.S_IMODE(source_before.st_mode) & 0o022
+            or not source_before.st_mode & 0o111
+            or not 0 < source_before.st_size <= maximum_bytes
+        ):
+            raise OfflineRuntimeError(f"the {label} source is not stable")
         destination_fd = os.open(
             destination.name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
@@ -310,14 +353,24 @@ def copy_pinned_executable(
         )
         created = True
         digest = hashlib.sha256()
+        total = 0
         while chunk := os.read(source_fd, 1024 * 1024):
+            total += len(chunk)
+            if total > maximum_bytes:
+                raise OfflineRuntimeError(f"the {label} executable is too large")
             digest.update(chunk)
             offset = 0
             while offset < len(chunk):
                 offset += os.write(destination_fd, chunk[offset:])
         os.fsync(destination_fd)
         os.fchmod(destination_fd, 0o500)
-        if _identity(source_before) != _identity(os.fstat(source_fd)):
+        source_after = os.fstat(source_fd)
+        linked_after = os.stat(source, follow_symlinks=False)
+        if (
+            total != source_before.st_size
+            or _identity(source_before) != _identity(source_after)
+            or _identity(source_after) != _identity(linked_after)
+        ):
             raise OfflineRuntimeError(f"the {label} source changed while copied")
         if digest.hexdigest() != expected:
             raise OfflineRuntimeError(f"the {label} executable digest is not pinned")
@@ -339,6 +392,103 @@ def copy_pinned_executable(
         os.close(parent)
     verify_private_executable(destination, expected=expected, label=label)
     return destination
+
+
+def _rename_directory_no_replace(
+    *, parent: int, source_name: str, destination_name: str
+) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if sys.platform == "darwin":
+        function_name = "renameatx_np"
+        no_replace_flag = 0x00000004  # RENAME_EXCL
+    elif sys.platform.startswith("linux"):
+        function_name = "renameat2"
+        no_replace_flag = 1  # RENAME_NOREPLACE
+    else:
+        raise OfflineRuntimeError("atomic no-replace source publication is unsupported")
+    try:
+        rename = getattr(libc, function_name)
+    except AttributeError as exc:
+        raise OfflineRuntimeError(
+            "atomic no-replace source publication is unavailable"
+        ) from exc
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    if (
+        rename(
+            parent,
+            os.fsencode(source_name),
+            parent,
+            os.fsencode(destination_name),
+            no_replace_flag,
+        )
+        != 0
+    ):
+        error_number = ctypes.get_errno()
+        error = OSError(error_number, os.strerror(error_number), destination_name)
+        raise OfflineRuntimeError(
+            "decoder source could not be published without replacement"
+        ) from error
+
+
+def _remove_flat_private_directory(
+    *, parent: int, name: str, allowed_members: frozenset[str], require_exact: bool
+) -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_DIRECTORY", 0),
+            dir_fd=parent,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise OfflineRuntimeError("decoder source cleanup target is not private")
+        observed = frozenset(os.listdir(descriptor))
+        if (
+            require_exact
+            and observed != allowed_members
+            or not observed.issubset(allowed_members)
+        ):
+            raise OfflineRuntimeError("decoder source cleanup target is not exact")
+        for member in sorted(observed):
+            member_metadata = os.stat(member, dir_fd=descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(member_metadata.st_mode)
+                or member_metadata.st_uid != os.geteuid()
+                or member_metadata.st_nlink != 1
+                or stat.S_IMODE(member_metadata.st_mode) != 0o400
+            ):
+                raise OfflineRuntimeError("decoder source cleanup member is not exact")
+        for member in sorted(observed):
+            os.unlink(member, dir_fd=descriptor)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.rmdir(name, dir_fd=parent)
+        os.fsync(parent)
+    except (OSError, OfflineRuntimeError) as exc:
+        if isinstance(exc, OfflineRuntimeError):
+            raise
+        raise OfflineRuntimeError(
+            "decoder source cleanup could not be confirmed"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
@@ -377,21 +527,44 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
         os.fsync(target)
         os.close(target)
         target = None
-        os.rename(temporary.name, directory.name, src_dir_fd=parent, dst_dir_fd=parent)
+        _rename_directory_no_replace(
+            parent=parent,
+            source_name=temporary.name,
+            destination_name=directory.name,
+        )
         published = True
         temporary = None
         os.fsync(parent)
     except (OSError, OfflineRuntimeError) as exc:
-        if published:
-            shutil.rmtree(directory, ignore_errors=True)
+        if target is not None:
+            os.close(target)
+            target = None
+        try:
+            if published:
+                _remove_flat_private_directory(
+                    parent=parent,
+                    name=directory.name,
+                    allowed_members=frozenset(files),
+                    require_exact=True,
+                )
+            elif temporary is not None:
+                _remove_flat_private_directory(
+                    parent=parent,
+                    name=temporary.name,
+                    allowed_members=frozenset(files),
+                    require_exact=False,
+                )
+                temporary = None
+        except OfflineRuntimeError as cleanup_error:
+            raise OfflineRuntimeError(
+                "decoder source materialization failed and cleanup could not be confirmed"
+            ) from cleanup_error
         if isinstance(exc, OfflineRuntimeError):
             raise
         raise OfflineRuntimeError("decoder source could not be materialized") from exc
     finally:
         if target is not None:
             os.close(target)
-        if temporary is not None:
-            shutil.rmtree(temporary, ignore_errors=True)
         os.close(parent)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import stat
 from pathlib import Path
 
@@ -13,7 +14,7 @@ def test_json_and_canonical_hash_are_strict() -> None:
     assert runtime.canonical_file_set_sha256({"b": b"2", "a": b"1"}) == (
         runtime.canonical_file_set_sha256({"a": b"1", "b": b"2"})
     )
-    for value in (b'{"a":1,"a":2}', b'{"a":NaN}', b"[]"):
+    for value in (b'{"a":1,"a":2}', b'{"a":NaN}', b'{"a":1e9999}', b"[]"):
         with pytest.raises(runtime.OfflineRuntimeError):
             runtime.load_json_bytes(value, label="record")
 
@@ -94,6 +95,30 @@ def test_copy_rejects_unpinned_executable_without_leaving_output(
     assert not destination.exists()
 
 
+def test_executable_hash_rejects_fifo_and_copy_enforces_size_bound(
+    tmp_path: Path,
+) -> None:
+    fifo = tmp_path / "fifo"
+    os.mkfifo(fifo, mode=0o500)
+    with pytest.raises(runtime.OfflineRuntimeError, match="invalid"):
+        runtime.executable_sha256(fifo, label="FIFO")
+
+    source = tmp_path / "source"
+    source.write_bytes(b"#!/bin/sh\n")
+    source.chmod(0o500)
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    with pytest.raises(runtime.OfflineRuntimeError, match="not stable"):
+        runtime.copy_pinned_executable(
+            source,
+            private / "tool",
+            expected=runtime.sha256_bytes(source.read_bytes()),
+            label="tool",
+            maximum_bytes=4,
+        )
+    assert not (private / "tool").exists()
+
+
 def test_materialized_source_is_private_and_exact(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     source = tmp_path / "source"
@@ -105,6 +130,20 @@ def test_materialized_source_is_private_and_exact(tmp_path: Path) -> None:
     with pytest.raises(runtime.OfflineRuntimeError, match="member is invalid"):
         runtime.materialize_source(tmp_path / "bad", {"../escape": b"no"})
     assert not (tmp_path / "bad").exists()
+
+
+def test_materialized_source_never_replaces_existing_directory(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    source = tmp_path / "source"
+    source.mkdir(mode=0o700)
+    original_inode = source.stat().st_ino
+
+    with pytest.raises(runtime.OfflineRuntimeError, match="without replacement"):
+        runtime.materialize_source(source, {"main.tf": b"reviewed"})
+
+    assert source.stat().st_ino == original_inode
+    assert list(source.iterdir()) == []
+    assert list(tmp_path.iterdir()) == [source]
 
 
 def test_materialized_source_cleans_published_tree_when_parent_sync_fails(
