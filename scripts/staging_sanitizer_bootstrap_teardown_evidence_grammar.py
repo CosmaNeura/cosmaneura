@@ -36,44 +36,14 @@ REVIEW_BINDING_DOMAIN = (
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
-RESPONSE_FIELDS = {
-    "background",
-    "completed_at",
-    "content_filters",
-    "created_at",
-    "error",
-    "frequency_penalty",
-    "id",
-    "incomplete_details",
-    "instructions",
-    "max_output_tokens",
-    "max_tool_calls",
-    "metadata",
-    "model",
-    "moderation",
-    "object",
-    "output",
-    "parallel_tool_calls",
-    "presence_penalty",
-    "previous_response_id",
-    "prompt_cache_key",
-    "prompt_cache_retention",
-    "reasoning",
-    "safety_identifier",
-    "service_tier",
-    "status",
-    "store",
-    "temperature",
-    "text",
-    "tool_choice",
-    "tool_usage",
-    "tools",
-    "top_logprobs",
-    "top_p",
-    "truncation",
-    "usage",
-    "user",
-}
+RESPONSE_FIELDS: set[str] = set(
+    "background completed_at content_filters created_at error frequency_penalty id "
+    "incomplete_details instructions max_output_tokens max_tool_calls metadata model "
+    "moderation object output parallel_tool_calls presence_penalty previous_response_id "
+    "prompt_cache_key prompt_cache_retention reasoning safety_identifier service_tier "
+    "status store temperature text tool_choice tool_usage tools top_logprobs top_p "
+    "truncation usage user".split()
+)
 
 
 class EvidenceGrammarFailure(RuntimeError):
