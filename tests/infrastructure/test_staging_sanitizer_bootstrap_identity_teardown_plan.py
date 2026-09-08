@@ -116,8 +116,8 @@ def _raw_state(*, before_refresh: bool) -> dict[str, Any]:
     return {
         "version": 4,
         "terraform_version": validator.base.EXPECTED_TOFU_VERSION,
-        "serial": validator.EXPECTED_STATE_SERIAL,
-        "lineage": validator.EXPECTED_STATE_LINEAGE,
+        "serial": 0 if before_refresh else validator.EXPECTED_STATE_SERIAL,
+        "lineage": "" if before_refresh else validator.EXPECTED_STATE_LINEAGE,
         "outputs": outputs,
         "resources": resources,
         "check_results": None,
@@ -453,12 +453,28 @@ def test_security_relevant_plan_mutations_refuse(mutation: Any) -> None:
 def test_embedded_state_lineage_serial_and_uami_are_exact() -> None:
     for field, value in (
         ("lineage", "11111111-1111-4111-8111-111111111111"),
-        ("serial", validator.EXPECTED_STATE_SERIAL + 1),
+        ("serial", validator.EXPECTED_STATE_SERIAL),
     ):
         previous = _raw_state(before_refresh=True)
         previous[field] = value
         with pytest.raises(validator.BootstrapPlanError, match="lineage or serial"):
             _validate(previous=previous)
+
+    for field, value in (
+        ("lineage", ""),
+        ("serial", 0),
+    ):
+        refreshed = _raw_state(before_refresh=False)
+        refreshed[field] = value
+        with pytest.raises(validator.BootstrapPlanError, match="lineage or serial"):
+            _validate(refreshed=refreshed)
+
+    previous = _raw_state(before_refresh=True)
+    previous["resources"][1]["instances"][0]["attributes"]["client_id"] = (
+        "00000000-0000-0000-0000-000000000000"
+    )
+    with pytest.raises(validator.BootstrapPlanError, match="UAMI values"):
+        _validate(previous=previous)
 
     refreshed = _raw_state(before_refresh=False)
     refreshed["resources"][0]["instances"][0]["attributes"]["id"] = (
