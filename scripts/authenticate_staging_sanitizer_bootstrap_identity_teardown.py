@@ -94,6 +94,12 @@ def _canonical(
     value: Any,
     *,
     dumps: Callable[..., str] = json.dumps,
+    errors: tuple[type[BaseException], ...] = (
+        TypeError,
+        ValueError,
+        UnicodeEncodeError,
+        RecursionError,
+    ),
     fail: Callable[[str], NoReturn] = _fail,
 ) -> bytes:
     try:
@@ -104,7 +110,7 @@ def _canonical(
             separators=(",", ":"),
             sort_keys=True,
         ).encode("ascii")
-    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+    except errors:
         fail("bootstrap_identity_teardown_evidence.json_invalid")
 
 
@@ -117,75 +123,166 @@ def _pretty_file_digest(value: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _mapping(value: Any, fields: set[str], code: str) -> Mapping[str, Any]:
-    if type(value) is not dict or set(value) != fields:
-        _fail(code)
+def _mapping(
+    value: Any,
+    fields: set[str],
+    code: str,
+    type_of: Callable[[Any], type[Any]] = type,
+    dict_type: type[dict[Any, Any]] = dict,
+    to_set: Callable[[Any], set[Any]] = set,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> Mapping[str, Any]:
+    if type_of(value) is not dict_type or to_set(value) != fields:
+        fail(code)
     return value
 
 
-def _integer(value: Any, expected: int, code: str) -> None:
-    if type(value) is not int or value != expected:
-        _fail(code)
+def _integer(
+    value: Any,
+    expected: int,
+    code: str,
+    type_of: Callable[[Any], type[Any]] = type,
+    int_type: type[int] = int,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> None:
+    if type_of(value) is not int_type or value != expected:
+        fail(code)
 
 
-def _same_typed(value: Any, expected: Any) -> bool:
-    if type(value) is not type(expected):
-        return False
-    if type(expected) is dict:
-        return set(value) == set(expected) and all(
-            _same_typed(value[name], item) for name, item in expected.items()
-        )
-    if type(expected) is list:
-        return len(value) == len(expected) and all(
-            _same_typed(item, expected[index]) for index, item in enumerate(value)
-        )
-    return value == expected
+def _same_typed(
+    value: Any,
+    expected: Any,
+    type_of: Callable[[Any], type[Any]] = type,
+    dict_type: type[dict[Any, Any]] = dict,
+    list_type: type[list[Any]] = list,
+    to_set: Callable[[Any], set[Any]] = set,
+    pair_length: Callable[[Any], int] = len,
+    pairwise: Callable[..., Any] = zip,
+) -> bool:
+    pending = [(value, expected)]
+    while pending:
+        current, wanted = pending.pop()
+        if type_of(current) is not type_of(wanted):
+            return False
+        if type_of(wanted) is dict_type:
+            if to_set(current) != to_set(wanted):
+                return False
+            pending.extend((current[name], item) for name, item in wanted.items())
+        elif type_of(wanted) is list_type:
+            if pair_length(current) != pair_length(wanted):
+                return False
+            pending.extend(pairwise(current, wanted, strict=True))
+        elif current != wanted:
+            return False
+    return True
 
 
-def _exact_typed(value: Any, expected: Any, code: str) -> None:
-    if not _same_typed(value, expected):
-        _fail(code)
+def _exact_typed(
+    value: Any,
+    expected: Any,
+    code: str,
+    same_typed: Callable[[Any, Any], bool] = _same_typed,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> None:
+    if not same_typed(value, expected):
+        fail(code)
 
 
-def _matches(pattern: re.Pattern[str], value: Any) -> bool:
-    return type(value) is str and pattern.fullmatch(value) is not None
+def _matches(
+    pattern: re.Pattern[str],
+    value: Any,
+    type_of: Callable[[Any], type[Any]] = type,
+    str_type: type[str] = str,
+) -> bool:
+    return type_of(value) is str_type and pattern.fullmatch(value) is not None
 
 
-def _parse_utc(value: Any, code: str) -> datetime:
-    if type(value) is not str or UTC_RE.fullmatch(value) is None:
-        _fail(code)
+def _parse_utc(
+    value: Any,
+    code: str,
+    type_of: Callable[[Any], type[Any]] = type,
+    str_type: type[str] = str,
+    utc_pattern: re.Pattern[str] = UTC_RE,
+    parse: Callable[..., datetime] = datetime.strptime,
+    format_datetime: Callable[..., str] = datetime.strftime,
+    utc: Any = UTC,
+    value_error: type[ValueError] = ValueError,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> datetime:
+    if type_of(value) is not str_type or utc_pattern.fullmatch(value) is None:
+        fail(code)
     try:
-        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-    except ValueError:
-        _fail(code)
-    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
-        _fail(code)
+        parsed = parse(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=utc)
+    except value_error:
+        fail(code)
+    if format_datetime(parsed, "%Y-%m-%dT%H:%M:%SZ") != value:
+        fail(code)
     return parsed
 
 
-def _trusted_now(clock: Callable[[], datetime]) -> datetime:
+def _trusted_now(
+    clock: Callable[[], datetime],
+    type_of: Callable[[Any], type[Any]] = type,
+    datetime_type: type[datetime] = datetime,
+    utc: Any = UTC,
+    zero_offset: timedelta = timedelta(0),
+    base_error: type[Exception] = Exception,
+    fail: Callable[[str], NoReturn] = _fail,
+) -> datetime:
     try:
         value = clock()
-    except Exception:
-        _fail("bootstrap_identity_teardown_evidence.clock_invalid")
+    except base_error:
+        fail("bootstrap_identity_teardown_evidence.clock_invalid")
     if (
-        type(value) is not datetime
-        or value.tzinfo is not UTC
-        or value.utcoffset() != timedelta(0)
+        type_of(value) is not datetime_type
+        or value.tzinfo is not utc
+        or value.utcoffset() != zero_offset
         or value.microsecond
         or value.fold
     ):
-        _fail("bootstrap_identity_teardown_evidence.clock_invalid")
+        fail("bootstrap_identity_teardown_evidence.clock_invalid")
     return value
 
 
-def _utc_now() -> datetime:
-    return datetime.now(UTC).replace(microsecond=0)
+def _utc_now(
+    now: Callable[..., datetime] = datetime.now,
+    utc: Any = UTC,
+) -> datetime:
+    return now(utc).replace(microsecond=0)
 
 
-def _validate_policy(value: Any) -> dict[str, Any]:
+def _validate_policy(
+    value: Any,
+    mapping: Callable[[Any, set[str], str], Mapping[str, Any]] = _mapping,
+    integer: Callable[[Any, int, str], None] = _integer,
+    exact_typed: Callable[[Any, Any, str], None] = _exact_typed,
+    matches: Callable[[re.Pattern[str], Any], bool] = _matches,
+    parse_utc: Callable[[Any, str], datetime] = _parse_utc,
+    fail: Callable[[str], NoReturn] = _fail,
+    type_of: Callable[[Any], type[Any]] = type,
+    to_set: Callable[[Any], set[Any]] = set,
+    to_list: Callable[[Any], list[Any]] = list,
+    dict_type: type[dict[Any, Any]] = dict,
+    str_type: type[str] = str,
+    int_type: type[int] = int,
+    any_true: Callable[[Any], bool] = any,
+    duration: Callable[..., timedelta] = timedelta,
+    claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
+    kind: str = KIND,
+    public_fields: tuple[str, ...] = PUBLIC_FIELDS,
+    private_fields: tuple[str, ...] = PRIVATE_FIELDS,
+    evidence_files: tuple[str, ...] = EVIDENCE_FILES,
+    evidence_file: str = EVIDENCE_FILE,
+    review_request_file: str = REVIEW_REQUEST_FILE,
+    review_response_file: str = REVIEW_RESPONSE_FILE,
+    digest_re: re.Pattern[str] = DIGEST_RE,
+    sha_re: re.Pattern[str] = SHA_RE,
+    uuid_re: re.Pattern[str] = UUID_RE,
+    maximum_file_bytes: int = offline.MAX_FILE_BYTES,
+    expected_review_binding: Callable[..., str] = grammar.expected_review_binding,
+) -> dict[str, Any]:
     code = "bootstrap_identity_teardown_evidence.policy_invalid"
-    document = _mapping(
+    document = mapping(
         value,
         {
             "schema_version",
@@ -204,7 +301,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    source = _mapping(
+    source = mapping(
         document["source"],
         {
             "repository",
@@ -219,7 +316,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    target = _mapping(
+    target = mapping(
         document["target"],
         {
             "subscription_id",
@@ -233,7 +330,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    evidence = _mapping(
+    evidence = mapping(
         document["evidence"],
         {
             "acceptance_mode",
@@ -246,7 +343,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    cleanup = _mapping(
+    cleanup = mapping(
         document["cleanup"],
         {
             "cleanup_not_after",
@@ -260,7 +357,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    state = _mapping(
+    state = mapping(
         document["state"],
         {
             "backend_key",
@@ -275,7 +372,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    authority = _mapping(
+    authority = mapping(
         document["authority"],
         {
             "identity_count",
@@ -289,7 +386,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    review = _mapping(
+    review = mapping(
         document["independent_review"],
         {
             "model",
@@ -306,7 +403,7 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         },
         code,
     )
-    output = _mapping(
+    output = mapping(
         document["output"],
         {
             "kind",
@@ -334,13 +431,13 @@ def _validate_policy(value: Any) -> dict[str, Any]:
             "activation.sanitizer_bootstrap_job_attachment_unavailable"
         ),
     }
-    claims = _mapping(document["claims"], set(CLAIMS), code)
-    status = _mapping(document["status"], set(expected_status), code)
+    claim_values = mapping(document["claims"], to_set(name for name, _ in claims), code)
+    status = mapping(document["status"], to_set(expected_status), code)
     files = evidence["files"]
-    _integer(document["schema_version"], 1, code)
-    _integer(state["pre_apply_serial"], 2, code)
-    _integer(state["post_apply_serial"], 3, code)
-    _integer(review["content_filter_end_offset"], 53_234, code)
+    integer(document["schema_version"], 1, code)
+    integer(state["pre_apply_serial"], 2, code)
+    integer(state["post_apply_serial"], 3, code)
+    integer(review["content_filter_end_offset"], 53_234, code)
     expected_authority = {
         "identity_count": 0,
         "direct_or_inherited_role_assignment_count": 0,
@@ -354,23 +451,23 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         "bootstrap_identity_postgres_administrator_count": 0,
     }
     for name, expected_value in expected_authority.items():
-        _exact_typed(authority[name], expected_value, code)
-    for name, expected_value in CLAIMS.items():
-        _exact_typed(claims[name], expected_value, code)
+        exact_typed(authority[name], expected_value, code)
+    for name, expected_value in claims:
+        exact_typed(claim_values[name], expected_value, code)
     for name, expected_value in expected_status.items():
-        _exact_typed(status[name], expected_value, code)
-    deadline = _parse_utc(cleanup["cleanup_not_after"], code)
-    started = _parse_utc(cleanup["evidence_started_at"], code)
-    completed = _parse_utc(cleanup["evidence_completed_at"], code)
+        exact_typed(status[name], expected_value, code)
+    deadline = parse_utc(cleanup["cleanup_not_after"], code)
+    started = parse_utc(cleanup["evidence_started_at"], code)
+    completed = parse_utc(cleanup["evidence_completed_at"], code)
     if (
         document["policy_id"]
         != "cosmaneura-staging-sanitizer-bootstrap-identity-teardown-evidence-v1"
         or document["closed_world"] is not True
         or source["repository"] != "CosmaNeura/cosmaneura"
         or source["protected_ref"] != "refs/heads/master"
-        or not _matches(SHA_RE, source["source_commit"])
-        or any(
-            not _matches(DIGEST_RE, source[name])
+        or not matches(sha_re, source["source_commit"])
+        or any_true(
+            not matches(digest_re, source[name])
             for name in (
                 "applied_plan_sha256",
                 "decoded_plan_sha256",
@@ -378,11 +475,11 @@ def _validate_policy(value: Any) -> dict[str, Any]:
                 "plan_review_response_sha256",
             )
         )
-        or type(source["plan_review_response_id"]) is not str
+        or type_of(source["plan_review_response_id"]) is not str_type
         or not source["plan_review_response_id"].startswith("resp_")
         or source["plan_review_verdict"] != "APPROVED FOR FOUNDER APPLY"
-        or any(
-            not _matches(UUID_RE, target[name])
+        or any_true(
+            not matches(uuid_re, target[name])
             for name in ("subscription_id", "tenant_id", "client_id", "principal_id")
         )
         or target["identity_name"] != "cosmaneura-staging-restore-bootstrap-job"
@@ -399,21 +496,21 @@ def _validate_policy(value: Any) -> dict[str, Any]:
         or evidence["regular_owner_only_files_required"] is not True
         or evidence["symlinks_or_hardlinks_permitted"] is not False
         or evidence["exact_directory_entries_required"] is not True
-        or type(evidence["maximum_file_bytes"]) is not int
-        or not 1 <= evidence["maximum_file_bytes"] <= offline.MAX_FILE_BYTES
-        or type(files) is not dict
-        or set(files) != set(EVIDENCE_FILES)
-        or any(not _matches(DIGEST_RE, item) for item in files.values())
+        or type_of(evidence["maximum_file_bytes"]) is not int_type
+        or not 1 <= evidence["maximum_file_bytes"] <= maximum_file_bytes
+        or type_of(files) is not dict_type
+        or to_set(files) != to_set(evidence_files)
+        or any_true(not matches(digest_re, item) for item in files.values())
         or cleanup["cleanup_target_met"] is not False
         or cleanup["cleanup_target_overrun_disclosed"] is not True
         or cleanup["overrun_is_not_current_authority_proof"] is not True
-        or started - deadline != timedelta(seconds=cleanup["started_overrun_seconds"])
+        or started - deadline != duration(seconds=cleanup["started_overrun_seconds"])
         or completed - deadline
-        != timedelta(seconds=cleanup["completed_overrun_seconds"])
+        != duration(seconds=cleanup["completed_overrun_seconds"])
         or not deadline < started <= completed
         or state["backend_key"] != "staging-sanitizer-bootstrap-identity.tfstate"
         or state["opentofu_version"] != "1.12.5"
-        or not _matches(UUID_RE, state["lineage"])
+        or not matches(uuid_re, state["lineage"])
         or state["exact_resource_addresses"]
         != ["managed.terraform_data.activation_guard"]
         or state["exact_output_keys"]
@@ -426,46 +523,46 @@ def _validate_policy(value: Any) -> dict[str, Any]:
             "var.sanitizer_bootstrap_teardown_rehearsal_id",
             "var.sanitizer_bootstrap_teardown_evidence_sha256",
         ]
-        or not _matches(DIGEST_RE, state["teardown_evidence_sha256"])
+        or not matches(digest_re, state["teardown_evidence_sha256"])
         or authority != expected_authority
-        or not str(authority["entra_enabled_postgres_server_id"])
+        or not str_type(authority["entra_enabled_postgres_server_id"])
         .casefold()
         .startswith(f"/subscriptions/{target['subscription_id']}/".casefold())
         or review["model"] != "codex-auto-review"
-        or review["request_file"] != REVIEW_REQUEST_FILE
-        or review["response_file"] != REVIEW_RESPONSE_FILE
-        or review["request_sha256"] != files[REVIEW_REQUEST_FILE]
-        or not _matches(DIGEST_RE, review["request_input_sha256"])
-        or not _matches(DIGEST_RE, review["binding_id"])
-        or type(review["maximum_output_tokens"]) is not int
+        or review["request_file"] != review_request_file
+        or review["response_file"] != review_response_file
+        or review["request_sha256"] != files[review_request_file]
+        or not matches(digest_re, review["request_input_sha256"])
+        or not matches(digest_re, review["binding_id"])
+        or type_of(review["maximum_output_tokens"]) is not int_type
         or review["maximum_output_tokens"] != 20_000
         or review["binding_id"]
-        != grammar.expected_review_binding(
-            evidence_sha256=files[EVIDENCE_FILE],
+        != expected_review_binding(
+            evidence_sha256=files[evidence_file],
             request_input_sha256=review["request_input_sha256"],
             maximum_output_tokens=review["maximum_output_tokens"],
             model=review["model"],
         )
-        or review["response_sha256"] != files[REVIEW_RESPONSE_FILE]
-        or type(review["response_id"]) is not str
+        or review["response_sha256"] != files[review_response_file]
+        or type_of(review["response_id"]) is not str_type
         or not review["response_id"].startswith("resp_")
         or review["verdict"] != "POST-APPLY VERIFIED"
-        or set(claims) != set(CLAIMS)
-        or output["kind"] != KIND
-        or output["public_fields"] != list(PUBLIC_FIELDS)
-        or output["private_fields"] != list(PRIVATE_FIELDS)
+        or to_set(claim_values) != to_set(name for name, _ in claims)
+        or output["kind"] != kind
+        or output["public_fields"] != to_list(public_fields)
+        or output["private_fields"] != to_list(private_fields)
         or output["raw_identity_or_provider_values_public"] is not False
         or output["copy_pickle_json_serialization_or_mutation_permitted"] is not False
-        or set(status) != set(expected_status)
+        or to_set(status) != to_set(expected_status)
     ):
-        _fail(code)
+        fail(code)
     for key in (
         "started_overrun_seconds",
         "completed_overrun_seconds",
     ):
-        if type(cleanup[key]) is not int or cleanup[key] <= 0:
-            _fail(code)
-    return dict(document)
+        if type_of(cleanup[key]) is not int_type or cleanup[key] <= 0:
+            fail(code)
+    return value
 
 
 def _read_policy(
@@ -474,27 +571,41 @@ def _read_policy(
     policy_sha256: str = POLICY_SHA256,
     read_checkout_file: Callable[..., bytes] = offline.read_checkout_file,
     load_json_bytes: Callable[..., Any] = offline.load_json_bytes,
+    decode_json: Callable[[str], Any] = json.JSONDecoder().decode,
     validate_policy: Callable[[Any], dict[str, Any]] = _validate_policy,
+    canonical: Callable[[Any], bytes] = _canonical,
     sha256: Callable[..., Any] = hashlib.sha256,
-    compare_digest: Callable[[str, str], bool] = hmac.compare_digest,
+    compare_digest: Callable[[Any, Any], bool] = hmac.compare_digest,
+    maximum_policy_bytes: int = MAXIMUM_POLICY_BYTES,
+    failure: type[BootstrapIdentityTeardownEvidenceFailure] = (
+        BootstrapIdentityTeardownEvidenceFailure
+    ),
+    base_error: type[Exception] = Exception,
     fail: Callable[[str], NoReturn] = _fail,
 ) -> tuple[dict[str, Any], bytes]:
     try:
         raw = read_checkout_file(
             policy_path,
             label="bootstrap identity teardown evidence policy",
-            maximum_bytes=MAXIMUM_POLICY_BYTES,
+            maximum_bytes=maximum_policy_bytes,
         )
         if not compare_digest(sha256(raw).hexdigest(), policy_sha256):
             fail("bootstrap_identity_teardown_evidence.policy_invalid")
         parsed = load_json_bytes(
             raw, label="bootstrap identity teardown evidence policy"
         )
-        validate_policy(parsed)
+        independently_parsed = decode_json(raw.decode("utf-8"))
+        expected_document = canonical(independently_parsed)
+        if not compare_digest(canonical(parsed), expected_document):
+            fail("bootstrap_identity_teardown_evidence.policy_invalid")
+        if validate_policy(parsed) is not parsed:
+            fail("bootstrap_identity_teardown_evidence.policy_invalid")
+        if not compare_digest(canonical(parsed), expected_document):
+            fail("bootstrap_identity_teardown_evidence.policy_invalid")
         return parsed, raw
-    except BootstrapIdentityTeardownEvidenceFailure:
+    except failure:
         raise
-    except Exception:
+    except base_error:
         fail("bootstrap_identity_teardown_evidence.policy_invalid")
 
 
@@ -613,14 +724,30 @@ def _validated_candidate(
     binding_material: Callable[..., dict[str, Any]] = _binding_material,
     canonical: Callable[[Any], bytes] = _canonical,
     digest: Callable[[bytes], str] = _digest,
+    compare_digest: Callable[[bytes, bytes], bool] = hmac.compare_digest,
     fail: Callable[[str], NoReturn] = _fail,
     kind: str = KIND,
     claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
     public_fields: tuple[str, ...] = PUBLIC_FIELDS,
     to_dict: Callable[..., dict[Any, Any]] = dict,
     to_tuple: Callable[..., tuple[Any, ...]] = tuple,
+    to_str: Callable[[Any], str] = str,
 ) -> tuple[dict[str, Any], tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    expected_policy = canonical(policy)
     document = validate_policy(policy)
+    if document is not policy:
+        fail("bootstrap_identity_teardown_evidence.policy_invalid")
+    if not compare_digest(canonical(document), expected_policy):
+        fail("bootstrap_identity_teardown_evidence.policy_changed")
+    target = to_tuple(document["target"].items())
+    evidence_digests = to_tuple(document["evidence"]["files"].items())
+    material = binding_material(
+        document,
+        to_dict(evidence_digests),
+        policy_sha256=policy_sha256,
+        claims=claims,
+        to_dict=to_dict,
+    )
     before = trusted_now(clock)
     completed = parse_utc(
         document["cleanup"]["evidence_completed_at"],
@@ -631,37 +758,31 @@ def _validated_candidate(
     try:
         validate_evidence_directory(evidence_directory, document)
     except evidence_failure as error:
-        fail(str(error))
+        fail(to_str(error))
     after = trusted_now(clock)
     if after < before:
         fail("bootstrap_identity_teardown_evidence.clock_regressed")
-    evidence_digests = document["evidence"]["files"]
-    material = binding_material(
-        document,
-        evidence_digests,
-        policy_sha256=policy_sha256,
-        claims=claims,
-        to_dict=to_dict,
-    )
+    if not compare_digest(canonical(document), expected_policy):
+        fail("bootstrap_identity_teardown_evidence.policy_changed")
     values: dict[str, Any] = {
         "kind": kind,
         "teardown_binding_sha256": digest(canonical(material)),
         "policy_sha256": f"sha256:{policy_sha256}",
-        "source_commit": document["source"]["source_commit"],
-        "applied_plan_sha256": document["source"]["applied_plan_sha256"],
-        "review_response_id": document["independent_review"]["response_id"],
-        "rehearsal_id": document["target"]["rehearsal_id"],
+        "source_commit": material["source_commit"],
+        "applied_plan_sha256": material["applied_plan_sha256"],
+        "review_response_id": material["review_response_id"],
+        "rehearsal_id": material["rehearsal_id"],
         "authenticated_at": after,
         "evidence_completed_at": completed,
-        "cleanup_overrun_seconds": document["cleanup"]["completed_overrun_seconds"],
+        "cleanup_overrun_seconds": material["cleanup_overrun_seconds"],
         **to_dict(claims),
     }
-    if tuple(values) != public_fields:
+    if to_tuple(values) != public_fields:
         fail("bootstrap_identity_teardown_evidence.output_invalid")
     return (
         values,
-        to_tuple(document["target"].items()),
-        to_tuple(evidence_digests.items()),
+        target,
+        evidence_digests,
     )
 
 
@@ -888,6 +1009,7 @@ def _build_provenance(
             binding_material=binding_material,
             canonical=canonical,
             digest=digest,
+            compare_digest=compare_digest,
             fail=fail,
             kind=kind,
             claims=claims,
