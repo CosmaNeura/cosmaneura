@@ -1,7 +1,7 @@
 # Staging sanitizer bootstrap-identity teardown evidence authenticator
 
 This Tier 2 slice is based on protected `master`
-`8c5e32e1197e83892c0487be2e259d621d276324`. It authenticates only the
+`0e307bb0aeb631fed82c89b1a6fbf0d810b06254`. It authenticates only the
 reviewed retrospective evidence from the founder-applied teardown of rehearsal
 `21506aaeec3c`. It performs no network, credential, provider, database,
 workflow, deployment, or mutation action.
@@ -35,8 +35,9 @@ It proves only the historical deletion, negative-authority observations, and
 state tombstone. Current live state, identity creation or attachment,
 provider/database mutation, workflow integration, and execution remain false.
 
-The process-local provenance registry and verifier are closure-bound. An
-authenticated value inherited by a forked process is invalid, and changing
+The process-local provenance registry and verifier are closure-bound,
+weak-reference lifetime-bounded, and bind the exact ordered value snapshot.
+An authenticated value inherited by a forked process is invalid, and changing
 lookalike module globals cannot invalidate an issued value or authenticate a
 forged copy. Code with permission to replace the module, class methods, or
 public entry point inside the same interpreter is outside this artifact's

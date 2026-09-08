@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import gc
 import hashlib
 import json
 import os
 import pickle
-from datetime import UTC, datetime, timedelta
+import weakref
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -511,8 +513,24 @@ def _fixture(
         path.write_bytes(raw)
         path.chmod(0o400)
     monkeypatch.setattr(auth, "POLICY_PATH", policy_path)
-    monkeypatch.setattr(auth, "POLICY_SHA256", hashlib.sha256(policy_raw).hexdigest())
+    policy_sha256 = hashlib.sha256(policy_raw).hexdigest()
+    monkeypatch.setattr(auth, "POLICY_SHA256", policy_sha256)
     monkeypatch.setattr(auth, "_utc_now", lambda: NOW)
+    read_policy = auth._read_policy
+    authenticate, is_authenticated = auth._build_provenance(
+        read_policy=lambda: read_policy(
+            policy_path=policy_path,
+            policy_sha256=policy_sha256,
+        ),
+        clock=lambda: NOW,
+        policy_sha256=policy_sha256,
+    )
+    monkeypatch.setattr(auth, "_authenticate", authenticate)
+    monkeypatch.setattr(
+        auth.AuthenticatedBootstrapIdentityTeardownEvidence,
+        "_is_authenticated",
+        is_authenticated,
+    )
     return evidence_directory, policy
 
 
@@ -572,16 +590,69 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
     )
 
     monkeypatch.setattr(auth, "_SEAL", object())
-    monkeypatch.setattr(auth, "_authentication_shape", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        auth,
+        "_validated_candidate",
+        lambda **_kwargs: pytest.fail("mutable global validator was invoked"),
+    )
+    monkeypatch.setattr(
+        auth.grammar,
+        "validate_evidence_directory",
+        lambda *_args, **_kwargs: pytest.fail("mutable grammar global was invoked"),
+    )
     monkeypatch.setattr(auth, "_verify_provenance", lambda _value: False, raising=False)
     assert value._is_authenticated()
+    second = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    assert second._is_authenticated()
+    with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+        auth.authenticate_bootstrap_identity_teardown_evidence(
+            evidence_directory=directory / "missing"
+        )
 
     forged = object.__new__(auth.AuthenticatedBootstrapIdentityTeardownEvidence)
     for name in (*auth.PUBLIC_FIELDS, *auth.PRIVATE_FIELDS):
         object.__setattr__(forged, name, getattr(value, name))
-    monkeypatch.setattr(auth, "_authentication_shape", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(auth, "_verify_provenance", lambda _value: True)
     assert not forged._is_authenticated()
+
+
+def test_provenance_binds_exact_datetime_and_ordered_private_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(tmp_path, monkeypatch)
+    mutations = (
+        ("authenticated_at", NOW.astimezone(timezone(timedelta(hours=1)))),
+        ("authenticated_at", NOW.replace(microsecond=1)),
+        ("authenticated_at", NOW.replace(fold=1)),
+        ("_target", lambda value: tuple(reversed(value._target))),
+        ("_target", lambda value: value._target + (value._target[0],)),
+        (
+            "_evidence_digests",
+            lambda value: tuple(reversed(value._evidence_digests)),
+        ),
+    )
+    for name, mutation in mutations:
+        value = auth.authenticate_bootstrap_identity_teardown_evidence(
+            evidence_directory=directory
+        )
+        replacement = mutation(value) if callable(mutation) else mutation
+        object.__setattr__(value, name, replacement)
+        assert not value._is_authenticated()
+
+
+def test_provenance_registry_does_not_retain_unreferenced_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(tmp_path, monkeypatch)
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    reference = weakref.ref(value)
+    del value
+    gc.collect()
+    assert reference() is None
 
 
 def test_authenticated_value_does_not_survive_fork(

@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sys
+import weakref
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -459,19 +460,26 @@ def _validate_policy(value: Any) -> dict[str, Any]:
     return dict(document)
 
 
-def _read_policy() -> tuple[dict[str, Any], bytes]:
+def _read_policy(
+    *,
+    policy_path: Path = POLICY_PATH,
+    policy_sha256: str = POLICY_SHA256,
+    read_checkout_file: Callable[..., bytes] = offline.read_checkout_file,
+    load_json_bytes: Callable[..., Any] = offline.load_json_bytes,
+    validate_policy: Callable[[Any], dict[str, Any]] = _validate_policy,
+) -> tuple[dict[str, Any], bytes]:
     try:
-        raw = offline.read_checkout_file(
-            POLICY_PATH,
+        raw = read_checkout_file(
+            policy_path,
             label="bootstrap identity teardown evidence policy",
             maximum_bytes=MAXIMUM_POLICY_BYTES,
         )
-        if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), POLICY_SHA256):
+        if not hmac.compare_digest(hashlib.sha256(raw).hexdigest(), policy_sha256):
             _fail("bootstrap_identity_teardown_evidence.policy_invalid")
-        parsed = offline.load_json_bytes(
+        parsed = load_json_bytes(
             raw, label="bootstrap identity teardown evidence policy"
         )
-        return _validate_policy(parsed), raw
+        return validate_policy(parsed), raw
     except BootstrapIdentityTeardownEvidenceFailure:
         raise
     except Exception:
@@ -481,15 +489,22 @@ def _read_policy() -> tuple[dict[str, Any], bytes]:
 def load_bootstrap_identity_teardown_evidence_policy() -> dict[str, Any]:
     """Load the exact checked-in retrospective teardown policy."""
 
-    policy, _raw = _read_policy()
+    policy, _raw = _read_policy(
+        policy_path=POLICY_PATH,
+        policy_sha256=POLICY_SHA256,
+    )
     return policy
 
 
 def _binding_material(
-    policy: Mapping[str, Any], evidence_digests: Mapping[str, str]
+    policy: Mapping[str, Any],
+    evidence_digests: Mapping[str, str],
+    *,
+    policy_sha256: str = POLICY_SHA256,
+    claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
 ) -> dict[str, Any]:
     return {
-        "policy_sha256": f"sha256:{POLICY_SHA256}",
+        "policy_sha256": f"sha256:{policy_sha256}",
         "source_commit": policy["source"]["source_commit"],
         "applied_plan_sha256": policy["source"]["applied_plan_sha256"],
         "review_response_id": policy["independent_review"]["response_id"],
@@ -498,14 +513,14 @@ def _binding_material(
         "cleanup_overrun_seconds": policy["cleanup"]["completed_overrun_seconds"],
         "target": dict(policy["target"]),
         "evidence_digests": dict(evidence_digests),
-        "claims": dict(CLAIMS),
+        "claims": dict(claims),
     }
 
 
 class AuthenticatedBootstrapIdentityTeardownEvidence:
     """Immutable process-local proof of the reviewed teardown checkpoint."""
 
-    __slots__ = (*PUBLIC_FIELDS, *PRIVATE_FIELDS)
+    __slots__ = (*PUBLIC_FIELDS, *PRIVATE_FIELDS, "__weakref__")
 
     kind: str
     teardown_binding_sha256: str
@@ -574,30 +589,47 @@ def _validated_candidate(
     policy: Mapping[str, Any],
     evidence_directory: Path,
     clock: Callable[[], datetime],
-    seal: object = _SEAL,
-) -> AuthenticatedBootstrapIdentityTeardownEvidence:
-    document = _validate_policy(policy)
-    before = _trusted_now(clock)
-    completed = _parse_utc(
+    policy_sha256: str = POLICY_SHA256,
+    validate_policy: Callable[[Any], dict[str, Any]] = _validate_policy,
+    trusted_now: Callable[[Callable[[], datetime]], datetime] = _trusted_now,
+    parse_utc: Callable[[Any, str], datetime] = _parse_utc,
+    validate_evidence_directory: Callable[..., Any] = (
+        grammar.validate_evidence_directory
+    ),
+    evidence_failure: type[Exception] = grammar.EvidenceGrammarFailure,
+    binding_material: Callable[..., dict[str, Any]] = _binding_material,
+    canonical: Callable[[Any], bytes] = _canonical,
+    digest: Callable[[bytes], str] = _digest,
+    kind: str = KIND,
+    claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
+    public_fields: tuple[str, ...] = PUBLIC_FIELDS,
+) -> tuple[dict[str, Any], tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    document = validate_policy(policy)
+    before = trusted_now(clock)
+    completed = parse_utc(
         document["cleanup"]["evidence_completed_at"],
         "bootstrap_identity_teardown_evidence.policy_invalid",
     )
     if before < completed:
         _fail("bootstrap_identity_teardown_evidence.evidence_from_future")
     try:
-        grammar.validate_evidence_directory(evidence_directory, document)
-    except grammar.EvidenceGrammarFailure as error:
+        validate_evidence_directory(evidence_directory, document)
+    except evidence_failure as error:
         _fail(str(error))
-    after = _trusted_now(clock)
+    after = trusted_now(clock)
     if after < before:
         _fail("bootstrap_identity_teardown_evidence.clock_regressed")
     evidence_digests = document["evidence"]["files"]
-    material = _binding_material(document, evidence_digests)
-    value = object.__new__(AuthenticatedBootstrapIdentityTeardownEvidence)
-    values = {
-        "kind": KIND,
-        "teardown_binding_sha256": _digest(_canonical(material)),
-        "policy_sha256": f"sha256:{POLICY_SHA256}",
+    material = binding_material(
+        document,
+        evidence_digests,
+        policy_sha256=policy_sha256,
+        claims=claims,
+    )
+    values: dict[str, Any] = {
+        "kind": kind,
+        "teardown_binding_sha256": digest(canonical(material)),
+        "policy_sha256": f"sha256:{policy_sha256}",
         "source_commit": document["source"]["source_commit"],
         "applied_plan_sha256": document["source"]["applied_plan_sha256"],
         "review_response_id": document["independent_review"]["response_id"],
@@ -605,109 +637,177 @@ def _validated_candidate(
         "authenticated_at": after,
         "evidence_completed_at": completed,
         "cleanup_overrun_seconds": document["cleanup"]["completed_overrun_seconds"],
-        **CLAIMS,
-        "_target": tuple(document["target"].items()),
-        "_evidence_digests": tuple(evidence_digests.items()),
-        "_proof_sha256": "",
-        "_seal": seal,
+        **dict(claims),
     }
-    if tuple(values) != (*PUBLIC_FIELDS, *PRIVATE_FIELDS):
+    if tuple(values) != public_fields:
         _fail("bootstrap_identity_teardown_evidence.output_invalid")
-    for name, item in values.items():
-        object.__setattr__(value, name, item)
-    return value
+    return (
+        values,
+        tuple(document["target"].items()),
+        tuple(evidence_digests.items()),
+    )
 
 
-def _authentication_shape(
-    value: AuthenticatedBootstrapIdentityTeardownEvidence,
+def _build_provenance(
     *,
-    verify_provenance: Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], bool],
-    seal: object,
-) -> bool:
-    try:
-        policy = load_bootstrap_identity_teardown_evidence_policy()
-        target = dict(value._target)
-        evidence_digests = dict(value._evidence_digests)
-        material = _binding_material(policy, evidence_digests)
-        public = {
-            "kind": KIND,
-            "teardown_binding_sha256": _digest(_canonical(material)),
-            "policy_sha256": f"sha256:{POLICY_SHA256}",
-            "source_commit": policy["source"]["source_commit"],
-            "applied_plan_sha256": policy["source"]["applied_plan_sha256"],
-            "review_response_id": policy["independent_review"]["response_id"],
-            "rehearsal_id": policy["target"]["rehearsal_id"],
-            "authenticated_at": value.authenticated_at,
-            "evidence_completed_at": _parse_utc(
-                policy["cleanup"]["evidence_completed_at"],
-                "bootstrap_identity_teardown_evidence.policy_invalid",
-            ),
-            "cleanup_overrun_seconds": policy["cleanup"]["completed_overrun_seconds"],
-            **CLAIMS,
-        }
-        actual = {name: getattr(value, name) for name in PUBLIC_FIELDS}
-        return (
-            type(value) is AuthenticatedBootstrapIdentityTeardownEvidence
-            and value._seal is seal
-            and tuple(public) == PUBLIC_FIELDS
-            and target == policy["target"]
-            and value._evidence_digests == tuple(policy["evidence"]["files"].items())
-            and all(
-                type(actual[name]) is type(expected) and actual[name] == expected
-                for name, expected in public.items()
-            )
-            and verify_provenance(value)
-        )
-    except Exception:
-        return False
-
-
-def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
+    read_policy: Callable[[], tuple[dict[str, Any], bytes]] = _read_policy,
+    validated_candidate: Callable[..., Any] = _validated_candidate,
+    clock: Callable[[], datetime] = _utc_now,
+    policy_sha256: str = POLICY_SHA256,
+    validate_policy: Callable[[Any], dict[str, Any]] = _validate_policy,
+    trusted_now: Callable[[Callable[[], datetime]], datetime] = _trusted_now,
+    parse_utc: Callable[[Any, str], datetime] = _parse_utc,
+    validate_evidence_directory: Callable[..., Any] = (
+        grammar.validate_evidence_directory
+    ),
+    evidence_failure: type[Exception] = grammar.EvidenceGrammarFailure,
+    binding_material: Callable[..., dict[str, Any]] = _binding_material,
+    canonical: Callable[[Any], bytes] = _canonical,
+    digest: Callable[[bytes], str] = _digest,
+    fail: Callable[[str], NoReturn] = _fail,
+    kind: str = KIND,
+    claims: tuple[tuple[str, Any], ...] = tuple(CLAIMS.items()),
+    public_fields: tuple[str, ...] = PUBLIC_FIELDS,
+    private_fields: tuple[str, ...] = PRIVATE_FIELDS,
+    provenance_domain: str = PROVENANCE_DOMAIN,
+    seal: object = _SEAL,
+) -> tuple[Callable[..., Any], Callable[..., bool]]:
     key = os.urandom(32)
-    issued: dict[tuple[int, int], object] = {}
-    seal = _SEAL
-    shape = _authentication_shape
+    value_type = AuthenticatedBootstrapIdentityTeardownEvidence
+    issued: weakref.WeakKeyDictionary[
+        AuthenticatedBootstrapIdentityTeardownEvidence, tuple[int, bytes]
+    ] = weakref.WeakKeyDictionary()
 
-    def proof(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> str:
-        material = _canonical(
+    def snapshot(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bytes:
+        if type(value) is not value_type:
+            raise TypeError
+
+        encoded_public: list[dict[str, Any]] = []
+        for name in public_fields:
+            item = getattr(value, name)
+            if type(item) is datetime:
+                if (
+                    item.tzinfo is not UTC
+                    or item.utcoffset() != timedelta(0)
+                    or item.microsecond
+                    or item.fold
+                ):
+                    raise ValueError
+                encoded = {
+                    "type": "utc-datetime-seconds",
+                    "value": item.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+            elif type(item) in (str, bool, int):
+                encoded = {"type": type(item).__name__, "value": item}
+            else:
+                raise TypeError
+            encoded_public.append({"name": name, **encoded})
+
+        def exact_pairs(name: str, value: object) -> dict[str, Any]:
+            if type(value) is not tuple or any(
+                type(pair) is not tuple
+                or len(pair) != 2
+                or any(type(part) is not str for part in pair)
+                for pair in value
+            ):
+                raise TypeError
+            return {"name": name, "type": "ordered-string-pairs", "value": value}
+
+        return canonical(
             {
-                "domain": PROVENANCE_DOMAIN,
+                "public": encoded_public,
+                "private": [
+                    exact_pairs("_target", value._target),
+                    exact_pairs("_evidence_digests", value._evidence_digests),
+                    {
+                        "name": "_seal",
+                        "type": "object-identity",
+                        "value": id(value._seal),
+                    },
+                ],
+            }
+        )
+
+    def proof(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+        expected_snapshot: bytes,
+    ) -> str:
+        material = canonical(
+            {
+                "domain": provenance_domain,
                 "pid": os.getpid(),
                 "object_identity": id(value),
-                "teardown_binding_sha256": value.teardown_binding_sha256,
-                "authenticated_at": value.authenticated_at.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
+                "snapshot_sha256": hashlib.sha256(expected_snapshot).hexdigest(),
                 "seal_identity": id(seal),
             }
         )
         return hmac.new(key, material, hashlib.sha256).hexdigest()
 
     def verify(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bool:
-        return issued.get((os.getpid(), id(value))) is value and hmac.compare_digest(
-            value._proof_sha256, proof(value)
-        )
+        try:
+            record = issued.get(value)
+            if record is None:
+                return False
+            issued_pid, expected_snapshot = record
+            current_snapshot = snapshot(value)
+            return (
+                issued_pid == os.getpid()
+                and hmac.compare_digest(current_snapshot, expected_snapshot)
+                and type(value._proof_sha256) is str
+                and hmac.compare_digest(
+                    value._proof_sha256, proof(value, expected_snapshot)
+                )
+            )
+        except Exception:
+            return False
 
     def is_authenticated(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> bool:
-        return shape(value, verify_provenance=verify, seal=seal)
+        try:
+            return type(value) is value_type and value._seal is seal and verify(value)
+        except Exception:
+            return False
 
     def authenticate(
         *, evidence_directory: Path
     ) -> AuthenticatedBootstrapIdentityTeardownEvidence:
-        policy, _raw = _read_policy()
-        value = _validated_candidate(
+        policy, _raw = read_policy()
+        public, target, evidence_digests = validated_candidate(
             policy=policy,
             evidence_directory=evidence_directory,
-            clock=_utc_now,
-            seal=seal,
+            clock=clock,
+            policy_sha256=policy_sha256,
+            validate_policy=validate_policy,
+            trusted_now=trusted_now,
+            parse_utc=parse_utc,
+            validate_evidence_directory=validate_evidence_directory,
+            evidence_failure=evidence_failure,
+            binding_material=binding_material,
+            canonical=canonical,
+            digest=digest,
+            kind=kind,
+            claims=claims,
+            public_fields=public_fields,
         )
-        object.__setattr__(value, "_proof_sha256", proof(value))
-        issued[os.getpid(), id(value)] = value
+        value = object.__new__(value_type)
+        values = {
+            **public,
+            "_target": target,
+            "_evidence_digests": evidence_digests,
+            "_proof_sha256": "",
+            "_seal": seal,
+        }
+        if tuple(values) != (*public_fields, *private_fields):
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
+        for name, item in values.items():
+            object.__setattr__(value, name, item)
+        expected_snapshot = snapshot(value)
+        object.__setattr__(value, "_proof_sha256", proof(value, expected_snapshot))
+        issued[value] = (os.getpid(), expected_snapshot)
         if not is_authenticated(value):
-            issued.pop((os.getpid(), id(value)), None)
-            _fail("bootstrap_identity_teardown_evidence.output_invalid")
+            issued.pop(value, None)
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
         return value
 
     return authenticate, is_authenticated
