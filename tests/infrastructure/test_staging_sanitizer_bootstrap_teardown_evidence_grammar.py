@@ -515,6 +515,7 @@ def _bundle(
     mutate_evidence: Callable[[dict[str, Any]], None] | None = None,
     mutate_request: Callable[[dict[str, Any]], None] | None = None,
     mutate_response: Callable[[dict[str, Any]], None] | None = None,
+    binding_override: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     policy = _policy()
     evidence = _envelope(policy)
@@ -552,6 +553,9 @@ def _bundle(
     if mutate_request:
         mutate_request(request)
     response = _review_response(policy, metadata, len(review_input))
+    if binding_override is not None:
+        review["binding_id"] = binding_override
+        metadata["binding_id"] = binding_override
     if mutate_response:
         mutate_response(response)
     payloads = {
@@ -594,9 +598,6 @@ def test_validates_closed_world_bundle(tmp_path: Path) -> None:
                 "id"
             ].replace("cosmaneura-scheduling-dev-pg", "wrong-server")
         ),
-        lambda value: value["prior_envelope"]["verification"]["state_resources"][
-            0
-        ].update(provider='provider["unexpected"]'),
         lambda value: value["prior_envelope"]["verification"].update(
             state_serial=False
         ),
@@ -624,6 +625,13 @@ def test_scope_hash_and_closed_world_mutations_refuse(
             ),
         ),
         (None, lambda value: value.update(unexpected=True)),
+        (None, lambda value: value.update(max_output_tokens=20000.0)),
+        (
+            None,
+            lambda value: value["usage"].update(
+                output_tokens=20001, total_tokens=20002
+            ),
+        ),
         (
             None,
             lambda value: value["output"][-1]["content"][0].update(text="APPROVED"),
@@ -640,6 +648,25 @@ def test_review_binding_and_shape_mutations_refuse(
         mutate_request=request_mutation,
         mutate_response=response_mutation,
     )
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+def test_verification_provider_is_bound_to_raw_state(tmp_path: Path) -> None:
+    def mutate(value: dict[str, Any]) -> None:
+        verification = value["prior_envelope"]["verification"]
+        verification["state_resources"][0]["provider"] = 'provider["unexpected"]'
+        value["prior_envelope"]["evidence_hashes"]["v1_verification"] = _pretty_sha(
+            verification
+        )
+
+    directory, policy = _bundle(tmp_path, mutate_evidence=mutate)
+    with pytest.raises(grammar.EvidenceGrammarFailure):
+        grammar.validate_evidence_directory(directory, policy)
+
+
+def test_consistently_replaced_review_binding_refuses(tmp_path: Path) -> None:
+    directory, policy = _bundle(tmp_path, binding_override="sha256:" + "f" * 64)
     with pytest.raises(grammar.EvidenceGrammarFailure):
         grammar.validate_evidence_directory(directory, policy)
 

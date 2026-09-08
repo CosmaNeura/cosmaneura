@@ -821,6 +821,11 @@ def _validate_evidence(
         )
     except Exception:
         _fail(code)
+    _validate_state(raw["isolated_state"], policy)
+    expected_verification_resources = [
+        {name: resource[name] for name in ("mode", "type", "name", "provider")}
+        for resource in raw["isolated_state"]["resources"]
+    ]
     component_values = {
         "v1_verification": verification,
         "identities": raw["identities"],
@@ -905,14 +910,11 @@ def _validate_evidence(
         or verification["state_lineage"] != state_policy["lineage"]
         or verification["state_serial"] != state_policy["post_apply_serial"]
         or verification["state_outputs"] != state_policy["exact_output_keys"]
-        or [
-            f"{item.get('mode')}.{item.get('type')}.{item.get('name')}"
-            for item in verification["state_resources"]
-        ]
-        != state_policy["exact_resource_addresses"]
+        or not _same_typed(
+            verification["state_resources"], expected_verification_resources
+        )
     ):
         _fail(code)
-    _validate_state(raw["isolated_state"], policy)
 
 
 def _validate_review_response(
@@ -1028,6 +1030,11 @@ def _validate_review_response(
     if usage["total_tokens"] != usage["input_tokens"] + usage["output_tokens"]:
         _fail(code)
     if (
+        usage["output_tokens"] > review["maximum_output_tokens"]
+        or output_details["reasoning_tokens"] > usage["output_tokens"]
+    ):
+        _fail(code)
+    if (
         response["id"] != review["response_id"]
         or response["model"] != review["model"]
         or response["status"] != "completed"
@@ -1035,6 +1042,7 @@ def _validate_review_response(
         or response["incomplete_details"] is not None
         or response["background"] is not False
         or response["instructions"] is not None
+        or type(response["max_output_tokens"]) is not int
         or response["max_output_tokens"] != review["maximum_output_tokens"]
         or response["max_tool_calls"] is not None
         or response["moderation"] is not None
@@ -1127,6 +1135,14 @@ def _validate_review_request(
         "evidence_sha256": policy["evidence"]["files"][EVIDENCE_FILE],
         "request_input_sha256": review["request_input_sha256"],
     }
+    calculated_input_sha256 = (
+        _digest(review_input.encode("utf-8")) if type(review_input) is str else ""
+    )
+    calculated_binding = expected_review_binding(
+        evidence_sha256=expected_metadata["evidence_sha256"],
+        request_input_sha256=calculated_input_sha256,
+        maximum_output_tokens=review["maximum_output_tokens"],
+    )
     if (
         request["model"] != review["model"]
         or reasoning["effort"] != "high"
@@ -1135,7 +1151,8 @@ def _validate_review_request(
         or type(review_input) is not str
         or not review_input.endswith(f"\n\nEVIDENCE V3\n{evidence_text}")
         or review_input.count(evidence_text) != 1
-        or _digest(review_input.encode("utf-8")) != review["request_input_sha256"]
+        or calculated_input_sha256 != review["request_input_sha256"]
+        or not hmac.compare_digest(review["binding_id"], calculated_binding)
         or not _same_typed(metadata, expected_metadata)
     ):
         _fail(code)
