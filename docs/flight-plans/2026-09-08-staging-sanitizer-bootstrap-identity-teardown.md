@@ -47,23 +47,43 @@ creation requires another reviewed source change. The resulting public output
 is a non-authoritative tombstone with `founder_apply_required=true` and
 `apply_authorized=false`. The guard preserves its exact creation-time
 replacement triggers and updates in place; its own `prevent_destroy` causes a
-blanket destroy-mode plan to fail.
+blanket destroy-mode plan to fail. The UAMI also explicitly depends on the
+guard so a normal targeted plan cannot omit its preconditions.
 
 Secretless validation passes all seven mocked plans. A backend-disabled,
 refresh-disabled dry run against a private copy of serial-2 state produced
 exactly `0 add, 1 in-place guard update, 1 UAMI destroy`; its plan JSON SHA-256
-is `b8e3b71421c67a570f7744f1dcc17ab66ea9437e6d79e45ffc544d7c67b393db`.
-A separate dry-run destroy-mode attempt failed on the tombstone's
-`prevent_destroy`, as required. Neither artifact is a live or apply-authorized
-plan, and `DRYRUN-NEVER-APPLY.tfplan` must never be used against Azure.
+is `1b48159572d1ff775e91ca2f8743959d70ef1ba22509b0b140e3e184a7507a55`.
+A default targeted plan failed on the guard. Exact-input targeted normal and
+targeted destroy plans were also generated only as negative tests: the former
+omits the complete output transition and the latter omits both the guard update
+and complete outputs, so the teardown validator rejects both. Their decoded
+JSON SHA-256 values are respectively
+`873f9dd6254eed8030436a45c4a8eb76e3f0681fd419c8b430bcfa61096e5fbc`
+and `a846cda81c7bd0e7c1cff0caace8232ebbc9903ddb3f8608ccdf695fee5b5653`.
+Neither artifact is a live or apply-authorized plan; every local plan is marked
+never-apply and must never be used against Azure.
+
+The teardown-specific saved-plan validator is the mandatory execution gate.
+It decodes with the pinned OpenTofu and AzureRM binaries and requires the exact
+protected source archive, backend tuple, lineage `a0c8b939-2fb2-0604-3e70-d925aeee5950`,
+serial 2, UAMI resource/client/principal/tenant IDs and tags, guard state,
+variables, checks, full output transition, and the sole action set of one UAMI
+delete plus one in-place guard update. It emits a receipt with
+`apply_authorized=false` and `founder_apply_required=true`; a refusal or any
+receipt difference is an abort.
 
 After merge, the founder may prepare a fresh saved plan from exact protected
 `master` and the isolated backend. The plan must show only destruction of the
 exact UAMI, an in-place guard-tombstone update, and the expected output
-transition. A fresh read-only sweep must again prove no federation, RBAC, job
-attachment, PostgreSQL administrator binding, or state change immediately
-before apply. The saved plan and fresh evidence require independent review.
-Agents do not apply it.
+transition. Run
+`scripts/validate_staging_sanitizer_bootstrap_identity_teardown_plan.py`
+against that protected 0400 saved plan, its exact SHA-256, the exact merged
+`master` SHA, the pinned provider package, and the mode-0600 backend metadata
+file from the same initialized execution data directory. A fresh read-only sweep must
+again prove no federation, RBAC, job attachment, PostgreSQL administrator
+binding, or state change immediately before apply. The saved plan, validator
+receipt, and fresh evidence require independent review. Agents do not apply it.
 
 Abort on any extra resource action, drift, state lineage/serial change,
 authority or attachment, changed identity IDs/tags, expired or ambiguous

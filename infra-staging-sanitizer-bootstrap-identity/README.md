@@ -38,9 +38,10 @@ the wrong rehearsal, the wrong digest, and every former creation input. The
 guard preserves its exact creation-time replacement triggers, updates in place
 as a state tombstone, and retains its own `prevent_destroy` so blanket destroy
 mode fails. The identity resource is fixed at count zero and its
-`prevent_destroy` is deliberately removed. A future bootstrap attempt therefore
-requires a separate reviewed source change rather than reusing or extending
-this expired lifecycle.
+`prevent_destroy` is deliberately removed. Its explicit dependency on the
+guard makes a normal targeted plan evaluate the same authorization checks. A
+future bootstrap attempt therefore requires a separate reviewed source change
+rather than reusing or extending this expired lifecycle.
 
 Pull-request verification is credential-free:
 
@@ -59,6 +60,16 @@ founder. An immediate second read-only authority/attachment sweep is required
 before that apply; any changed state invalidates the plan and evidence.
 
 The existing creation-plan verifier cannot authorize teardown and must not be
-used for this plan. Until a teardown-specific validator is reviewed, inspection
-of a live saved plan remains a manual exact-plan hold point. The spent creation
-plan must never be reused for teardown.
+used for this plan. The teardown-specific validator is mandatory: it binds the
+saved archive to exact protected source, the isolated backend tuple, lineage
+`a0c8b939-2fb2-0604-3e70-d925aeee5950` at serial 2, exact UAMI IDs/tags,
+complete outputs, and exactly one UAMI delete plus one guard update. It rejects
+targeted plans because they omit the
+complete action or output contract. Its receipt remains non-authoritative with
+`apply_authorized=false`; the founder-only apply decision remains separate. The
+spent creation plan must never be reused for teardown.
+
+Pass the mode-0600 `.terraform/terraform.tfstate` from the same initialized
+execution data directory as `--backend-metadata`; any backend coordinate
+override or nonempty credential setting is rejected and its digest is included
+in the receipt.

@@ -16,6 +16,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/validate_staging_sanitizer_bootstrap_identity_plan.py"
+TEARDOWN_SCRIPT = (
+    ROOT / "scripts/validate_staging_sanitizer_bootstrap_identity_teardown_plan.py"
+)
 IDENTITY_ROOT = ROOT / "infra-staging-sanitizer-bootstrap-identity"
 NOW = datetime(2026, 9, 8, 4, 15, tzinfo=UTC)
 PLAN_TIMESTAMP = "2026-09-08T04:01:49Z"
@@ -47,6 +50,7 @@ def _source_snapshot() -> Any:
         **terraform_files,
         ".terraform.lock.hcl": lockfile,
         str(SCRIPT.relative_to(ROOT)): SCRIPT.read_bytes(),
+        str(TEARDOWN_SCRIPT.relative_to(ROOT)): TEARDOWN_SCRIPT.read_bytes(),
         str(
             validator.RUNTIME_PATH.relative_to(ROOT)
         ): validator.RUNTIME_PATH.read_bytes(),
@@ -670,6 +674,7 @@ def test_git_reader_allowlist_covers_only_required_source_reads() -> None:
         str(path.relative_to(validator.REPOSITORY_ROOT))
         for path in (
             validator.VALIDATOR_PATH,
+            validator.TEARDOWN_VALIDATOR_PATH,
             validator.RUNTIME_PATH,
             validator.DECODER_PATH,
         )

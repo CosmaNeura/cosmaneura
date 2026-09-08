@@ -86,6 +86,10 @@ resource "terraform_data" "activation_guard" {
 resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
   count = 0
 
+  # Keep every targeted plan coupled to the teardown authorization guard. This
+  # prevents `-target` from bypassing the exact rehearsal/evidence checks.
+  depends_on = [terraform_data.activation_guard]
+
   name                = local.bootstrap_identity_name
   resource_group_name = data.azurerm_resource_group.control[0].name
   location            = data.azurerm_resource_group.control[0].location
