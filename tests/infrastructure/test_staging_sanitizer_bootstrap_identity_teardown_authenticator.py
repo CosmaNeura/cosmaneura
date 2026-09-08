@@ -533,6 +533,11 @@ def _fixture(
         "_is_authenticated",
         is_authenticated,
     )
+    monkeypatch.setattr(
+        auth,
+        "is_authenticated_bootstrap_identity_teardown_evidence",
+        is_authenticated,
+    )
     monkeypatch.setattr(auth, "_public_projection", project)
     return evidence_directory, policy
 
@@ -567,6 +572,7 @@ def test_authenticates_exact_evidence_without_exposing_identity(
         evidence_directory=directory
     )
     assert value._is_authenticated()
+    assert auth.is_authenticated_bootstrap_identity_teardown_evidence(value)
     assert value.kind == auth.KIND
     assert value.authenticated_at == NOW
     assert value.evidence_completed_at == datetime(2026, 9, 8, 17, 42, 44, tzinfo=UTC)
@@ -657,6 +663,49 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
     for name in (*expected_fields, *auth.PRIVATE_FIELDS):
         object.__setattr__(forged, name, getattr(value, name))
     assert not forged._is_authenticated()
+
+
+def test_module_verifier_rejects_replaced_slot_and_getattribute_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, _policy = _fixture(tmp_path, monkeypatch)
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    value_type = auth.AuthenticatedBootstrapIdentityTeardownEvidence
+    executable_slot = vars(value_type)["executable"]
+    executable_slot.__set__(value, True)
+
+    class StatefulExecutable:
+        reads = 0
+
+        def __get__(self, _instance: object, _owner: object) -> bool:
+            self.reads += 1
+            return self.reads > 1
+
+    with monkeypatch.context() as descriptor_patch:
+        descriptor_patch.setattr(value_type, "executable", StatefulExecutable())
+        assert value.executable is False
+        assert value.executable is True
+        assert not auth.is_authenticated_bootstrap_identity_teardown_evidence(value)
+        with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+            auth._public_projection(value)
+
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    original_getattribute = value_type.__getattribute__
+    with monkeypatch.context() as getattribute_patch:
+        getattribute_patch.setattr(
+            value_type,
+            "__getattribute__",
+            lambda item, name: (
+                False if name == "executable" else original_getattribute(item, name)
+            ),
+        )
+        assert not auth.is_authenticated_bootstrap_identity_teardown_evidence(value)
+        with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+            auth._public_projection(value)
 
 
 def test_exact_field_provenance(

@@ -699,16 +699,58 @@ def _build_provenance(
     format_datetime = datetime.strftime
     utc = UTC
     zero_offset = timedelta(0)
-    type_of, read_attr, identity, pair_length, any_true = type, getattr, id, len, any
+    type_of, type_read_attr = type, type.__getattribute__
+    identity, pair_length, any_true, all_true = id, len, any, all
     tuple_type, mapping_type, scalar_types = tuple, dict, (str, bool, int)
     type_error, value_error, base_error = TypeError, ValueError, Exception
-    new_value, set_value = object.__new__, object.__setattr__
+    new_value = object.__new__
     key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
+    slot_descriptors = tuple_type(
+        (name, type_read_attr(value_type, name))
+        for name in (*public_fields, *private_fields)
+    )
+    member_descriptor_type = type_of(slot_descriptors[0][1])
+    descriptor_get = type_read_attr(member_descriptor_type, "__get__")
+    descriptor_set = type_read_attr(member_descriptor_type, "__set__")
+    guarded_class_attributes = (
+        ("__getattribute__", type_read_attr(value_type, "__getattribute__")),
+        ("__hash__", type_read_attr(value_type, "__hash__")),
+        ("__eq__", type_read_attr(value_type, "__eq__")),
+        *slot_descriptors,
+    )
     issued: weakref.WeakKeyDictionary[
         AuthenticatedBootstrapIdentityTeardownEvidence,
         tuple[int, bytes, tuple[tuple[str, Any], ...]],
     ] = weakref.WeakKeyDictionary()
+
+    def class_shape_intact() -> bool:
+        try:
+            return all_true(
+                type_read_attr(value_type, name) is expected
+                for name, expected in guarded_class_attributes
+            )
+        except base_error:
+            return False
+
+    def read_slot(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence, name: str
+    ) -> Any:
+        for slot_name, descriptor in slot_descriptors:
+            if slot_name == name:
+                return descriptor_get(descriptor, value, value_type)
+        raise value_error
+
+    def write_slot(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+        name: str,
+        item: Any,
+    ) -> None:
+        for slot_name, descriptor in slot_descriptors:
+            if slot_name == name:
+                descriptor_set(descriptor, value, item)
+                return
+        raise value_error
 
     def reset_after_fork() -> None:
         nonlocal key
@@ -718,12 +760,12 @@ def _build_provenance(
     register_at_fork(after_in_child=reset_after_fork)
 
     def snapshot(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bytes:
-        if type_of(value) is not value_type:
+        if type_of(value) is not value_type or not class_shape_intact():
             raise type_error
 
         encoded_public: list[dict[str, Any]] = []
         for name in public_fields:
-            item = read_attr(value, name)
+            item = read_slot(value, name)
             if type_of(item) is datetime_type:
                 if (
                     item.tzinfo is not utc
@@ -759,12 +801,14 @@ def _build_provenance(
             {
                 "public": encoded_public,
                 "private": [
-                    exact_pairs("_target", value._target),
-                    exact_pairs("_evidence_digests", value._evidence_digests),
+                    exact_pairs("_target", read_slot(value, "_target")),
+                    exact_pairs(
+                        "_evidence_digests", read_slot(value, "_evidence_digests")
+                    ),
                     {
                         "name": "_seal",
                         "type": "object-identity",
-                        "value": identity(value._seal),
+                        "value": identity(read_slot(value, "_seal")),
                     },
                 ],
             }
@@ -789,6 +833,12 @@ def _build_provenance(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> tuple[int, bytes, tuple[tuple[str, Any], ...]] | None:
         try:
+            if (
+                type_of(value) is not value_type
+                or not class_shape_intact()
+                or read_slot(value, "_seal") is not seal
+            ):
+                return None
             record = issued.get(value)
             if record is None:
                 return None
@@ -797,8 +847,11 @@ def _build_provenance(
             if (
                 issued_pid == process_id()
                 and compare_digest(current_snapshot, expected_snapshot)
-                and type_of(value._proof_sha256) is scalar_types[0]
-                and compare_digest(value._proof_sha256, proof(value, expected_snapshot))
+                and type_of(read_slot(value, "_proof_sha256")) is scalar_types[0]
+                and compare_digest(
+                    read_slot(value, "_proof_sha256"),
+                    proof(value, expected_snapshot),
+                )
             ):
                 return record
         except base_error:
@@ -808,26 +861,12 @@ def _build_provenance(
     def is_authenticated(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> bool:
-        try:
-            return (
-                type_of(value) is value_type
-                and value._seal is seal
-                and verified_record(value) is not None
-            )
-        except base_error:
-            return False
+        return verified_record(value) is not None
 
     def project(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> dict[str, Any]:
-        try:
-            record = (
-                verified_record(value)
-                if type_of(value) is value_type and value._seal is seal
-                else None
-            )
-        except base_error:
-            record = None
+        record = verified_record(value)
         if record is None:
             fail("bootstrap_identity_teardown_evidence.output_invalid")
         return mapping_type(record[2])
@@ -862,6 +901,8 @@ def _build_provenance(
             for name, expected in claims
         ):
             fail("bootstrap_identity_teardown_evidence.output_invalid")
+        if not class_shape_intact():
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
         value = new_value(value_type)
         values = {
             **public,
@@ -873,18 +914,18 @@ def _build_provenance(
         if tuple_type(values) != (*public_fields, *private_fields):
             fail("bootstrap_identity_teardown_evidence.output_invalid")
         for name, item in values.items():
-            set_value(value, name, item)
+            write_slot(value, name, item)
         expected_snapshot = snapshot(value)
         public_projection = tuple_type(
             (
                 name,
                 format_datetime(item, "%Y-%m-%dT%H:%M:%SZ")
-                if type_of(item := read_attr(value, name)) is datetime_type
+                if type_of(item := read_slot(value, name)) is datetime_type
                 else item,
             )
             for name in public_fields
         )
-        set_value(value, "_proof_sha256", proof(value, expected_snapshot))
+        write_slot(value, "_proof_sha256", proof(value, expected_snapshot))
         issued[value] = (process_id(), expected_snapshot, public_projection)
         if not is_authenticated(value):
             issued.pop(value, None)
@@ -898,7 +939,44 @@ _authenticate, _bound_is_authenticated, _bound_public_projection = _build_proven
 AuthenticatedBootstrapIdentityTeardownEvidence._is_authenticated = (  # type: ignore[method-assign]
     _bound_is_authenticated
 )
+
+
+def _bind_module_verifier(
+    verify: Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], bool],
+) -> Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], bool]:
+    def is_authenticated_bootstrap_identity_teardown_evidence(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    ) -> bool:
+        """Verify process-local provenance without mutable class-method dispatch."""
+
+        return verify(value)
+
+    return is_authenticated_bootstrap_identity_teardown_evidence
+
+
+is_authenticated_bootstrap_identity_teardown_evidence = _bind_module_verifier(
+    _bound_is_authenticated
+)
+
+
+def _bind_public_projection(
+    project: Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], dict[str, Any]],
+) -> Callable[[AuthenticatedBootstrapIdentityTeardownEvidence], dict[str, Any]]:
+    def public_projection(
+        value: AuthenticatedBootstrapIdentityTeardownEvidence,
+    ) -> dict[str, Any]:
+        return project(value)
+
+    return public_projection
+
+
+_public_projection = _bind_public_projection(_bound_public_projection)
+
+
+del _bind_module_verifier
+del _bind_public_projection
 del _bound_is_authenticated
+del _bound_public_projection
 
 
 def authenticate_bootstrap_identity_teardown_evidence(
@@ -912,13 +990,6 @@ def authenticate_bootstrap_identity_teardown_evidence(
         raise
     except Exception:
         _fail("bootstrap_identity_teardown_evidence.evidence_invalid")
-
-
-def _public_projection(
-    value: AuthenticatedBootstrapIdentityTeardownEvidence,
-    project: Callable[..., dict[str, Any]] = _bound_public_projection,
-) -> dict[str, Any]:
-    return project(value)
 
 
 def main(argv: list[str] | None = None) -> int:
