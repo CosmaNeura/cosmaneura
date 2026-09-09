@@ -103,8 +103,8 @@
     "executable": false
   },
   "status": {
-    "sealed_request_plan_implemented": true,
-    "one_shot_get_transport_implemented": true,
+    "dormant_request_plan_compiler_implemented": true,
+    "one_shot_get_transport_implemented": false,
     "bootstrap_job_semantic_observer_implemented": false,
     "bootstrap_job_attachment_authenticator_implemented": false,
     "live_provider_calls_enabled": false,
@@ -113,6 +113,7 @@
     "activation_ready": false,
     "public_activation_failure": "activation.sanitizer_bootstrap_job_live_provider_unavailable",
     "activation_blockers": [
+      "isolated_transport_boundary_unimplemented",
       "authenticated_runtime_binding_unavailable",
       "authenticated_bootstrap_identity_unavailable",
       "authenticated_bootstrap_image_unavailable",

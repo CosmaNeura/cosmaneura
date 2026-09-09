@@ -1095,7 +1095,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_305_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_295_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -1190,7 +1190,7 @@ def test_sanitizer_observer_shards_partition_all_305_collected_cases_once() -> N
     assert len(connection_plan_state) == 4
     assert len(connection_plan_output) == 2
     assert len(connection_plan_contract) == 13
-    assert len(bootstrap_binding) == 90
+    assert len(bootstrap_binding) == 80
     assert len(bootstrap_binding_digest) == 1
     assert len(bootstrap_binding_ancestry) == 2
     assert len(bootstrap_binding_state) == 1
@@ -1198,9 +1198,9 @@ def test_sanitizer_observer_shards_partition_all_305_collected_cases_once() -> N
     assert len(bootstrap_binding_duplicate) == 1
     assert len(bootstrap_binding_tamper) == 1
     assert len(bootstrap_binding_failure) == 1
-    assert len(bootstrap_binding_family) == 98
+    assert len(bootstrap_binding_family) == 88
     assert len(integrity) == 39
-    assert len(family) == 305
+    assert len(family) == 295
     assert all(len(group) == len(set(group)) for group in groups)
     assert len(bootstrap_binding_family) == len(set(bootstrap_binding_family))
     assert len(family) == len(set(family))
@@ -1278,13 +1278,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(privileged_global_connection_plan) == 24
     assert len(bootstrap_binding_plan) == 28
     assert len(bootstrap_job_attachment_contract) == 44
-    assert len(bootstrap_job_live_provider) == 26
+    assert len(bootstrap_job_live_provider) == 16
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 591
+    assert len(family) == 581
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))

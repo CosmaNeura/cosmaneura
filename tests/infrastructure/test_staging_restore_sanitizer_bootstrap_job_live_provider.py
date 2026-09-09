@@ -2,28 +2,16 @@ from __future__ import annotations
 
 import copy
 import dataclasses
-import email.message
 import hashlib
 import inspect
-import io
-import json
 import pickle
 import sys
-import urllib.error
-import urllib.parse
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from scripts import (  # noqa: E402
-    staging_restore_runtime_adapters as adapters,
-)
 from scripts import (  # noqa: E402
     staging_sanitizer_bootstrap_job_live_provider as provider,
 )
@@ -31,12 +19,6 @@ from scripts import (  # noqa: E402
 sys.path.pop(0)
 
 CLIENT_ID = "11111111-1111-4111-8111-111111111111"
-WRONG_CLIENT_ID = "22222222-2222-4222-8222-222222222222"
-IDENTITY_ENDPOINT = "http://127.0.0.1:42356/msi/token"
-IDENTITY_HEADER = "opaque-platform-secret"
-TOKEN = "header.payload.signature"
-NOW_EPOCH = 2_000_000_000
-NOW = datetime(2033, 5, 18, 3, 33, 20, tzinfo=UTC)
 REGISTRY_ID = (
     f"{provider.SUBSCRIPTION_SCOPE}/resourceGroups/cosmaneura-staging-rehearsal-control/"
     "providers/Microsoft.ContainerRegistry/registries/cosmaneurastgrecovery"
@@ -44,105 +26,8 @@ REGISTRY_ID = (
 ROLE_ASSIGNMENT_NAME = "33333333-3333-4333-8333-333333333333"
 
 
-class Headers:
-    def __init__(self, values: Mapping[str, str | list[str]]) -> None:
-        self.values = {
-            name.lower(): value if isinstance(value, list) else [value]
-            for name, value in values.items()
-        }
-
-    def get_all(self, name: str) -> list[str] | None:
-        return self.values.get(name.lower())
-
-
-class FakeResponse:
-    def __init__(
-        self,
-        body: bytes,
-        *,
-        status: int = 200,
-        url: str = "",
-        headers: Mapping[str, str | list[str]] | None = None,
-    ) -> None:
-        self.body = body
-        self.status = status
-        self.url = url
-        self.headers = Headers(
-            headers
-            or {
-                "Content-Type": "application/json; charset=utf-8",
-                "Content-Length": str(len(body)),
-            }
-        )
-
-    def __enter__(self) -> FakeResponse:
-        return self
-
-    def __exit__(self, *_args: Any) -> None:
-        return None
-
-    def geturl(self) -> str:
-        return self.url
-
-    def read(self, maximum: int) -> bytes:
-        return self.body[:maximum]
-
-
-class FakeOpener:
-    def __init__(self, responses: list[Any]) -> None:
-        self.responses = responses
-        self.calls: list[tuple[Any, int]] = []
-
-    def open(self, request: Any, *, timeout: int) -> Any:
-        self.calls.append((request, timeout))
-        value = self.responses.pop(0)
-        if isinstance(value, Exception):
-            raise value
-        if not value.url:
-            value.url = request.full_url
-        return value
-
-
-class RaisingTimezone(tzinfo):
-    def utcoffset(self, _value: datetime | None) -> timedelta:
-        raise RuntimeError("clock secret")
-
-    def dst(self, _value: datetime | None) -> timedelta:
-        return timedelta(0)
-
-
-@contextmanager
-def _deadline(_timeout_seconds: int) -> Iterator[None]:
-    yield
-
-
-def _token_body(*, client_id: str = CLIENT_ID) -> bytes:
-    return json.dumps(
-        {
-            "access_token": TOKEN,
-            "client_id": client_id,
-            "expires_on": str(NOW_EPOCH + 3600),
-            "resource": adapters.ARM_RESOURCE,
-            "token_type": "Bearer",
-        },
-        separators=(",", ":"),
-    ).encode()
-
-
-def _token_source(
-    opener: FakeOpener, *, client_id: str = CLIENT_ID
-) -> adapters.ManagedIdentityTokenSource:
-    return adapters.ManagedIdentityTokenSource(
-        client_id=client_id,
-        identity_endpoint=IDENTITY_ENDPOINT,
-        identity_header=IDENTITY_HEADER,
-        opener=opener,
-        clock=lambda: NOW_EPOCH,
-    )
-
-
 def _plan(phase: str = "present") -> provider.BootstrapJobLiveReadPlan:
-    return provider._seal_reviewed_read_plan(
+    return provider._compile_dormant_read_plan(
         phase=phase,
         identity_client_id=CLIENT_ID,
         private_registry_resource_id=REGISTRY_ID,
@@ -150,50 +35,7 @@ def _plan(phase: str = "present") -> provider.BootstrapJobLiveReadPlan:
     )
 
 
-def _http_error(url: str, status: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError(
-        url, status, "refused", email.message.Message(), io.BytesIO(b"secret")
-    )
-
-
-def _provider(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    phase: str = "present",
-    arm_responses: list[Any] | None = None,
-    client_id: str = CLIENT_ID,
-    clock: Any = lambda: NOW,
-    monotonic: Any = lambda: 1.0,
-) -> tuple[
-    provider.AzureBootstrapJobLiveProvider,
-    provider.BootstrapJobLiveReadPlan,
-    FakeOpener,
-    FakeOpener,
-]:
-    plan = _plan(phase)
-    identity_opener = FakeOpener([FakeResponse(_token_body(client_id=client_id))])
-    if arm_responses is None:
-        arm_responses = [
-            FakeResponse(json.dumps({"key": request.key}).encode())
-            for request in plan._requests
-        ]
-    arm_opener = FakeOpener(arm_responses)
-    monkeypatch.setattr(adapters, "_default_opener", lambda: arm_opener)
-    monkeypatch.setattr(adapters, "_wall_clock_deadline", _deadline)
-    monkeypatch.setattr(provider, "_utc_now", clock)
-    monkeypatch.setattr(provider, "_monotonic_now", monotonic)
-    live = provider.AzureBootstrapJobLiveProvider._from_reviewed_plan(
-        plan=plan,
-        token_source=_token_source(identity_opener, client_id=client_id),
-    )
-    return live, plan, identity_opener, arm_opener
-
-
-def _headers(request: Any) -> dict[str, str]:
-    return {name.lower(): value for name, value in request.header_items()}
-
-
-def test_policy_is_hash_pinned_upstream_bound_and_dormant() -> None:
+def test_policy_is_hash_pinned_upstream_bound_and_fully_dormant() -> None:
     raw = provider.POLICY_PATH.read_bytes()
     policy = provider.load_bootstrap_job_live_provider_policy()
 
@@ -206,13 +48,18 @@ def test_policy_is_hash_pinned_upstream_bound_and_dormant() -> None:
     assert policy["transport"]["method"] == "GET"
     assert policy["transport"]["maximum_token_requests"] == 1
     assert policy["transport"]["maximum_arm_get_requests_per_plan"] == 4
-    assert policy["status"]["one_shot_get_transport_implemented"] is True
+    assert policy["status"]["dormant_request_plan_compiler_implemented"] is True
+    assert policy["status"]["one_shot_get_transport_implemented"] is False
     assert policy["status"]["live_provider_calls_enabled"] is False
     assert policy["status"]["activation_ready"] is False
+    assert (
+        "isolated_transport_boundary_unimplemented"
+        in policy["status"]["activation_blockers"]
+    )
     assert all(value is False for value in policy["claims"].values())
 
 
-def test_policy_mutations_and_public_activation_refuse() -> None:
+def test_policy_mutations_and_every_public_activation_request_refuse() -> None:
     policy = provider.load_bootstrap_job_live_provider_policy()
     mutations = (
         ("method", "PUT"),
@@ -229,22 +76,24 @@ def test_policy_mutations_and_public_activation_refuse() -> None:
         ):
             provider.validate_bootstrap_job_live_provider_policy(changed)
 
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match=f"^{provider.ACTIVATION_FAILURE}$",
+    for activation in (
+        lambda: provider.validate_bootstrap_job_live_provider_policy(
+            policy, executable=True
+        ),
+        lambda: provider.load_bootstrap_job_live_provider_policy(executable=True),
+        provider.build_bootstrap_job_live_provider,
     ):
-        provider.load_bootstrap_job_live_provider_policy(executable=True)
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match=f"^{provider.ACTIVATION_FAILURE}$",
-    ):
-        provider.build_bootstrap_job_live_provider()
+        with pytest.raises(
+            provider.SanitizerBootstrapJobLiveProviderFailure,
+            match=f"^{provider.ACTIVATION_FAILURE}$",
+        ):
+            activation()
 
 
 @pytest.mark.parametrize(
     "phase,count", (("initial_absence", 3), ("present", 4), ("final_absence", 3))
 )
-def test_sealed_plans_have_exact_phase_order_and_statuses(
+def test_dormant_plans_have_exact_phase_order_and_statuses(
     phase: str, count: int
 ) -> None:
     plan = _plan(phase)
@@ -259,6 +108,10 @@ def test_sealed_plans_have_exact_phase_order_and_statuses(
         item["expected_status"] for item in policy["plans"][phase]
     ]
     assert all(item._is_valid() for item in plan._requests)
+    assert not any(
+        hasattr(plan, name)
+        for name in ("execute", "read", "read_all", "token", "token_source")
+    )
 
 
 @pytest.mark.parametrize(
@@ -272,10 +125,25 @@ def test_sealed_plans_have_exact_phase_order_and_statuses(
                 "/subscriptions/", "/tenants/"
             )
         },
+        {
+            "private_registry_resource_id": REGISTRY_ID.replace(
+                "cosmaneura-staging-rehearsal-control", "."
+            )
+        },
+        {
+            "private_registry_resource_id": REGISTRY_ID.replace(
+                "cosmaneura-staging-rehearsal-control", ".."
+            )
+        },
+        {
+            "private_registry_resource_id": REGISTRY_ID.replace(
+                "cosmaneura-staging-rehearsal-control", "resource-group."
+            )
+        },
         {"private_registry_acrpull_role_assignment_name": "not-a-uuid"},
     ),
 )
-def test_plan_builder_rejects_redirected_or_malformed_inputs(
+def test_plan_compiler_rejects_redirected_or_malformed_inputs(
     change: dict[str, str],
 ) -> None:
     values = {
@@ -289,10 +157,10 @@ def test_plan_builder_rejects_redirected_or_malformed_inputs(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match="^bootstrap_job_live_provider.plan_invalid$",
     ):
-        provider._seal_reviewed_read_plan(**values)
+        provider._compile_dormant_read_plan(**values)
 
 
-def test_plan_is_exact_type_sealed_tamper_evident_and_nonserializable() -> None:
+def test_dormant_plan_is_nonserializable_and_tampering_invalidates_it() -> None:
     plan = _plan()
     with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
         provider.BootstrapJobLiveReadPlan()
@@ -302,286 +170,36 @@ def test_plan_is_exact_type_sealed_tamper_evident_and_nonserializable() -> None:
         copy.deepcopy(plan)
     with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
         pickle.dumps(plan)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(plan, "request_plan_sha256", "0" * 64)
 
     object.__setattr__(plan, "request_plan_sha256", "0" * 64)
     assert not plan._is_valid()
 
-    for invalid_group in (".", "..", "resource-group."):
-        with pytest.raises(
-            provider.SanitizerBootstrapJobLiveProviderFailure,
-            match="^bootstrap_job_live_provider.plan_invalid$",
-        ):
-            provider._seal_reviewed_read_plan(
-                phase="present",
-                identity_client_id=CLIENT_ID,
-                private_registry_resource_id=REGISTRY_ID.replace(
-                    "cosmaneura-staging-rehearsal-control", invalid_group
-                ),
-                private_registry_acrpull_role_assignment_name=ROLE_ASSIGNMENT_NAME,
-            )
 
-
-def test_present_plan_uses_one_token_and_exact_get_sequence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    live, plan, identity_opener, arm_opener = _provider(monkeypatch)
-    responses = live.read_all()
-
-    assert len(identity_opener.calls) == 1
-    assert len(arm_opener.calls) == 4
-    assert len(responses) == 4
-    for call, request_item, response in zip(
-        arm_opener.calls, plan._requests, responses, strict=True
-    ):
-        request, timeout = call
-        query = urllib.parse.urlencode({"api-version": request_item.api_version})
-        assert request.full_url == (
-            f"{adapters.ARM_ORIGIN}{request_item.resource_id}?{query}"
-        )
-        assert request.method == "GET"
-        assert request.data is None
-        assert timeout == adapters.REQUEST_TIMEOUT_SECONDS
-        assert _headers(request) == {
-            "accept": "application/json",
-            "accept-encoding": "identity",
-            "authorization": f"Bearer {TOKEN}",
-        }
-        assert response._is_authenticated_for(plan, request_item)
-        assert response.status == 200
-        expected_body = json.dumps({"key": request_item.key}).encode()
-        assert response.body_sha256 == hashlib.sha256(expected_body).hexdigest()
-        assert not hasattr(response, "_body")
-        assert not hasattr(response, "_reader")
-
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.already_used$",
-    ):
-        live.read_all()
-    assert len(identity_opener.calls) == 1
-    assert len(arm_opener.calls) == 4
-
-
-@pytest.mark.parametrize("phase", ("initial_absence", "final_absence"))
-def test_absence_plans_accept_only_exact_404s_without_retaining_error_bodies(
-    phase: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    plan = _plan(phase)
-    errors = []
-    for request_item in plan._requests:
-        query = urllib.parse.urlencode({"api-version": request_item.api_version})
-        url = f"{adapters.ARM_ORIGIN}{request_item.resource_id}?{query}"
-        errors.append(_http_error(url, 404))
-    live, actual_plan, identity_opener, arm_opener = _provider(
-        monkeypatch, phase=phase, arm_responses=errors
-    )
-
-    responses = live.read_all()
-
-    assert len(identity_opener.calls) == 1
-    assert len(arm_opener.calls) == len(plan._requests)
-    assert [item.status for item in responses] == [404] * len(responses)
-    assert all(
-        item._is_authenticated_for(actual_plan, request_item)
-        for item, request_item in zip(responses, actual_plan._requests, strict=True)
-    )
-    assert all(
-        item.body_sha256 == hashlib.sha256(b"").hexdigest() for item in responses
-    )
-    assert all(not hasattr(item, "_reader") for item in responses)
-
-
-def test_transport_requires_exact_plan_identity_and_configuration() -> None:
-    plan = _plan()
-    identity_opener = FakeOpener([FakeResponse(_token_body(client_id=WRONG_CLIENT_ID))])
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.transport_invalid$",
-    ):
-        provider.AzureBootstrapJobLiveProvider._from_reviewed_plan(
-            plan=plan,
-            token_source=_token_source(identity_opener, client_id=WRONG_CLIENT_ID),
-        )
-    assert tuple(
-        inspect.signature(
-            provider.AzureBootstrapJobLiveProvider._from_reviewed_plan
-        ).parameters
-    ) == ("plan", "token_source")
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.transport_invalid$",
-    ):
-        provider.AzureBootstrapJobLiveProvider()
-
-
-def test_transport_configuration_and_consumption_gate_are_immutable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    live, _plan_value, _identity, _arm = _provider(monkeypatch)
-    assert not hasattr(live, "_policy")
-    assert not hasattr(live, "_used")
-    for name in (
-        "_arm_opener",
-        "_claim",
-        "_clock",
-        "_deadline_factory",
-        "_monotonic",
-        "_plan",
-        "_token_source",
-        "_transport",
-    ):
-        assert not hasattr(live, name)
-    with pytest.raises(AttributeError):
-        object.__setattr__(live, "_transport", object())
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.transport_invalid$",
-    ):
-        live._execute = lambda: ()
-
-    live.read_all()
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.already_used$",
-    ):
-        live.read_all()
-
-
-def test_remaining_elapsed_budget_caps_each_arm_request(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ticks = iter([0.0] * 14 + [122.0] * 10)
-    live, _plan_value, _identity, arm = _provider(monkeypatch, monotonic=ticks.__next__)
-    live.read_all()
-    assert [timeout for _request, timeout in arm.calls] == [30, 30, 30, 28]
-
-
-@pytest.mark.parametrize(
-    "response,code",
-    (
-        (FakeResponse(b"{}", status=201), "provider_refused"),
-        (FakeResponse(b"not-json"), "response_invalid"),
-        (
-            FakeResponse(
-                b"{}",
-                headers={"Content-Type": "text/plain", "Content-Length": "2"},
-            ),
-            "response_invalid",
-        ),
-        (
-            FakeResponse(
-                b"{}",
-                headers={
-                    "Content-Type": "application/json",
-                    "Content-Length": str(adapters.MAXIMUM_PROVIDER_BYTES + 1),
-                },
-            ),
-            "response_too_large",
-        ),
-        (RuntimeError("provider secret"), "provider_unavailable"),
-    ),
-)
-def test_provider_failures_are_bounded_and_content_free(
-    response: Any, code: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    live, _plan_value, _identity, _arm = _provider(
-        monkeypatch, arm_responses=[response]
-    )
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match=rf"^bootstrap_job_live_provider\.{code}$",
-    ) as caught:
-        live.read_all()
-    assert "secret" not in str(caught.value)
-
-
-def test_status_or_url_mismatch_refuses_without_retry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    plan = _plan()
-    first = plan._requests[0]
-    query = urllib.parse.urlencode({"api-version": first.api_version})
-    expected_url = f"{adapters.ARM_ORIGIN}{first.resource_id}?{query}"
-    for response, code in (
-        (_http_error(expected_url, 404), "provider_refused"),
-        (
-            FakeResponse(b"{}", url="https://example.invalid/redirect"),
-            "redirect_refused",
-        ),
-    ):
-        live, _plan_value, _identity, arm = _provider(
-            monkeypatch, arm_responses=[response]
-        )
-        with pytest.raises(
-            provider.SanitizerBootstrapJobLiveProviderFailure,
-            match=rf"^bootstrap_job_live_provider\.{code}$",
-        ):
-            live.read_all()
-        assert len(arm.calls) == 1
-
-
-def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    for clock, monotonic, code in (
-        (lambda: datetime(2033, 5, 18), lambda: 1.0, "clock_invalid"),
-        (
-            lambda: datetime(2033, 5, 18, tzinfo=RaisingTimezone()),
-            lambda: 1.0,
-            "clock_invalid",
-        ),
-        (lambda: NOW, lambda: 10**10000, "clock_invalid"),
-        (lambda: NOW, iter((1.0, 200.0)).__next__, "deadline"),
-    ):
-        live, _plan_value, identity, arm = _provider(
-            monkeypatch, clock=clock, monotonic=monotonic
-        )
-        with pytest.raises(
-            provider.SanitizerBootstrapJobLiveProviderFailure,
-            match=rf"^bootstrap_job_live_provider\.{code}$",
-        ) as caught:
-            live.read_all()
-        assert "secret" not in str(caught.value)
-        assert len(arm.calls) == 0
-        assert len(identity.calls) in {0, 1}
-
-
-def test_response_is_sealed_tamper_evident_and_nonserializable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    live, plan, _identity, _arm = _provider(monkeypatch)
-    response = live.read_all()[0]
-    request_item = plan._requests[0]
-
-    with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
-        provider.AuthenticatedBootstrapJobArmRead()
-    with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
-        copy.copy(response)
-    with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
-        pickle.dumps(response)
-    with pytest.raises(TypeError):
-        dataclasses.asdict(cast(Any, response))
-    with pytest.raises(TypeError):
-        dataclasses.astuple(cast(Any, response))
-    with pytest.raises(AttributeError):
-        getattr(response, "_body")
-    with pytest.raises(AttributeError):
-        getattr(response, "_reader")
-    assert not hasattr(provider, "_BODY_ACCESS_SEAL")
-    assert not hasattr(provider, "_consume_response_body")
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.response_invalid$",
-    ):
-        response.status = 404
-
-    object.__setattr__(response, "status", 404)
-    assert not response._is_authenticated_for(plan, request_item)
-
-
-def test_module_has_no_mutation_database_process_or_public_runtime_surface() -> None:
+def test_module_exposes_no_token_arm_or_response_execution_route() -> None:
     source = Path(provider.__file__).read_text()
-    assert 'method="GET"' in source
+    assert (
+        list(inspect.signature(provider.build_bootstrap_job_live_provider).parameters)
+        == []
+    )
+    assert not hasattr(provider, "AzureBootstrapJobLiveProvider")
+    assert not hasattr(provider, "AuthenticatedBootstrapJobArmRead")
+    assert not hasattr(provider, "adapters")
+    for forbidden in (
+        "urllib.request",
+        "get_token(",
+        '"Authorization":',
+        "_default_opener",
+        "_wall_clock_deadline",
+        "_HttpOpener",
+        "_read_json_response",
+    ):
+        assert forbidden not in source
+
+
+def test_module_has_no_mutation_database_process_or_network_surface() -> None:
+    source = Path(provider.__file__).read_text()
     for forbidden in (
         'method="POST"',
         'method="PUT"',
@@ -591,9 +209,8 @@ def test_module_has_no_mutation_database_process_or_public_runtime_surface() -> 
         "psycopg",
         "asyncpg",
         "socket",
+        "http.client",
+        "import requests",
+        "from requests",
     ):
         assert forbidden not in source
-    assert (
-        list(inspect.signature(provider.build_bootstrap_job_live_provider).parameters)
-        == []
-    )
