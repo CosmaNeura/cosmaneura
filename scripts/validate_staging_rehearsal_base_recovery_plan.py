@@ -1266,9 +1266,16 @@ def cleanup():
         try:
             if created_fd is None:created_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
             created_metadata=os.fstat(created_fd);created_linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False);created_identity=(created_metadata.st_dev,created_metadata.st_ino,created_metadata.st_uid)
-            if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or (not created_fd_was_established and (created_identity!=(created_linked.st_dev,created_linked.st_ino,created_linked.st_uid) or os.listdir(created_fd))) or (snapshot_identity is not None and snapshot_identity!=created_identity):raise ValueError
-            safe_acl(created_fd)
-            if not remove_snapshot(snapshot_name,created_fd,created_identity):raise ValueError
+            if created_fd_was_established:
+                metadata_safe=stat.S_ISDIR(created_metadata.st_mode) and created_metadata.st_uid==os.geteuid() and stat.S_IMODE(created_metadata.st_mode)==0o700
+                if snapshot_identity is None or not remove_snapshot(snapshot_name,created_fd,snapshot_identity):raise ValueError
+                try:safe_acl(created_fd)
+                except (OSError,ValueError):metadata_safe=False
+                if not metadata_safe:ok=False
+            else:
+                if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or created_identity!=(created_linked.st_dev,created_linked.st_ino,created_linked.st_uid) or os.listdir(created_fd) or snapshot_identity is not None:raise ValueError
+                safe_acl(created_fd)
+                if not remove_snapshot(snapshot_name,created_fd,created_identity):raise ValueError
         except (OSError,ValueError):ok=False
         finally:
             if created_fd is not None:os.close(created_fd)
@@ -1283,6 +1290,12 @@ def cleanup():
         lock_fd=None
     if previous_mask is not None and ok:signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
     return ok
+def cleanup_until_complete():
+    interrupted=None
+    while True:
+        try:return cleanup(),interrupted
+        except SystemExit as error:
+            if interrupted is None:interrupted=error
 def valid_snapshot_name(name):
     suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
 def terminate(signum,_frame):raise SystemExit(128+signum)
@@ -1339,7 +1352,9 @@ try:
         print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
     runpy.run_module("azure.cli",run_name="__main__")
 finally:
-    if not cleanup():print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    cleanup_ok,cleanup_interrupted=cleanup_until_complete()
+    if not cleanup_ok:print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    if cleanup_interrupted is not None:raise cleanup_interrupted
 """
     return source.replace("__EXPECTED__", repr(dict(EXPECTED_AZURE_CONFIG_SHA256S))).replace("__NAMES__", repr(AZURE_CONFIG_FILES)).replace("__MAXIMUM__", str(MAXIMUM_AZURE_CONFIG_FILE_BYTES)).replace("__PARENT__", repr(str(runtime_directory))).replace("__BINDING_ENV__", repr(AZURE_CONFIG_BINDING_ENV)).replace("__LOCK__", repr(AZURE_CONFIG_LOCK_NAME))
 def _azure_cli_wrapper(runtime_directory: Path) -> bytes:

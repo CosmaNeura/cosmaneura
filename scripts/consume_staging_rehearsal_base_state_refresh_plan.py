@@ -39,7 +39,7 @@ _VALIDATOR = (
     .with_name("validate_staging_rehearsal_base_state_refresh_plan.py")
 )
 _BOOTSTRAP_DIGESTS = {
-    _VALIDATOR.name: "6fbefd292b703d406123a4cbf97f3cd18bd45f43679afb861ea991320ee4b078",
+    _VALIDATOR.name: "e08ba655385999404d1b7be9a1107fd6ccf164a92608d45f174bf4b88ea90fa4",
 }
 _MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
 
