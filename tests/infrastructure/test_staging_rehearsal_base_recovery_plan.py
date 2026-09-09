@@ -8,7 +8,9 @@ import inspect
 import io
 import json
 import os
+import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import zipfile
@@ -626,6 +628,7 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
     pins = {"EXPECTED_TOFU_PATH": tofu, "EXPECTED_AZURE_CLI_PATH": azure_cli, "EXPECTED_TOFU_SHA256": hashlib.sha256(tofu.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_SHA256": hashlib.sha256(azure_cli.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_VERSION_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(), "EXPECTED_AZURE_CLOUD_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest()}
     for name, value in pins.items(): monkeypatch.setattr(recovery, name, value)  # noqa: E701
+    monkeypatch.setattr(recovery, "_trusted_executable_source", lambda path, **_: path)
     closure_sha256 = "c" * 64
 
     def fake_snapshot_azure_cli_closure(runtime_directory: Path) -> tuple[Path, str]:
@@ -674,11 +677,11 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
     runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (runtime / "azure-home").mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
-    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,sys\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}))\n')
+    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}))\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
     assert recovery._azure_cli_environment(runtime)["HOME"] == str(runtime / "azure-home"); monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": str(runtime / "azure-home"), "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
-    wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)
+    lock = runtime / recovery.AZURE_CONFIG_LOCK_NAME; lock.touch(mode=0o600); lock.chmod(0o600); wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)  # noqa: E702
     environment = {"AZURE_CONFIG_DIR": str(config), recovery.AZURE_CONFIG_BINDING_ENV: binding}
     result = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False); observed = json.loads(result.stdout)
     assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and observed["home"] == str(runtime / "azure-home") and not observed["netrc"] and not Path(observed["path"]).exists()
@@ -689,8 +692,35 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     moved = home / ".azure-old"; config.rename(moved); shutil.copytree(moved, config)
     refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
     assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n"
+    shutil.rmtree(config); moved.rename(config)
+    for termination_signal in (signal.SIGHUP, signal.SIGTERM):
+        environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; process = subprocess.Popen([wrapper, "wait-signal"], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: E702
+        assert process.stdout is not None; selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ); assert selector.select(5) and process.stdout.readline() == b"ready\n"; selector.close()  # noqa: E702
+        process.send_signal(termination_signal); stdout, stderr = process.communicate(timeout=5)  # noqa: E702
+        assert process.returncode == 128 + termination_signal and stdout == b"" and stderr == b"" and not any(path.name in values for path in runtime.rglob("*"))
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; broken = subprocess.run([wrapper, "break-cleanup"], env=environment, capture_output=True, check=False)
     assert broken.returncode == 2 and b"azure_cli_guard_refused\n" in broken.stderr and not any(path.name in values for path in runtime.rglob("*"))
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS extended ACL semantics")
+def test_azure_config_and_runtime_acl_grants_are_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, _ = _azure_home(tmp_path, monkeypatch); config = home / ".azure"; runtime = tmp_path / "runtime"; runtime.mkdir(mode=0o700)  # noqa: E702
+    for path in (home, config, config / "config"):
+        subprocess.run(["/bin/chmod", "+a", "everyone allow read", str(path)], check=True)
+        with pytest.raises(recovery.RecoveryPlanError, match="ACL grants or inherits external access"): recovery._validated_azure_config(home)
+        subprocess.run(["/bin/chmod", "-N", str(path)], check=True)
+    subprocess.run(["/bin/chmod", "+a", "everyone allow read", str(runtime)], check=True)
+    with pytest.raises(recovery.RecoveryPlanError, match="ACL grants or inherits external access"): recovery._require_protected_directory(runtime, label="runtime")
+
+
+def test_stale_snapshot_swap_scrubs_original_without_deleting_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = tmp_path / "runtime"; runtime.mkdir(mode=0o700); stale = runtime / ".azure-config-stale1"; moved = runtime / ".azure-config-moved1"; replacement = runtime / "replacement"; stale.mkdir(mode=0o700); replacement.mkdir(mode=0o700)  # noqa: E702
+    _protected_file(stale / "msal_token_cache.json", b"credential", mode=0o600); _protected_file(replacement / "sentinel", b"keep", mode=0o600); real_fchmod = os.fchmod; swapped = False  # noqa: E702
+    def swap_after_validation(descriptor: int, mode: int) -> None:
+        nonlocal swapped
+        real_fchmod(descriptor, mode)
+        if not swapped: stale.rename(moved); replacement.rename(stale); swapped = True  # noqa: E701
+    monkeypatch.setattr(recovery.os, "fchmod", swap_after_validation)
+    with pytest.raises(recovery.RecoveryPlanError, match="snapshot changed"): recovery._remove_stale_azure_config_snapshots(runtime)
+    assert (stale / "sentinel").read_bytes() == b"keep" and moved.is_dir() and not any(moved.iterdir())
 def test_azure_config_capture_rejects_directory_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, values = _azure_home(tmp_path, monkeypatch); config = home / ".azure"  # noqa: E702
     config.chmod(0o755)
