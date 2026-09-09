@@ -601,11 +601,15 @@ def _require_protected_directory(path: Path, *, label: str) -> None:
 def _create_protected_directory(path: Path, *, label: str) -> None:
     _reject_symlink_components(path, label=label, allow_missing_leaf=True)
     parent = _open_protected_directory(path.parent, label=f"{label} parent")
+    previous_umask: int | None = None
     try:
+        previous_umask = os.umask(0o077)
         os.mkdir(path.name, 0o700, dir_fd=parent)
     except OSError as exc:
         raise RecoveryPlanError(f"{label} must not already exist") from exc
     finally:
+        if previous_umask is not None:
+            os.umask(previous_umask)
         os.close(parent)
     _require_protected_directory(path, label=label)
 
@@ -860,7 +864,9 @@ def _open_azure_config_lock(runtime_directory: Path) -> int:
         try:
             descriptor = os.open(AZURE_CONFIG_LOCK_NAME, flags, dir_fd=parent)
         except FileNotFoundError:
+            previous_umask: int | None = None
             try:
+                previous_umask = os.umask(0o077)
                 descriptor = os.open(
                     AZURE_CONFIG_LOCK_NAME,
                     flags | os.O_CREAT | os.O_EXCL,
@@ -869,6 +875,9 @@ def _open_azure_config_lock(runtime_directory: Path) -> int:
                 )
             except FileExistsError:
                 descriptor = os.open(AZURE_CONFIG_LOCK_NAME, flags, dir_fd=parent)
+            finally:
+                if previous_umask is not None:
+                    os.umask(previous_umask)
         metadata = os.fstat(descriptor)
         linked = os.stat(AZURE_CONFIG_LOCK_NAME, dir_fd=parent, follow_symlinks=False)
         if (
@@ -1173,7 +1182,7 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
 # fmt: off
 def _azure_cli_guard_source(runtime_directory: Path) -> str:
     source = r"""import ctypes,errno,fcntl,hashlib,json,os,runpy,secrets,shutil,signal,stat,sys
-EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=(signal.SIGHUP,signal.SIGTERM)
+EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None)
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
 def acl_state(fd):
