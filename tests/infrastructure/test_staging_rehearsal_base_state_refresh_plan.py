@@ -282,7 +282,10 @@ def _plan() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         "configuration": {"provider_config": _providers()},
         "prior_state": {"values": {"root_module": {"resources": prior_resources}}},
         "planned_values": {"root_module": {"resources": []}},
-        "relevant_attributes": copy.deepcopy(refresh.EXPECTED_RELEVANT_ATTRIBUTES),
+        "relevant_attributes": [
+            {"resource": resource, "attribute": list(attribute)}
+            for resource, attribute in sorted(refresh.EXPECTED_RELEVANT_ATTRIBUTES)
+        ],
         "resource_drift": drift,
         "output_changes": output_changes,
     }
@@ -412,6 +415,45 @@ def test_digest_mismatch_precedes_provider_access(
         with pytest.raises(refresh.RefreshPlanError, match="reviewed snapshot"):
             operation()
     assert called == []
+
+
+@pytest.mark.parametrize("target", ["storage", "output", "mask", "embedded"])
+def test_boolean_number_coercion_fails_closed(target: str) -> None:
+    plan, before, after = _plan()
+    if target == "storage":
+        storage = next(
+            item
+            for item in plan["resource_drift"]
+            if item["address"] == refresh.STORAGE_ADDRESS
+        )
+        storage["change"]["after"]["large_file_share_enabled"] = 0
+        refresh._state_attributes(after)[refresh.STORAGE_ADDRESS][
+            "large_file_share_enabled"
+        ] = 0
+    elif target == "output":
+        plan["output_changes"]["control_plane_enabled"]["after_sensitive"] = 0
+    elif target == "mask":
+        subnet = next(
+            item
+            for item in plan["resource_drift"]
+            if item["address"] in refresh.SUBNET_ADDRESSES
+        )
+        subnet["change"]["after_sensitive"]["address_prefixes"][0] = 0
+    else:
+        before["resources"][0]["instances"][0]["private"] = False
+        after["resources"][0]["instances"][0]["private"] = 0
+    with pytest.raises(refresh.RefreshPlanError):
+        refresh._validate_plan(
+            plan, external_state=before, embedded_state=after, now=NOW
+        )
+
+    remote = copy.deepcopy(before)
+    before["outputs"]["control_plane_enabled"]["value"] = False
+    remote["outputs"]["control_plane_enabled"]["value"] = 0
+    assert not refresh._json_equal(
+        refresh._state_binding_projection(before),
+        refresh._state_binding_projection(remote),
+    )
 
 
 @pytest.mark.parametrize("target", ["role", "storage", "output"])

@@ -193,73 +193,37 @@ EXPECTED_PLAN_FIELDS = frozenset(
 OPTIONAL_EMPTY_PLAN_FIELDS = frozenset(
     {"action_invocations", "deferred_changes", "resource_changes"}
 )
-EXPECTED_RELEVANT_ATTRIBUTES = [
-    {"attribute": [], "resource": "azapi_resource.marker_container"},
-    {"attribute": ["id"], "resource": "azurerm_management_lock.marker[0]"},
-    {"attribute": ["id"], "resource": "azurerm_private_dns_zone.marker_blob[0]"},
+EXPECTED_RELEVANT_ATTRIBUTES = frozenset(
     {
-        "attribute": ["id"],
-        "resource": "azurerm_private_dns_zone_virtual_network_link.marker_blob[0]",
-    },
-    {"attribute": ["id"], "resource": "azurerm_private_endpoint.marker[0]"},
-    {
-        "attribute": ["id"],
-        "resource": 'azurerm_role_assignment.marker_create["cleanup_cleanup"]',
-    },
-    {
-        "attribute": ["id"],
-        "resource": 'azurerm_role_assignment.marker_create["provision_intent"]',
-    },
-    {
-        "attribute": ["id"],
-        "resource": 'azurerm_role_assignment.marker_create["provision_submission"]',
-    },
-    {
-        "attribute": ["id"],
-        "resource": "azurerm_role_assignment.marker_provision_cleanup[0]",
-    },
-    {
-        "attribute": ["id"],
-        "resource": 'azurerm_role_assignment.marker_read["cleanup_intent"]',
-    },
-    {
-        "attribute": ["id"],
-        "resource": 'azurerm_role_assignment.marker_read["cleanup_submission"]',
-    },
-    {
-        "attribute": ["primary_blob_host"],
-        "resource": "azurerm_storage_account.marker[0]",
-    },
-    {"attribute": ["id"], "resource": "azurerm_storage_account.marker[0]"},
-    {
-        "attribute": [],
-        "resource": "azurerm_storage_container_immutability_policy.marker",
-    },
-    {
-        "attribute": ["id"],
-        "resource": (
-            "azurerm_storage_container_immutability_policy.marker["
-            '"restore-cleanups-v4"]'
+        ("azapi_resource.marker_container", ()),
+        ("azurerm_management_lock.marker[0]", ("id",)),
+        ("azurerm_private_dns_zone.marker_blob[0]", ("id",)),
+        ("azurerm_private_dns_zone_virtual_network_link.marker_blob[0]", ("id",)),
+        ("azurerm_private_endpoint.marker[0]", ("id",)),
+        ('azurerm_role_assignment.marker_create["cleanup_cleanup"]', ("id",)),
+        ('azurerm_role_assignment.marker_create["provision_intent"]', ("id",)),
+        ('azurerm_role_assignment.marker_create["provision_submission"]', ("id",)),
+        ("azurerm_role_assignment.marker_provision_cleanup[0]", ("id",)),
+        ('azurerm_role_assignment.marker_read["cleanup_intent"]', ("id",)),
+        ('azurerm_role_assignment.marker_read["cleanup_submission"]', ("id",)),
+        ("azurerm_storage_account.marker[0]", ("id",)),
+        ("azurerm_storage_account.marker[0]", ("primary_blob_host",)),
+        ("azurerm_storage_container_immutability_policy.marker", ()),
+        (
+            'azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"]',
+            ("id",),
         ),
-    },
-    {
-        "attribute": ["id"],
-        "resource": (
-            'azurerm_storage_container_immutability_policy.marker["restore-intents-v4"]'
+        (
+            'azurerm_storage_container_immutability_policy.marker["restore-intents-v4"]',
+            ("id",),
         ),
-    },
-    {
-        "attribute": ["id"],
-        "resource": (
-            "azurerm_storage_container_immutability_policy.marker["
-            '"restore-submissions-v4"]'
+        (
+            'azurerm_storage_container_immutability_policy.marker["restore-submissions-v4"]',
+            ("id",),
         ),
-    },
-    {
-        "attribute": ["id"],
-        "resource": "azurerm_subnet.private_executor_reserved[0]",
-    },
-]
+        ("azurerm_subnet.private_executor_reserved[0]", ("id",)),
+    }
+)
 EXPECTED_MARKER_OUTPUT_TYPE = [
     "object",
     {
@@ -363,6 +327,14 @@ def _validate_pre_refresh_state_digest(state_bytes: bytes) -> None:
         raise RefreshPlanError("pre-refresh state digest is not the reviewed snapshot")
 
 
+def _json_equal(actual: Any, expected: Any) -> bool:
+    try:
+        options = {"sort_keys": True, "separators": (",", ":"), "allow_nan": False}
+        return json.dumps(actual, **options) == json.dumps(expected, **options)
+    except (TypeError, ValueError):
+        return False
+
+
 def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
     if type(before) is not type(after):
         return {prefix or "<root>"}
@@ -377,9 +349,7 @@ def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
             else:
                 result.update(_changed_paths(before[key], after[key], path))
         return result
-    if isinstance(before, Sequence) and not isinstance(before, (str, bytes)):
-        return set() if before == after else {prefix or "<root>"}
-    return set() if before == after else {prefix or "<root>"}
+    return set() if _json_equal(before, after) else {prefix or "<root>"}
 
 
 def _contains_true(value: Any) -> bool:
@@ -611,7 +581,9 @@ def _validate_storage_drift(change: Mapping[str, Any]) -> None:
         raise RefreshPlanError("storage drift field set is not exact")
     for name, value in scalar_updates.items():
         expected_before = [] if name == "share_properties" else None
-        if before.get(name) != expected_before or after.get(name) != value:
+        if not _json_equal(before.get(name), expected_before) or not _json_equal(
+            after.get(name), value
+        ):
             raise RefreshPlanError("storage normalization is not exact")
         expected[name] = value
     for name in STORAGE_SECRET_FIELDS:
@@ -638,7 +610,7 @@ def _validate_storage_drift(change: Mapping[str, Any]) -> None:
             raise RefreshPlanError("storage access-key encoding is invalid") from exc
         if len(decoded) != 64:
             raise RefreshPlanError("storage access-key length is invalid")
-    if expected != after:
+    if not _json_equal(expected, after):
         raise RefreshPlanError("storage drift contains an unapproved value change")
     for sensitive in (change.get("before_sensitive"), change.get("after_sensitive")):
         if (
@@ -693,7 +665,7 @@ def _validate_normalization(address: str, change: Mapping[str, Any]) -> None:
         expected["subnet"] = EXPECTED_SUBNETS
     else:
         raise RefreshPlanError("drift address is outside the refresh envelope")
-    if expected != after:
+    if not _json_equal(expected, after):
         raise RefreshPlanError("provider normalization is not exact")
 
 
@@ -779,8 +751,9 @@ def _validate_embedded_state(
 ) -> None:
     actual = copy.deepcopy(dict(embedded_state))
     actual.pop("check_results", None)
-    if actual != _expected_embedded_state(
-        external_state, drift_by_address=drift_by_address
+    if not _json_equal(
+        actual,
+        _expected_embedded_state(external_state, drift_by_address=drift_by_address),
     ):
         raise RefreshPlanError("embedded refreshed state is not closed-world")
 
@@ -805,7 +778,9 @@ def _validate_output_changes(
             raise RefreshPlanError("refresh output change is invalid")
         before = before_outputs.get(name)
         after = after_outputs.get(name)
-        if value.get("before") != before or value.get("after") != after:
+        if not _json_equal(value.get("before"), before) or not _json_equal(
+            value.get("after"), after
+        ):
             raise RefreshPlanError("refresh output is not state-bound")
         if name == "marker_store_binding":
             expected = {
@@ -816,16 +791,19 @@ def _validate_output_changes(
                 "before_sensitive": False,
                 "after_sensitive": False,
             }
-            if value != expected:
+            if not _json_equal(value, expected):
                 raise RefreshPlanError("marker-store output refresh is not exact")
-        elif value != {
-            "actions": ["no-op"],
-            "before": before,
-            "after": after,
-            "after_unknown": False,
-            "before_sensitive": False,
-            "after_sensitive": False,
-        }:
+        elif not _json_equal(
+            value,
+            {
+                "actions": ["no-op"],
+                "before": before,
+                "after": after,
+                "after_unknown": False,
+                "before_sensitive": False,
+                "after_sensitive": False,
+            },
+        ):
             raise RefreshPlanError("refresh contains a non-no-op existing output")
 
 
@@ -848,7 +826,7 @@ def _validate_drift(
     if set(embedded_attributes) != set(recovery.EXPECTED_EXISTING_ADDRESSES):
         raise RefreshPlanError("embedded refreshed inventory is not exact")
     for address in recovery.EXPECTED_EXISTING_ADDRESSES - EXPECTED_DRIFT_ADDRESSES:
-        if external_attributes[address] != embedded_attributes[address]:
+        if not _json_equal(external_attributes[address], embedded_attributes[address]):
             raise RefreshPlanError("unreported state attribute changed during refresh")
     for address, item in by_address.items():
         change = item.get("change")
@@ -872,12 +850,13 @@ def _validate_drift(
             or item.get("mode") != "managed"
             or item.get("type") != resource_type
             or item.get("name") != name
+            or type(item.get("index")) is not int
             or item.get("index") != 0
             or item.get("provider_name") != "registry.opentofu.org/hashicorp/azurerm"
             or not isinstance(change, Mapping)
             or change.get("actions") != ["update"]
-            or change.get("before") != expected_before
-            or change.get("after") != embedded_attributes[address]
+            or not _json_equal(change.get("before"), expected_before)
+            or not _json_equal(change.get("after"), embedded_attributes[address])
             or _contains_true(change.get("after_unknown"))
         ):
             raise RefreshPlanError("refresh drift is not state-bound and update-only")
@@ -887,8 +866,11 @@ def _validate_drift(
             for name, value in change.items()
             if name not in {"before", "after"}
         }
-        if observed_metadata != _expected_change_metadata(
-            address, before=change["before"], after=change["after"]
+        if not _json_equal(
+            observed_metadata,
+            _expected_change_metadata(
+                address, before=change["before"], after=change["after"]
+            ),
         ):
             raise RefreshPlanError("refresh change metadata is not exact")
     return by_address
@@ -927,8 +909,7 @@ def _validate_relevant_attributes(value: Any) -> None:
         return result
 
     observed = normalize(value)
-    expected = normalize(EXPECTED_RELEVANT_ATTRIBUTES)
-    if len(observed) != len(value) or observed != expected:
+    if len(observed) != len(value) or observed != EXPECTED_RELEVANT_ATTRIBUTES:
         raise RefreshPlanError("refresh relevant-attribute set is not exact")
 
 
@@ -1057,7 +1038,9 @@ def _validate_artifacts(
     remote = recovery._load_json_bytes(
         remote_state_bytes, label="remote pre-refresh state"
     )
-    if _state_binding_projection(external) != _state_binding_projection(remote):
+    if not _json_equal(
+        _state_binding_projection(external), _state_binding_projection(remote)
+    ):
         raise RefreshPlanError("remote state differs from the protected snapshot")
     recovery._validate_state(
         external, label="pre-refresh state snapshot", expected_serial=PRE_REFRESH_SERIAL
@@ -1138,9 +1121,10 @@ def create_and_validate_state_refresh_plan(
             tofu=tofu, output_parent=saved_plan.parent, data_dir=data_dir
         )
         remote_after = _pull_remote_state(tofu=tofu, data_dir=data_dir)
-        if recovery._load_json_bytes(
-            remote_before, label="remote state before plan"
-        ) != recovery._load_json_bytes(remote_after, label="remote state after plan"):
+        if not _json_equal(
+            recovery._load_json_bytes(remote_before, label="remote state before plan"),
+            recovery._load_json_bytes(remote_after, label="remote state after plan"),
+        ):
             raise RefreshPlanError(
                 "remote state changed while refresh plan was generated"
             )
