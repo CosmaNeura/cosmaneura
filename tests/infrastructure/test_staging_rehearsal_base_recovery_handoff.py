@@ -48,7 +48,7 @@ def _valid_state() -> dict[str, Any]:
         if address.startswith('azurerm_role_definition.'):
             key = address.removeprefix('azurerm_role_definition.').removesuffix('[0]')
             contract = handoff.ROLE_CONTRACTS[key]
-            attributes.update(role_definition_resource_id=handoff.EXISTING_IDS[address], name=contract['name'], description=contract['description'], permissions=[{'actions': list(contract['actions']), 'not_actions': [], 'data_actions': list(contract['data_actions']), 'not_data_actions': []}])
+            attributes.update(id=f'{handoff.EXISTING_IDS[address]}|{handoff.SUBSCRIPTION_SCOPE}', role_definition_resource_id=handoff.EXISTING_IDS[address], name=contract['name'], description=contract['description'], permissions=[{'actions': list(contract['actions']), 'not_actions': [], 'data_actions': list(contract['data_actions']), 'not_data_actions': []}])
         resources.append(_state_resource(address, attributes))
     return {'version': 4, 'terraform_version': handoff.recovery.EXPECTED_TOFU_VERSION, 'serial': 8, 'lineage': handoff.recovery.EXPECTED_LINEAGE, 'outputs': {}, 'resources': resources}
 
@@ -262,6 +262,16 @@ def test_state_resource_ids_are_exact() -> None:
     state = _valid_state()
     role = next(item for item in state['resources'] if item['type'] == 'azurerm_role_definition')
     role['instances'][0]['attributes']['permissions'][0]['actions'] = ['*']
+    with pytest.raises(handoff.HandoffError, match='state_role_definition'):
+        _attributes(state)
+    state = _valid_state()
+    role = next(item for item in state['resources'] if item['type'] == 'azurerm_role_definition')
+    role['instances'][0]['attributes']['id'] = role['instances'][0]['attributes']['role_definition_resource_id']
+    with pytest.raises(handoff.HandoffError, match='state_resource_id'):
+        _attributes(state)
+    state = _valid_state()
+    role = next(item for item in state['resources'] if item['type'] == 'azurerm_role_definition')
+    role['instances'][0]['attributes']['role_definition_resource_id'] += '-other'
     with pytest.raises(handoff.HandoffError, match='state_role_definition'):
         _attributes(state)
 

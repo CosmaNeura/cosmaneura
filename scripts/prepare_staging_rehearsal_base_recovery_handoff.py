@@ -510,9 +510,11 @@ def _state_attributes(state_bytes: bytes) -> dict[str, Mapping[str, Any]]:
     for address, expected in EXISTING_IDS.items():
         attributes = output[address]
         observed = attributes.get('id')
-        if _lower_id(observed) != _lower_id(expected):
+        role_definition = address.startswith('azurerm_role_definition.')
+        expected_state_id = f'{expected}|{SUBSCRIPTION_SCOPE}' if role_definition else expected
+        if _lower_id(observed) != _lower_id(expected_state_id):
             _fail('state_resource_id.mismatch')
-        if address.startswith('azurerm_role_definition.'):
+        if role_definition:
             key = address.removeprefix('azurerm_role_definition.').removesuffix('[0]')
             contract = ROLE_CONTRACTS[key]
             if _lower_id(attributes.get('role_definition_resource_id')) != _lower_id(expected) or attributes.get('name') != contract['name'] or attributes.get('description') != contract['description'] or _permission_digest(attributes.get('permissions')) != _permission_digest([{'actions': contract['actions'], 'notActions': [], 'dataActions': contract['data_actions'], 'notDataActions': []}]):
