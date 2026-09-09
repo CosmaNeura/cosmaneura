@@ -4,17 +4,11 @@ from app import log
 from app.celery import celery_app
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
-from app.services.scheduling_acuity import (
-    AcuityIntegrationInvalid,
-    AcuitySchedulingProvider,
-    get_acuity_integration,
+from app.services.scheduling_provider import resolve_event
+from app.services.scheduling_provider_factory import (
+    SCHEDULING_INTEGRATION_INVALID_EXCEPTIONS,
+    build_scheduling_provider,
 )
-from app.services.scheduling_google_calendar import (
-    GoogleCalendarIntegrationInvalid,
-    GoogleCalendarSchedulingProvider,
-    get_google_calendar_integration,
-)
-from app.services.scheduling_provider import SchedulingProvider, resolve_event
 
 from app.models.doctor import Doctor
 from app.models.patient_external_identity import SchedulingProviderSource
@@ -25,28 +19,9 @@ _MAX_LOG_COUNT = 10_000
 # back a forward sync re-checks for edits to already-synced appointments.
 _FORWARD_SYNC_LOOKBACK = timedelta(days=1)
 
-_INTEGRATION_INVALID_EXCEPTIONS = (
-    AcuityIntegrationInvalid,
-    GoogleCalendarIntegrationInvalid,
-)
-
 
 def _bounded_count(value: int) -> int:
     return min(value, _MAX_LOG_COUNT)
-
-
-def _build_provider(
-    doctor: Doctor, provider_source: SchedulingProviderSource
-) -> SchedulingProvider | None:
-    if provider_source == SchedulingProviderSource.acuity:
-        if get_acuity_integration(doctor) is None:
-            return None
-        return AcuitySchedulingProvider(doctor)
-    if provider_source == SchedulingProviderSource.google_calendar:
-        if get_google_calendar_integration(doctor) is None:
-            return None
-        return GoogleCalendarSchedulingProvider(doctor)
-    return None
 
 
 def perform(doctor_id: str, source: str) -> None:
@@ -64,7 +39,7 @@ def perform(doctor_id: str, source: str) -> None:
         )
         return
 
-    provider = _build_provider(doctor, provider_source)
+    provider = build_scheduling_provider(doctor, provider_source)
     if provider is None:
         log.info(
             "scheduling sync skipped",
@@ -77,7 +52,7 @@ def perform(doctor_id: str, source: str) -> None:
     since = datetime.now(timezone.utc) - _FORWARD_SYNC_LOOKBACK
     try:
         events = provider.fetch_upcoming(doctor, since)
-    except _INTEGRATION_INVALID_EXCEPTIONS:
+    except SCHEDULING_INTEGRATION_INVALID_EXCEPTIONS:
         log.info(
             "scheduling sync skipped",
             event_code="scheduling_sync_integration_invalid",
