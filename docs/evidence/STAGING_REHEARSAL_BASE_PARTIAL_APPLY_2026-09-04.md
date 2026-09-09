@@ -131,10 +131,6 @@ resource actions.
 
 ## Recovery acceptance
 
-On 2026-09-09, the human operator consumed the independently reviewed refresh-only plan. The protected backend advanced to serial 9 with the same 28-instance inventory, no tainted/deposed instance, and zero resources added, changed, or destroyed. Protected snapshot SHA-256: `8abb6c30c94614b0b701da63112f726742ab9eaef3f98782f1abcf51394bb363`.
-
-The first serial-9 base-recovery plan (`2f16bcb6fdeddeca55987084511361f030c7bd5648435d7487461eb540f7ab36`) was rejected by independent review and never applied. Its validator lacked an exact Azure CLI runtime-closure snapshot, a closed process environment, exact no-op/create value and identity contracts, and direct projected-prior-state binding. The digest is permanently denylisted; generate a fresh plan only after the hardening change is protected on `master`.
-
 Follow `infra-staging-rehearsal/README.md` exactly. A human operator must own
 both state transitions. Completion first requires the independently reviewed,
 zero-resource-action refresh-only plan to advance state from serial 8 to serial

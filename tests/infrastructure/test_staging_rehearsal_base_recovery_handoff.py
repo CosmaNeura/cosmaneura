@@ -437,6 +437,7 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     prefix = ['/usr/bin/env', '-i', f'HOME={tmp_path}']
     assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and any(item.startswith('PYTHONPATH=') for item in command) and f'AZURE_EXTENSION_DIR={tmp_path / "azure-extensions"}' in command for command in commands))
     assert all(f'AZURE_CONFIG_DIR={tmp_path / ".azure"}' in command for command in commands)
+    assert all(f"{handoff.recovery.AZURE_CONFIG_BINDING_ENV}={'d' * 64}" in command for command in commands)
     assert commands[0][-8:] == [str(az), 'account', 'show', '--subscription', handoff.SUBSCRIPTION, '--only-show-errors', '--output', 'json']
     assert commands[1][-4:] == ['version', '--only-show-errors', '--output', 'json']
     assert commands[2][-8:] == [str(az), 'cloud', 'show', '--name', 'AzureCloud', '--only-show-errors', '--output', 'json']
@@ -517,8 +518,10 @@ def test_action_window_caps_account_cli_timeout(monkeypatch: pytest.MonkeyPatch)
     reader._az = Path('/trusted/az')
     reader._home = Path('/trusted/home')
     reader._azure_config = Path('/trusted/home/.azure')
+    reader.azure_config_binding_sha256 = 'd' * 64
     observed: list[float] = []
     monkeypatch.setattr(handoff.time, 'monotonic', lambda: now)
+    monkeypatch.setattr(handoff, '_operator_paths', lambda: (reader._home, reader._azure_config, reader.azure_config_binding_sha256))
     monkeypatch.setattr(handoff.recovery, '_run_process', lambda *_args, **kwargs: observed.append(kwargs['timeout_seconds']) or subprocess.CompletedProcess([], 0, b'{}', b''))
     reader.refresh_account()
     assert observed == [7.5] and reader.account == {}
@@ -546,9 +549,10 @@ def test_cli_and_operator_home_ignore_ambient_path_and_home(monkeypatch: pytest.
         home = tmp_path / 'home'
         home.mkdir(mode=448)
         (home / '.azure').mkdir(mode=448)
-        for name, value in {'config': b'config', 'clouds.config': b'cloud'}.items():
+        values = {'config': b'config', 'clouds.config': b'cloud', 'azureProfile.json': b'profile', 'msal_token_cache.json': b'token'}
+        for name, value in values.items():
             (home / '.azure' / name).write_bytes(value)
-        monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CONFIG_SHA256S', {name: hashlib.sha256(value).hexdigest() for name, value in {'config': b'config', 'clouds.config': b'cloud'}.items()})
+        monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CONFIG_SHA256S', {name: hashlib.sha256(values[name]).hexdigest() for name in ('config', 'clouds.config')})
         monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
         monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())
         monkeypatch.setenv('PATH', str(tmp_path / 'evil'))

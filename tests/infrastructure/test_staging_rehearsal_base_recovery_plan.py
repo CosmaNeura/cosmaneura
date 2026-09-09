@@ -1,4 +1,6 @@
 from __future__ import annotations
+# ruff: noqa: E701, E702, I001
+# fmt: off
 
 import hashlib
 import importlib.util
@@ -6,7 +8,6 @@ import inspect
 import io
 import json
 import os
-import pwd
 import shutil
 import subprocess
 import sys
@@ -41,14 +42,17 @@ def _load_module() -> ModuleType:
 recovery = _load_module()
 
 
+def _azure_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, dict[str, bytes]]:
+    home = tmp_path / "home"; config = home / ".azure"  # noqa: E702
+    config.mkdir(parents=True, mode=0o700); values = {"config": b"config", "clouds.config": b"cloud", "azureProfile.json": b"profile", "msal_token_cache.json": b"token-cache"}
+    for name, value in values.items():
+        path = config / name; path.write_bytes(value); path.chmod(0o600)  # noqa: E702
+    monkeypatch.setattr(recovery, "EXPECTED_AZURE_CONFIG_SHA256S", {name: hashlib.sha256(values[name]).hexdigest() for name in ("config", "clouds.config")}); monkeypatch.setattr(recovery.pwd, "getpwuid", lambda _: type("Passwd", (), {"pw_dir": str(home)})()); return home, values
 def _state_resource(address: str) -> dict[str, Any]:
     base, separator, raw_key = address.partition("[")
     resource_type, name = base.split(".", 1)
     provider, schema_version, resource_id = recovery.EXPECTED_STATE_IDENTITIES[address]
-    instance: dict[str, Any] = {
-        "schema_version": schema_version,
-        "attributes": {"id": resource_id},
-    }
+    instance: dict[str, Any] = {"schema_version": schema_version, "attributes": {"id": resource_id}}
     if separator:
         assert raw_key.endswith("]")
         instance["index_key"] = json.loads(raw_key[:-1])
@@ -75,34 +79,18 @@ def _valid_state() -> dict[str, Any]:
     }
 
 
-def _valid_state_projection() -> dict[str, Any]:
-    resources = []
-    for address in sorted(recovery.EXPECTED_EXISTING_ADDRESSES):
-        metadata = dict(recovery._resource_change_metadata(address))
-        _, schema_version, resource_id = recovery.EXPECTED_STATE_IDENTITIES[address]
-        resources.append({**metadata, "schema_version": schema_version, "values": {"id": resource_id}, "sensitive_values": {}})  # fmt: skip
-    return {"format_version": "1.0", "terraform_version": recovery.EXPECTED_TOFU_VERSION, "values": {"root_module": {"resources": resources}}}  # fmt: skip
+def _valid_state_projection() -> dict[str, Any]: resources = [{**dict(recovery._resource_change_metadata(address)), "schema_version": recovery.EXPECTED_STATE_IDENTITIES[address][1], "values": {"id": recovery.EXPECTED_STATE_IDENTITIES[address][2]}, "sensitive_values": {}} for address in sorted(recovery.EXPECTED_EXISTING_ADDRESSES)]; return {"format_version": "1.0", "terraform_version": recovery.EXPECTED_TOFU_VERSION, "values": {"root_module": {"resources": resources}}}
 
 
 def _valid_plan(*, state_projection: dict[str, Any] | None = None) -> dict[str, Any]:
-    projected = state_projection or _valid_state_projection()
-    projected_by_address = {item["address"]: item for item in projected["values"]["root_module"]["resources"]}  # fmt: skip
-
-    # fmt: off
+    projected = state_projection or _valid_state_projection(); projected_by_address = {item["address"]: item for item in projected["values"]["root_module"]["resources"]}
     def no_op(address: str) -> dict[str, Any]:
-        resource = projected_by_address[address]
-        values, sensitive = deepcopy(resource["values"]), deepcopy(resource["sensitive_values"])
+        resource = projected_by_address[address]; values, sensitive = deepcopy(resource["values"]), deepcopy(resource["sensitive_values"])
         change = {"actions": ["no-op"], "before": values, "after": deepcopy(values), "after_unknown": {}, "before_sensitive": sensitive, "after_sensitive": deepcopy(sensitive)}  # fmt: skip
-        if "identity" in resource:
-            change.update(before_identity=deepcopy(resource["identity"]), after_identity=deepcopy(resource["identity"]))  # fmt: skip
+        if "identity" in resource: change.update(before_identity=deepcopy(resource["identity"]), after_identity=deepcopy(resource["identity"]))  # fmt: skip
         return {**recovery._resource_change_metadata(address), "change": change}
-
     changes = [no_op(address) for address in sorted(recovery.EXPECTED_EXISTING_ADDRESSES)]
-    # fmt: on
-    changes.extend(
-        deepcopy(recovery._expected_create_change(address))
-        for address in sorted(recovery.EXPECTED_CREATE_ADDRESSES)
-    )
+    changes.extend(deepcopy(recovery._expected_create_change(address)) for address in sorted(recovery.EXPECTED_CREATE_ADDRESSES))
     providers = json.loads(
         '{"azurerm":{"full_name":"registry.opentofu.org/hashicorp/azurerm","version_constraint":"4.73.0","expressions":{"features":[{"storage":[{"data_plane_available":{"constant_value":false}}]}]}},"azapi":{"full_name":"registry.opentofu.org/azure/azapi","version_constraint":"2.1.0","expressions":{}},"terraform":{"full_name":"terraform.io/builtin/terraform","version_constraint":null,"expressions":null}}'
     )
@@ -136,10 +124,7 @@ def _source_snapshot() -> Any:
     )
 
 
-def _runtime_snapshot() -> Any:
-    return recovery.RuntimeSnapshot(TOFU, AZURE_CLI, recovery.EXPECTED_TOFU_SHA256, recovery.EXPECTED_AZURE_CLI_SHA256, recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "f" * 64, "1" * 64)  # fmt: skip
-
-
+def _runtime_snapshot() -> Any: return recovery.RuntimeSnapshot(TOFU, AZURE_CLI, recovery.EXPECTED_TOFU_SHA256, recovery.EXPECTED_AZURE_CLI_SHA256, recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "f" * 64, "1" * 64)  # fmt: skip
 def _saved_plan_bytes(
     *, state: dict[str, Any] | None = None, source: Any | None = None
 ) -> bytes:
@@ -173,11 +158,7 @@ def _install_plan_show(
 
     monkeypatch.setattr(recovery, "_show_saved_plan", fake_show)
 
-    def fake_show_state(value: bytes, *, tofu: Path, data_dir: Path) -> bytes:
-        assert value
-        assert tofu == TOFU and data_dir.is_absolute()
-        return json.dumps(projection).encode()
-
+    def fake_show_state(value: bytes, *, tofu: Path, data_dir: Path) -> bytes: assert value and tofu == TOFU and data_dir.is_absolute(); return json.dumps(projection).encode()
     monkeypatch.setattr(recovery, "_show_state", fake_show_state)
 
 
@@ -199,12 +180,7 @@ def _validate(
         state=embedded_state or deepcopy(state_value),
         source=archive_source or source_snapshot,
     )
-    _install_plan_show(
-        monkeypatch,
-        expected_plan_bytes=plan_bytes,
-        plan=plan or _valid_plan(state_projection=state_projection),
-        state_projection=state_projection,
-    )
+    _install_plan_show(monkeypatch, expected_plan_bytes=plan_bytes, plan=plan or _valid_plan(state_projection=state_projection), state_projection=state_projection)
     return dict(
         recovery._validate_captured_artifacts(
             saved_plan_bytes=plan_bytes,
@@ -228,8 +204,7 @@ def _protected_file(path: Path, value: bytes, *, mode: int = 0o600) -> Path:
 
 def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) -> None:
     source = _source_snapshot()
-    state_bytes = json.dumps(_valid_state()).encode()
-    state_projection_bytes = json.dumps(_valid_state_projection()).encode()
+    state_bytes = json.dumps(_valid_state()).encode(); state_projection_bytes = json.dumps(_valid_state_projection()).encode()
     plan_bytes = _saved_plan_bytes(source=source)
     plan_json_bytes = json.dumps(_valid_plan()).encode()
     receipt = _validate(monkeypatch, source=source, saved_plan_bytes=plan_bytes)
@@ -404,23 +379,13 @@ def test_state_snapshot_safety_regressions(monkeypatch: pytest.MonkeyPatch) -> N
         embedded["resources"][0]["instances"][0][field] = value
         with pytest.raises(recovery.RecoveryPlanError, match="does not match"):
             _validate(monkeypatch, embedded_state=embedded)
-    state = _valid_state()
-    state["resources"][0]["provider"] = 'provider["attacker.invalid/provider"]'
-    with pytest.raises(recovery.RecoveryPlanError, match="exact contract"):
-        _validate(monkeypatch, state=state)
-    embedded = _valid_state()
-    embedded["resources"][0]["instances"][0]["attributes"]["semantic_field"] = "mutated"
-    with pytest.raises(recovery.RecoveryPlanError, match="semantically identical"):
-        _validate(monkeypatch, embedded_state=embedded)
-
-    external = _valid_state()
-    embedded = deepcopy(external)
-    external["check_results"] = [{"status": "pass"}]
-    embedded["check_results"] = None
+    state = _valid_state(); state["resources"][0]["provider"] = 'provider["attacker.invalid/provider"]'
+    with pytest.raises(recovery.RecoveryPlanError, match="exact contract"): _validate(monkeypatch, state=state)
+    embedded = _valid_state(); embedded["resources"][0]["instances"][0]["attributes"]["semantic_field"] = "mutated"
+    with pytest.raises(recovery.RecoveryPlanError, match="semantically identical"): _validate(monkeypatch, embedded_state=embedded)
+    external = _valid_state(); embedded = deepcopy(external); external["check_results"] = [{"status": "pass"}]; embedded["check_results"] = None
     receipt = _validate(monkeypatch, state=external, embedded_state=embedded)
-    assert receipt["state_semantic_sha256"] == recovery._semantic_state_sha256(
-        external, label="state snapshot"
-    )
+    assert receipt["state_semantic_sha256"] == recovery._semantic_state_sha256(external, label="state snapshot")
 
 
 def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -437,7 +402,6 @@ def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -
         rejected(plan, "would change")
     stale = (NOW - timedelta(hours=4, seconds=1)).isoformat().replace("+00:00", "Z")
     future = (NOW + timedelta(minutes=5, seconds=1)).isoformat().replace("+00:00", "Z")
-    # fmt: off
     for field, value, message in (
         ("errored", True, "errored"),
         ("resource_drift", [{"address": "drift"}], "drift"),
@@ -447,20 +411,17 @@ def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -
         ("timestamp", stale, "stale"),
         ("timestamp", future, "future"),
     ):
-        # fmt: on
         plan = _valid_plan()
         plan[field] = value
         rejected(plan, message)
     plan = _valid_plan()
     plan["resource_changes"].append({"address": "azurerm_public_ip.forbidden[0]", "change": {"actions": ["create"]}})  # fmt: skip
     rejected(plan, "address set")
-    # fmt: off
     for path, value, message in (
         (("configuration", "provider_config", "azurerm", "expressions", "features"), [{}], "data-plane opt-out"),
         (("variables", "enable_marker_legal_holds", "value"), True, "not recovery-safe"),
         (("checks", 0, "status"), "fail", "non-passing"),
     ):
-        # fmt: on
         plan = _valid_plan()
         node: Any = plan
         for key in path[:-1]:
@@ -470,59 +431,30 @@ def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_noop_values_sensitivity_identity_and_prior_state_are_exact(monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
-    projection = _valid_state_projection()
-    projected = projection["values"]["root_module"]["resources"][0]
+    projection = _valid_state_projection(); projected = projection["values"]["root_module"]["resources"][0]
     projected.update(values={**projected["values"], "binding": "protected"}, sensitive_values={"binding": True}, identity={"key": "state-bound"}, identity_schema_version=0)  # fmt: skip
-    base = _valid_plan(state_projection=projection)
-    address = projected["address"]
+    base = _valid_plan(state_projection=projection); address = projected["address"]
     for field, value in (("before", {"id": "different"}), ("after", {"id": "different"}), ("before_sensitive", {}), ("after_identity", {"key": "different"}), ("action_reason", [])):  # fmt: skip
-        plan = deepcopy(base)
-        change = next(item for item in plan["resource_changes"] if item["address"] == address)["change"]  # fmt: skip
-        change[field] = value
-        with pytest.raises(recovery.RecoveryPlanError):
-            _validate(monkeypatch, plan=plan, state_projection=projection)
-    plan = deepcopy(base)
-    plan["prior_state"]["values"]["root_module"]["resources"][0]["values"]["binding"] = "different"  # fmt: skip
-    with pytest.raises(recovery.RecoveryPlanError, match="prior state"):
-        _validate(monkeypatch, plan=plan, state_projection=projection)
+        plan = deepcopy(base); change = next(item for item in plan["resource_changes"] if item["address"] == address)["change"]; change[field] = value  # fmt: skip
+        with pytest.raises(recovery.RecoveryPlanError): _validate(monkeypatch, plan=plan, state_projection=projection)
+    plan = deepcopy(base); plan["prior_state"]["values"]["root_module"]["resources"][0]["values"]["binding"] = "different"  # fmt: skip
+    with pytest.raises(recovery.RecoveryPlanError, match="prior state"): _validate(monkeypatch, plan=plan, state_projection=projection)
 
 
 def test_rejected_plan_digest_cannot_be_reauthorized(monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
-    plan = _saved_plan_bytes()
-    monkeypatch.setattr(recovery, "REJECTED_SAVED_PLAN_SHA256S", frozenset({recovery._sha256_bytes(plan)}))  # fmt: skip
-    with pytest.raises(recovery.RecoveryPlanError, match="permanently rejected"):
-        _validate(monkeypatch, saved_plan_bytes=plan)
+    plan = _saved_plan_bytes(); monkeypatch.setattr(recovery, "REJECTED_SAVED_PLAN_SHA256S", frozenset({recovery._sha256_bytes(plan)}))  # fmt: skip
+    with pytest.raises(recovery.RecoveryPlanError, match="permanently rejected"): _validate(monkeypatch, saved_plan_bytes=plan)
 
 
-# fmt: off
-@pytest.mark.parametrize(
-    ("address", "path", "value"),
-    [
-        ('azapi_resource.marker_container["restore-cleanups-v4"]', ("change", "after", "parent_id"), "/subscriptions/attacker/storage"),  # fmt: skip
-        ("azurerm_private_endpoint.marker[0]", ("change", "after", "subnet_id"), "/subscriptions/attacker/subnet"),  # fmt: skip
-        ("azurerm_private_endpoint.marker[0]", ("change", "after", "private_service_connection", 0, "private_connection_resource_id"), "/subscriptions/attacker/storage"),  # fmt: skip
-        ('azurerm_role_assignment.marker_read["cleanup_intent"]', ("change", "after", "principal_id"), "00000000-0000-0000-0000-000000000000"),  # fmt: skip
-        ("azurerm_role_assignment.marker_provision_cleanup[0]", ("change", "after", "role_definition_id"), "/subscriptions/attacker/role"),  # fmt: skip
-        ("azurerm_private_endpoint.marker[0]", ("change", "after_unknown", "subnet_id"), True),  # fmt: skip
-        ("azurerm_private_endpoint.marker[0]", ("provider_name",), "registry.opentofu.org/attacker/provider"),  # fmt: skip
-        ('azapi_resource.marker_container["restore-cleanups-v4"]', ("change", "replace_paths"), []),  # fmt: skip
-    ],
-)
-# fmt: on
-def test_create_contract_rejects_exact_value_or_schema_mutation(
-    monkeypatch: pytest.MonkeyPatch,
-    address: str,
-    path: tuple[str | int, ...],
-    value: Any,
-) -> None:
-    plan = _valid_plan()
-    change = next(item for item in plan["resource_changes"] if item["address"] == address)  # fmt: skip
+CREATE_MUTATIONS = [('azapi_resource.marker_container["restore-cleanups-v4"]', ("change", "after", "parent_id"), "/subscriptions/attacker/storage"), ("azurerm_private_endpoint.marker[0]", ("change", "after", "subnet_id"), "/subscriptions/attacker/subnet"), ("azurerm_private_endpoint.marker[0]", ("change", "after", "private_service_connection", 0, "private_connection_resource_id"), "/subscriptions/attacker/storage"), ('azurerm_role_assignment.marker_read["cleanup_intent"]', ("change", "after", "principal_id"), "00000000-0000-0000-0000-000000000000"), ("azurerm_role_assignment.marker_provision_cleanup[0]", ("change", "after", "role_definition_id"), "/subscriptions/attacker/role"), ("azurerm_private_endpoint.marker[0]", ("change", "after_unknown", "subnet_id"), True), ("azurerm_private_endpoint.marker[0]", ("provider_name",), "registry.opentofu.org/attacker/provider"), ('azapi_resource.marker_container["restore-cleanups-v4"]', ("change", "replace_paths"), [])]
+@pytest.mark.parametrize(("address", "path", "value"), CREATE_MUTATIONS)
+def test_create_contract_rejects_exact_value_or_schema_mutation(monkeypatch: pytest.MonkeyPatch, address: str, path: tuple[str | int, ...], value: Any) -> None:
+    plan = _valid_plan(); change = next(item for item in plan["resource_changes"] if item["address"] == address)  # fmt: skip
     node: Any = change
     for key in path[:-1]:
         node = node[key]
     node[path[-1]] = value
-    with pytest.raises(recovery.RecoveryPlanError, match="exact create contract"):
-        _validate(monkeypatch, plan=plan)
+    with pytest.raises(recovery.RecoveryPlanError, match="exact create contract"): _validate(monkeypatch, plan=plan)
 
 def test_pinned_opentofu_json_may_omit_applyable_and_complete(
     monkeypatch: pytest.MonkeyPatch,
@@ -685,10 +617,7 @@ def test_parent_swap_keeps_open_directory(
     assert recovery._read_protected_file(artifact, label="artifact") == b"reviewed"
 
 
-def test_runtime_executables_and_versions_are_snapshotted_and_pinned(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # fmt: off
+def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, data_dir = tmp_path / "source", tmp_path / "data"
     source.mkdir(mode=0o700); data_dir.mkdir(mode=0o700)  # noqa: E702
     tofu = _protected_file(source / "tofu", b"tofu-binary", mode=0o500)
@@ -699,15 +628,12 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(
     closure_sha256 = "c" * 64
 
     def fake_snapshot_azure_cli_closure(runtime_directory: Path) -> tuple[Path, str]:
-        (runtime_directory / "homebrew").mkdir(mode=0o700, exist_ok=True)
-        wrapper = runtime_directory / "az"
-        if not wrapper.exists():
-            wrapper.write_bytes(recovery._azure_cli_wrapper(runtime_directory)); wrapper.chmod(0o500)  # noqa: E702
+        (runtime_directory / "homebrew").mkdir(mode=0o700, exist_ok=True); wrapper = runtime_directory / "az"
+        if not wrapper.exists(): wrapper.write_bytes(recovery._azure_cli_wrapper(runtime_directory)); wrapper.chmod(0o500)  # noqa: E702
         return wrapper, closure_sha256
 
     def fake_run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        assert kwargs["data_dir"] == data_dir
-        output = b'{"terraform_version":"1.12.5"}' if arguments[-2:] == ["version", "-json"] else json.dumps(azure_version).encode()
+        assert kwargs["data_dir"] == data_dir; output = b'{"terraform_version":"1.12.5"}' if arguments[-2:] == ["version", "-json"] else json.dumps(azure_version).encode()
         return subprocess.CompletedProcess(arguments, 0, output, b"")
 
     monkeypatch.setattr(recovery, "_run_process", fake_run); monkeypatch.setattr(recovery, "_snapshot_azure_cli_closure", fake_snapshot_azure_cli_closure)  # noqa: E702
@@ -715,63 +641,64 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(
     assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent)
     assert runtime.azure_cli_closure_sha256 == closure_sha256 and runtime.tofu.stat().st_mode & 0o777 == runtime.azure_cli.stat().st_mode & 0o777 == 0o500
     runtime.azure_cli.chmod(0o700)
-    with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"):
-        recovery._snapshot_and_verify_runtime(data_dir=data_dir)
-    # fmt: on
+    with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
 
 
-def test_azure_cli_closure_digest_binds_dependency_bytes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_azure_cli_closure_digest_binds_dependency_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path.resolve() / "homebrew"; formula = root / "Cellar" / "azure-cli" / "1"  # noqa: E702  # fmt: skip
-    formula.mkdir(parents=True)
-    dependency = _protected_file(formula / "dependency.py", b"trusted", mode=0o400)
+    formula.mkdir(parents=True); dependency = _protected_file(formula / "dependency.py", b"trusted", mode=0o400)
     opt = root / "opt"; opt.mkdir()  # noqa: E702
     (opt / "azure-cli").symlink_to("../Cellar/azure-cli/1")
     monkeypatch.setattr(recovery, "EXPECTED_AZURE_CLI_FORMULAE", {"azure-cli": "1"})
     digest = lambda: recovery._runtime_entries_sha256(recovery._azure_cli_closure_entries(root, snapshot=False))  # noqa: E731  # fmt: skip
-    captured = bytearray()
-    record = recovery._runtime_file_record(dependency, label="dependency", capture=captured)
-    before = digest()
-    dependency.chmod(0o600)
-    dependency.write_bytes(b"changed")
-    dependency.chmod(0o400)
+    captured = bytearray(); record = recovery._runtime_file_record(dependency, label="dependency", capture=captured); before = digest()
+    dependency.chmod(0o600); dependency.write_bytes(b"changed"); dependency.chmod(0o400)
     assert bytes(captured) == b"trusted" and record != recovery._runtime_file_record(dependency, label="dependency") and before != digest()  # fmt: skip
 
 
-def test_cli_cloud_environment_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    scrubbed = "TF_CLI_ARGS TOFU_CLI_ARGS_plan OPENTOFU_CLI_ARGS TF_VAR_enable_marker_legal_holds TF_LOG_PATH GIT_DIR HTTPS_PROXY SSL_CERT_FILE REQUESTS_CA_BUNDLE PYTHONPATH AZURE_CONFIG_DIR ARM_TENANT_ID PATH".split()
+def test_cli_cloud_environment_is_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, _ = _azure_home(tmp_path, monkeypatch); scrubbed = "TF_CLI_ARGS TOFU_CLI_ARGS_plan OPENTOFU_CLI_ARGS TF_VAR_enable_marker_legal_holds TF_LOG_PATH GIT_DIR HTTPS_PROXY SSL_CERT_FILE REQUESTS_CA_BUNDLE PYTHONPATH AZURE_CONFIG_DIR ARM_TENANT_ID PATH".split()
     for name in scrubbed:
         monkeypatch.setenv(name, "hostile")
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-    environment = recovery._normalized_environment(data_dir=DATA_DIR)
-    expected = {
-        "ARM_ENVIRONMENT": "public",
-        "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID,
-        "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID,
-        "ARM_USE_AZUREAD": "true",
-        "ARM_USE_CLI": "true",
-        "AZURE_CONFIG_DIR": str(Path(pwd.getpwuid(os.geteuid()).pw_dir) / ".azure"),
-        "AZURE_CORE_COLLECT_TELEMETRY": "false",
-        "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
-        "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
-        "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
-        "AZURE_LOGGING_ENABLE_LOG_FILE": "false",
-        "CHECKPOINT_DISABLE": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "HOME": pwd.getpwuid(os.geteuid()).pw_dir,
-        "LANG": "C",
-        "LC_ALL": "C",
-        "PATH": f"{recovery.EXPECTED_AZURE_CLI_PATH.parent}:/usr/bin:/bin",
-        "TF_CLI_CONFIG_FILE": os.devnull,
-        "TF_DATA_DIR": str(DATA_DIR),
-        "TF_IN_AUTOMATION": "1",
-        "TF_INPUT": "0",
-    }
+    environment = recovery._normalized_environment(data_dir=DATA_DIR); expected = {"ARM_ENVIRONMENT": "public", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID, "ARM_USE_AZUREAD": "true", "ARM_USE_CLI": "true", "AZURE_CONFIG_DIR": str(home / ".azure"), recovery.AZURE_CONFIG_BINDING_ENV: recovery._validated_azure_config(home)[1], "AZURE_CORE_COLLECT_TELEMETRY": "false", "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true", "AZURE_CORE_ONLY_SHOW_ERRORS": "true", "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_LOGGING_ENABLE_LOG_FILE": "false", "CHECKPOINT_DISABLE": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": str(home), "LANG": "C", "LC_ALL": "C", "PATH": f"{recovery.EXPECTED_AZURE_CLI_PATH.parent}:/usr/bin:/bin", "TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
     assert environment == expected
+
+
+def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home)  # noqa: E702
+    runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (modules / "azure" / "cli").mkdir(parents=True)
+    (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
+    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir())}))\n')
+    python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
+    python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
+    monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
+    wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)
+    environment = {"AZURE_CONFIG_DIR": str(config), recovery.AZURE_CONFIG_BINDING_ENV: binding}
+    result = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False); observed = json.loads(result.stdout)
+    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values)
+    assert not Path(observed["path"]).exists()
+    for name in ("config", "msal_token_cache.json"):
+        environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; (config / name).write_bytes(b"changed")
+        refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
+        assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n"
+        (config / name).write_bytes(values[name])
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]
+    moved = home / ".azure-old"; config.rename(moved); shutil.copytree(moved, config)
+    refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
+    assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n"
+def test_azure_config_capture_rejects_directory_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home, values = _azure_home(tmp_path, monkeypatch); config = home / ".azure"  # noqa: E702
+    replacement, moved = home / ".replacement", home / ".moved"; shutil.copytree(config, replacement)
+    real_open, swapped = os.open, False
+    def swap_after_directory_open(path: Any, flags: int, mode: int=0o777, *, dir_fd: int | None=None) -> int:
+        nonlocal swapped
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if path == ".azure" and dir_fd is not None and not swapped:
+            config.rename(moved); replacement.rename(config); swapped = True  # noqa: E702
+        return descriptor
+    monkeypatch.setattr(recovery.os, "open", swap_after_directory_open)
+    with pytest.raises(recovery.RecoveryPlanError, match="path changed"): recovery._validated_azure_config(home)
 
 
 def test_backend_cache_and_workspace_are_exact(

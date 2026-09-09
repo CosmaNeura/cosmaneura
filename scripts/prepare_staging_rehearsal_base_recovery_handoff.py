@@ -1,5 +1,5 @@
 #!/opt/homebrew/bin/python3 -IS
-# ruff: noqa: I001
+# ruff: noqa: E701, E702, I001
 """Prepare a read-only, machine-bound staging-rehearsal recovery handoff.
 
 This program can read Azure Resource Manager and the isolated OpenTofu backend.
@@ -307,24 +307,20 @@ class AzureManagementReader:
     def __init__(self, *, azure_cli: Path | None=None, runtime_data_dir: Path | None=None, source_sha256: str | None=None, closure_sha256: str | None=None, runtime_snapshot_sha256: str | None=None) -> None:
         self._action_window_started = False
         self._az = azure_cli or _resolve_azure_cli()
-        self._runtime_data_dir = runtime_data_dir
-        self._closure_sha256 = closure_sha256
-        self._runtime_snapshot_sha256 = runtime_snapshot_sha256
-        self._home, self._azure_config, _ = _operator_paths()
+        self._runtime_data_dir, self._closure_sha256, self._runtime_snapshot_sha256 = runtime_data_dir, closure_sha256, runtime_snapshot_sha256
+        self._home, self._azure_config, self.azure_config_binding_sha256 = _operator_paths()
         self._az_executable_sha256 = recovery._executable_sha256(self._az, label='Azure CLI')
         self.azure_cli_sha256 = source_sha256 or self._az_executable_sha256
         self.account: Mapping[str, Any] = {}
         self.refresh_account()
         version = self._az_json('version')
         self.azure_cli_version_sha256 = _digest(_canonical(version))
-        if _digest(_canonical(self._az_json('cloud'))) != recovery.EXPECTED_AZURE_CLOUD_SHA256:
-            _fail('azure_cloud.invalid')
+        if _digest(_canonical(self._az_json('cloud'))) != recovery.EXPECTED_AZURE_CLOUD_SHA256: _fail('azure_cloud.invalid')
         token = self._az_json('token')
         access_token = token.get('accessToken')
         if not isinstance(access_token, str) or not 100 < len(access_token) <= 64 * 1024 or token.get('tokenType') != 'Bearer' or (token.get('subscription') != SUBSCRIPTION) or (token.get('tenant') != TENANT):
             _fail('azure_token.invalid')
         self._token = access_token
-        self.azure_config_binding_sha256 = _operator_paths()[2]
         self.dates: list[datetime] = []
         self._deadline = time.monotonic() + MAX_READBACK_SECONDS
         self._bytes_read = 0
@@ -336,8 +332,10 @@ class AzureManagementReader:
         arguments = commands.get(operation)
         if arguments is None:
             _fail('azure_cli.operation_invalid')
+        home, azure_config, binding = _operator_paths()
+        if home != self._home or azure_config != self._azure_config or binding != self.azure_config_binding_sha256: _fail('azure_runtime.changed')
         path = ':'.join(dict.fromkeys((str(self._az.parent), '/usr/bin', '/bin')))
-        command = ['/usr/bin/env', '-i', f'HOME={self._home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={self._azure_config}', *(f'{name}={value}' for name, value in recovery._azure_cli_environment(self._az.parent).items()), str(self._az), *arguments, '--only-show-errors', '--output', 'json']
+        command = ['/usr/bin/env', '-i', f'HOME={home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={azure_config}', f'{recovery.AZURE_CONFIG_BINDING_ENV}={binding}', *(f'{name}={value}' for name, value in recovery._azure_cli_environment(self._az.parent).items()), str(self._az), *arguments, '--only-show-errors', '--output', 'json']
         timeout = 60.0
         if self._action_window_started:
             remaining = self._deadline - time.monotonic()
@@ -366,8 +364,7 @@ class AzureManagementReader:
     def revalidate_runtime(self) -> None:
         runtime_changed = recovery._executable_sha256(self._az, label='Azure CLI') != self._az_executable_sha256
         if self._runtime_data_dir is not None:
-            runtime = recovery._snapshot_and_verify_runtime(data_dir=self._runtime_data_dir)
-            runtime_changed = runtime_changed or runtime.azure_cli != self._az or runtime.azure_cli_sha256 != self.azure_cli_sha256 or runtime.azure_cli_closure_sha256 != self._closure_sha256 or runtime.runtime_snapshot_sha256 != self._runtime_snapshot_sha256
+            runtime = recovery._snapshot_and_verify_runtime(data_dir=self._runtime_data_dir); runtime_changed = runtime_changed or runtime.azure_cli != self._az or runtime.azure_cli_sha256 != self.azure_cli_sha256 or runtime.azure_cli_closure_sha256 != self._closure_sha256 or runtime.runtime_snapshot_sha256 != self._runtime_snapshot_sha256
         if runtime_changed or _digest(_canonical(self._az_json('version'))) != self.azure_cli_version_sha256 or _digest(_canonical(self._az_json('cloud'))) != recovery.EXPECTED_AZURE_CLOUD_SHA256 or _hardened_tls_context()[1] != self.azure_tls_ca_bundle_sha256 or _operator_paths()[2] != self.azure_config_binding_sha256:
             _fail('azure_runtime.changed')
 
@@ -780,12 +777,10 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> str:
     return _digest(source)
 
 def _trusted_reader(reader_factory: Callable[[], ReadOnlyArm], *, data_dir: Path, base: Mapping[str, Any]) -> ReadOnlyArm:
-    if reader_factory is not AzureManagementReader:
-        return reader_factory()
+    if reader_factory is not AzureManagementReader: return reader_factory()
     runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
     expected = {'open_tofu_sha256': runtime.tofu_sha256, 'azure_cli_sha256': runtime.azure_cli_sha256, 'azure_cli_version_sha256': runtime.azure_cli_version_sha256, 'azure_cli_closure_sha256': runtime.azure_cli_closure_sha256, 'runtime_snapshot_sha256': runtime.runtime_snapshot_sha256}
-    if any(base.get(name) != value for name, value in expected.items()) or base.get('azure_cli_source_closure_sha256') != recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256:
-        _fail('plan_runtime.changed')
+    if any(base.get(name) != value for name, value in expected.items()) or base.get('azure_cli_source_closure_sha256') != recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256: _fail('plan_runtime.changed')
     return AzureManagementReader(azure_cli=runtime.azure_cli, runtime_data_dir=data_dir, source_sha256=runtime.azure_cli_sha256, closure_sha256=runtime.azure_cli_closure_sha256, runtime_snapshot_sha256=runtime.runtime_snapshot_sha256)
 
 def prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path, expected_source_commit: str, expected_saved_plan_sha256: str, reader_factory: Callable[[], ReadOnlyArm]=AzureManagementReader, clock: Callable[[], datetime]=lambda: datetime.now(UTC), nonce_source: Callable[[int], bytes]=secrets.token_bytes, boot_session: Callable[[], bytes]=_boot_session, source_binding: Callable[[str, str], str]=_source_binding) -> Mapping[str, Any]:
@@ -823,11 +818,7 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
     if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid() or stat.S_IMODE(directory.st_mode) != 448:
         _fail('execution_directory.changed')
     reader = _trusted_reader(reader_factory, data_dir=execution_dir, base=base)
-    if (
-        base.get('azure_cli_sha256') != reader.azure_cli_sha256
-        or base.get('azure_cli_version_sha256') != reader.azure_cli_version_sha256
-    ):
-        _fail('plan_runtime.changed')
+    if base.get('azure_cli_sha256') != reader.azure_cli_sha256 or base.get('azure_cli_version_sha256') != reader.azure_cli_version_sha256: _fail('plan_runtime.changed')
     first = _capture_snapshot(reader, attributes)
     reader.refresh_account()
     second = _capture_snapshot(reader, attributes)

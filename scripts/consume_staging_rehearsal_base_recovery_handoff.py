@@ -603,15 +603,12 @@ def _execution_arguments(tofu: Path, plan_descriptor: int) -> list[str]:
     return [str(tofu), f'-chdir={recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
 
 
-def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, execution_dir: Path) -> dict[str, str]:
+def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, azure_config_binding: str, execution_dir: Path) -> dict[str, str]:
     path = ':'.join(dict.fromkeys((str(azure_cli.parent), '/usr/bin', '/bin')))
     environment = {
         'HOME': str(home), 'PATH': path, 'LC_ALL': 'C', 'LANG': 'C',
         'AZURE_CONFIG_DIR': str(azure_config), 'AZURE_CORE_ONLY_SHOW_ERRORS': 'true',
-        'AZURE_CORE_COLLECT_TELEMETRY': 'false',
-        'AZURE_CORE_DISABLE_CONFIRM_PROMPT': 'true',
-        'AZURE_EXTENSION_USE_DYNAMIC_INSTALL': 'no',
-        'AZURE_LOGGING_ENABLE_LOG_FILE': 'false',
+        recovery.AZURE_CONFIG_BINDING_ENV: azure_config_binding,
         'CHECKPOINT_DISABLE': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_NO_REPLACE_OBJECTS': '1',
         'GIT_TERMINAL_PROMPT': '0', 'TF_CLI_CONFIG_FILE': os.devnull,
@@ -674,7 +671,7 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
         deadline = time.monotonic() + CONFIRMATION_SECONDS
         _confirm_operator(final, expected_source_commit, expected_saved_plan_sha256, expected_receipt_sha256, deadline, challenge_source)
         newest_arm_date = _revalidate_preclaim(final, execution_dir=execution_dir, reader=reader, expected_source_commit=expected_source_commit, expected_principal_sha256=expected_azure_principal_sha256, expected_live_snapshot=live_snapshot, deadline=deadline, clock=clock)
-        environment = _execution_environment(azure_cli=final.tofu.with_name('az'), home=home, azure_config=azure_config, execution_dir=execution_dir)
+        environment = _execution_environment(azure_cli=final.tofu.with_name('az'), home=home, azure_config=azure_config, azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution_dir)
         plan_descriptor: int | None = None
         try:
             plan_descriptor = _open_pinned_plan(saved_plan, expected_sha256=expected_saved_plan_sha256, expected_identity=final.identities[0])
