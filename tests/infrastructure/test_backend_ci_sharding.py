@@ -193,6 +193,9 @@ SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR = (
     "tests/infrastructure/"
     "test_staging_restore_sanitizer_bootstrap_job_attachment_contract.py"
 )
+SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_bootstrap_job_live_provider.py"
+)
 SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs",
@@ -252,6 +255,7 @@ SANITIZER_BOOTSTRAP_BINDING_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_module_has_no_database_network_provider_or_process_surface",
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_public_factory_remains_terminal",
     SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR,
+    SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR,
 )
 SANITIZER_BOOTSTRAP_BINDING_DIGEST_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_binding_digest_is_domain_separated_and_exact",
@@ -301,6 +305,7 @@ SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR,
     SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR,
     SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR,
+    SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
@@ -353,6 +358,7 @@ def _infrastructure_shard(path: Path) -> str:
             (
                 SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR,
                 SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR,
+                SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR,
             ),
         ):
             return "infrastructure-sanitizer-bootstrap-binding"
@@ -1089,7 +1095,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_279_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_295_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -1128,6 +1134,7 @@ def test_sanitizer_observer_shards_partition_all_279_collected_cases_once() -> N
     bootstrap_binding_family = _collect_nodeids(
         SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR,
         SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR,
+        SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR,
     )
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
@@ -1143,6 +1150,7 @@ def test_sanitizer_observer_shards_partition_all_279_collected_cases_once() -> N
         SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR,
         SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR,
         SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR,
+        SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR,
     )
 
     groups = (
@@ -1182,7 +1190,7 @@ def test_sanitizer_observer_shards_partition_all_279_collected_cases_once() -> N
     assert len(connection_plan_state) == 4
     assert len(connection_plan_output) == 2
     assert len(connection_plan_contract) == 13
-    assert len(bootstrap_binding) == 64
+    assert len(bootstrap_binding) == 80
     assert len(bootstrap_binding_digest) == 1
     assert len(bootstrap_binding_ancestry) == 2
     assert len(bootstrap_binding_state) == 1
@@ -1190,9 +1198,9 @@ def test_sanitizer_observer_shards_partition_all_279_collected_cases_once() -> N
     assert len(bootstrap_binding_duplicate) == 1
     assert len(bootstrap_binding_tamper) == 1
     assert len(bootstrap_binding_failure) == 1
-    assert len(bootstrap_binding_family) == 72
+    assert len(bootstrap_binding_family) == 88
     assert len(integrity) == 39
-    assert len(family) == 279
+    assert len(family) == 295
     assert all(len(group) == len(set(group)) for group in groups)
     assert len(bootstrap_binding_family) == len(set(bootstrap_binding_family))
     assert len(family) == len(set(family))
@@ -1242,6 +1250,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     bootstrap_job_attachment_contract = _collect_nodeids(
         SANITIZER_BOOTSTRAP_JOB_ATTACHMENT_CONTRACT_SELECTOR
     )
+    bootstrap_job_live_provider = _collect_nodeids(
+        SANITIZER_BOOTSTRAP_JOB_LIVE_PROVIDER_SELECTOR
+    )
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -1267,12 +1278,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(privileged_global_connection_plan) == 24
     assert len(bootstrap_binding_plan) == 28
     assert len(bootstrap_job_attachment_contract) == 44
+    assert len(bootstrap_job_live_provider) == 16
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 565
+    assert len(family) == 581
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
@@ -1301,6 +1313,7 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(bootstrap_job_attachment_contract) == len(
         set(bootstrap_job_attachment_contract)
     )
+    assert len(bootstrap_job_live_provider) == len(set(bootstrap_job_live_provider))
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
     assert len(data_contract_executor) == len(set(data_contract_executor))
@@ -1412,6 +1425,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert set(bootstrap_job_attachment_contract).isdisjoint(
         set(family) - set(bootstrap_job_attachment_contract)
     )
+    assert set(bootstrap_job_live_provider).isdisjoint(
+        set(family) - set(bootstrap_job_live_provider)
+    )
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
@@ -1446,8 +1462,10 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     ) | set(privileged_global_observation_frames) | set(
         privileged_global_connection_plan
     ) | set(bootstrap_binding_plan) | set(bootstrap_job_attachment_contract) | set(
-        data_contract_executor
-    ) | set(source_snapshot) | set(post_projection) == set(family)
+        bootstrap_job_live_provider
+    ) | set(data_contract_executor) | set(source_snapshot) | set(
+        post_projection
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
