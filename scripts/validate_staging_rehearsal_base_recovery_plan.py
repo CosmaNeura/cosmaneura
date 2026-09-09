@@ -835,10 +835,12 @@ def _validated_azure_config(home: Path) -> tuple[Path, str]:
             _require_safe_acl(descriptor, label="Azure CLI configuration file")
             with os.fdopen(os.dup(descriptor), "rb") as stream: value = stream.read(MAXIMUM_AZURE_CONFIG_FILE_BYTES + 1)  # noqa: E701
             after = os.fstat(descriptor); linked = os.stat(name, dir_fd=config_descriptor, follow_symlinks=False)  # noqa: E702
+            _require_safe_acl(descriptor, label="Azure CLI configuration file")
             if len(value) != before.st_size or _azure_file_identity(before) != _azure_file_identity(after) or _azure_file_identity(before) != _azure_file_identity(linked): raise RecoveryPlanError("Azure CLI configuration changed while captured")  # noqa: E701
             digest = _sha256_bytes(value)
             if name in EXPECTED_AZURE_CONFIG_SHA256S and digest != EXPECTED_AZURE_CONFIG_SHA256S[name]: raise RecoveryPlanError("Azure CLI configuration is not exact")  # noqa: E701
             bindings.append((name, *_azure_file_identity(before), digest))
+        _require_safe_acl(home_descriptor, label="Azure CLI home", allow_deny_only=True); _require_safe_acl(config_descriptor, label="Azure CLI configuration directory")  # noqa: E702
         if _azure_directory_identity(home_metadata) != _azure_directory_identity(os.stat(home, follow_symlinks=False)) or _azure_directory_identity(config_metadata) != _azure_directory_identity(os.stat(".azure", dir_fd=home_descriptor, follow_symlinks=False)): raise RecoveryPlanError("Azure CLI configuration path changed")  # noqa: E701
         return home / ".azure", _sha256_bytes(_canonical_json_bytes(bindings))
     except OSError as exc:
@@ -930,6 +932,7 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                     raise RecoveryPlanError(
                         "stale Azure configuration snapshot is unsafe"
                     )
+                identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
                 os.fchmod(descriptor, 0o700)
                 _require_safe_acl(
                     descriptor, label="stale Azure configuration snapshot"
@@ -956,11 +959,11 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                     )
                 current = os.fstat(descriptor)
                 linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                if _azure_directory_identity(metadata) != _azure_directory_identity(
-                    current
-                ) or _azure_directory_identity(metadata) != _azure_directory_identity(
-                    linked
-                ):
+                if identity != (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_uid,
+                ) or identity != (linked.st_dev, linked.st_ino, linked.st_uid):
                     raise RecoveryPlanError("stale Azure configuration snapshot changed")  # fmt: skip
                 os.rmdir(name, dir_fd=parent)
                 try:
@@ -1214,10 +1217,12 @@ def capture(source):
             safe_acl(fd)
             with os.fdopen(os.dup(fd),"rb") as stream:value=stream.read(MAXIMUM+1)
             after=os.fstat(fd);linked=os.stat(name,dir_fd=config_fd,follow_symlinks=False)
+            safe_acl(fd)
             if len(value)!=before.st_size or file_identity(before)!=file_identity(after) or file_identity(before)!=file_identity(linked):raise ValueError
             digest=hashlib.sha256(value).hexdigest()
             if name in EXPECTED and digest!=EXPECTED[name]:raise ValueError
             captures[name]=value;bindings.append((name,*file_identity(before),digest))
+        safe_acl(home_fd,True);safe_acl(config_fd)
         if directory_identity(home_metadata)!=directory_identity(os.stat(home,follow_symlinks=False)) or directory_identity(config_metadata)!=directory_identity(os.stat(".azure",dir_fd=home_fd,follow_symlinks=False)):raise ValueError
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
@@ -1280,15 +1285,18 @@ try:
     if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
     safe_acl(lock_fd);fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lock_current=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
     if file_identity(lock_metadata)!=file_identity(lock_current) or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
-    for stale_name in os.listdir(parent_fd):
-        if not valid_snapshot_name(stale_name):continue
-        stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
-        try:
-            stale_metadata=os.fstat(stale_fd);stale_linked=os.stat(stale_name,dir_fd=parent_fd,follow_symlinks=False)
-            if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid() or stat.S_IMODE(stale_metadata.st_mode) not in (0o500,0o700) or directory_identity(stale_metadata)!=directory_identity(stale_linked):raise ValueError
-            safe_acl(stale_fd);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
-            if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
-        finally:os.close(stale_fd)
+    stale_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+    try:
+        for stale_name in os.listdir(parent_fd):
+            if not valid_snapshot_name(stale_name):continue
+            stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
+            try:
+                stale_metadata=os.fstat(stale_fd);stale_linked=os.stat(stale_name,dir_fd=parent_fd,follow_symlinks=False)
+                if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid() or stat.S_IMODE(stale_metadata.st_mode) not in (0o500,0o700) or directory_identity(stale_metadata)!=directory_identity(stale_linked):raise ValueError
+                safe_acl(stale_fd);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
+                if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
+            finally:os.close(stale_fd)
+    finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
     for _ in range(16):
         snapshot_name=".azure-config-"+secrets.token_hex(16)
         try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);break

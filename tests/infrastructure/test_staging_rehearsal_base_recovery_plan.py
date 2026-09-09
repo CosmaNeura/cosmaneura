@@ -622,7 +622,7 @@ def test_parent_swap_keeps_open_directory(
 def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, data_dir = tmp_path / "source", tmp_path / "data"
     source.mkdir(mode=0o700); data_dir.mkdir(mode=0o700)  # noqa: E702
-    runtime_directory = data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME; runtime_directory.mkdir(mode=0o700); stale = runtime_directory / ".azure-config-stale1"; stale.mkdir(mode=0o700); _protected_file(stale / "msal_token_cache.json", b"stale", mode=0o600)  # noqa: E702
+    runtime_directory = data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME; runtime_directory.mkdir(mode=0o700); stale = runtime_directory / ".azure-config-stale1"; stale.mkdir(mode=0o700); _protected_file(stale / "msal_token_cache.json", b"stale", mode=0o600); stale.chmod(0o500)  # noqa: E702
     tofu = _protected_file(source / "tofu", b"tofu-binary", mode=0o500)
     azure_cli = _protected_file(source / "az", b"azure-cli", mode=0o500)
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
@@ -693,6 +693,13 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
     assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n"
     shutil.rmtree(config); moved.rename(config)
+    sitecustomize = modules / "sitecustomize.py"
+    sitecustomize.write_text('import sys,time\ndef hook(event,args):\n if event == "shutil.rmtree" and args and args[0] == "pause-cleanup":\n  print("stale-cleanup-ready",flush=True);time.sleep(0.5)\nsys.addaudithook(hook)\n')
+    stale = runtime / ".azure-config-stale-signal"; pause = stale / "pause-cleanup"; stale.mkdir(mode=0o700); pause.mkdir(mode=0o700); _protected_file(pause / "msal_token_cache.json", b"stale", mode=0o600)  # noqa: E702
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; process = subprocess.Popen([wrapper, "version"], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: E702
+    assert process.stdout is not None; selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ); assert selector.select(5) and process.stdout.readline() == b"stale-cleanup-ready\n"; selector.close()  # noqa: E702
+    process.send_signal(signal.SIGTERM); stdout, stderr = process.communicate(timeout=5); sitecustomize.unlink()  # noqa: E702
+    assert process.returncode == 2 and stdout == b"" and stderr == b"azure_cli_guard_refused\n" and not stale.exists() and not any(path.name in values for path in runtime.rglob("*"))
     for termination_signal in (signal.SIGHUP, signal.SIGTERM):
         environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; process = subprocess.Popen([wrapper, "wait-signal"], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: E702
         assert process.stdout is not None; selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ); assert selector.select(5) and process.stdout.readline() == b"ready\n"; selector.close()  # noqa: E702
