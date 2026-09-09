@@ -1825,6 +1825,16 @@ def _resolve_and_verify_tofu() -> Path:
 
 
 def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
+    previous_umask = os.umask(0o077)
+    try:
+        return _snapshot_and_verify_runtime_with_protected_umask(data_dir=data_dir)
+    finally:
+        os.umask(previous_umask)
+
+
+def _snapshot_and_verify_runtime_with_protected_umask(
+    *, data_dir: Path
+) -> RuntimeSnapshot:
     _require_protected_directory(data_dir, label="OpenTofu data directory")
     runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
     if runtime_directory.exists():
