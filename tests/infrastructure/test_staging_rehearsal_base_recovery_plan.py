@@ -6,6 +6,7 @@ import inspect
 import io
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,7 @@ REHEARSAL_ROOT = ROOT / "infra-staging-rehearsal"
 NOW = datetime(2026, 9, 5, 2, 45, tzinfo=UTC)
 BACKEND_SHA256 = "c" * 64
 TOFU = Path("/trusted/tofu")
+AZURE_CLI = Path("/trusted/az")
 DATA_DIR = Path("/protected/tofu-data")
 
 
@@ -42,13 +44,14 @@ recovery = _load_module()
 def _state_resource(address: str) -> dict[str, Any]:
     base, separator, raw_key = address.partition("[")
     resource_type, name = base.split(".", 1)
-    instance: dict[str, Any] = {"schema_version": 0, "attributes": {"id": address}}
+    provider, schema_version, resource_id = recovery.EXPECTED_STATE_IDENTITIES[address]
+    instance: dict[str, Any] = {
+        "schema_version": schema_version,
+        "attributes": {"id": resource_id},
+    }
     if separator:
         assert raw_key.endswith("]")
         instance["index_key"] = json.loads(raw_key[:-1])
-    provider = 'provider["registry.opentofu.org/hashicorp/azurerm"]'
-    if resource_type == "terraform_data":
-        provider = 'provider["terraform.io/builtin/terraform"]'
     return {
         "mode": "managed",
         "type": resource_type,
@@ -73,7 +76,24 @@ def _valid_state() -> dict[str, Any]:
 
 
 def _valid_plan() -> dict[str, Any]:
-    changes = [{"address": address, "change": {"actions": [action]}} for action, addresses in (("no-op", recovery.EXPECTED_EXISTING_ADDRESSES), ("create", recovery.EXPECTED_CREATE_ADDRESSES)) for address in sorted(addresses)]  # fmt: skip
+    changes = [
+        {
+            **recovery._resource_change_metadata(address),
+            "change": {
+                "actions": ["no-op"],
+                "before": {"id": address},
+                "after": {"id": address},
+                "after_unknown": {},
+                "before_sensitive": {},
+                "after_sensitive": {},
+            },
+        }
+        for address in sorted(recovery.EXPECTED_EXISTING_ADDRESSES)
+    ]
+    changes.extend(
+        deepcopy(recovery._expected_create_change(address))
+        for address in sorted(recovery.EXPECTED_CREATE_ADDRESSES)
+    )
     providers = json.loads(
         '{"azurerm":{"full_name":"registry.opentofu.org/hashicorp/azurerm","version_constraint":"4.73.0","expressions":{"features":[{"storage":[{"data_plane_available":{"constant_value":false}}]}]}},"azapi":{"full_name":"registry.opentofu.org/azure/azapi","version_constraint":"2.1.0","expressions":{}},"terraform":{"full_name":"terraform.io/builtin/terraform","version_constraint":null,"expressions":null}}'
     )
@@ -105,6 +125,16 @@ def _source_snapshot() -> Any:
         terraform_files=terraform_files,
         lockfile=lockfile,
         tree_sha256=recovery._canonical_file_set_sha256(files),
+    )
+
+
+def _runtime_snapshot() -> Any:
+    return recovery.RuntimeSnapshot(
+        tofu=TOFU,
+        azure_cli=AZURE_CLI,
+        tofu_sha256=recovery.EXPECTED_TOFU_SHA256,
+        azure_cli_sha256=recovery.EXPECTED_AZURE_CLI_SHA256,
+        azure_cli_version_sha256=recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
     )
 
 
@@ -165,7 +195,7 @@ def _validate(
             saved_plan_bytes=plan_bytes,
             state_bytes=json.dumps(state_value).encode(),
             source=source_snapshot,
-            tofu=TOFU,
+            runtime=_runtime_snapshot(),
             data_dir=DATA_DIR,
             generation_mode="validator_full_refresh",
             now=NOW,
@@ -191,7 +221,7 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
     expected_facts = {"state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
     assert {name: receipt[name] for name in expected_facts} == expected_facts
     digest = recovery._sha256_bytes
-    expected_hashes = {"state_json_sha256": digest(state_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256}  # fmt: skip
+    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256}  # fmt: skip
     assert {name: receipt[name] for name in expected_hashes} == expected_hashes
     with pytest.raises(recovery.RecoveryPlanError, match="digest"):
         _validate(monkeypatch, expected_digest="0" * 64)
@@ -315,7 +345,9 @@ def test_cli_modes_emit_only_validated_receipt(
     if mode == "verify":
         _protected_file(plan_path, plan_bytes, mode=0o400)
     monkeypatch.setattr(recovery, "_source_snapshot", lambda _: source)
-    monkeypatch.setattr(recovery, "_resolve_and_verify_tofu", lambda: TOFU)
+    monkeypatch.setattr(
+        recovery, "_snapshot_and_verify_runtime", lambda **_: _runtime_snapshot()
+    )
     monkeypatch.setattr(recovery, "_initialize_tofu", lambda **_: None)
     monkeypatch.setattr(recovery, "_backend_snapshot", lambda **_: BACKEND_SHA256)
     monkeypatch.setattr(recovery, "_generate_saved_plan", lambda **_: plan_bytes)
@@ -356,6 +388,23 @@ def test_state_snapshot_safety_regressions(monkeypatch: pytest.MonkeyPatch) -> N
         embedded["resources"][0]["instances"][0][field] = value
         with pytest.raises(recovery.RecoveryPlanError, match="does not match"):
             _validate(monkeypatch, embedded_state=embedded)
+    state = _valid_state()
+    state["resources"][0]["provider"] = 'provider["attacker.invalid/provider"]'
+    with pytest.raises(recovery.RecoveryPlanError, match="exact contract"):
+        _validate(monkeypatch, state=state)
+    embedded = _valid_state()
+    embedded["resources"][0]["instances"][0]["attributes"]["semantic_field"] = "mutated"
+    with pytest.raises(recovery.RecoveryPlanError, match="semantically identical"):
+        _validate(monkeypatch, embedded_state=embedded)
+
+    external = _valid_state()
+    embedded = deepcopy(external)
+    external["check_results"] = [{"status": "pass"}]
+    embedded["check_results"] = None
+    receipt = _validate(monkeypatch, state=external, embedded_state=embedded)
+    assert receipt["state_semantic_sha256"] == recovery._semantic_state_sha256(
+        external, label="state snapshot"
+    )
 
 
 def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -402,6 +451,91 @@ def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -
             node = node[key]
         node[path[-1]] = value
         rejected(plan, message)
+
+
+@pytest.mark.parametrize(
+    ("address", "path", "value"),
+    [
+        (
+            'azapi_resource.marker_container["restore-cleanups-v4"]',
+            ("change", "after", "parent_id"),
+            "/subscriptions/attacker/storage",
+        ),
+        (
+            "azurerm_private_endpoint.marker[0]",
+            ("change", "after", "subnet_id"),
+            "/subscriptions/attacker/subnet",
+        ),
+        (
+            "azurerm_private_endpoint.marker[0]",
+            (
+                "change",
+                "after",
+                "private_service_connection",
+                0,
+                "private_connection_resource_id",
+            ),
+            "/subscriptions/attacker/storage",
+        ),
+        (
+            'azurerm_role_assignment.marker_read["cleanup_intent"]',
+            ("change", "after", "principal_id"),
+            "00000000-0000-0000-0000-000000000000",
+        ),
+        (
+            "azurerm_role_assignment.marker_provision_cleanup[0]",
+            ("change", "after", "role_definition_id"),
+            "/subscriptions/attacker/role",
+        ),
+        (
+            "azurerm_private_endpoint.marker[0]",
+            ("change", "after_unknown", "subnet_id"),
+            True,
+        ),
+        (
+            "azurerm_private_endpoint.marker[0]",
+            ("provider_name",),
+            "registry.opentofu.org/attacker/provider",
+        ),
+    ],
+)
+def test_create_contract_rejects_exact_value_or_schema_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    address: str,
+    path: tuple[str | int, ...],
+    value: Any,
+) -> None:
+    plan = _valid_plan()
+    change = next(
+        item for item in plan["resource_changes"] if item["address"] == address
+    )
+    node: Any = change
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    with pytest.raises(recovery.RecoveryPlanError, match="exact create contract"):
+        _validate(monkeypatch, plan=plan)
+
+
+def test_change_envelopes_reject_unreviewed_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for address, field in (
+        ("azurerm_storage_account.marker[0]", "action_reason"),
+        ('azapi_resource.marker_container["restore-cleanups-v4"]', "replace_paths"),
+    ):
+        plan = _valid_plan()
+        change = next(
+            item for item in plan["resource_changes"] if item["address"] == address
+        )
+        change["change"][field] = []
+        message = (
+            "action schema differs"
+            if field == "action_reason"
+            else "exact create contract"
+        )
+        with pytest.raises(recovery.RecoveryPlanError, match=message):
+            _validate(monkeypatch, plan=plan)
 
 
 def test_pinned_opentofu_json_may_omit_applyable_and_complete(
@@ -565,31 +699,87 @@ def test_parent_swap_keeps_open_directory(
     assert recovery._read_protected_file(artifact, label="artifact") == b"reviewed"
 
 
-def test_tofu_version_is_pinned(
+def test_runtime_executables_and_versions_are_snapshotted_and_pinned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    tofu = _protected_file(tmp_path / "tofu", b"binary", mode=0o700)
-    monkeypatch.setattr(recovery.shutil, "which", lambda _: str(tofu))
+    source = tmp_path / "source"
+    source.mkdir(mode=0o700)
+    tofu = _protected_file(source / "tofu", b"tofu-binary", mode=0o500)
+    azure_cli = _protected_file(source / "az", b"azure-cli", mode=0o500)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(mode=0o700)
+    azure_version = {"azure-cli": "2.89.1", "extensions": {}}
+    monkeypatch.setattr(recovery, "EXPECTED_TOFU_PATH", tofu)
+    monkeypatch.setattr(recovery, "EXPECTED_AZURE_CLI_PATH", azure_cli)
+    monkeypatch.setattr(
+        recovery, "EXPECTED_TOFU_SHA256", hashlib.sha256(tofu.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(
+        recovery,
+        "EXPECTED_AZURE_CLI_SHA256",
+        hashlib.sha256(azure_cli.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "EXPECTED_AZURE_CLI_VERSION_SHA256",
+        hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(),
+    )
 
-    def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        del kwargs
-        return subprocess.CompletedProcess(
-            args[0], 0, b'{"terraform_version":"1.12.4"}', b""
+    def fake_run(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        assert kwargs["data_dir"] == data_dir
+        output = (
+            b'{"terraform_version":"1.12.5"}'
+            if arguments[-2:] == ["version", "-json"]
+            else json.dumps(azure_version).encode()
         )
+        return subprocess.CompletedProcess(arguments, 0, output, b"")
 
     monkeypatch.setattr(recovery, "_run_process", fake_run)
-    with pytest.raises(recovery.RecoveryPlanError, match="version is not pinned"):
-        recovery._resolve_and_verify_tofu()
+    runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
+    assert runtime.tofu.read_bytes() == tofu.read_bytes()
+    assert runtime.azure_cli.read_bytes() == azure_cli.read_bytes()
+    assert runtime.tofu.stat().st_mode & 0o777 == 0o500
+    assert runtime.azure_cli.stat().st_mode & 0o777 == 0o500
+
+    runtime.azure_cli.chmod(0o700)
+    with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"):
+        recovery._snapshot_and_verify_runtime(data_dir=data_dir)
 
 
 def test_cli_cloud_environment_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    scrubbed = "TF_CLI_ARGS TOFU_CLI_ARGS_plan OPENTOFU_CLI_ARGS TF_VAR_enable_marker_legal_holds TF_LOG_PATH GIT_DIR AZURE_CONFIG_DIR ARM_TENANT_ID".split()
-    fixed = {"TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_ENVIRONMENT": "public", "ARM_USE_CLI": "true", "ARM_USE_AZUREAD": "true", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0"}  # fmt: skip
-    for name in (*scrubbed, *fixed):
+    scrubbed = "TF_CLI_ARGS TOFU_CLI_ARGS_plan OPENTOFU_CLI_ARGS TF_VAR_enable_marker_legal_holds TF_LOG_PATH GIT_DIR HTTPS_PROXY SSL_CERT_FILE REQUESTS_CA_BUNDLE PYTHONPATH AZURE_CONFIG_DIR ARM_TENANT_ID PATH".split()
+    for name in scrubbed:
         monkeypatch.setenv(name, "hostile")
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
     environment = recovery._normalized_environment(data_dir=DATA_DIR)
-    assert all(name not in environment for name in scrubbed)
-    assert {name: environment[name] for name in fixed} == fixed
+    expected = {
+        "ARM_ENVIRONMENT": "public",
+        "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID,
+        "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID,
+        "ARM_USE_AZUREAD": "true",
+        "ARM_USE_CLI": "true",
+        "AZURE_CONFIG_DIR": str(Path(pwd.getpwuid(os.geteuid()).pw_dir) / ".azure"),
+        "AZURE_CORE_COLLECT_TELEMETRY": "false",
+        "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
+        "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
+        "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
+        "CHECKPOINT_DISABLE": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": pwd.getpwuid(os.geteuid()).pw_dir,
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": f"{recovery.EXPECTED_AZURE_CLI_PATH.parent}:/usr/bin:/bin",
+        "TF_CLI_CONFIG_FILE": os.devnull,
+        "TF_DATA_DIR": str(DATA_DIR),
+        "TF_IN_AUTOMATION": "1",
+        "TF_INPUT": "0",
+    }
+    assert environment == expected
 
 
 def test_backend_cache_and_workspace_are_exact(

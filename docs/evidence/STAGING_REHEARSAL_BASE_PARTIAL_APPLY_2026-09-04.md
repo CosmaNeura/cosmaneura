@@ -131,6 +131,22 @@ resource actions.
 
 ## Recovery acceptance
 
+On 2026-09-09, the independently reviewed refresh-only plan was consumed by
+the human operator. The protected backend advanced to serial 9 with the exact
+same 28-instance inventory, no tainted or deposed instance, and the apply
+reported zero resources added, changed, or destroyed. The protected serial-9
+snapshot SHA-256 is
+`8abb6c30c94614b0b701da63112f726742ab9eaef3f98782f1abcf51394bb363`.
+
+The first serial-9 base-recovery plan (SHA-256
+`2f16bcb6fdeddeca55987084511361f030c7bd5648435d7487461eb540f7ab36`)
+was rejected during independent review and was never applied. The review found
+that the validator needed exact executable snapshots, a closed process
+environment, exact create-value/unknown-field contracts, and full semantic
+equality between the protected and plan-embedded states. That plan is not an
+authorized recovery artifact; generate a fresh plan only after the hardening
+change is protected on `master`.
+
 Follow `infra-staging-rehearsal/README.md` exactly. A human operator must own
 both state transitions. Completion first requires the independently reviewed,
 zero-resource-action refresh-only plan to advance state from serial 8 to serial

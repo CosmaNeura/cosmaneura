@@ -37,11 +37,18 @@ def _base() -> dict[str, Any]:
         'state_lineage': consumer.recovery.EXPECTED_LINEAGE,
         'state_serial': consumer.recovery.EXPECTED_RECOVERY_SERIAL,
         'state_json_sha256': '7' * 64,
+        'state_semantic_sha256': '7' * 64,
         'embedded_state_sha256': '8' * 64,
         'saved_plan_sha256': PLAN_DIGEST,
         'derived_plan_json_sha256': '9' * 64,
         'plan_timestamp': '2026-09-05T04:00:00Z',
         'open_tofu_version': '1.12.5',
+        'open_tofu_source_path': str(consumer.recovery.EXPECTED_TOFU_PATH),
+        'open_tofu_sha256': consumer.recovery.EXPECTED_TOFU_SHA256,
+        'azure_cli_source_path': str(consumer.recovery.EXPECTED_AZURE_CLI_PATH),
+        'azure_cli_sha256': consumer.recovery.EXPECTED_AZURE_CLI_SHA256,
+        'azure_cli_version_sha256': consumer.recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
+        'trusted_runtime_snapshotted': True,
         'validated_nonempty_change_set': True,
         'artifact_policy_complete': True,
         'live_readback_bound': False,
@@ -55,7 +62,6 @@ def _base() -> dict[str, Any]:
         'execution_data_dir': '/protected/execution',
         'execution_provider_tree_sha256': 'a' * 64,
         'open_tofu_path': '/trusted/tofu',
-        'open_tofu_sha256': 'b' * 64,
     }
 
 
@@ -79,8 +85,8 @@ def _receipt(base: Mapping[str, Any] | None=None) -> dict[str, Any]:
         'execution_provider_tree_sha256': base['execution_provider_tree_sha256'],
         'python_executable_sha256': 'e' * 64,
         'python_runtime_sha256': 'f' * 64,
-        'azure_cli_sha256': '0' * 64,
-        'azure_cli_version_sha256': '1' * 64,
+        'azure_cli_sha256': base['azure_cli_sha256'],
+        'azure_cli_version_sha256': base['azure_cli_version_sha256'],
         'azure_tls_ca_bundle_sha256': '2' * 64,
         'azure_config_binding_sha256': '3' * 64,
         'base_validation_receipt_sha256': consumer._digest(consumer._canonical(base)),
@@ -241,6 +247,10 @@ def test_receipt_shape_hashes_and_expiry_fail_closed(mutation: str) -> None:
     ('apply_authorized', True), ('pass', False), ('state_serial', 7),
     ('state_lineage', 'wrong'), ('backend_workspace', 'other'),
     ('open_tofu_version', '1.13.0'), ('generation_mode', 'validator_full_refresh'),
+    ('open_tofu_sha256', 'f' * 64), ('azure_cli_sha256', 'f' * 64),
+    ('azure_cli_version_sha256', 'f' * 64), ('trusted_runtime_snapshotted', False),
+    ('open_tofu_source_path', '/untrusted/tofu'),
+    ('state_semantic_sha256', 'not-a-digest'),
 ])
 def test_reconstructed_plan_requires_exact_28_noops_11_creates(field: str, value: Any) -> None:
     base = _base()
@@ -373,8 +383,8 @@ def test_source_binding_requires_head_tree_and_committed_validator_preparer_cons
 
 
 class _Reader:
-    azure_cli_sha256 = '0' * 64
-    azure_cli_version_sha256 = '1' * 64
+    azure_cli_sha256 = consumer.recovery.EXPECTED_AZURE_CLI_SHA256
+    azure_cli_version_sha256 = consumer.recovery.EXPECTED_AZURE_CLI_VERSION_SHA256
     azure_tls_ca_bundle_sha256 = '2' * 64
     azure_config_binding_sha256 = '3' * 64
     def __init__(self) -> None:
@@ -773,7 +783,7 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     path, argv, environment = calls[0]
     assert path == '/trusted/tofu'
     assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
-    assert environment == consumer._execution_environment(azure_cli=Path('/trusted/bin/az'), home=Path('/operator'), azure_config=Path('/operator/.azure'), execution_dir=execution)
+    assert environment == consumer._execution_environment(azure_cli=binding.tofu.with_name('az'), home=Path('/operator'), azure_config=Path('/operator/.azure'), execution_dir=execution)
     with pytest.raises(OSError):
         os.fstat(plan_descriptor)
     marker = execution / consumer.CLAIM_NAME

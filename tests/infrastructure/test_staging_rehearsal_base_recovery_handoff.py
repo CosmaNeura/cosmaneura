@@ -31,10 +31,12 @@ def _resource(resource_id: str, properties: Mapping[str, Any] | None=None, **out
 def _state_resource(address: str, attributes: Mapping[str, Any]) -> dict[str, Any]:
     base, separator, raw_key = address.partition('[')
     resource_type, name = base.split('.', 1)
-    instance: dict[str, Any] = {'schema_version': 0, 'attributes': dict(attributes)}
+    provider, schema_version, resource_id = handoff.recovery.EXPECTED_STATE_IDENTITIES[address]
+    exact_attributes = dict(attributes)
+    exact_attributes['id'] = resource_id
+    instance: dict[str, Any] = {'schema_version': schema_version, 'attributes': exact_attributes}
     if separator:
         instance['index_key'] = json.loads(raw_key[:-1])
-    provider = 'provider["terraform.io/builtin/terraform"]' if resource_type == 'terraform_data' else 'provider["registry.opentofu.org/hashicorp/azurerm"]'
     return {'mode': 'managed', 'type': resource_type, 'name': name, 'provider': provider, 'instances': [instance]}
 
 def _valid_state() -> dict[str, Any]:
@@ -159,7 +161,7 @@ def _attributes(state: dict[str, Any] | None=None) -> dict[str, Mapping[str, Any
     return handoff._state_attributes(json.dumps(state or _valid_state()).encode())
 
 def _base_receipt(state_bytes: bytes) -> dict[str, Any]:
-    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_sha256': '6' * 64, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
+    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
 
 def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[str]]:
     queue = list(states)
@@ -311,7 +313,7 @@ def test_prepare_reruns_validator_and_writes_owner_only_bound_receipt(tmp_path: 
     serialized = receipt_path.read_text()
     assert 'operator@example' not in serialized and (not any((value in serialized for value in PRINCIPALS.values())))
 
-@pytest.mark.parametrize('failure', ['base', 'nonce', 'remote', 'stale', 'torn'])
+@pytest.mark.parametrize('failure', ['base', 'plan_runtime', 'nonce', 'remote', 'stale', 'torn'])
 def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     tmp_path.chmod(448)
     state_bytes = json.dumps(_valid_state()).encode()
@@ -324,6 +326,8 @@ def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     base = _base_receipt(state_bytes)
     if failure == 'base':
         base['apply_authorized'] = True
+    elif failure == 'plan_runtime':
+        base['azure_cli_sha256'] = 'f' * 64
 
     def verify(**_: Any) -> Mapping[str, Any]:
         execution.mkdir(mode=448)

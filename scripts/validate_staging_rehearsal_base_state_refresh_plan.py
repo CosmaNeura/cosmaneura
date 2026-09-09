@@ -29,7 +29,7 @@ _RECOVERY_VALIDATOR = (
     .with_name("validate_staging_rehearsal_base_recovery_plan.py")
 )
 _RECOVERY_VALIDATOR_SHA256 = (
-    "0eaf0693016a52c8ab48b16fa7870aaefce8fb784c6732d1a9258456e1a4cb9e"
+    "971fca27d42448155c72540294596fa7e673d7482e34a690dfec1994375ec6a7"
 )
 _MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
 
@@ -1249,11 +1249,11 @@ def create_and_validate_state_refresh_plan(
     )
     _validate_pre_refresh_state_digest(state_bytes)
     source_before = _source_snapshot(expected_source_commit)
-    tofu = recovery._resolve_and_verify_tofu()
     with tempfile.TemporaryDirectory(
         prefix=".cosmaneura-refresh-tfdata-", dir=saved_plan.parent
     ) as temporary:
         data_dir = Path(temporary)
+        tofu = recovery._resolve_and_verify_tofu()
         recovery._initialize_tofu(tofu=tofu, data_dir=data_dir)
         backend_before = recovery._backend_snapshot(tofu=tofu, data_dir=data_dir)
         remote_before = _pull_remote_state(tofu=tofu, data_dir=data_dir)

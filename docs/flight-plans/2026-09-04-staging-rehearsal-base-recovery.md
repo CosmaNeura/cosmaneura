@@ -155,12 +155,16 @@ posture mismatch. No production or PHI promotion is part of this plan.
   disabled-key material from state, requires its own rehearsed state migration.
 - No `-refresh=false`, `-target`, `-replace`, force-unlock, state removal/import,
   unsaved apply, or raw-state/plan publication is permitted.
-- The validator strips ambient OpenTofu, Git, and Azure-provider overrides,
-  pins the reviewed subscription, backend coordinates, Azure public cloud, default workspace, provider tenant, and OpenTofu 1.12.5; it generates the full-refresh plan itself,
-  decodes JSON from the exact
-  captured plan bytes, verifies the archive's Terraform source and provider
-  lockfile against the clean expected protected-master commit, and binds its
-  embedded state to the protected snapshot. Artifacts must be single-link,
+- The validator uses a closed environment; pins the reviewed subscription,
+  backend coordinates, Azure public cloud, default workspace, and provider
+  tenant; and copies exact-digest OpenTofu 1.12.5 and Azure CLI entry points to
+  an owner-only runtime directory before use. It generates the full-refresh
+  plan itself, decodes JSON from the exact captured plan bytes, verifies the
+  archive's Terraform source and provider lockfile against the clean expected
+  protected-master commit, and compares every embedded state field with the
+  protected snapshot except OpenTofu's transient `check_results`. The eleven
+  create envelopes are exact, including identities, roles, networking,
+  sensitive masks, and unknown-value shapes. Artifacts must be single-link,
   owner-only regular files in a symlink-free owner-only directory.
 - OpenTofu 1.12.5 does not emit `applyable` or `complete` in plan JSON. A
   successful detailed-exitcode plan plus `errored=false`, the exact nonempty

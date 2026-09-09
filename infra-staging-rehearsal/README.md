@@ -326,17 +326,24 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    ```
 
    Create mode itself invokes the fixed `tofu plan` command with
-   `-refresh=true`, the three exact reversible inputs, no ambient OpenTofu,
-   Git, or Azure-provider overrides, and pinned OpenTofu 1.12.5. It fixes the
-   backend to the reviewed subscription, storage coordinates, Azure public cloud, and default workspace; the provider configuration pins the tenant. It writes a read-only
-   (`0400`) saved plan only after validating JSON derived from those exact
-   binary bytes. The plan archive must contain the exact reviewed Terraform
-   source and provider lockfile, embed lineage and serial 9, be no more than
-   four hours old, and contain exactly 28 no-ops plus eleven creates. Drift,
-   updates, deletes, replacements, irreversible flags, extra resources,
-   non-passing checks, provider changes, or detached/insecure artifacts fail
-   closed. Retain the digest-only JSON receipt in the protected operator
-   packet; do not persist a raw plan-JSON export.
+   `-refresh=true` and the three exact reversible inputs. It copies the
+   digest-pinned OpenTofu and Azure CLI entry points into an owner-only runtime
+   directory, verifies the exact Azure CLI version manifest, and runs with a
+   closed environment that excludes ambient proxy, TLS, Python, OpenTofu, Git,
+   and Azure-provider overrides. It fixes the backend to the reviewed
+   subscription, storage coordinates, Azure public cloud, and default
+   workspace; the provider configuration pins the tenant. It writes a
+   read-only (`0400`) saved plan only after validating JSON derived from those
+   exact binary bytes. The plan archive must contain the exact reviewed
+   Terraform source and provider lockfile, embed a semantically identical
+   lineage/serial-9 state snapshot (excluding only OpenTofu's transient
+   `check_results` field), be no more than four hours old, and contain exact
+   change envelopes for 28 no-ops and eleven creates. The eleven create
+   envelopes pin every identity, role, network, storage, sensitivity, and
+   unknown-value field. Drift, updates, deletes, replacements, irreversible
+   flags, extra fields/resources, non-passing checks, provider changes, or
+   detached/insecure artifacts fail closed. Retain the digest-only JSON receipt
+   in the protected operator packet; do not persist a raw plan-JSON export.
 9. A different reviewer must independently inspect the saved plan, receipt,
    current state metadata, and current live readback. Immediately before apply,
    fetch `origin/master` again, pull a new protected state snapshot, and run

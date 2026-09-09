@@ -8,10 +8,10 @@ import hashlib
 import io
 import json
 import os
+import pwd
 import re
 import selectors
 import shlex
-import shutil
 import signal
 import stat
 import subprocess
@@ -33,6 +33,17 @@ EXPECTED_LINEAGE = "76b6712e-5781-adbd-9fb1-cf66db4f4e28"
 EXPECTED_RECOVERY_SERIAL = 9
 EXPECTED_FORMAT_VERSION = "1.2"
 EXPECTED_TOFU_VERSION = "1.12.5"
+EXPECTED_TOFU_PATH = Path("/opt/homebrew/Cellar/opentofu/1.12.5/bin/tofu")
+EXPECTED_TOFU_SHA256 = (
+    "1334ccf2360fe38460c47fd0924555f411cf714813e541d17d744283c973aa99"
+)
+EXPECTED_AZURE_CLI_PATH = Path("/opt/homebrew/Cellar/azure-cli/2.89.1/bin/az")
+EXPECTED_AZURE_CLI_SHA256 = (
+    "e62d2f82b3c4d2a98202154e2a01638b656059e25c25605c56732516527dc6df"
+)
+EXPECTED_AZURE_CLI_VERSION_SHA256 = (
+    "95aba806efb5d25cc23df04924a6da51f7571a08a6e21283c29c96a10a0b91a0"
+)
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
 EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
@@ -42,8 +53,10 @@ GITHUB_HOST_KEY = "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0Sd
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAXIMUM_PLAN_JSON_BYTES = 128 * 1024 * 1024
 MAXIMUM_PLAN_ARCHIVE_BYTES = 256 * 1024 * 1024
+MAXIMUM_EXECUTABLE_BYTES = 128 * 1024 * 1024
 MAXIMUM_PLAN_AGE = timedelta(hours=4)
 MAXIMUM_CLOCK_SKEW = timedelta(minutes=5)
+TRUSTED_RUNTIME_DIRECTORY_NAME = ".trusted-runtime-bin"
 
 PLAN_VARIABLE_ARGUMENTS = (
     "-var=deploy_staging_restore_control_plane=true",
@@ -135,6 +148,225 @@ EXPECTED_BACKEND_CONFIG: Mapping[str, Any] = {
     "use_azuread_auth": True,
     "use_cli": True,
 }
+EXPECTED_CONTROL_RESOURCE_GROUP_ID = (
+    f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+    "cosmaneura-staging-rehearsal-control"
+)
+EXPECTED_MARKER_STORAGE_ACCOUNT_ID = (
+    f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.Storage/"
+    "storageAccounts/cosmaneurarehearsalctl"
+)
+EXPECTED_MARKER_CONTAINER_PARENT_ID = (
+    f"{EXPECTED_MARKER_STORAGE_ACCOUNT_ID}/blobServices/default"
+)
+EXPECTED_MARKER_PRIVATE_DNS_ZONE_ID = (
+    f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.Network/"
+    "privateDnsZones/privatelink.blob.core.windows.net"
+)
+EXPECTED_MARKER_SUBNET_ID = (
+    f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.Network/"
+    "virtualNetworks/cosmaneura-staging-rehearsal-control-vnet/"
+    "subnets/marker-private-endpoints"
+)
+EXPECTED_MARKER_READER_ROLE_ID = (
+    f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+    "Microsoft.Authorization/roleDefinitions/"
+    "3a78ee1a-5f02-5a39-a6d2-634ff2a8a253"
+)
+EXPECTED_ROLE_ASSIGNMENTS: Mapping[str, tuple[str, str]] = {
+    "azurerm_role_assignment.marker_provision_cleanup[0]": (
+        "8e5606e8-5cc0-5e0f-ad8f-5ee340a2f7c2",
+        "b1a7600b-b8ff-4b8b-ab3b-af483b1619c5",
+    ),
+    'azurerm_role_assignment.marker_read["cleanup_intent"]': (
+        "d795a889-8f20-51c2-bfcc-8e3983cf6f3b",
+        "1680af1c-bfa4-4968-baeb-5a175fdd749d",
+    ),
+    'azurerm_role_assignment.marker_read["cleanup_submission"]': (
+        "8caca083-2c21-53ba-8a0f-65d856015c3e",
+        "1680af1c-bfa4-4968-baeb-5a175fdd749d",
+    ),
+}
+AZURERM_STATE_PROVIDER = 'provider["registry.opentofu.org/hashicorp/azurerm"]'
+TERRAFORM_STATE_PROVIDER = 'provider["terraform.io/builtin/terraform"]'
+EXPECTED_STATE_IDENTITIES: Mapping[str, tuple[str, int, str]] = {
+    'azurerm_federated_identity_credential.dispatcher["cleanup"]': (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-cleanup/"
+        "federatedIdentityCredentials/github-staging-restore-cleanup",
+    ),
+    'azurerm_federated_identity_credential.dispatcher["provision"]': (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-provision/"
+        "federatedIdentityCredentials/github-staging-restore-provision",
+    ),
+    "azurerm_policy_definition.deny_postgres_firewall_rules[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/policyDefinitions/"
+        "deny-staging-restore-firewall-rules",
+    ),
+    "azurerm_private_dns_zone.marker_blob[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        EXPECTED_MARKER_PRIVATE_DNS_ZONE_ID,
+    ),
+    "azurerm_private_dns_zone_virtual_network_link.marker_blob[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"{EXPECTED_MARKER_PRIVATE_DNS_ZONE_ID}/virtualNetworkLinks/"
+        "cosmaneura-staging-rehearsal-marker-link",
+    ),
+    "azurerm_resource_group.control[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        EXPECTED_CONTROL_RESOURCE_GROUP_ID,
+    ),
+    "azurerm_resource_group.target[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+        "cosmaneura-staging-rehearsal",
+    ),
+    "azurerm_resource_group_policy_assignment.deny_postgres_firewall_rules[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+        "cosmaneura-staging-rehearsal/providers/Microsoft.Authorization/"
+        "policyAssignments/deny-staging-restore-firewall-rules",
+    ),
+    'azurerm_role_assignment.control_reader["cleanup"]': (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleAssignments/"
+        "8e1df710-ef99-5127-926f-43ce2e992553",
+    ),
+    'azurerm_role_assignment.control_reader["provision"]': (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleAssignments/"
+        "b07454ab-e9a7-5a82-b22b-312fc9c8e53b",
+    ),
+    "azurerm_role_assignment.source_reader[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+        "cosmaneura-staging/providers/Microsoft.DBforPostgreSQL/flexibleServers/"
+        "cosmaneura-staging-postgres/providers/Microsoft.Authorization/"
+        "roleAssignments/cb35be04-b595-5d40-98f6-34b95a58ab8d",
+    ),
+    "azurerm_role_assignment.target_cleanup[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+        "cosmaneura-staging-rehearsal/providers/Microsoft.Authorization/"
+        "roleAssignments/2c1af22d-d0ad-5734-b190-e20403c2fc9f",
+    ),
+    "azurerm_role_assignment.target_provisioner[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/resourceGroups/"
+        "cosmaneura-staging-rehearsal/providers/Microsoft.Authorization/"
+        "roleAssignments/f6ad6576-89f9-5c59-82dc-0e527c7c841f",
+    ),
+    "azurerm_role_definition.control_reader[0]": (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleDefinitions/"
+        f"3b95a7e2-f4fa-5ed7-a1ad-7723610455e0|/subscriptions/{EXPECTED_SUBSCRIPTION_ID}",
+    ),
+    "azurerm_role_definition.marker_reader[0]": (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"{EXPECTED_MARKER_READER_ROLE_ID}|/subscriptions/{EXPECTED_SUBSCRIPTION_ID}",
+    ),
+    "azurerm_role_definition.source_reader[0]": (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleDefinitions/"
+        f"4191a01a-8fcc-5710-859b-3e83f3d21fce|/subscriptions/{EXPECTED_SUBSCRIPTION_ID}",
+    ),
+    "azurerm_role_definition.target_cleanup[0]": (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleDefinitions/"
+        f"642e3081-a3b1-53c6-873f-3badacc97e26|/subscriptions/{EXPECTED_SUBSCRIPTION_ID}",
+    ),
+    "azurerm_role_definition.target_provisioner[0]": (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"/subscriptions/{EXPECTED_SUBSCRIPTION_ID}/providers/"
+        "Microsoft.Authorization/roleDefinitions/"
+        f"0004ec78-d9bb-5a1a-bff9-ebfa89c29e7d|/subscriptions/{EXPECTED_SUBSCRIPTION_ID}",
+    ),
+    "azurerm_storage_account.marker[0]": (
+        AZURERM_STATE_PROVIDER,
+        4,
+        EXPECTED_MARKER_STORAGE_ACCOUNT_ID,
+    ),
+    "azurerm_subnet.marker_private_endpoint[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        EXPECTED_MARKER_SUBNET_ID,
+    ),
+    "azurerm_subnet.private_executor_reserved[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.Network/"
+        "virtualNetworks/cosmaneura-staging-rehearsal-control-vnet/"
+        "subnets/private-executor-reserved",
+    ),
+    'azurerm_user_assigned_identity.dispatcher["cleanup"]': (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-cleanup",
+    ),
+    'azurerm_user_assigned_identity.dispatcher["provision"]': (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-provision",
+    ),
+    'azurerm_user_assigned_identity.job["cleanup"]': (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-cleanup-job",
+    ),
+    'azurerm_user_assigned_identity.job["provision"]': (
+        AZURERM_STATE_PROVIDER,
+        1,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/cosmaneura-staging-restore-provision-job",
+    ),
+    "azurerm_virtual_network.control[0]": (
+        AZURERM_STATE_PROVIDER,
+        0,
+        f"{EXPECTED_CONTROL_RESOURCE_GROUP_ID}/providers/Microsoft.Network/"
+        "virtualNetworks/cosmaneura-staging-rehearsal-control-vnet",
+    ),
+    "terraform_data.activation_guard[0]": (
+        TERRAFORM_STATE_PROVIDER,
+        0,
+        "6c8fec9d-c704-446c-9ebb-b0c254504b94",
+    ),
+    "terraform_data.private_executor_topology_blocker[0]": (
+        TERRAFORM_STATE_PROVIDER,
+        0,
+        "64c63cb5-6fd8-76da-39ce-4658df4ffc4d",
+    ),
+}
 
 
 class RecoveryPlanError(ValueError):
@@ -149,8 +381,21 @@ class SourceSnapshot:
     tree_sha256: str
 
 
+@dataclass(frozen=True)
+class RuntimeSnapshot:
+    tofu: Path
+    azure_cli: Path
+    tofu_sha256: str
+    azure_cli_sha256: str
+    azure_cli_version_sha256: str
+
+
 def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
 def _canonical_file_set_sha256(files: Mapping[str, bytes]) -> str:
@@ -250,6 +495,140 @@ def _executable_sha256(path: Path, *, label: str) -> str:
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _trusted_executable_source(path: Path, *, label: str, expected_sha256: str) -> Path:
+    _reject_symlink_components(path, label=label)
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except OSError as exc:
+            raise RecoveryPlanError(f"{label} is unavailable") from exc
+        if metadata.st_uid not in {0, os.geteuid()}:
+            raise RecoveryPlanError(f"{label} has untrusted ownership")
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise RecoveryPlanError(f"{label} has a writable path component")
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RecoveryPlanError(f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or not metadata.st_mode & 0o111
+        or not 0 < metadata.st_size <= MAXIMUM_EXECUTABLE_BYTES
+        or _executable_sha256(path, label=label) != expected_sha256
+    ):
+        raise RecoveryPlanError(f"{label} does not match the pinned executable")
+    return path
+
+
+def _validate_runtime_snapshot(path: Path, *, label: str, expected_sha256: str) -> None:
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RecoveryPlanError(f"{label} snapshot is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or stat.S_IMODE(metadata.st_mode) != 0o500
+        or not 0 < metadata.st_size <= MAXIMUM_EXECUTABLE_BYTES
+        or _executable_sha256(path, label=f"{label} snapshot") != expected_sha256
+    ):
+        raise RecoveryPlanError(f"{label} snapshot is not exact")
+
+
+def _snapshot_executable(
+    source: Path,
+    destination: Path,
+    *,
+    label: str,
+    expected_sha256: str,
+) -> Path:
+    _trusted_executable_source(
+        source, label=f"pinned {label}", expected_sha256=expected_sha256
+    )
+    if destination.exists():
+        _validate_runtime_snapshot(
+            destination, label=label, expected_sha256=expected_sha256
+        )
+        return destination
+
+    parent = _open_protected_directory(
+        destination.parent, label="trusted runtime directory"
+    )
+    source_flags = (
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    )
+    destination_flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    source_descriptor: int | None = None
+    destination_descriptor: int | None = None
+    created = False
+    try:
+        source_descriptor = os.open(source, source_flags)
+        before = os.fstat(source_descriptor)
+        destination_descriptor = os.open(
+            destination.name, destination_flags, 0o500, dir_fd=parent
+        )
+        created = True
+        digest = hashlib.sha256()
+        copied = 0
+        while chunk := os.read(source_descriptor, 1024 * 1024):
+            digest.update(chunk)
+            copied += len(chunk)
+            offset = 0
+            while offset < len(chunk):
+                offset += os.write(destination_descriptor, chunk[offset:])
+        after = os.fstat(source_descriptor)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if (
+            copied != before.st_size
+            or identity_before != identity_after
+            or digest.hexdigest() != expected_sha256
+        ):
+            raise RecoveryPlanError(f"pinned {label} changed during snapshot")
+        os.fchmod(destination_descriptor, 0o500)
+        os.fsync(destination_descriptor)
+    except (OSError, RecoveryPlanError) as exc:
+        if created:
+            try:
+                os.unlink(destination.name, dir_fd=parent)
+            except OSError:
+                pass
+        if isinstance(exc, RecoveryPlanError):
+            raise
+        raise RecoveryPlanError(f"{label} snapshot could not be created") from exc
+    finally:
+        if source_descriptor is not None:
+            os.close(source_descriptor)
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        os.close(parent)
+    _validate_runtime_snapshot(
+        destination, label=label, expected_sha256=expected_sha256
+    )
+    return destination
 
 
 def _provider_tree_sha256(data_dir: Path) -> str:
@@ -372,24 +751,56 @@ def _load_json_bytes(value: bytes, *, label: str) -> Mapping[str, Any]:
 
 
 def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
+    try:
+        home = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+    except (KeyError, OSError) as exc:
+        raise RecoveryPlanError("the operator home directory is unavailable") from exc
+    if not home.is_absolute() or home != Path(os.path.abspath(home)):
+        raise RecoveryPlanError("the operator home directory is invalid")
+    runtime_directory = (
+        data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME if data_dir is not None else None
+    )
+    azure_cli_directory = (
+        runtime_directory
+        if runtime_directory is not None and runtime_directory.is_dir()
+        else EXPECTED_AZURE_CLI_PATH.parent
+    )
     environment = {
-        name: value
-        for name, value in os.environ.items()
-        if not name.startswith(("TF_", "TOFU_", "OPENTOFU_", "GIT_", "ARM_", "AZURE_"))
+        "ARM_ENVIRONMENT": "public",
+        "ARM_SUBSCRIPTION_ID": EXPECTED_SUBSCRIPTION_ID,
+        "ARM_TENANT_ID": EXPECTED_TENANT_ID,
+        "ARM_USE_AZUREAD": "true",
+        "ARM_USE_CLI": "true",
+        "AZURE_CONFIG_DIR": str(home / ".azure"),
+        "AZURE_CORE_COLLECT_TELEMETRY": "false",
+        "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
+        "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
+        "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
+        "CHECKPOINT_DISABLE": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": str(home),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": f"{azure_cli_directory}:/usr/bin:/bin",
+        "TF_CLI_CONFIG_FILE": os.devnull,
+        "TF_IN_AUTOMATION": "1",
+        "TF_INPUT": "0",
     }
-    environment["CHECKPOINT_DISABLE"] = "1"
-    environment["GIT_CONFIG_GLOBAL"] = os.devnull
-    environment["GIT_CONFIG_NOSYSTEM"] = "1"
-    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
-    environment["GIT_TERMINAL_PROMPT"] = "0"
-    environment["TF_CLI_CONFIG_FILE"] = os.devnull
     if data_dir is not None:
         environment["TF_DATA_DIR"] = str(data_dir)
-    environment["TF_IN_AUTOMATION"] = "1"
-    environment["ARM_SUBSCRIPTION_ID"] = EXPECTED_SUBSCRIPTION_ID
-    environment["ARM_ENVIRONMENT"] = "public"
-    environment["ARM_USE_CLI"] = "true"
-    environment["ARM_USE_AZUREAD"] = "true"
+    ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
+    if ssh_auth_sock:
+        try:
+            socket_path = Path(ssh_auth_sock).resolve(strict=True)
+            metadata = os.stat(socket_path, follow_symlinks=False)
+        except OSError:
+            pass
+        else:
+            if stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.geteuid():
+                environment["SSH_AUTH_SOCK"] = str(socket_path)
     return environment
 
 
@@ -464,34 +875,88 @@ def _run_process(
     return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
 
 
-def _resolve_and_verify_tofu() -> Path:
-    executable = shutil.which("tofu")
-    if executable is None:
-        raise RecoveryPlanError("the pinned OpenTofu executable is unavailable")
-    try:
-        path = Path(executable).resolve(strict=True)
-        metadata = path.stat()
-    except OSError as exc:
-        raise RecoveryPlanError("the OpenTofu executable is unavailable") from exc
-    if not stat.S_ISREG(metadata.st_mode) or not os.access(path, os.X_OK):
-        raise RecoveryPlanError("the OpenTofu executable is invalid")
-    if (
-        metadata.st_uid not in {0, os.geteuid()}
-        or stat.S_IMODE(metadata.st_mode) & 0o022
-    ):
-        raise RecoveryPlanError("the OpenTofu executable has unsafe ownership or mode")
-
+def _verify_tofu_version(tofu: Path, *, data_dir: Path | None = None) -> None:
     result = _run_process(
-        [str(path), "version", "-json"],
+        [str(tofu), "version", "-json"],
         cwd=REPOSITORY_ROOT,
         timeout_seconds=30,
+        data_dir=data_dir,
     )
     if result.returncode != 0 or not result.stdout:
         raise RecoveryPlanError("the OpenTofu version could not be verified")
     version = _load_json_bytes(result.stdout, label="OpenTofu version output")
     if version.get("terraform_version") != EXPECTED_TOFU_VERSION:
         raise RecoveryPlanError("the OpenTofu executable version is not pinned")
-    return path
+
+
+def _resolve_and_verify_tofu() -> Path:
+    tofu = _trusted_executable_source(
+        EXPECTED_TOFU_PATH,
+        label="pinned OpenTofu",
+        expected_sha256=EXPECTED_TOFU_SHA256,
+    )
+    _verify_tofu_version(tofu)
+    return tofu
+
+
+def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
+    _require_protected_directory(data_dir, label="OpenTofu data directory")
+    runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
+    if runtime_directory.exists():
+        _require_protected_directory(
+            runtime_directory, label="trusted runtime directory"
+        )
+    else:
+        _create_protected_directory(
+            runtime_directory, label="trusted runtime directory"
+        )
+    tofu = _snapshot_executable(
+        EXPECTED_TOFU_PATH,
+        runtime_directory / "tofu",
+        label="OpenTofu",
+        expected_sha256=EXPECTED_TOFU_SHA256,
+    )
+    azure_cli = _snapshot_executable(
+        EXPECTED_AZURE_CLI_PATH,
+        runtime_directory / "az",
+        label="Azure CLI",
+        expected_sha256=EXPECTED_AZURE_CLI_SHA256,
+    )
+    try:
+        runtime_names = {entry.name for entry in runtime_directory.iterdir()}
+    except OSError as exc:
+        raise RecoveryPlanError("trusted runtime directory is unavailable") from exc
+    if runtime_names != {"az", "tofu"}:
+        raise RecoveryPlanError("trusted runtime executable set is not exact")
+    _verify_tofu_version(tofu, data_dir=data_dir)
+    azure_version = _run_process(
+        [str(azure_cli), "version"],
+        cwd=REPOSITORY_ROOT,
+        timeout_seconds=60,
+        max_output_bytes=1024 * 1024,
+        data_dir=data_dir,
+    )
+    if azure_version.returncode != 0 or not azure_version.stdout:
+        raise RecoveryPlanError("the Azure CLI version could not be verified")
+    azure_version_document = _load_json_bytes(
+        azure_version.stdout, label="Azure CLI version output"
+    )
+    azure_version_sha256 = _sha256_bytes(_canonical_json_bytes(azure_version_document))
+    if azure_version_sha256 != EXPECTED_AZURE_CLI_VERSION_SHA256:
+        raise RecoveryPlanError("the Azure CLI version manifest is not pinned")
+    _validate_runtime_snapshot(
+        tofu, label="OpenTofu", expected_sha256=EXPECTED_TOFU_SHA256
+    )
+    _validate_runtime_snapshot(
+        azure_cli, label="Azure CLI", expected_sha256=EXPECTED_AZURE_CLI_SHA256
+    )
+    return RuntimeSnapshot(
+        tofu=tofu,
+        azure_cli=azure_cli,
+        tofu_sha256=EXPECTED_TOFU_SHA256,
+        azure_cli_sha256=EXPECTED_AZURE_CLI_SHA256,
+        azure_cli_version_sha256=azure_version_sha256,
+    )
 
 
 def _show_saved_plan(plan_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
@@ -814,7 +1279,27 @@ def _validate_state(
             f"{label} address set differs from the recovery inventory; "
             f"missing={_bounded_names(missing)}; extra={_bounded_names(extra)}"
         )
+    if set(EXPECTED_STATE_IDENTITIES) != EXPECTED_EXISTING_ADDRESSES:
+        raise RecoveryPlanError("internal recovery state identity contract is invalid")
+    for address, expected_identity in EXPECTED_STATE_IDENTITIES.items():
+        if inventory[address] != expected_identity:
+            raise RecoveryPlanError(
+                f"{label} resource identity does not match the exact contract: "
+                f"{address}"
+            )
     return EXPECTED_LINEAGE, serial, inventory
+
+
+def _semantic_state_sha256(state: Mapping[str, Any], *, label: str) -> str:
+    check_results = state.get("check_results")
+    if check_results is not None and (
+        not isinstance(check_results, Sequence)
+        or isinstance(check_results, (str, bytes))
+    ):
+        raise RecoveryPlanError(f"{label} check results are invalid")
+    semantic_state = dict(state)
+    semantic_state.pop("check_results", None)
+    return _sha256_bytes(_canonical_json_bytes(semantic_state))
 
 
 def _read_zip_member(archive: zipfile.ZipFile, name: str) -> bytes:
@@ -1039,6 +1524,244 @@ def _validate_plan_timestamp(plan: Mapping[str, Any], *, now: datetime) -> str:
     return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
+def _resource_change_metadata(address: str) -> Mapping[str, Any]:
+    match = re.fullmatch(
+        r'(?P<type>[a-z0-9_]+)\.(?P<name>[a-z0-9_]+)\[(?P<index>0|"(?:[^"\\]|\\.)+")\]',
+        address,
+    )
+    if match is None:
+        raise RecoveryPlanError("expected recovery resource address is invalid")
+    resource_type = match.group("type")
+    raw_index = match.group("index")
+    index: int | str = int(raw_index) if raw_index.isdigit() else json.loads(raw_index)
+    if resource_type == "azapi_resource":
+        provider = "registry.opentofu.org/azure/azapi"
+    elif resource_type == "terraform_data":
+        provider = "terraform.io/builtin/terraform"
+    elif resource_type.startswith("azurerm_"):
+        provider = "registry.opentofu.org/hashicorp/azurerm"
+    else:
+        raise RecoveryPlanError("expected recovery resource provider is invalid")
+    return {
+        "address": address,
+        "mode": "managed",
+        "type": resource_type,
+        "name": match.group("name"),
+        "index": index,
+        "provider_name": provider,
+    }
+
+
+def _expected_container_change(address: str) -> Mapping[str, Any]:
+    metadata = _resource_change_metadata(address)
+    name = metadata["index"]
+    if not isinstance(name, str):
+        raise RecoveryPlanError("expected marker-container index is invalid")
+    return {
+        **metadata,
+        "change": {
+            "actions": ["create"],
+            "before": None,
+            "after": {
+                "body": {"properties": {"publicAccess": "None"}},
+                "create_headers": None,
+                "create_query_parameters": None,
+                "delete_headers": None,
+                "delete_query_parameters": None,
+                "identity": [],
+                "ignore_casing": False,
+                "ignore_missing_property": True,
+                "location": None,
+                "locks": None,
+                "name": name,
+                "parent_id": EXPECTED_MARKER_CONTAINER_PARENT_ID,
+                "read_headers": None,
+                "read_query_parameters": None,
+                "replace_triggers_external_values": None,
+                "replace_triggers_refs": None,
+                "response_export_values": None,
+                "retry": None,
+                "schema_validation_enabled": True,
+                "tags": None,
+                "timeouts": None,
+                "type": (
+                    "Microsoft.Storage/storageAccounts/blobServices/"
+                    "containers@2023-05-01"
+                ),
+                "update_headers": None,
+                "update_query_parameters": None,
+            },
+            "after_unknown": {
+                "body": {"properties": {}},
+                "id": True,
+                "identity": [],
+                "output": True,
+            },
+            "before_sensitive": False,
+            "after_sensitive": {
+                "body": {"properties": {}},
+                "identity": [],
+            },
+        },
+    }
+
+
+def _expected_private_endpoint_change(address: str) -> Mapping[str, Any]:
+    return {
+        **_resource_change_metadata(address),
+        "change": {
+            "actions": ["create"],
+            "before": None,
+            "after": {
+                "custom_network_interface_name": None,
+                "ip_configuration": [],
+                "location": "eastus",
+                "name": "cosmaneura-staging-rehearsal-marker-pe",
+                "private_dns_zone_group": [
+                    {
+                        "name": "blob",
+                        "private_dns_zone_ids": [EXPECTED_MARKER_PRIVATE_DNS_ZONE_ID],
+                    }
+                ],
+                "private_service_connection": [
+                    {
+                        "is_manual_connection": False,
+                        "name": "cosmaneura-staging-rehearsal-marker-connection",
+                        "private_connection_resource_alias": None,
+                        "private_connection_resource_id": (
+                            EXPECTED_MARKER_STORAGE_ACCOUNT_ID
+                        ),
+                        "request_message": None,
+                        "subresource_names": ["blob"],
+                    }
+                ],
+                "resource_group_name": "cosmaneura-staging-rehearsal-control",
+                "subnet_id": EXPECTED_MARKER_SUBNET_ID,
+                "tags": dict(EXPECTED_VARIABLES["tags"]),
+                "timeouts": None,
+            },
+            "after_unknown": {
+                "custom_dns_configs": True,
+                "id": True,
+                "ip_configuration": [],
+                "network_interface": True,
+                "private_dns_zone_configs": True,
+                "private_dns_zone_group": [
+                    {"id": True, "private_dns_zone_ids": [False]}
+                ],
+                "private_service_connection": [
+                    {"private_ip_address": True, "subresource_names": [False]}
+                ],
+                "tags": {},
+            },
+            "before_sensitive": False,
+            "after_sensitive": {
+                "custom_dns_configs": [],
+                "ip_configuration": [],
+                "network_interface": [],
+                "private_dns_zone_configs": [],
+                "private_dns_zone_group": [{"private_dns_zone_ids": [False]}],
+                "private_service_connection": [{"subresource_names": [False]}],
+                "tags": {},
+            },
+            "after_identity": {
+                "name": None,
+                "resource_group_name": None,
+                "subscription_id": None,
+            },
+        },
+    }
+
+
+def _expected_role_assignment_change(address: str) -> Mapping[str, Any]:
+    try:
+        assignment_name, principal_id = EXPECTED_ROLE_ASSIGNMENTS[address]
+    except KeyError as exc:
+        raise RecoveryPlanError("expected role assignment is invalid") from exc
+    return {
+        **_resource_change_metadata(address),
+        "change": {
+            "actions": ["create"],
+            "before": None,
+            "after": {
+                "condition": None,
+                "delegated_managed_identity_resource_id": None,
+                "description": None,
+                "name": assignment_name,
+                "principal_id": principal_id,
+                "principal_type": "ServicePrincipal",
+                "role_definition_id": EXPECTED_MARKER_READER_ROLE_ID,
+                "skip_service_principal_aad_check": True,
+                "timeouts": None,
+            },
+            "after_unknown": {
+                "condition_version": True,
+                "id": True,
+                "role_definition_name": True,
+                "scope": True,
+            },
+            "before_sensitive": False,
+            "after_sensitive": {},
+        },
+    }
+
+
+def _expected_create_change(address: str) -> Mapping[str, Any]:
+    if address.startswith("azapi_resource.marker_container["):
+        return _expected_container_change(address)
+    if address == "azurerm_private_endpoint.marker[0]":
+        return _expected_private_endpoint_change(address)
+    if address in EXPECTED_ROLE_ASSIGNMENTS:
+        return _expected_role_assignment_change(address)
+    raise RecoveryPlanError("expected create address has no exact value contract")
+
+
+def _validate_noop_change(resource_change: Mapping[str, Any], *, address: str) -> None:
+    metadata = _resource_change_metadata(address)
+    if set(resource_change) != {*metadata, "change"} or any(
+        _canonical_json_bytes(resource_change.get(name))
+        != _canonical_json_bytes(expected)
+        for name, expected in metadata.items()
+    ):
+        raise RecoveryPlanError(f"existing resource metadata differs: {address}")
+    change = resource_change.get("change")
+    if not isinstance(change, Mapping):
+        raise RecoveryPlanError(f"existing resource action body is invalid: {address}")
+    base_keys = {
+        "actions",
+        "before",
+        "after",
+        "after_unknown",
+        "before_sensitive",
+        "after_sensitive",
+    }
+    identity_keys = {"before_identity", "after_identity"}
+    if frozenset(change) not in {
+        frozenset(base_keys),
+        frozenset(base_keys | identity_keys),
+    }:
+        raise RecoveryPlanError(f"existing resource action schema differs: {address}")
+    if change.get("actions") != ["no-op"]:
+        raise RecoveryPlanError(f"existing resource would change: {address}")
+    before = change.get("before")
+    if not isinstance(before, Mapping) or _canonical_json_bytes(
+        before
+    ) != _canonical_json_bytes(change.get("after")):
+        raise RecoveryPlanError(f"existing resource values would change: {address}")
+    if _canonical_json_bytes(change.get("before_sensitive")) != _canonical_json_bytes(
+        change.get("after_sensitive")
+    ):
+        raise RecoveryPlanError(
+            f"existing resource sensitivity would change: {address}"
+        )
+    if change.get("after_unknown") != {}:
+        raise RecoveryPlanError(f"existing resource has unknown values: {address}")
+    if identity_keys <= set(change) and _canonical_json_bytes(
+        change["before_identity"]
+    ) != _canonical_json_bytes(change["after_identity"]):
+        raise RecoveryPlanError(f"existing resource identity would change: {address}")
+
+
 def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
     if plan.get("format_version") != EXPECTED_FORMAT_VERSION:
         raise RecoveryPlanError("plan JSON format version is not pinned")
@@ -1076,7 +1799,7 @@ def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
     changes = plan.get("resource_changes")
     if not isinstance(changes, Sequence) or isinstance(changes, (str, bytes)):
         raise RecoveryPlanError("plan resource changes are missing")
-    observed: dict[str, tuple[str, ...]] = {}
+    observed: dict[str, Mapping[str, Any]] = {}
     for resource_change in changes:
         if not isinstance(resource_change, Mapping):
             raise RecoveryPlanError("plan contains an invalid resource change")
@@ -1085,15 +1808,7 @@ def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
             raise RecoveryPlanError("plan contains an invalid resource address")
         if address in observed:
             raise RecoveryPlanError("plan contains a duplicate resource change")
-        change = resource_change.get("change")
-        if not isinstance(change, Mapping):
-            raise RecoveryPlanError("plan contains an invalid action body")
-        actions = change.get("actions")
-        if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes)):
-            raise RecoveryPlanError("plan contains invalid actions")
-        if not all(isinstance(action, str) for action in actions):
-            raise RecoveryPlanError("plan contains a non-string action")
-        observed[address] = tuple(actions)
+        observed[address] = resource_change
 
     expected_addresses = EXPECTED_EXISTING_ADDRESSES | EXPECTED_CREATE_ADDRESSES
     if set(observed) != set(expected_addresses):
@@ -1101,11 +1816,14 @@ def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
             "plan resource address set is not the exact recovery set"
         )
     for address in EXPECTED_EXISTING_ADDRESSES:
-        if observed[address] != ("no-op",):
-            raise RecoveryPlanError(f"existing resource would change: {address}")
+        _validate_noop_change(observed[address], address=address)
     for address in EXPECTED_CREATE_ADDRESSES:
-        if observed[address] != ("create",):
-            raise RecoveryPlanError(f"missing resource is not create-only: {address}")
+        if _canonical_json_bytes(observed[address]) != _canonical_json_bytes(
+            _expected_create_change(address)
+        ):
+            raise RecoveryPlanError(
+                f"missing resource does not match exact create contract: {address}"
+            )
     return timestamp
 
 
@@ -1115,7 +1833,7 @@ def _validate_captured_artifacts(
     state_bytes: bytes,
     source: SourceSnapshot,
     backend_metadata_sha256: str,
-    tofu: Path,
+    runtime: RuntimeSnapshot,
     data_dir: Path,
     generation_mode: str,
     now: datetime,
@@ -1146,8 +1864,21 @@ def _validate_captured_artifacts(
         raise RecoveryPlanError(
             "saved plan embedded state does not match the protected snapshot"
         )
+    state_semantic_sha256 = _semantic_state_sha256(
+        external_state, label="state snapshot"
+    )
+    if (
+        _semantic_state_sha256(embedded_state, label="saved plan embedded state")
+        != state_semantic_sha256
+    ):
+        raise RecoveryPlanError(
+            "saved plan embedded state is not semantically identical to the "
+            "protected snapshot"
+        )
 
-    plan_json_bytes = _show_saved_plan(saved_plan_bytes, tofu=tofu, data_dir=data_dir)
+    plan_json_bytes = _show_saved_plan(
+        saved_plan_bytes, tofu=runtime.tofu, data_dir=data_dir
+    )
     plan = _load_json_bytes(plan_json_bytes, label="derived plan JSON")
     plan_timestamp = _validate_plan(plan, now=now)
     return {
@@ -1162,11 +1893,18 @@ def _validate_captured_artifacts(
         "state_lineage": lineage,
         "state_serial": serial,
         "state_json_sha256": _sha256_bytes(state_bytes),
+        "state_semantic_sha256": state_semantic_sha256,
         "embedded_state_sha256": _sha256_bytes(embedded_state_bytes),
         "saved_plan_sha256": saved_plan_sha256,
         "derived_plan_json_sha256": _sha256_bytes(plan_json_bytes),
         "plan_timestamp": plan_timestamp,
         "open_tofu_version": EXPECTED_TOFU_VERSION,
+        "open_tofu_source_path": str(EXPECTED_TOFU_PATH),
+        "open_tofu_sha256": runtime.tofu_sha256,
+        "azure_cli_source_path": str(EXPECTED_AZURE_CLI_PATH),
+        "azure_cli_sha256": runtime.azure_cli_sha256,
+        "azure_cli_version_sha256": runtime.azure_cli_version_sha256,
+        "trusted_runtime_snapshotted": True,
         "validated_nonempty_change_set": True,
         "artifact_policy_complete": True,
         "live_readback_bound": False,
@@ -1191,27 +1929,27 @@ def create_and_validate_recovery_plan(
         state_json, label="state snapshot", required_mode=0o600
     )
     source_before = _source_snapshot(expected_source_commit)
-    tofu = _resolve_and_verify_tofu()
     with tempfile.TemporaryDirectory(
         prefix=".cosmaneura-tofu-data-", dir=saved_plan.parent
     ) as temporary_data_dir:
         data_dir = Path(temporary_data_dir)
-        _initialize_tofu(tofu=tofu, data_dir=data_dir)
-        backend_before = _backend_snapshot(tofu=tofu, data_dir=data_dir)
+        runtime = _snapshot_and_verify_runtime(data_dir=data_dir)
+        _initialize_tofu(tofu=runtime.tofu, data_dir=data_dir)
+        backend_before = _backend_snapshot(tofu=runtime.tofu, data_dir=data_dir)
         saved_plan_bytes = _generate_saved_plan(
-            tofu=tofu, output_parent=saved_plan.parent, data_dir=data_dir
+            tofu=runtime.tofu, output_parent=saved_plan.parent, data_dir=data_dir
         )
         receipt = _validate_captured_artifacts(
             saved_plan_bytes=saved_plan_bytes,
             state_bytes=state_bytes,
             source=source_before,
             backend_metadata_sha256=backend_before,
-            tofu=tofu,
+            runtime=runtime,
             data_dir=data_dir,
             generation_mode="validator_full_refresh",
             now=datetime.now(UTC),
         )
-        if _backend_snapshot(tofu=tofu, data_dir=data_dir) != backend_before:
+        if _backend_snapshot(tofu=runtime.tofu, data_dir=data_dir) != backend_before:
             raise RecoveryPlanError(
                 "backend metadata changed while the plan was generated"
             )
@@ -1248,31 +1986,30 @@ def revalidate_recovery_plan(
         raise RecoveryPlanError("execution directory must share the saved-plan parent")
     _create_protected_directory(execution_dir, label="execution directory")
     source_before = _source_snapshot(expected_source_commit)
-    tofu = _resolve_and_verify_tofu()
-    _initialize_tofu(tofu=tofu, data_dir=execution_dir)
-    backend_before = _backend_snapshot(tofu=tofu, data_dir=execution_dir)
+    runtime = _snapshot_and_verify_runtime(data_dir=execution_dir)
+    _initialize_tofu(tofu=runtime.tofu, data_dir=execution_dir)
+    backend_before = _backend_snapshot(tofu=runtime.tofu, data_dir=execution_dir)
     receipt = dict(
         _validate_captured_artifacts(
             saved_plan_bytes=saved_plan_bytes,
             state_bytes=state_bytes,
             source=source_before,
             backend_metadata_sha256=backend_before,
-            tofu=tofu,
+            runtime=runtime,
             data_dir=execution_dir,
             generation_mode="digest_bound_revalidation",
             now=datetime.now(UTC),
             expected_saved_plan_sha256=expected_saved_plan_sha256,
         )
     )
-    if _backend_snapshot(tofu=tofu, data_dir=execution_dir) != backend_before:
+    if _backend_snapshot(tofu=runtime.tofu, data_dir=execution_dir) != backend_before:
         raise RecoveryPlanError("backend metadata changed during plan revalidation")
     if _source_snapshot(expected_source_commit) != source_before:
         raise RecoveryPlanError("recovery source changed during plan revalidation")
     receipt.update(
         execution_data_dir=str(execution_dir),
         execution_provider_tree_sha256=_provider_tree_sha256(execution_dir),
-        open_tofu_path=str(tofu),
-        open_tofu_sha256=_executable_sha256(tofu, label="OpenTofu executable"),
+        open_tofu_path=str(runtime.tofu),
     )
     return receipt
 

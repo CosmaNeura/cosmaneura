@@ -502,7 +502,12 @@ class AzureManagementReader:
 
 def _state_attributes(state_bytes: bytes) -> dict[str, Mapping[str, Any]]:
     state = recovery._load_json_bytes(state_bytes, label='state snapshot')
-    recovery._validate_state(state, label='state snapshot')
+    try:
+        recovery._validate_state(state, label='state snapshot')
+    except recovery.RecoveryPlanError as exc:
+        if 'resource identity does not match the exact contract' in str(exc):
+            _fail('state_resource_id.mismatch')
+        _fail('state_snapshot.invalid')
     output: dict[str, Mapping[str, Any]] = {}
     for resource in state['resources']:
         for instance in resource['instances']:
@@ -800,6 +805,11 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
     if not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.geteuid() or stat.S_IMODE(directory.st_mode) != 448:
         _fail('execution_directory.changed')
     reader = reader_factory()
+    if (
+        base.get('azure_cli_sha256') != reader.azure_cli_sha256
+        or base.get('azure_cli_version_sha256') != reader.azure_cli_version_sha256
+    ):
+        _fail('plan_runtime.changed')
     first = _capture_snapshot(reader, attributes)
     reader.refresh_account()
     second = _capture_snapshot(reader, attributes)
