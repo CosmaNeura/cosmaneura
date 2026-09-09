@@ -6,7 +6,7 @@ import subprocess
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any
 
 import pytest
@@ -238,13 +238,28 @@ def test_executable_snapshot_is_removed_on_preclaim_refusal(tmp_path: Path) -> N
 
 
 def test_path_ancestry_rejects_operator_owned_group_writable_component(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     shared = tmp_path / "shared"
     shared.mkdir(mode=0o700)
     executable = shared / "tool"
     executable.write_bytes(b"tool")
     executable.chmod(0o500)
+
+    # Pytest uses a descendant of world-writable /tmp on Linux. Mask unrelated
+    # ancestor write bits so this unit test isolates the component under test.
+    real_lstat = Path.lstat
+
+    def isolated_lstat(path: Path) -> os.stat_result | SimpleNamespace:
+        metadata = real_lstat(path)
+        if path == shared:
+            return metadata
+        return SimpleNamespace(
+            st_mode=metadata.st_mode & ~0o022,
+            st_uid=metadata.st_uid,
+        )
+
+    monkeypatch.setattr(Path, "lstat", isolated_lstat)
     consumer._validate_path_ancestry(executable)
     shared.chmod(0o770)
     with pytest.raises(consumer.ConsumerError, match="local_path.unsafe"):
