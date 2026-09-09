@@ -267,14 +267,55 @@ def test_path_ancestry_rejects_operator_owned_group_writable_component(
         consumer._validate_path_ancestry(executable)
 
 
-def test_redirect_standard_streams_uses_character_sink(
+def test_apply_log_is_owner_only_identity_bound_and_one_use(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    path, descriptor, identity = consumer._open_apply_log(tmp_path)
+    try:
+        assert path == tmp_path / consumer.APPLY_LOG_NAME
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert identity["name"] == consumer.APPLY_LOG_NAME
+        assert identity["inode"] == os.fstat(descriptor).st_ino
+        with pytest.raises(consumer.ConsumerError, match="apply_log.unavailable"):
+            consumer._open_apply_log(tmp_path)
+        path.chmod(0o640)
+        with pytest.raises(consumer.ConsumerError, match="apply_log.changed"):
+            consumer._apply_log_identity(path, descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def test_apply_log_identity_requires_append_only_write_descriptor(
+    tmp_path: Path,
+) -> None:
+    tmp_path.chmod(0o700)
+    path = tmp_path / consumer.APPLY_LOG_NAME
+    path.write_bytes(b"")
+    path.chmod(0o600)
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        with pytest.raises(consumer.ConsumerError, match="apply_log.changed"):
+            consumer._apply_log_identity(path, descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def test_redirect_standard_streams_uses_character_sink_and_protected_log(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    metadata = os.stat(os.devnull)
+    null_metadata = os.stat(os.devnull)
+    log_metadata = SimpleNamespace(
+        st_mode=stat.S_IFREG | 0o600,
+        st_uid=os.geteuid(),
+        st_nlink=1,
+    )
     duplicates: list[tuple[int, int, bool]] = []
     closed: list[int] = []
     monkeypatch.setattr(os, "open", lambda *_args, **_kwargs: 9)
-    monkeypatch.setattr(os, "fstat", lambda _: metadata)
+    monkeypatch.setattr(
+        os,
+        "fstat",
+        lambda descriptor: log_metadata if descriptor == 8 else null_metadata,
+    )
     monkeypatch.setattr(
         os,
         "dup2",
@@ -283,8 +324,8 @@ def test_redirect_standard_streams_uses_character_sink(
         ),
     )
     monkeypatch.setattr(os, "close", closed.append)
-    consumer._redirect_standard_streams()
-    assert duplicates == [(9, 0, True), (9, 1, True), (9, 2, True)]
+    consumer._redirect_standard_streams(8)
+    assert duplicates == [(9, 0, True), (8, 1, True), (8, 2, True)]
     assert closed == [9]
 
 
@@ -308,7 +349,8 @@ def test_redirected_exec_does_not_emit_child_output(tmp_path: Path) -> None:
     emitter.chmod(0o500)
     command = (
         _isolated_consumer_import()
-        + "module._redirect_standard_streams();"
+        + f"log=module._open_apply_log(module.Path({str(tmp_path)!r}))[1];"
+        + "module._redirect_standard_streams(log);module.os.close(log);"
         + f"module.os.execve({str(emitter)!r},['emitter'],{{'PATH':'/usr/bin:/bin'}})"
     )
     result = subprocess.run(
@@ -322,6 +364,9 @@ def test_redirected_exec_does_not_emit_child_output(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert result.stdout == b""
     assert result.stderr == b""
+    log = tmp_path / consumer.APPLY_LOG_NAME
+    assert log.stat().st_mode & 0o777 == 0o600
+    assert log.read_bytes() == b"protected-stdoutprotected-stderr"
 
 
 def test_close_ambient_descriptors_preserves_only_plan_and_executable(
@@ -525,8 +570,11 @@ def test_ambient_environment_overrides_are_refused(
         consumer._reject_ambient_environment()
 
 
-def test_consume_execs_only_exact_reviewed_refresh_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("claim_failure_stage", [None, "before", "after"])
+def test_consume_execs_only_exact_reviewed_refresh_plan_and_cleans_preclaim_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claim_failure_stage: str | None,
 ) -> None:
     tmp_path.chmod(0o700)
     plan = tmp_path / "refresh.tfplan"
@@ -617,21 +665,37 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
     monkeypatch.setattr(
         consumer, "_revalidate_pinned_executable", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(
-        consumer,
-        "_claim",
-        lambda directory, digest, facts: captured.update(
+
+    def claim(
+        directory: Path,
+        digest: str,
+        facts: dict[str, Any],
+        *,
+        on_created: Any,
+    ) -> None:
+        captured.update(
             claim_directory=directory,
             claim_digest=digest,
             claim=facts,
             checks_at_claim=len(deadline_checks),
-        ),
+        )
+        if claim_failure_stage == "before":
+            raise consumer.ConsumerError("claim.exists_or_unavailable")
+        on_created()
+        if claim_failure_stage == "after":
+            raise consumer.ConsumerError("claim.invalid")
+
+    monkeypatch.setattr(consumer, "_claim", claim)
+    monkeypatch.setattr(
+        consumer,
+        "_remove_unclaimed_executable_snapshot",
+        lambda *_args, **_kwargs: captured.update(snapshot_removed=True),
     )
     monkeypatch.setattr(
         consumer,
         "_redirect_standard_streams",
-        lambda: captured.update(
-            redirected=True, checks_at_redirect=len(deadline_checks)
+        lambda descriptor: captured.update(
+            redirected=descriptor, checks_at_redirect=len(deadline_checks)
         ),
     )
     monkeypatch.setattr(
@@ -648,7 +712,10 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
         raise Executed
 
     monkeypatch.setattr(os, "execve", execve)
-    with pytest.raises(Executed):
+    expected_error = (
+        consumer.ConsumerError if claim_failure_stage is not None else Executed
+    )
+    with pytest.raises(expected_error):
         consumer.consume(
             saved_plan=plan,
             state_json=state,
@@ -656,6 +723,14 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
             expected_source_commit=SOURCE,
             expected_saved_plan_sha256=PLAN_DIGEST,
         )
+    if claim_failure_stage == "before":
+        assert captured["snapshot_removed"] is True
+        assert not (execution / consumer.APPLY_LOG_NAME).exists()
+        return
+    if claim_failure_stage == "after":
+        assert "snapshot_removed" not in captured
+        assert (execution / consumer.APPLY_LOG_NAME).exists()
+        return
     assert captured["path"] == str(tofu)
     assert captured["argv"][-1] == f"/dev/fd/{descriptor}"
     assert captured["argv"][2:4] == ["apply", "-input=false"]
@@ -665,10 +740,12 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
     assert captured["claim"]["python_runtime_sha256"] == "9" * 64
     assert captured["claim"]["azure_cli_sha256"] == "8" * 64
     assert captured["environment"]["TF_DATA_DIR"] == str(execution)
-    assert captured["redirected"] is True
+    assert captured["redirected"] > 2
+    assert captured["claim"]["apply_log_identity"]["name"] == consumer.APPLY_LOG_NAME
     assert captured["preserved"] == {descriptor, tofu_descriptor}
     assert captured["checks_at_redirect"] > captured["checks_at_claim"]
     assert len(deadline_checks) > captured["checks_at_redirect"]
+    assert (execution / consumer.APPLY_LOG_NAME).exists()
 
 
 def test_consumer_source_has_no_subprocess_apply_path() -> None:
