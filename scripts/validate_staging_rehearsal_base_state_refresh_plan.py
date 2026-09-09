@@ -8,18 +8,150 @@ import base64
 import copy
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 import tempfile
+import types
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from scripts.validate_staging_rehearsal_base_recovery_plan import SourceSnapshot
+
+
+_RECOVERY_VALIDATOR = (
+    Path(__file__)
+    .resolve()
+    .with_name("validate_staging_rehearsal_base_recovery_plan.py")
+)
+_RECOVERY_VALIDATOR_SHA256 = (
+    "0eaf0693016a52c8ab48b16fa7870aaefce8fb784c6732d1a9258456e1a4cb9e"
+)
+_MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
+
+
+def _read_bootstrap_source(path: Path, expected_sha256: str) -> bytes:
+    directory: int | None = None
+    descriptor: int | None = None
+    try:
+        directory = os.open(
+            path.parent,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        directory_before = os.fstat(directory)
+        if (
+            not stat.S_ISDIR(directory_before.st_mode)
+            or directory_before.st_uid != os.geteuid()
+            or stat.S_IMODE(directory_before.st_mode) & 0o022
+        ):
+            raise RuntimeError("bootstrap source refused")
+        directory_identity = (
+            directory_before.st_dev,
+            directory_before.st_ino,
+            directory_before.st_mode,
+            directory_before.st_uid,
+            directory_before.st_nlink,
+            directory_before.st_mtime_ns,
+            directory_before.st_ctime_ns,
+        )
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or not 0 < before.st_size <= _MAX_BOOTSTRAP_SOURCE_BYTES
+        ):
+            raise RuntimeError("bootstrap source refused")
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        value = b"".join(chunks)
+        after = os.fstat(descriptor)
+        directory_after = os.fstat(directory)
+        if (
+            remaining
+            or len(value) != before.st_size
+            or identity
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            or directory_identity
+            != (
+                directory_after.st_dev,
+                directory_after.st_ino,
+                directory_after.st_mode,
+                directory_after.st_uid,
+                directory_after.st_nlink,
+                directory_after.st_mtime_ns,
+                directory_after.st_ctime_ns,
+            )
+            or hashlib.sha256(value).hexdigest() != expected_sha256
+        ):
+            raise RuntimeError("bootstrap source refused")
+        return value
+    except OSError as exc:
+        raise RuntimeError("bootstrap source refused") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory is not None:
+            os.close(directory)
+
 
 try:
-    from scripts import validate_staging_rehearsal_base_recovery_plan as recovery
-except ModuleNotFoundError:  # Direct execution places scripts/ on sys.path.
-    import validate_staging_rehearsal_base_recovery_plan as recovery
+    recovery_source = _read_bootstrap_source(
+        _RECOVERY_VALIDATOR, _RECOVERY_VALIDATOR_SHA256
+    )
+    recovery = types.ModuleType("validate_staging_rehearsal_base_recovery_plan")
+    recovery.__file__ = str(_RECOVERY_VALIDATOR)
+    sys.modules[recovery.__name__] = recovery
+    exec(
+        compile(
+            recovery_source,
+            str(_RECOVERY_VALIDATOR),
+            "exec",
+            dont_inherit=True,
+        ),
+        recovery.__dict__,
+    )
+except RuntimeError:
+    print("state_refresh_plan_refused: bootstrap source refused", file=sys.stderr)
+    raise SystemExit(2) from None
 
 
 RefreshPlanError = recovery.RecoveryPlanError
@@ -257,7 +389,7 @@ EXPECTED_MARKER_OUTPUT_TYPE = [
 ]
 
 
-def _source_snapshot(expected_commit: str) -> recovery.SourceSnapshot:
+def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     source = recovery._source_snapshot(expected_commit)
     relative = VALIDATOR_PATH.relative_to(recovery.REPOSITORY_ROOT)
     if recovery._run_git(["status", "--porcelain=v1", "--", str(relative)]):
@@ -1017,7 +1149,7 @@ def _validate_artifacts(
     saved_plan_bytes: bytes,
     state_bytes: bytes,
     remote_state_bytes: bytes,
-    source: recovery.SourceSnapshot,
+    source: SourceSnapshot,
     backend_metadata_sha256: str,
     tofu: Path,
     data_dir: Path,

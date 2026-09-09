@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import copy
+import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -32,6 +34,61 @@ def _load_module() -> ModuleType:
 
 refresh = _load_module()
 recovery = refresh.recovery
+
+
+def test_cli_bootstraps_under_isolated_python() -> None:
+    result = subprocess.run(
+        [sys.executable, "-IS", str(SCRIPT), "--help"],
+        cwd=ROOT,
+        env={"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert b"--expected-source-commit" in result.stdout
+
+
+def test_recovery_bootstrap_digest_matches_reviewed_source() -> None:
+    assert (
+        hashlib.sha256(refresh._RECOVERY_VALIDATOR.read_bytes()).hexdigest()
+        == refresh._RECOVERY_VALIDATOR_SHA256
+    )
+
+
+def test_recovery_bootstrap_requires_exact_owner_only_regular_bytes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "recovery.py"
+    source.write_bytes(b"VALUE = 1\n")
+    source.chmod(0o600)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    assert refresh._read_bootstrap_source(source, digest) == b"VALUE = 1\n"
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        refresh._read_bootstrap_source(source, "0" * 64)
+    source.chmod(0o620)
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        refresh._read_bootstrap_source(source, digest)
+    source.chmod(0o600)
+    tmp_path.chmod(0o720)
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        refresh._read_bootstrap_source(source, digest)
+
+
+def test_recovery_bootstrap_refuses_links(tmp_path: Path) -> None:
+    source = tmp_path / "recovery.py"
+    alias = tmp_path / "alias.py"
+    hardlink = tmp_path / "hardlink.py"
+    source.write_bytes(b"VALUE = 1\n")
+    source.chmod(0o600)
+    alias.symlink_to(source)
+    os.link(source, hardlink)
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    for path in (alias, source, hardlink):
+        with pytest.raises(RuntimeError, match="bootstrap source refused"):
+            refresh._read_bootstrap_source(path, digest)
 
 
 def _storage_values() -> tuple[dict[str, Any], dict[str, Any]]:
