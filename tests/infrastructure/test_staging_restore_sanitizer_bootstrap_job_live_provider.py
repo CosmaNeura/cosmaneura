@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any, cast
 
@@ -101,6 +101,14 @@ class FakeOpener:
         if not value.url:
             value.url = request.full_url
         return value
+
+
+class RaisingTimezone(tzinfo):
+    def utcoffset(self, _value: datetime | None) -> timedelta:
+        raise RuntimeError("clock secret")
+
+    def dst(self, _value: datetime | None) -> timedelta:
+        return timedelta(0)
 
 
 @contextmanager
@@ -486,14 +494,21 @@ def test_status_or_url_mismatch_refuses_without_retry() -> None:
 def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call() -> None:
     for clock, monotonic, code in (
         (lambda: datetime(2033, 5, 18), lambda: 1.0, "clock_invalid"),
+        (
+            lambda: datetime(2033, 5, 18, tzinfo=RaisingTimezone()),
+            lambda: 1.0,
+            "clock_invalid",
+        ),
+        (lambda: NOW, lambda: 10**10000, "clock_invalid"),
         (lambda: NOW, iter((1.0, 200.0)).__next__, "deadline"),
     ):
         live, _plan_value, identity, arm = _provider(clock=clock, monotonic=monotonic)
         with pytest.raises(
             provider.SanitizerBootstrapJobLiveProviderFailure,
             match=rf"^bootstrap_job_live_provider\.{code}$",
-        ):
+        ) as caught:
             live.read_all()
+        assert "secret" not in str(caught.value)
         assert len(arm.calls) == 0
         assert len(identity.calls) in {0, 1}
 

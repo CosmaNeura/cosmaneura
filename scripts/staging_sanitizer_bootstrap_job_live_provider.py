@@ -569,31 +569,37 @@ def _seal_reviewed_read_plan(
 def _trusted_utc(clock: Callable[[], datetime]) -> datetime:
     try:
         value = clock()
+        if (
+            type(value) is not datetime
+            or value.tzinfo is None
+            or value.utcoffset() != timedelta(0)
+            or value.microsecond != 0
+        ):
+            _fail("bootstrap_job_live_provider.clock_invalid")
+        normalized = value.astimezone(UTC)
+    except SanitizerBootstrapJobLiveProviderFailure:
+        raise
     except Exception:
         _fail("bootstrap_job_live_provider.clock_invalid")
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-        or value.microsecond != 0
-    ):
-        _fail("bootstrap_job_live_provider.clock_invalid")
-    return value.astimezone(UTC)
+    return normalized
 
 
 def _monotonic_value(clock: Callable[[], float]) -> float:
     try:
         value = clock()
+        if (
+            type(value) not in {int, float}
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            _fail("bootstrap_job_live_provider.clock_invalid")
+        normalized = float(value)
+    except SanitizerBootstrapJobLiveProviderFailure:
+        raise
     except Exception:
         _fail("bootstrap_job_live_provider.clock_invalid")
-    if (
-        type(value) not in {int, float}
-        or isinstance(value, bool)
-        or not math.isfinite(value)
-        or value < 0
-    ):
-        _fail("bootstrap_job_live_provider.clock_invalid")
-    return float(value)
+    return normalized
 
 
 class AuthenticatedBootstrapJobArmRead:
