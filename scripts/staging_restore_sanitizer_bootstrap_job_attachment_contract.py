@@ -165,24 +165,24 @@ def _canonical(value: Any) -> bytes:
 
 def _validate_exact_json_tree(value: Any) -> None:
     stack: list[tuple[Any, int]] = [(value, 0)]
-    seen_containers: set[int] = set()
-    node_count = 0
+    seen_containers = (
+        {id(value)} if type(value) is dict or type(value) is list else set()
+    )
+    discovered_nodes = 1
     scalar_characters = 0
 
     while stack:
         current, depth = stack.pop()
-        node_count += 1
-        if node_count > MAXIMUM_CONTRACT_NODES or depth > MAXIMUM_CONTRACT_DEPTH:
+        if depth > MAXIMUM_CONTRACT_DEPTH:
             _fail("bootstrap_job_attachment_contract.invalid")
 
         if type(current) is dict:
-            identity = id(current)
-            if identity in seen_containers:
+            if current and depth >= MAXIMUM_CONTRACT_DEPTH:
                 _fail("bootstrap_job_attachment_contract.invalid")
-            seen_containers.add(identity)
-            node_count += len(current)
-            if node_count > MAXIMUM_CONTRACT_NODES:
+            additional_nodes = len(current) * 2
+            if discovered_nodes + additional_nodes > MAXIMUM_CONTRACT_NODES:
                 _fail("bootstrap_job_attachment_contract.invalid")
+            discovered_nodes += additional_nodes
             for name, nested in current.items():
                 if type(name) is not str:
                     _fail("bootstrap_job_attachment_contract.invalid")
@@ -192,13 +192,25 @@ def _validate_exact_json_tree(value: Any) -> None:
                     or scalar_characters > MAXIMUM_CONTRACT_BYTES
                 ):
                     _fail("bootstrap_job_attachment_contract.invalid")
+                if type(nested) is dict or type(nested) is list:
+                    identity = id(nested)
+                    if identity in seen_containers:
+                        _fail("bootstrap_job_attachment_contract.invalid")
+                    seen_containers.add(identity)
                 stack.append((nested, depth + 1))
         elif type(current) is list:
-            identity = id(current)
-            if identity in seen_containers:
+            if current and depth >= MAXIMUM_CONTRACT_DEPTH:
                 _fail("bootstrap_job_attachment_contract.invalid")
-            seen_containers.add(identity)
-            stack.extend((nested, depth + 1) for nested in current)
+            if discovered_nodes + len(current) > MAXIMUM_CONTRACT_NODES:
+                _fail("bootstrap_job_attachment_contract.invalid")
+            discovered_nodes += len(current)
+            for nested in current:
+                if type(nested) is dict or type(nested) is list:
+                    identity = id(nested)
+                    if identity in seen_containers:
+                        _fail("bootstrap_job_attachment_contract.invalid")
+                    seen_containers.add(identity)
+                stack.append((nested, depth + 1))
         elif type(current) is str:
             scalar_characters += len(current)
             if (

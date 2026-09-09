@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import copy
 import hashlib
+import tracemalloc
 from pathlib import Path
 from typing import Any, cast
 
@@ -464,6 +465,21 @@ def test_contract_file_read_is_bounded(
         match="bootstrap_job_attachment_contract.invalid",
     ):
         contract_module.load_bootstrap_job_attachment_contract()
+
+
+def test_oversized_list_refuses_before_bulk_traversal_stack_allocation() -> None:
+    oversized = [None] * (contract_module.MAXIMUM_CONTRACT_NODES * 128)
+    tracemalloc.start()
+    try:
+        with pytest.raises(
+            contract_module.SanitizerBootstrapJobAttachmentContractFailure,
+            match="bootstrap_job_attachment_contract.invalid",
+        ):
+            contract_module._validate_exact_json_tree(oversized)  # noqa: SLF001
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 1024 * 1024
 
 
 def test_upstream_digest_drift_and_unexpected_failure_are_bounded(
