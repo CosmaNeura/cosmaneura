@@ -579,6 +579,49 @@ def test_operator_tty_rejects_root_non_tty_background_or_mixed_devices(monkeypat
         consumer._validate_operator_tty()
 
 
+def test_operator_tty_duplicates_the_validated_inherited_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    metadata = type('S', (), {'st_dev': 1, 'st_rdev': 2, 'st_mode': stat.S_IFCHR | 0o600})()
+    duplicated: list[int] = []
+    inheritable: list[tuple[int, bool]] = []
+    monkeypatch.setattr(consumer.os, 'getuid', lambda: 501)
+    monkeypatch.setattr(consumer.os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(consumer.os, 'getgid', lambda: 20)
+    monkeypatch.setattr(consumer.os, 'getegid', lambda: 20)
+    monkeypatch.setattr(consumer.os, 'isatty', lambda _fd: True)
+    monkeypatch.setattr(consumer.os, 'fstat', lambda _fd: metadata)
+    monkeypatch.setattr(consumer.os, 'tcgetpgrp', lambda _fd: 7)
+    monkeypatch.setattr(consumer.os, 'getpgrp', lambda: 7)
+    monkeypatch.setattr(consumer.os, 'dup', lambda fd: duplicated.append(fd) or 91)
+    monkeypatch.setattr(consumer.os, 'set_inheritable', lambda fd, value: inheritable.append((fd, value)))
+    monkeypatch.setattr(consumer.os, 'get_inheritable', lambda _fd: False)
+    monkeypatch.setattr(consumer.os, 'open', lambda *_args, **_kwargs: pytest.fail('must not reopen /dev/tty'))
+
+    assert consumer._validate_operator_tty() == 91
+    assert duplicated == [0]
+    assert inheritable == [(91, False)]
+
+
+def test_operator_tty_closes_a_duplicate_that_fails_revalidation(monkeypatch: pytest.MonkeyPatch) -> None:
+    metadata = type('S', (), {'st_dev': 1, 'st_rdev': 2, 'st_mode': stat.S_IFCHR | 0o600})()
+    closed: list[int] = []
+    monkeypatch.setattr(consumer.os, 'getuid', lambda: 501)
+    monkeypatch.setattr(consumer.os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(consumer.os, 'getgid', lambda: 20)
+    monkeypatch.setattr(consumer.os, 'getegid', lambda: 20)
+    monkeypatch.setattr(consumer.os, 'isatty', lambda _fd: True)
+    monkeypatch.setattr(consumer.os, 'fstat', lambda _fd: metadata)
+    monkeypatch.setattr(consumer.os, 'tcgetpgrp', lambda _fd: 7)
+    monkeypatch.setattr(consumer.os, 'getpgrp', lambda: 7)
+    monkeypatch.setattr(consumer.os, 'dup', lambda _fd: 91)
+    monkeypatch.setattr(consumer.os, 'set_inheritable', lambda *_args: None)
+    monkeypatch.setattr(consumer.os, 'get_inheritable', lambda _fd: True)
+    monkeypatch.setattr(consumer.os, 'close', closed.append)
+
+    with pytest.raises(consumer.ConsumerError, match='operator.tty_mismatch'):
+        consumer._validate_operator_tty()
+    assert closed == [91]
+
+
 def test_confirm_requires_all_five_exact_values_under_one_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, execution, _ = _artifacts(tmp_path)
     answers: list[str] = []
