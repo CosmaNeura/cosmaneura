@@ -914,21 +914,89 @@ def _open_azure_config_lock(runtime_directory: Path) -> int:
         os.close(parent)
 
 
+def _mount_identity(descriptor: int) -> tuple[Any, ...]:
+    if sys.platform == "darwin":
+
+        class FileSystemId(ctypes.Structure):
+            _fields_ = [("values", ctypes.c_int32 * 2)]
+
+        class FileSystemStatistics(ctypes.Structure):
+            _fields_ = [
+                ("block_size", ctypes.c_uint32),
+                ("io_size", ctypes.c_int32),
+                ("blocks", ctypes.c_uint64),
+                ("blocks_free", ctypes.c_uint64),
+                ("blocks_available", ctypes.c_uint64),
+                ("files", ctypes.c_uint64),
+                ("files_free", ctypes.c_uint64),
+                ("filesystem_id", FileSystemId),
+                ("owner", ctypes.c_uint32),
+                ("filesystem_type", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32),
+                ("subtype", ctypes.c_uint32),
+                ("filesystem_type_name", ctypes.c_char * 16),
+                ("mounted_on", ctypes.c_char * 1024),
+                ("mounted_from", ctypes.c_char * 1024),
+                ("extended_flags", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32 * 7),
+            ]
+
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        fstatfs = library.fstatfs
+        fstatfs.argtypes = (ctypes.c_int, ctypes.POINTER(FileSystemStatistics))
+        fstatfs.restype = ctypes.c_int
+        filesystem = FileSystemStatistics()
+        ctypes.set_errno(0)
+        if fstatfs(descriptor, ctypes.byref(filesystem)) != 0:
+            raise OSError(ctypes.get_errno(), "fstatfs failed")
+        mounted_on = bytes(filesystem.mounted_on).split(b"\0", 1)[0]
+        mounted_from = bytes(filesystem.mounted_from).split(b"\0", 1)[0]
+        if not mounted_on.startswith(b"/") or not mounted_from:
+            raise OSError("mount identity is unavailable")
+        return (
+            "darwin",
+            *filesystem.filesystem_id.values,
+            mounted_on,
+            mounted_from,
+        )
+    if sys.platform.startswith("linux"):
+        info: int | None = None
+        value = b""
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            info = os.open(f"/proc/self/fdinfo/{descriptor}", flags)
+            value = os.read(info, 16 * 1024)
+            if os.read(info, 1):
+                raise OSError("mount identity is too large")
+        finally:
+            if info is not None:
+                os.close(info)
+        matches = re.findall(rb"^mnt_id:\s*([0-9]+)\s*$", value, re.MULTILINE)
+        if len(matches) != 1:
+            raise OSError("mount identity is unavailable")
+        return ("linux", int(matches[0]))
+    raise OSError("mount identity is unsupported")
+
+
 def _scrub_azure_config_directory(
     descriptor: int,
     *,
     expected_device: int,
+    expected_mount: tuple[Any, ...],
     remaining_entries: list[int],
     depth: int,
 ) -> bool:
     try:
         root = os.fstat(descriptor)
+        current_mount = _mount_identity(descriptor)
     except OSError:
         return False
     if (
         not stat.S_ISDIR(root.st_mode)
         or root.st_uid != os.geteuid()
         or root.st_dev != expected_device
+        or current_mount != expected_mount
         or depth > 64
     ):
         return False
@@ -977,6 +1045,7 @@ def _scrub_azure_config_directory(
                 if not _scrub_azure_config_directory(
                     child,
                     expected_device=expected_device,
+                    expected_mount=expected_mount,
                     remaining_entries=remaining_entries,
                     depth=depth + 1,
                 ):
@@ -1012,10 +1081,16 @@ def _scrub_azure_config_directory(
     return scrubbed
 
 
-def _scrub_azure_config_snapshot(descriptor: int, *, expected_device: int) -> bool:
+def _scrub_azure_config_snapshot(
+    descriptor: int,
+    *,
+    expected_device: int,
+    expected_mount: tuple[Any, ...],
+) -> bool:
     return _scrub_azure_config_directory(
         descriptor,
         expected_device=expected_device,
+        expected_mount=expected_mount,
         remaining_entries=[MAXIMUM_RUNTIME_CLOSURE_ENTRIES],
         depth=0,
     )
@@ -1031,6 +1106,7 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
             runtime_directory, label="trusted runtime directory"
         )
         parent_device = os.fstat(parent).st_dev
+        parent_mount = _mount_identity(parent)
         for name in sorted(os.listdir(parent)):
             if re.fullmatch(r"\.azure-config-[A-Za-z0-9_-]{6,96}", name) is None:
                 continue
@@ -1055,7 +1131,9 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                 identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
                 metadata_safe = stat.S_IMODE(metadata.st_mode) in {0o500, 0o700}
                 scrubbed = _scrub_azure_config_snapshot(
-                    descriptor, expected_device=parent_device
+                    descriptor,
+                    expected_device=parent_device,
+                    expected_mount=parent_mount,
                 )
                 try:
                     _require_safe_acl(
@@ -1323,6 +1401,26 @@ def _azure_cli_guard_source(runtime_directory: Path) -> str:
 EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None);CLEANUP_LIMIT=50000;CLEANUP_DEPTH=64
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
+def mount_identity(fd):
+    if sys.platform=="darwin":
+        class FileSystemId(ctypes.Structure):_fields_=[("values",ctypes.c_int32*2)]
+        class FileSystemStatistics(ctypes.Structure):_fields_=[("block_size",ctypes.c_uint32),("io_size",ctypes.c_int32),("blocks",ctypes.c_uint64),("blocks_free",ctypes.c_uint64),("blocks_available",ctypes.c_uint64),("files",ctypes.c_uint64),("files_free",ctypes.c_uint64),("filesystem_id",FileSystemId),("owner",ctypes.c_uint32),("filesystem_type",ctypes.c_uint32),("flags",ctypes.c_uint32),("subtype",ctypes.c_uint32),("filesystem_type_name",ctypes.c_char*16),("mounted_on",ctypes.c_char*1024),("mounted_from",ctypes.c_char*1024),("extended_flags",ctypes.c_uint32),("reserved",ctypes.c_uint32*7)]
+        library=ctypes.CDLL("/usr/lib/libSystem.B.dylib",use_errno=True);fstatfs=library.fstatfs;fstatfs.argtypes=(ctypes.c_int,ctypes.POINTER(FileSystemStatistics));fstatfs.restype=ctypes.c_int;filesystem=FileSystemStatistics();ctypes.set_errno(0)
+        if fstatfs(fd,ctypes.byref(filesystem))!=0:raise OSError(ctypes.get_errno(),"fstatfs failed")
+        mounted_on=bytes(filesystem.mounted_on).split(b"\0",1)[0];mounted_from=bytes(filesystem.mounted_from).split(b"\0",1)[0]
+        if not mounted_on.startswith(b"/") or not mounted_from:raise OSError
+        return ("darwin",*filesystem.filesystem_id.values,mounted_on,mounted_from)
+    if sys.platform.startswith("linux"):
+        info=None
+        try:
+            info=os.open(f"/proc/self/fdinfo/{fd}",os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0));value=os.read(info,16384)
+            if os.read(info,1):raise OSError
+        finally:
+            if info is not None:os.close(info)
+        matches=[line.split(b":",1)[1].strip() for line in value.splitlines() if line.startswith(b"mnt_id:")]
+        if len(matches)!=1 or not matches[0].isdigit():raise OSError
+        return "linux",int(matches[0])
+    raise OSError
 def acl_state(fd):
     if sys.platform=="darwin":
         library=ctypes.CDLL("/usr/lib/libSystem.B.dylib",use_errno=True);get_acl=library.acl_get_fd_np;get_entry=library.acl_get_entry;get_tag=library.acl_get_tag_type;free_acl=library.acl_free
@@ -1383,10 +1481,10 @@ def capture(source):
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
 snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False
-def scrub_directory(fd,expected_device,budget,depth):
-    try:root=os.fstat(fd)
+def scrub_directory(fd,expected_device,expected_mount,budget,depth):
+    try:root=os.fstat(fd);current_mount=mount_identity(fd)
     except OSError:return False
-    if not stat.S_ISDIR(root.st_mode) or root.st_uid!=os.geteuid() or root.st_dev!=expected_device or depth>CLEANUP_DEPTH:return False
+    if not stat.S_ISDIR(root.st_mode) or root.st_uid!=os.geteuid() or root.st_dev!=expected_device or current_mount!=expected_mount or depth>CLEANUP_DEPTH:return False
     ok=True
     try:os.fchmod(fd,0o700)
     except OSError:ok=False
@@ -1403,7 +1501,7 @@ def scrub_directory(fd,expected_device,budget,depth):
                 if metadata.st_dev!=expected_device:ok=False;continue
                 child=os.open(name,DIRECTORY_FLAGS,dir_fd=fd);opened=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False);identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid)
                 if not stat.S_ISDIR(opened.st_mode) or opened.st_dev!=expected_device or opened.st_uid!=os.geteuid() or identity!=(opened.st_dev,opened.st_ino,opened.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):ok=False;continue
-                if not scrub_directory(child,expected_device,budget,depth+1):ok=False
+                if not scrub_directory(child,expected_device,expected_mount,budget,depth+1):ok=False
                 current=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False)
                 if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid) or os.listdir(child):ok=False;continue
                 os.rmdir(name,dir_fd=fd)
@@ -1418,9 +1516,9 @@ def scrub_directory(fd,expected_device,budget,depth):
     try:return ok and not os.listdir(fd)
     except OSError:return False
 def scrub(fd):
-    try:expected_device=os.fstat(parent_fd).st_dev
+    try:parent_metadata=os.fstat(parent_fd);expected_mount=mount_identity(parent_fd)
     except OSError:return False
-    return scrub_directory(fd,expected_device,[CLEANUP_LIMIT],0)
+    return scrub_directory(fd,parent_metadata.st_dev,expected_mount,[CLEANUP_LIMIT],0)
 def remove_snapshot(name,fd,identity):
     if not scrub(fd):return False
     try:
@@ -1484,7 +1582,7 @@ try:
         if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
         binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
         if binding!=expected_binding:raise ValueError
-        parent_fd=os.open(PARENT,DIRECTORY_FLAGS);parent_metadata=os.fstat(parent_fd);safe_acl(parent_fd)
+        parent_fd=os.open(PARENT,DIRECTORY_FLAGS);parent_metadata=os.fstat(parent_fd);parent_mount_identity=mount_identity(parent_fd);safe_acl(parent_fd)
         if parent_metadata.st_uid!=os.geteuid() or stat.S_IMODE(parent_metadata.st_mode)!=0o700:raise ValueError
         lock_fd=os.open(LOCK,LOCK_FLAGS,dir_fd=parent_fd);lock_metadata=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
         if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
@@ -1518,7 +1616,7 @@ try:
                 except FileExistsError:continue
             else:raise ValueError
             snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
-            if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
+            if metadata.st_uid!=os.geteuid() or metadata.st_dev!=parent_metadata.st_dev or mount_identity(snapshot_fd)!=parent_mount_identity or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
             safe_acl(snapshot_fd)
         finally:os.umask(previous_umask);signal.pthread_sigmask(signal.SIG_SETMASK,creation_mask)
         for name,value in captures.items():
@@ -1535,8 +1633,9 @@ try:
         print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
     try:
         if validate_null_home()!=null_home_binding:raise ValueError
-        runpy.run_module("azure.cli",run_name="__main__")
-        if validate_null_home()!=null_home_binding:raise ValueError
+        try:runpy.run_module("azure.cli",run_name="__main__")
+        finally:
+            if validate_null_home()!=null_home_binding:raise ValueError
     except (OSError,ValueError):print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
 finally:
     cleanup_ok,cleanup_interrupted=cleanup_until_complete()
