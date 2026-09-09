@@ -62,31 +62,38 @@ The later isolated synthetic-only rehearsal remains mandatory.
    CI.
 2. A human operator captures protected state and live ARM evidence and obtains
    approval for the one-resource untaint.
-3. From the exact current protected-master recovery commit, the operator uses
-   the incident-specific validator's create mode. It invokes the only permitted
-   plan command with `-refresh=true` and must emit a passing digest-only receipt
-   for exactly eleven creates and 28 no-ops.
-4. A different reviewer accepts the exact saved plan and current live state.
-5. The operator fetches protected master, pulls an immediate pre-apply state,
+3. From the exact current protected-master recovery commit, the operator first
+   uses the incident-specific state-refresh validator and human-only consumer.
+   They permit only the ten closed-world provider-state normalizations observed
+   after untaint, one non-secret output creation, and zero Azure resource
+   actions. The one-use apply advances state from serial 8 to serial 9 without
+   changing Azure resources. Raw state, raw plan JSON, and hydrated storage
+   credentials remain owner-only and are never review payloads.
+4. After exact serial-9 state and live readback are captured, the operator uses
+   the base-recovery validator's create mode. It invokes the only permitted
+   full-refresh plan command and must emit a passing digest-only receipt for
+   exactly eleven creates, 28 no-ops, and zero drift.
+5. A different reviewer accepts the exact saved plan and current live state.
+6. The operator fetches protected master, pulls an immediate pre-apply state,
    and runs digest-bound verify mode with a new path for the protected execution
    directory. It requires the same current source, exact reviewed plan hash,
-   lineage and serial 8, 28-instance inventory, and a plan age no greater than
+   lineage and serial 9, 28-instance inventory, and a plan age no greater than
    four hours. It performs a fresh read-only-lockfile initialization and binds
    the preserved provider runtime and exact backend into its receipt.
-6. From that same protected execution context, the operator runs the isolated
+7. From that same protected execution context, the operator runs the isolated
    GET-only handoff preparer. It proves two identical ARM snapshots, the exact
    26-object/eleven-absence live contract, target emptiness, effective policy
-   and role inventories, and unchanged serial-8 remote state. Its owner-only,
+   and role inventories, and unchanged serial-9 remote state. Its owner-only,
    ten-minute receipt binds the source, plan, state, runtime, Azure CLI and
    configuration, TLS trust, machine boot session, and one-use nonce. It always
    reports `apply_authorized=false`.
-7. After the consumer is independently reviewed and merged, discard every
+8. After the consumer is independently reviewed and merged, discard every
    receipt made before its merge and prepare a new plan, execution directory,
    and handoff from the exact current protected `master`. Supply the consumer
    the independently recorded source, plan, handoff-receipt, and Azure-user
    principal digests. It requires a non-root human at one foreground controlling
    terminal to enter the full commit, both artifact digests, the exact
-   statement `APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0,
+   statement `APPLY STAGING-REHEARSAL SERIAL 9: NO-OP 28, CREATE 11, UPDATE 0,
    DELETE 0, REPLACE 0`, and a fresh random challenge. Only after the two initial
    identical GET-only ARM snapshots and second complete local validation does
    that 120-second action window begin. The same deadline covers all five
@@ -96,7 +103,7 @@ The later isolated synthetic-only rehearsal remains mandatory.
    ARM response-date and byte counters for the final snapshot while retaining
    the exact already-running action deadline; it cannot create a fresh or
    longer window.
-8. The consumer atomically creates the owner-only one-use claim and directly
+9. The consumer atomically creates the owner-only one-use claim and directly
    opens and revalidates the plan descriptor-relatively, keeps that exact
    owner-only descriptor across `execve`, and replaces itself with OpenTofu
    1.12.5 using `/dev/fd/<n>` rather than the mutable plan pathname. It offers no
@@ -119,7 +126,7 @@ receipt, logs, or review:
   /opt/homebrew/bin/python3 -IS \
   /ABSOLUTE/PROTECTED_MASTER/scripts/consume_staging_rehearsal_base_recovery_handoff.py \
   --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
-  --state-json /ABSOLUTE/OWNER_ONLY/serial-8.tfstate \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
   --execution-dir /ABSOLUTE/OWNER_ONLY/execution \
   --receipt /ABSOLUTE/OWNER_ONLY/handoff.json \
   --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX \

@@ -105,18 +105,38 @@ turn taint into an incidental replacement. An intentional reversible-phase
 decommission must first remove that guard in a separately reviewed source
 change.
 
+## 2026-09-09 serial-8 normalization addendum
+
+The approved human untaint advanced the backend to serial 8. The protected
+post-untaint snapshot has SHA-256
+`4a62747650a8961cd48f716adc7f65abbed60997ecc7c00920c40346fec0a98b`,
+retains the exact lineage and 28-instance inventory, and contains no tainted or
+deposed instance.
+
+The first normal full-refresh recovery plan was refused. Its desired resource
+changes remained exactly 28 no-ops plus eleven creates, with zero updates,
+deletes, or replacements, but the provider reported ten state normalizations:
+one policy assignment, five role definitions, the marker storage account, two
+subnets, and the control VNet. The storage normalization hydrates provider-
+sensitive values that must never be persisted as plan JSON or submitted for
+review. Neither `-refresh=false` nor a broader recovery envelope is permitted.
+
+A bounded live diagnostic subsequently proved that a refresh-only plan can
+contain exactly those ten normalizations, one non-secret output creation, and
+zero `resource_changes`; it was not applied. The exact saved refresh plan still
+requires the merged closed-world validator, a separately merged human-only
+consumer, digest-bound independent review, and explicit human execution. Its
+only permitted transition is state serial 8 to serial 9 with zero Azure
+resource actions.
+
 ## Recovery acceptance
 
-Follow `infra-staging-rehearsal/README.md` exactly. A human operator must own the
-state transition. Completion requires a protected pre-state snapshot and hash,
-fresh ARM readback, explicitly approved untaint of only the marker account,
-protected post-state snapshot and hash, and a newly generated full-refresh
-saved plan. The validator creates that plan itself with `-refresh=true`, strips
-ambient CLI/variable overrides, decodes JSON from the captured binary, checks
-the archive's exact reviewed source and provider lockfile, and binds its
-embedded state to the protected external snapshot at exact serial 8. The plan
-must pass `scripts/validate_staging_rehearsal_base_recovery_plan.py` and
-independent review with exactly 28 no-ops, eleven creates, zero updates, zero
-deletes, and zero replacements. A second digest-bound validation against a
-fresh state pull is required immediately before human apply. Any other result
-stops recovery.
+Follow `infra-staging-rehearsal/README.md` exactly. A human operator must own
+both state transitions. Completion first requires the independently reviewed,
+zero-resource-action refresh-only plan to advance state from serial 8 to serial
+9. Only then may the full-refresh recovery validator create a plan bound to the
+protected serial-9 snapshot and exact reviewed source. That later plan must
+pass independent review with exactly 28 no-ops, eleven creates, zero drift,
+zero updates, zero deletes, and zero replacements. A second digest-bound
+validation against a fresh state pull is required immediately before each
+human apply. Any other result stops recovery.

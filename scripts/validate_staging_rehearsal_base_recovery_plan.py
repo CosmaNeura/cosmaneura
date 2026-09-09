@@ -30,7 +30,7 @@ REHEARSAL_ROOT = REPOSITORY_ROOT / "infra-staging-rehearsal"
 VALIDATOR_PATH = Path(__file__).resolve()
 
 EXPECTED_LINEAGE = "76b6712e-5781-adbd-9fb1-cf66db4f4e28"
-EXPECTED_POST_UNTAINT_SERIAL = 8
+EXPECTED_RECOVERY_SERIAL = 9
 EXPECTED_FORMAT_VERSION = "1.2"
 EXPECTED_TOFU_VERSION = "1.12.5"
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -757,15 +757,18 @@ def _state_address(resource: Mapping[str, Any], instance: Mapping[str, Any]) -> 
 
 
 def _validate_state(
-    state: Mapping[str, Any], *, label: str
+    state: Mapping[str, Any],
+    *,
+    label: str,
+    expected_serial: int = EXPECTED_RECOVERY_SERIAL,
 ) -> tuple[str, int, Mapping[str, tuple[str, int, str]]]:
     if state.get("lineage") != EXPECTED_LINEAGE:
         raise RecoveryPlanError(
             f"{label} lineage does not match the isolated rehearsal"
         )
     serial = state.get("serial")
-    if type(serial) is not int or serial != EXPECTED_POST_UNTAINT_SERIAL:
-        raise RecoveryPlanError(f"{label} serial must be exactly 8")
+    if type(serial) is not int or serial != expected_serial:
+        raise RecoveryPlanError(f"{label} serial must be exactly {expected_serial}")
     if state.get("terraform_version") != EXPECTED_TOFU_VERSION:
         raise RecoveryPlanError(f"{label} OpenTofu version is not pinned")
 

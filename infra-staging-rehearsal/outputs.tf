@@ -195,7 +195,7 @@ output "marker_store_binding" {
   value = var.deploy_staging_restore_control_plane ? {
     storage_account_id          = azurerm_storage_account.marker[0].id
     account_host                = azurerm_storage_account.marker[0].primary_blob_host
-    private_endpoint_id         = azurerm_private_endpoint.marker[0].id
+    private_endpoint_id         = try(azurerm_private_endpoint.marker[0].id, null)
     private_dns_zone_id         = azurerm_private_dns_zone.marker_blob[0].id
     private_dns_link_id         = azurerm_private_dns_zone_virtual_network_link.marker_blob[0].id
     reserved_executor_subnet_id = azurerm_subnet.private_executor_reserved[0].id
@@ -209,9 +209,18 @@ output "marker_store_binding" {
       provision_submission = var.enable_marker_create_assignments ? (
         azurerm_role_assignment.marker_create["provision_submission"].id
       ) : null
-      provision_cleanup       = azurerm_role_assignment.marker_provision_cleanup[0].id
-      cleanup_intent_read     = azurerm_role_assignment.marker_read["cleanup_intent"].id
-      cleanup_submission_read = azurerm_role_assignment.marker_read["cleanup_submission"].id
+      provision_cleanup = try(
+        azurerm_role_assignment.marker_provision_cleanup[0].id,
+        null,
+      )
+      cleanup_intent_read = try(
+        azurerm_role_assignment.marker_read["cleanup_intent"].id,
+        null,
+      )
+      cleanup_submission_read = try(
+        azurerm_role_assignment.marker_read["cleanup_submission"].id,
+        null,
+      )
       cleanup_marker = var.enable_marker_create_assignments ? (
         azurerm_role_assignment.marker_create["cleanup_cleanup"].id
       ) : null

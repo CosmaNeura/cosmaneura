@@ -50,7 +50,7 @@ def _valid_state() -> dict[str, Any]:
             contract = handoff.ROLE_CONTRACTS[key]
             attributes.update(id=f'{handoff.EXISTING_IDS[address]}|{handoff.SUBSCRIPTION_SCOPE}', role_definition_resource_id=handoff.EXISTING_IDS[address], name=contract['name'], description=contract['description'], permissions=[{'actions': list(contract['actions']), 'not_actions': [], 'data_actions': list(contract['data_actions']), 'not_data_actions': []}])
         resources.append(_state_resource(address, attributes))
-    return {'version': 4, 'terraform_version': handoff.recovery.EXPECTED_TOFU_VERSION, 'serial': 8, 'lineage': handoff.recovery.EXPECTED_LINEAGE, 'outputs': {}, 'resources': resources}
+    return {'version': 4, 'terraform_version': handoff.recovery.EXPECTED_TOFU_VERSION, 'serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'lineage': handoff.recovery.EXPECTED_LINEAGE, 'outputs': {}, 'resources': resources}
 
 class FakeReader:
     azure_cli_sha256 = 'a' * 64
@@ -159,7 +159,7 @@ def _attributes(state: dict[str, Any] | None=None) -> dict[str, Mapping[str, Any
     return handoff._state_attributes(json.dumps(state or _valid_state()).encode())
 
 def _base_receipt(state_bytes: bytes) -> dict[str, Any]:
-    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': 8, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_sha256': '6' * 64, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
+    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_sha256': '6' * 64, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
 
 def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[str]]:
     queue = list(states)

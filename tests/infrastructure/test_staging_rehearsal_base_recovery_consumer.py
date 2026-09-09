@@ -35,7 +35,7 @@ def _base() -> dict[str, Any]:
         'backend_metadata_sha256': '6' * 64,
         'backend_workspace': 'default',
         'state_lineage': consumer.recovery.EXPECTED_LINEAGE,
-        'state_serial': 8,
+        'state_serial': consumer.recovery.EXPECTED_RECOVERY_SERIAL,
         'state_json_sha256': '7' * 64,
         'embedded_state_sha256': '8' * 64,
         'saved_plan_sha256': PLAN_DIGEST,
@@ -69,7 +69,7 @@ def _receipt(base: Mapping[str, Any] | None=None) -> dict[str, Any]:
         'handoff_source_sha256': 'c' * 64,
         'provider_lock_sha256': base['provider_lock_sha256'],
         'state_lineage': consumer.recovery.EXPECTED_LINEAGE,
-        'state_serial': 8,
+        'state_serial': consumer.recovery.EXPECTED_RECOVERY_SERIAL,
         'state_json_sha256': base['state_json_sha256'],
         'remote_state_sha256': 'd' * 64,
         'saved_plan_sha256': PLAN_DIGEST,
@@ -308,7 +308,7 @@ def test_local_binding_reconstructs_receipt_and_machine_binding(tmp_path: Path, 
     snapshot = consumer.recovery.SourceSnapshot(SOURCE, {}, b'lock', '4' * 64)
     monkeypatch.setattr(consumer, '_source_binding', lambda *_: (snapshot, 'c' * 64))
     monkeypatch.setattr(consumer.handoff, '_python_runtime_binding', _python_binding)
-    monkeypatch.setattr(consumer.recovery, '_validate_state', lambda *_args, **_kwargs: (consumer.recovery.EXPECTED_LINEAGE, 8, {}))
+    monkeypatch.setattr(consumer.recovery, '_validate_state', lambda *_args, **_kwargs: (consumer.recovery.EXPECTED_LINEAGE, consumer.recovery.EXPECTED_RECOVERY_SERIAL, {}))
     binding = consumer._validate_local(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt_path, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=consumer._digest(raw), python_binding=_python_binding(), clock=lambda: NOW, boot_session=lambda: b'boot')
     assert binding.receipt == receipt and binding.nonce == nonce and binding.tofu == Path('/trusted/tofu')
     with pytest.raises(consumer.ConsumerError, match='machine_binding'):
@@ -586,7 +586,7 @@ def test_confirm_requires_all_five_exact_values_under_one_deadline(tmp_path: Pat
     monkeypatch.setattr(consumer.os, 'close', lambda fd: None)
     monkeypatch.setattr(consumer, '_read_prompt', lambda _fd, prompt, _deadline: answers.append(prompt) or ({
         0: SOURCE, 1: PLAN_DIGEST, 2: RECEIPT_DIGEST,
-        3: 'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
+        3: 'APPLY STAGING-REHEARSAL SERIAL 9: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
         4: 'APPLY 0001020304050607',
     }[len(answers) - 1]))
     deadline = consumer.time.monotonic() + 10
@@ -596,7 +596,7 @@ def test_confirm_requires_all_five_exact_values_under_one_deadline(tmp_path: Pat
 
 def test_confirmation_refuses_if_shared_action_deadline_elapsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, execution, _ = _artifacts(tmp_path)
-    answers = iter((SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, 'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0', 'APPLY 0001020304050607'))
+    answers = iter((SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, 'APPLY STAGING-REHEARSAL SERIAL 9: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0', 'APPLY 0001020304050607'))
     monkeypatch.setattr(consumer, '_validate_operator_tty', lambda: 7)
     monkeypatch.setattr(consumer.os, 'close', lambda _fd: None)
     monkeypatch.setattr(consumer, '_read_prompt', lambda *_: next(answers))

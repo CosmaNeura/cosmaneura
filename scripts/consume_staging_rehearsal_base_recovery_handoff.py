@@ -258,7 +258,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'handoff_source_sha256': handoff_source_sha256,
         'provider_lock_sha256': base.get('provider_lock_sha256'),
         'state_lineage': recovery.EXPECTED_LINEAGE,
-        'state_serial': recovery.EXPECTED_POST_UNTAINT_SERIAL,
+        'state_serial': recovery.EXPECTED_RECOVERY_SERIAL,
         'state_json_sha256': base.get('state_json_sha256'),
         'saved_plan_sha256': expected_saved_plan_sha256,
         'derived_plan_json_sha256': base.get('derived_plan_json_sha256'),
@@ -286,7 +286,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'source_commit': expected_source_commit,
         'backend_workspace': 'default',
         'state_lineage': recovery.EXPECTED_LINEAGE,
-        'state_serial': recovery.EXPECTED_POST_UNTAINT_SERIAL,
+        'state_serial': recovery.EXPECTED_RECOVERY_SERIAL,
         'saved_plan_sha256': expected_saved_plan_sha256,
         'open_tofu_version': recovery.EXPECTED_TOFU_VERSION,
         'validated_nonempty_change_set': True,
@@ -418,7 +418,7 @@ def _confirm_operator(binding: LocalBinding, expected_source_commit: str, expect
         expected_source_commit,
         expected_saved_plan_sha256,
         expected_receipt_sha256,
-        'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
+        'APPLY STAGING-REHEARSAL SERIAL 9: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
         f'APPLY {challenge}',
     )
     prompts = (
