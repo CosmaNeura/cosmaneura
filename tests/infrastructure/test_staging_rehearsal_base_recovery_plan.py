@@ -641,6 +641,14 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
         return subprocess.CompletedProcess(arguments, 0, output, b"")
 
     monkeypatch.setattr(recovery, "_run_process", fake_run); monkeypatch.setattr(recovery, "_snapshot_azure_cli_closure", fake_snapshot_azure_cli_closure)  # noqa: E702
+    unsafe_mode = runtime_directory / ".azure-config-unsafe-mode"; unsafe_mode.mkdir(mode=0o700); _protected_file(unsafe_mode / "msal_token_cache.json", b"credential", mode=0o600); unsafe_mode.chmod(0o755)  # noqa: E702
+    with pytest.raises(recovery.RecoveryPlanError, match="snapshot is unsafe"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
+    assert not unsafe_mode.exists() and not any(path.name == "msal_token_cache.json" for path in runtime_directory.rglob("*"))
+    if sys.platform == "darwin":
+        unsafe_acl = runtime_directory / ".azure-config-unsafe-acl"; unsafe_acl.mkdir(mode=0o700); _protected_file(unsafe_acl / "msal_token_cache.json", b"credential", mode=0o600)  # noqa: E702
+        subprocess.run(["/bin/chmod", "+a", "everyone allow read", str(unsafe_acl)], check=True)
+        with pytest.raises(recovery.RecoveryPlanError, match="snapshot is unsafe"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
+        assert not unsafe_acl.exists() and not any(path.name == "msal_token_cache.json" for path in runtime_directory.rglob("*"))
     previous_umask = os.umask(0o777)
     try:
         runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir); assert recovery._snapshot_and_verify_runtime(data_dir=data_dir) == runtime
@@ -697,6 +705,14 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
     assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n"
     shutil.rmtree(config); moved.rename(config)
+    stale_mode = runtime / ".azure-config-stale-mode"; stale_mode.mkdir(mode=0o700); _protected_file(stale_mode / "msal_token_cache.json", b"credential", mode=0o600); stale_mode.chmod(0o755)  # noqa: E702
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)  # noqa: E702
+    assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n" and not stale_mode.exists() and not any(path.name in values for path in runtime.rglob("*"))
+    if sys.platform == "darwin":
+        stale_acl = runtime / ".azure-config-stale-acl"; stale_acl.mkdir(mode=0o700); _protected_file(stale_acl / "msal_token_cache.json", b"credential", mode=0o600)  # noqa: E702
+        subprocess.run(["/bin/chmod", "+a", "everyone allow read", str(stale_acl)], check=True)
+        environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)  # noqa: E702
+        assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n" and not stale_acl.exists() and not any(path.name in values for path in runtime.rglob("*"))
     sitecustomize = modules / "sitecustomize.py"
     sitecustomize.write_text('import sys,time\ndef hook(event,args):\n if event == "shutil.rmtree" and args and args[0] == "pause-cleanup":\n  print("stale-cleanup-ready",flush=True);time.sleep(0.5)\nsys.addaudithook(hook)\n')
     stale = runtime / ".azure-config-stale-signal"; pause = stale / "pause-cleanup"; stale.mkdir(mode=0o700); pause.mkdir(mode=0o700); _protected_file(pause / "msal_token_cache.json", b"stale", mode=0o600)  # noqa: E702

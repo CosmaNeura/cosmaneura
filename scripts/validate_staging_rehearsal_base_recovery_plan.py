@@ -934,18 +934,19 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                 if (
                     not stat.S_ISDIR(metadata.st_mode)
                     or metadata.st_uid != os.geteuid()
-                    or stat.S_IMODE(metadata.st_mode) not in {0o500, 0o700}
-                    or _azure_directory_identity(metadata)
-                    != _azure_directory_identity(linked)
                 ):
                     raise RecoveryPlanError(
                         "stale Azure configuration snapshot is unsafe"
                     )
                 identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
-                os.fchmod(descriptor, 0o700)
-                _require_safe_acl(
-                    descriptor, label="stale Azure configuration snapshot"
+                metadata_safe = stat.S_IMODE(metadata.st_mode) in {0o500, 0o700}
+                metadata_safe = metadata_safe and identity == (
+                    linked.st_dev,
+                    linked.st_ino,
+                    linked.st_uid,
                 )
+                os.fchmod(descriptor, 0o700)
+                scrubbed = True
                 for entry in os.listdir(descriptor):
                     entry_metadata = os.stat(
                         entry, dir_fd=descriptor, follow_symlinks=False
@@ -955,33 +956,44 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                         or stat.S_ISREG(entry_metadata.st_mode)
                         or stat.S_ISLNK(entry_metadata.st_mode)
                     ):
-                        raise RecoveryPlanError(
-                            "stale Azure configuration snapshot is unsafe"
-                        )
+                        scrubbed = False
+                        continue
                     if stat.S_ISDIR(entry_metadata.st_mode):
                         shutil.rmtree(entry, dir_fd=descriptor)
                     else:
                         os.unlink(entry, dir_fd=descriptor)
                 if os.listdir(descriptor):
-                    raise RecoveryPlanError(
-                        "stale Azure configuration snapshot is not empty"
+                    scrubbed = False
+                try:
+                    _require_safe_acl(
+                        descriptor, label="stale Azure configuration snapshot"
                     )
+                except RecoveryPlanError:
+                    metadata_safe = False
                 current = os.fstat(descriptor)
                 linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                if identity != (
+                identity_safe = identity == (
                     current.st_dev,
                     current.st_ino,
                     current.st_uid,
-                ) or identity != (linked.st_dev, linked.st_ino, linked.st_uid):
-                    raise RecoveryPlanError("stale Azure configuration snapshot changed")  # fmt: skip
-                os.rmdir(name, dir_fd=parent)
-                try:
-                    os.stat(name, dir_fd=parent, follow_symlinks=False)
-                except FileNotFoundError:
-                    pass
-                else:
+                ) and identity == (linked.st_dev, linked.st_ino, linked.st_uid)
+                if scrubbed and identity_safe:
+                    os.rmdir(name, dir_fd=parent)
+                    try:
+                        os.stat(name, dir_fd=parent, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        raise RecoveryPlanError(
+                            "stale Azure configuration snapshot was not removed"
+                        )
+                if not scrubbed or not metadata_safe:
                     raise RecoveryPlanError(
-                        "stale Azure configuration snapshot was not removed"
+                        "stale Azure configuration snapshot is unsafe"
+                    )
+                if not identity_safe:
+                    raise RecoveryPlanError(
+                        "stale Azure configuration snapshot changed"
                     )
             finally:
                 os.close(descriptor)
@@ -1322,9 +1334,12 @@ try:
                 stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
                 try:
                     stale_metadata=os.fstat(stale_fd);stale_linked=os.stat(stale_name,dir_fd=parent_fd,follow_symlinks=False)
-                    if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid() or stat.S_IMODE(stale_metadata.st_mode) not in (0o500,0o700) or directory_identity(stale_metadata)!=directory_identity(stale_linked):raise ValueError
-                    safe_acl(stale_fd);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
+                    if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid():raise ValueError
+                    stale_metadata_safe=stat.S_IMODE(stale_metadata.st_mode) in (0o500,0o700) and directory_identity(stale_metadata)==directory_identity(stale_linked);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
                     if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
+                    try:safe_acl(stale_fd)
+                    except (OSError,ValueError):stale_metadata_safe=False
+                    if not stale_metadata_safe:raise ValueError
                 finally:os.close(stale_fd)
         finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
         creation_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS);previous_umask=os.umask(0o077)
