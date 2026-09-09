@@ -1226,7 +1226,7 @@ def capture(source):
         if directory_identity(home_metadata)!=directory_identity(os.stat(home,follow_symlinks=False)) or directory_identity(config_metadata)!=directory_identity(os.stat(".azure",dir_fd=home_fd,follow_symlinks=False)):raise ValueError
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
-snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None
+snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False
 def scrub(fd):
     ok=True
     try:
@@ -1252,8 +1252,19 @@ def cleanup():
     ok=True;previous_mask=None
     try:previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
     except (AttributeError,OSError):ok=False
+    if snapshot_created and snapshot_fd is None and snapshot_name is not None and parent_fd is not None:
+        created_fd=None
+        try:
+            created_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);created_metadata=os.fstat(created_fd);created_linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
+            if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or directory_identity(created_metadata)!=directory_identity(created_linked) or os.listdir(created_fd):raise ValueError
+            safe_acl(created_fd);os.rmdir(snapshot_name,dir_fd=parent_fd)
+            try:os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False);raise ValueError
+            except FileNotFoundError:pass
+        except (OSError,ValueError):ok=False
+        finally:
+            if created_fd is not None:os.close(created_fd)
     if snapshot_fd is not None:
-        ok=remove_snapshot(snapshot_name,snapshot_fd,snapshot_identity) and ok
+        ok=snapshot_identity is not None and remove_snapshot(snapshot_name,snapshot_fd,snapshot_identity) and ok
         try:os.close(snapshot_fd)
         except OSError:ok=False
         snapshot_fd=None
@@ -1297,14 +1308,17 @@ try:
                 if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
             finally:os.close(stale_fd)
     finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
-    for _ in range(16):
-        snapshot_name=".azure-config-"+secrets.token_hex(16)
-        try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);break
-        except FileExistsError:continue
-    else:raise ValueError
-    snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
-    if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
-    safe_acl(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid)
+    creation_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+    try:
+        for _ in range(16):
+            snapshot_name=".azure-config-"+secrets.token_hex(16)
+            try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);snapshot_created=True;break
+            except FileExistsError:continue
+        else:raise ValueError
+        snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
+        if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
+        safe_acl(snapshot_fd)
+    finally:signal.pthread_sigmask(signal.SIG_SETMASK,creation_mask)
     for name,value in captures.items():
         fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=snapshot_fd)
         try:
