@@ -24,7 +24,7 @@ import types
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 if __name__ == "__main__" and (
     sys.flags.isolated != 1 or sys.flags.no_site != 1 or not sys.flags.safe_path
@@ -37,17 +37,10 @@ _VALIDATOR = (
     .resolve()
     .with_name("validate_staging_rehearsal_base_state_refresh_plan.py")
 )
-_RECOVERY_VALIDATOR = _VALIDATOR.with_name(
-    "validate_staging_rehearsal_base_recovery_plan.py"
-)
 _BOOTSTRAP_DIGESTS = {
-    _RECOVERY_VALIDATOR.name: "0eaf0693016a52c8ab48b16fa7870aaefce8fb784c6732d1a9258456e1a4cb9e",
-    _VALIDATOR.name: "33193f1c7d5bbbad042da7d12118d506cb38250355a59fcd7119cdd5deafaca4",
+    _VALIDATOR.name: "c9875f97445064b3b00255bcfab2181b65688d9c8a30f70b1143a79fad354556",
 }
 _MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
-_RECOVERY_QUALIFIED_NAME = "scripts.validate_staging_rehearsal_base_recovery_plan"
-_RECOVERY_ATTRIBUTE = "validate_staging_rehearsal_base_recovery_plan"
-_MISSING = object()
 
 
 def _read_bootstrap_source(path: Path, expected_sha256: str) -> bytes:
@@ -150,64 +143,18 @@ def _read_bootstrap_source(path: Path, expected_sha256: str) -> bytes:
 
 
 try:
-    recovery_source = _read_bootstrap_source(
-        _RECOVERY_VALIDATOR, _BOOTSTRAP_DIGESTS[_RECOVERY_VALIDATOR.name]
-    )
     refresh_source = _read_bootstrap_source(
         _VALIDATOR, _BOOTSTRAP_DIGESTS[_VALIDATOR.name]
     )
-    recovery = types.ModuleType("validate_staging_rehearsal_base_recovery_plan")
-    recovery.__file__ = str(_RECOVERY_VALIDATOR)
-    sys.modules[recovery.__name__] = recovery
+    refresh = types.ModuleType("_cosmaneura_state_refresh_validator")
+    refresh.__file__ = str(_VALIDATOR)
+    sys.modules[refresh.__name__] = refresh
     exec(
-        compile(
-            recovery_source,
-            str(_RECOVERY_VALIDATOR),
-            "exec",
-            dont_inherit=True,
-        ),
-        recovery.__dict__,
+        compile(refresh_source, str(_VALIDATOR), "exec", dont_inherit=True),
+        refresh.__dict__,
     )
-    previous_qualified = sys.modules.get(_RECOVERY_QUALIFIED_NAME, _MISSING)
-    scripts_package = sys.modules.get("scripts")
-    previous_attribute = (
-        getattr(scripts_package, _RECOVERY_ATTRIBUTE, _MISSING)
-        if scripts_package is not None
-        else _MISSING
-    )
-    sys.modules[_RECOVERY_QUALIFIED_NAME] = recovery
-    if scripts_package is not None:
-        setattr(scripts_package, _RECOVERY_ATTRIBUTE, recovery)
-    try:
-        refresh = types.ModuleType("_cosmaneura_state_refresh_validator")
-        refresh.__file__ = str(_VALIDATOR)
-        sys.modules[refresh.__name__] = refresh
-        exec(
-            compile(refresh_source, str(_VALIDATOR), "exec", dont_inherit=True),
-            refresh.__dict__,
-        )
-    finally:
-        loaded_scripts_package = sys.modules.get("scripts")
-        if loaded_scripts_package is not None:
-            if previous_attribute is _MISSING:
-                if (
-                    getattr(loaded_scripts_package, _RECOVERY_ATTRIBUTE, _MISSING)
-                    is recovery
-                ):
-                    delattr(loaded_scripts_package, _RECOVERY_ATTRIBUTE)
-            else:
-                setattr(loaded_scripts_package, _RECOVERY_ATTRIBUTE, previous_attribute)
-        if previous_qualified is _MISSING:
-            sys.modules.pop(_RECOVERY_QUALIFIED_NAME, None)
-        else:
-            sys.modules[_RECOVERY_QUALIFIED_NAME] = cast(
-                types.ModuleType, previous_qualified
-            )
+    recovery = refresh.recovery
 except Exception:
-    print("state_refresh_apply_refused", file=sys.stderr)
-    raise SystemExit(2)
-
-if refresh.recovery is not recovery:
     print("state_refresh_apply_refused", file=sys.stderr)
     raise SystemExit(2)
 CONSUMER_PATH = Path(__file__).resolve()
