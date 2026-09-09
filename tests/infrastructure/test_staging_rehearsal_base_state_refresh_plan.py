@@ -84,9 +84,11 @@ def test_recovery_bootstrap_refuses_links(tmp_path: Path) -> None:
     source.write_bytes(b"VALUE = 1\n")
     source.chmod(0o600)
     alias.symlink_to(source)
-    os.link(source, hardlink)
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
-    for path in (alias, source, hardlink):
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        refresh._read_bootstrap_source(alias, digest)
+    os.link(source, hardlink)
+    for path in (source, hardlink):
         with pytest.raises(RuntimeError, match="bootstrap source refused"):
             refresh._read_bootstrap_source(path, digest)
 
