@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import email.message
 import hashlib
 import inspect
@@ -14,7 +15,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -322,7 +323,9 @@ def test_present_plan_uses_one_token_and_exact_get_sequence() -> None:
         }
         assert response._is_authenticated_for(plan, request_item)
         assert response.status == 200
-        assert response.body_sha256 == hashlib.sha256(response._body).hexdigest()
+        raw = provider._consume_response_body(response, plan=plan, request=request_item)
+        assert response.body_sha256 == hashlib.sha256(raw).hexdigest()
+        assert not hasattr(response, "_body")
 
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
@@ -352,9 +355,13 @@ def test_absence_plans_accept_only_exact_404s_without_retaining_error_bodies(
     assert len(identity_opener.calls) == 1
     assert len(arm_opener.calls) == len(plan._requests)
     assert [item.status for item in responses] == [404] * len(responses)
-    assert all(item._body == b"" for item in responses)
     assert all(
         item._is_authenticated_for(actual_plan, request_item)
+        for item, request_item in zip(responses, actual_plan._requests, strict=True)
+    )
+    assert all(
+        provider._consume_response_body(item, plan=actual_plan, request=request_item)
+        == b""
         for item, request_item in zip(responses, actual_plan._requests, strict=True)
     )
 
@@ -377,6 +384,45 @@ def test_transport_requires_exact_plan_identity_and_configuration() -> None:
         match="^bootstrap_job_live_provider.transport_invalid$",
     ):
         provider.AzureBootstrapJobLiveProvider()
+
+
+def test_transport_configuration_and_consumption_gate_are_immutable() -> None:
+    live, _plan_value, _identity, _arm = _provider()
+    assert not hasattr(live, "_policy")
+    assert not hasattr(live, "_used")
+    for name, value in (
+        ("management_origin", "https://attacker.example"),
+        ("oauth_resource", "https://attacker.example/"),
+        ("request_timeout_seconds", 60),
+        ("maximum_elapsed_seconds", 999),
+        ("maximum_response_bytes", 999999999),
+    ):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(live._transport, name, value)
+    with pytest.raises(
+        provider.SanitizerBootstrapJobLiveProviderFailure,
+        match="^bootstrap_job_live_provider.transport_invalid$",
+    ):
+        live._arm_opener = FakeOpener([])
+
+    live.read_all()
+    with pytest.raises(
+        provider.SanitizerBootstrapJobLiveProviderFailure,
+        match="^bootstrap_job_live_provider.transport_invalid$",
+    ):
+        live._claim = lambda: None
+    with pytest.raises(
+        provider.SanitizerBootstrapJobLiveProviderFailure,
+        match="^bootstrap_job_live_provider.already_used$",
+    ):
+        live.read_all()
+
+
+def test_remaining_elapsed_budget_caps_each_arm_request() -> None:
+    ticks = iter([0.0] * 14 + [122.0] * 10)
+    live, _plan_value, _identity, arm = _provider(monotonic=ticks.__next__)
+    live.read_all()
+    assert [timeout for _request, timeout in arm.calls] == [30, 30, 30, 28]
 
 
 @pytest.mark.parametrize(
@@ -463,6 +509,17 @@ def test_response_is_sealed_tamper_evident_and_nonserializable() -> None:
         copy.copy(response)
     with pytest.raises(provider.SanitizerBootstrapJobLiveProviderFailure):
         pickle.dumps(response)
+    with pytest.raises(TypeError):
+        dataclasses.asdict(cast(Any, response))
+    with pytest.raises(TypeError):
+        dataclasses.astuple(cast(Any, response))
+    with pytest.raises(AttributeError):
+        getattr(response, "_body")
+    with pytest.raises(
+        provider.SanitizerBootstrapJobLiveProviderFailure,
+        match="^bootstrap_job_live_provider.response_invalid$",
+    ):
+        response.status = 404
 
     object.__setattr__(response, "status", 404)
     assert not response._is_authenticated_for(plan, request_item)
