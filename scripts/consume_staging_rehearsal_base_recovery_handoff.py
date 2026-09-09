@@ -14,6 +14,7 @@ if __name__ == '__main__' and (_bootstrap_sys.flags.isolated != 1 or _bootstrap_
     _bootstrap_sys.stderr.write('recovery_apply_refused\n')
     raise SystemExit(2)
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -358,6 +359,7 @@ def _validate_operator_tty() -> int:
     if os.getuid() == 0 or os.getuid() != os.geteuid() or os.getgid() != os.getegid():
         _fail('operator.identity_invalid')
     descriptors = (0, 1, 2)
+    tty: int | None = None
     try:
         if not all(os.isatty(fd) for fd in descriptors):
             _fail('operator.tty_required')
@@ -365,13 +367,39 @@ def _validate_operator_tty() -> int:
         identities = [(item.st_dev, item.st_rdev) for item in metadata]
         if len(set(identities)) != 1 or any(os.tcgetpgrp(fd) != os.getpgrp() for fd in descriptors):
             _fail('operator.tty_mismatch')
-        tty = os.open('/dev/tty', os.O_RDWR | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOCTTY', 0) | getattr(os, 'O_NOFOLLOW', 0))
+        read_write_tty = next(
+            (
+                fd
+                for fd in descriptors
+                if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR
+            ),
+            None,
+        )
+        if read_write_tty is None:
+            _fail('operator.tty_access_invalid')
+        # Duplicate the terminal we have already authenticated instead of
+        # reopening /dev/tty. Sandboxed macOS terminals can deny that path
+        # open even when all inherited descriptors are a valid foreground
+        # TTY; duplicating its descriptor is also immune to path substitution.
+        tty = os.dup(read_write_tty)
+        os.set_inheritable(tty, False)
         metadata = os.fstat(tty)
-        if not stat.S_ISCHR(metadata.st_mode) or (metadata.st_dev, metadata.st_rdev) != identities[0] or os.tcgetpgrp(tty) != os.getpgrp():
-            os.close(tty)
+        if not stat.S_ISCHR(metadata.st_mode) or (metadata.st_dev, metadata.st_rdev) != identities[0] or os.tcgetpgrp(tty) != os.getpgrp() or os.get_inheritable(tty):
             _fail('operator.tty_mismatch')
         return tty
+    except ConsumerError:
+        if tty is not None:
+            try:
+                os.close(tty)
+            except OSError:
+                pass
+        raise
     except (OSError, ValueError):
+        if tty is not None:
+            try:
+                os.close(tty)
+            except OSError:
+                pass
         _fail('operator.tty_required')
 
 
