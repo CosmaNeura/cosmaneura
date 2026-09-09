@@ -100,6 +100,7 @@ def _drift_values(address: str) -> tuple[dict[str, Any], dict[str, Any]]:
     if address in refresh.ROLE_ADDRESSES:
         before = {
             "id": address,
+            "assignable_scopes": [refresh.CONTROL_GROUP_ID],
             "permissions": [
                 {
                     "actions": ["read"],
@@ -170,7 +171,7 @@ def _state(*, refreshed: bool) -> dict[str, Any]:
     if refreshed:
         outputs["marker_store_binding"] = {
             "value": refresh._expected_marker_output(),
-            "type": "dynamic",
+            "type": copy.deepcopy(refresh.EXPECTED_MARKER_OUTPUT_TYPE),
         }
     return {
         "version": 4,
@@ -224,8 +225,10 @@ def _plan() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
             ):
                 before[field] = []
         after = copy.deepcopy(after_attributes[address])
-        sensitive = {name: True for name in refresh.STORAGE_SECRET_FIELDS}
         resource_type, name = address.removesuffix("[0]").split(".", 1)
+        metadata = refresh._expected_change_metadata(
+            address, before=before, after=after
+        )
         drift.append(
             {
                 "address": address,
@@ -235,16 +238,9 @@ def _plan() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
                 "index": 0,
                 "provider_name": "registry.opentofu.org/hashicorp/azurerm",
                 "change": {
-                    "actions": ["update"],
                     "before": before,
                     "after": after,
-                    "after_unknown": {},
-                    "before_sensitive": sensitive
-                    if address == refresh.STORAGE_ADDRESS
-                    else {},
-                    "after_sensitive": sensitive
-                    if address == refresh.STORAGE_ADDRESS
-                    else {},
+                    **copy.deepcopy(metadata),
                 },
             }
         )
@@ -286,6 +282,7 @@ def _plan() -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         "configuration": {"provider_config": _providers()},
         "prior_state": {"values": {"root_module": {"resources": prior_resources}}},
         "planned_values": {"root_module": {"resources": []}},
+        "relevant_attributes": copy.deepcopy(refresh.EXPECTED_RELEVANT_ATTRIBUTES),
         "resource_drift": drift,
         "output_changes": output_changes,
     }
@@ -324,24 +321,67 @@ def test_refresh_plan_rejects_resource_actions_and_drift_expansion() -> None:
         )
 
 
-@pytest.mark.parametrize("target", ["drift", "sensitivity", "output"])
+@pytest.mark.parametrize(
+    "target", ["drift", "sensitivity", "unknown", "output", "top_level"]
+)
 def test_refresh_plan_rejects_unreviewed_metadata(target: str) -> None:
     plan, before, after = _plan()
     if target == "drift":
         plan["resource_drift"][0]["change"]["unreviewed"] = True
-    elif target == "sensitivity":
+    elif target in {"sensitivity", "unknown"}:
         storage = next(
             item
             for item in plan["resource_drift"]
             if item["address"] == refresh.STORAGE_ADDRESS
         )
-        storage["change"]["after_sensitive"]["unexpected"] = True
-    else:
+        if target == "sensitivity":
+            storage["change"]["after_sensitive"]["unexpected"] = False
+        else:
+            storage["change"]["after_unknown"]["unexpected"] = False
+    elif target == "output":
         plan["output_changes"]["control_plane_enabled"]["unreviewed"] = True
+    else:
+        plan["unreviewed"] = False
     with pytest.raises(refresh.RefreshPlanError):
         refresh._validate_plan(
             plan, external_state=before, embedded_state=after, now=NOW
         )
+
+
+@pytest.mark.parametrize("target", ["instance_private", "output_type", "top_level"])
+def test_refresh_plan_rejects_embedded_state_metadata_tampering(target: str) -> None:
+    plan, before, after = _plan()
+    if target == "instance_private":
+        after["resources"][0]["instances"][0]["private"] = "unreviewed"
+    elif target == "output_type":
+        after["outputs"]["marker_store_binding"]["type"] = "dynamic"
+    else:
+        after["unreviewed"] = False
+    with pytest.raises(refresh.RefreshPlanError, match="embedded refreshed state"):
+        refresh._validate_plan(
+            plan, external_state=before, embedded_state=after, now=NOW
+        )
+
+
+def test_pre_refresh_state_digest_is_exact(monkeypatch: pytest.MonkeyPatch) -> None:
+    state = _state(refreshed=False)
+    state_bytes = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    monkeypatch.setattr(
+        refresh,
+        "EXPECTED_PRE_REFRESH_STATE_SHA256",
+        recovery._sha256_bytes(state_bytes),
+    )
+    refresh._validate_pre_refresh_state_digest(state_bytes)
+
+    unrelated = next(
+        resource
+        for resource in state["resources"]
+        if resource["type"] == "azurerm_resource_group"
+    )
+    unrelated["instances"][0]["attributes"]["unreviewed"] = True
+    changed = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(refresh.RefreshPlanError, match="reviewed snapshot"):
+        refresh._validate_pre_refresh_state_digest(changed)
 
 
 @pytest.mark.parametrize("target", ["role", "storage", "output"])

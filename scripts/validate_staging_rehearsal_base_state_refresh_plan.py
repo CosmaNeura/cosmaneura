@@ -26,6 +26,9 @@ RefreshPlanError = recovery.RecoveryPlanError
 VALIDATOR_PATH = Path(__file__).resolve()
 PRE_REFRESH_SERIAL = 8
 POST_REFRESH_SERIAL = recovery.EXPECTED_RECOVERY_SERIAL
+EXPECTED_PRE_REFRESH_STATE_SHA256 = (
+    "4a62747650a8961cd48f716adc7f65abbed60997ecc7c00920c40346fec0a98b"
+)
 
 POLICY_ADDRESS = (
     "azurerm_resource_group_policy_assignment.deny_postgres_firewall_rules[0]"
@@ -171,16 +174,123 @@ EXPECTED_OUTPUT_NAMES = frozenset(
         "target_topology_contract",
     }
 )
-EXPECTED_CHANGE_KEYS = frozenset(
+EXPECTED_PLAN_FIELDS = frozenset(
     {
-        "actions",
-        "before",
-        "after",
-        "after_unknown",
-        "before_sensitive",
-        "after_sensitive",
+        "checks",
+        "configuration",
+        "errored",
+        "format_version",
+        "output_changes",
+        "planned_values",
+        "prior_state",
+        "relevant_attributes",
+        "resource_drift",
+        "terraform_version",
+        "timestamp",
+        "variables",
     }
 )
+OPTIONAL_EMPTY_PLAN_FIELDS = frozenset(
+    {"action_invocations", "deferred_changes", "resource_changes"}
+)
+EXPECTED_RELEVANT_ATTRIBUTES = [
+    {"attribute": [], "resource": "azapi_resource.marker_container"},
+    {"attribute": ["id"], "resource": "azurerm_management_lock.marker[0]"},
+    {"attribute": ["id"], "resource": "azurerm_private_dns_zone.marker_blob[0]"},
+    {
+        "attribute": ["id"],
+        "resource": "azurerm_private_dns_zone_virtual_network_link.marker_blob[0]",
+    },
+    {"attribute": ["id"], "resource": "azurerm_private_endpoint.marker[0]"},
+    {
+        "attribute": ["id"],
+        "resource": 'azurerm_role_assignment.marker_create["cleanup_cleanup"]',
+    },
+    {
+        "attribute": ["id"],
+        "resource": 'azurerm_role_assignment.marker_create["provision_intent"]',
+    },
+    {
+        "attribute": ["id"],
+        "resource": 'azurerm_role_assignment.marker_create["provision_submission"]',
+    },
+    {
+        "attribute": ["id"],
+        "resource": "azurerm_role_assignment.marker_provision_cleanup[0]",
+    },
+    {
+        "attribute": ["id"],
+        "resource": 'azurerm_role_assignment.marker_read["cleanup_intent"]',
+    },
+    {
+        "attribute": ["id"],
+        "resource": 'azurerm_role_assignment.marker_read["cleanup_submission"]',
+    },
+    {
+        "attribute": ["primary_blob_host"],
+        "resource": "azurerm_storage_account.marker[0]",
+    },
+    {"attribute": ["id"], "resource": "azurerm_storage_account.marker[0]"},
+    {
+        "attribute": [],
+        "resource": "azurerm_storage_container_immutability_policy.marker",
+    },
+    {
+        "attribute": ["id"],
+        "resource": (
+            "azurerm_storage_container_immutability_policy.marker["
+            '"restore-cleanups-v4"]'
+        ),
+    },
+    {
+        "attribute": ["id"],
+        "resource": (
+            'azurerm_storage_container_immutability_policy.marker["restore-intents-v4"]'
+        ),
+    },
+    {
+        "attribute": ["id"],
+        "resource": (
+            "azurerm_storage_container_immutability_policy.marker["
+            '"restore-submissions-v4"]'
+        ),
+    },
+    {
+        "attribute": ["id"],
+        "resource": "azurerm_subnet.private_executor_reserved[0]",
+    },
+]
+EXPECTED_MARKER_OUTPUT_TYPE = [
+    "object",
+    {
+        "account_host": "string",
+        "container_ids": ["object", {}],
+        "evidence_immutability_policy_id": "dynamic",
+        "immutability_policy_ids": ["map", "dynamic"],
+        "legal_hold_readback_proven": "bool",
+        "legal_hold_requested": "bool",
+        "locked_worm_requested": "bool",
+        "management_lock_id": "dynamic",
+        "private_dns_link_id": "string",
+        "private_dns_zone_id": "string",
+        "private_endpoint_id": "dynamic",
+        "private_marker_network_posture_proven": "bool",
+        "readonly_lock_requested": "bool",
+        "reserved_executor_subnet_id": "string",
+        "role_assignment_ids": [
+            "object",
+            {
+                "cleanup_intent_read": "dynamic",
+                "cleanup_marker": "dynamic",
+                "cleanup_submission_read": "dynamic",
+                "provision_cleanup": "dynamic",
+                "provision_intent": "dynamic",
+                "provision_submission": "dynamic",
+            },
+        ],
+        "storage_account_id": "string",
+    },
+]
 
 
 def _source_snapshot(expected_commit: str) -> recovery.SourceSnapshot:
@@ -248,6 +358,11 @@ def _state_binding_projection(state: Mapping[str, Any]) -> Mapping[str, Any]:
     return {name: value for name, value in state.items() if name != "check_results"}
 
 
+def _validate_pre_refresh_state_digest(state_bytes: bytes) -> None:
+    if recovery._sha256_bytes(state_bytes) != EXPECTED_PRE_REFRESH_STATE_SHA256:
+        raise RefreshPlanError("pre-refresh state digest is not the reviewed snapshot")
+
+
 def _changed_paths(before: Any, after: Any, prefix: str = "") -> set[str]:
     if type(before) is not type(after):
         return {prefix or "<root>"}
@@ -275,6 +390,193 @@ def _contains_true(value: Any) -> bool:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return any(_contains_true(item) for item in value)
     return False
+
+
+def _false_list(value: Any, *, label: str) -> list[bool]:
+    if not isinstance(value, list):
+        raise RefreshPlanError(f"{label} shape is invalid")
+    return [False] * len(value)
+
+
+def _role_sensitive_mask(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    assignable_scopes = _false_list(
+        value.get("assignable_scopes"), label="role assignable scopes"
+    )
+    permissions = value.get("permissions")
+    if not isinstance(permissions, list) or len(permissions) != 1:
+        raise RefreshPlanError("role permission sensitivity shape is invalid")
+    permission = permissions[0]
+    if not isinstance(permission, Mapping):
+        raise RefreshPlanError("role permission sensitivity shape is invalid")
+    permission_mask: dict[str, Any] = {}
+    for name in ("actions", "data_actions", "not_actions", "not_data_actions"):
+        field = permission.get(name)
+        if field is not None:
+            permission_mask[name] = _false_list(
+                field, label="role permission sensitivity"
+            )
+    return {
+        "assignable_scopes": assignable_scopes,
+        "permissions": [permission_mask],
+    }
+
+
+def _storage_sensitive_mask(*, refreshed: bool) -> Mapping[str, Any]:
+    result: dict[str, Any] = {
+        "azure_files_authentication": [],
+        "blob_properties": [
+            {
+                "container_delete_retention_policy": [],
+                "cors_rule": [],
+                "delete_retention_policy": [],
+                "restore_policy": [],
+            }
+        ],
+        "custom_domain": [],
+        "customer_managed_key": [],
+        "identity": [],
+        "immutability_policy": [],
+        "network_rules": [
+            {
+                "bypass": [False],
+                "ip_rules": [],
+                "private_link_access": [],
+                "virtual_network_subnet_ids": [],
+            }
+        ],
+        "queue_properties": [],
+        "routing": [],
+        "sas_policy": [],
+        "share_properties": (
+            [{"cors_rule": [], "retention_policy": [{}], "smb": []}]
+            if refreshed
+            else []
+        ),
+        "static_website": [],
+        "tags": {},
+    }
+    result.update({name: True for name in STORAGE_SECRET_FIELDS})
+    return result
+
+
+def _resource_identity(address: str) -> Mapping[str, str]:
+    identity = {
+        "resource_group_name": "cosmaneura-staging-rehearsal-control",
+        "subscription_id": recovery.EXPECTED_SUBSCRIPTION_ID,
+    }
+    if address == STORAGE_ADDRESS:
+        return {"name": ACCOUNT_NAME, **identity}
+    if address == VNET_ADDRESS:
+        return {"name": "cosmaneura-staging-rehearsal-control-vnet", **identity}
+    if address in SUBNET_ADDRESSES:
+        return {
+            "name": (
+                "marker-private-endpoints"
+                if address == "azurerm_subnet.marker_private_endpoint[0]"
+                else "private-executor-reserved"
+            ),
+            **identity,
+            "virtual_network_name": "cosmaneura-staging-rehearsal-control-vnet",
+        }
+    raise RefreshPlanError("refresh identity address is invalid")
+
+
+def _expected_change_metadata(
+    address: str, *, before: Mapping[str, Any], after: Mapping[str, Any]
+) -> Mapping[str, Any]:
+    metadata: dict[str, Any] = {"actions": ["update"], "after_unknown": {}}
+    if address == POLICY_ADDRESS:
+        metadata.update(
+            {
+                "before_sensitive": {
+                    "identity": [],
+                    "non_compliance_message": [],
+                    "overrides": [],
+                    "resource_selectors": [],
+                },
+                "after_sensitive": {
+                    "identity": [],
+                    "non_compliance_message": [],
+                    "not_scopes": [],
+                    "overrides": [],
+                    "resource_selectors": [],
+                },
+            }
+        )
+    elif address in ROLE_ADDRESSES:
+        metadata.update(
+            {
+                "before_sensitive": _role_sensitive_mask(before),
+                "after_sensitive": _role_sensitive_mask(after),
+            }
+        )
+    elif address == STORAGE_ADDRESS:
+        identity = _resource_identity(address)
+        metadata.update(
+            {
+                "before_identity": identity,
+                "after_identity": identity,
+                "before_sensitive": _storage_sensitive_mask(refreshed=False),
+                "after_sensitive": _storage_sensitive_mask(refreshed=True),
+            }
+        )
+    elif address in SUBNET_ADDRESSES:
+        identity = _resource_identity(address)
+        metadata.update(
+            {
+                "before_identity": identity,
+                "after_identity": identity,
+                "before_sensitive": {
+                    "address_prefixes": [False],
+                    "delegation": [],
+                    "ip_address_pool": [],
+                },
+                "after_sensitive": {
+                    "address_prefixes": [False],
+                    "delegation": [],
+                    "ip_address_pool": [],
+                    "service_endpoint_policy_ids": [],
+                    "service_endpoints": [],
+                },
+            }
+        )
+    elif address == VNET_ADDRESS:
+        identity = _resource_identity(address)
+        before_mask = {
+            "address_space": [False],
+            "ddos_protection_plan": [],
+            "dns_servers": [],
+            "encryption": [],
+            "ip_address_pool": [],
+            "subnet": [],
+            "tags": {},
+        }
+        after_mask = copy.deepcopy(before_mask)
+        after_mask["subnet"] = [
+            {
+                "address_prefixes": [False],
+                "delegation": [],
+                "service_endpoint_policy_ids": [],
+                "service_endpoints": [],
+            },
+            {
+                "address_prefixes": [False],
+                "delegation": [],
+                "service_endpoint_policy_ids": [],
+                "service_endpoints": [],
+            },
+        ]
+        metadata.update(
+            {
+                "before_identity": identity,
+                "after_identity": identity,
+                "before_sensitive": before_mask,
+                "after_sensitive": after_mask,
+            }
+        )
+    else:
+        raise RefreshPlanError("drift address is outside the refresh envelope")
+    return metadata
 
 
 def _validate_storage_drift(change: Mapping[str, Any]) -> None:
@@ -432,6 +734,57 @@ def _expected_marker_output() -> Mapping[str, Any]:
     }
 
 
+def _expected_embedded_state(
+    external_state: Mapping[str, Any],
+    *,
+    drift_by_address: Mapping[str, Mapping[str, Any]],
+) -> Mapping[str, Any]:
+    expected = copy.deepcopy(dict(external_state))
+    expected.pop("check_results", None)
+    resources = expected.get("resources")
+    outputs = expected.get("outputs")
+    if not isinstance(resources, list) or not isinstance(outputs, dict):
+        raise RefreshPlanError("pre-refresh state shape is invalid")
+    changed: set[str] = set()
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            raise RefreshPlanError("pre-refresh resource is invalid")
+        instances = resource.get("instances")
+        if not isinstance(instances, list):
+            raise RefreshPlanError("pre-refresh resource instances are invalid")
+        for instance in instances:
+            if not isinstance(instance, dict):
+                raise RefreshPlanError("pre-refresh resource instance is invalid")
+            address = recovery._state_address(resource, instance)
+            if address in drift_by_address:
+                change = drift_by_address[address].get("change")
+                if not isinstance(change, Mapping):
+                    raise RefreshPlanError("refresh drift change is invalid")
+                instance["attributes"] = copy.deepcopy(change.get("after"))
+                changed.add(address)
+    if changed != EXPECTED_DRIFT_ADDRESSES:
+        raise RefreshPlanError("expected embedded-state drift set is not exact")
+    outputs["marker_store_binding"] = {
+        "value": _expected_marker_output(),
+        "type": copy.deepcopy(EXPECTED_MARKER_OUTPUT_TYPE),
+    }
+    return expected
+
+
+def _validate_embedded_state(
+    external_state: Mapping[str, Any],
+    embedded_state: Mapping[str, Any],
+    *,
+    drift_by_address: Mapping[str, Mapping[str, Any]],
+) -> None:
+    actual = copy.deepcopy(dict(embedded_state))
+    actual.pop("check_results", None)
+    if actual != _expected_embedded_state(
+        external_state, drift_by_address=drift_by_address
+    ):
+        raise RefreshPlanError("embedded refreshed state is not closed-world")
+
+
 def _validate_output_changes(
     plan: Mapping[str, Any],
     *,
@@ -481,7 +834,7 @@ def _validate_drift(
     *,
     external_attributes: Mapping[str, Mapping[str, Any]],
     embedded_attributes: Mapping[str, Mapping[str, Any]],
-) -> None:
+) -> Mapping[str, Mapping[str, Any]]:
     drift = plan.get("resource_drift")
     if not isinstance(drift, Sequence) or isinstance(drift, (str, bytes)):
         raise RefreshPlanError("refresh drift is missing")
@@ -522,7 +875,6 @@ def _validate_drift(
             or item.get("index") != 0
             or item.get("provider_name") != "registry.opentofu.org/hashicorp/azurerm"
             or not isinstance(change, Mapping)
-            or set(change) != EXPECTED_CHANGE_KEYS
             or change.get("actions") != ["update"]
             or change.get("before") != expected_before
             or change.get("after") != embedded_attributes[address]
@@ -530,6 +882,16 @@ def _validate_drift(
         ):
             raise RefreshPlanError("refresh drift is not state-bound and update-only")
         _validate_normalization(address, change)
+        observed_metadata = {
+            name: value
+            for name, value in change.items()
+            if name not in {"before", "after"}
+        }
+        if observed_metadata != _expected_change_metadata(
+            address, before=change["before"], after=change["after"]
+        ):
+            raise RefreshPlanError("refresh change metadata is not exact")
+    return by_address
 
 
 def _root_addresses(container: Any, *, label: str) -> set[str]:
@@ -542,6 +904,34 @@ def _root_addresses(container: Any, *, label: str) -> set[str]:
     return recovery._module_addresses(root)
 
 
+def _validate_relevant_attributes(value: Any) -> None:
+    if not isinstance(value, list) or len(value) != len(EXPECTED_RELEVANT_ATTRIBUTES):
+        raise RefreshPlanError("refresh relevant-attribute set is not exact")
+
+    def normalize(
+        items: Sequence[Mapping[str, Any]],
+    ) -> set[tuple[str, tuple[str, ...]]]:
+        result: set[tuple[str, tuple[str, ...]]] = set()
+        for item in items:
+            if not isinstance(item, Mapping) or set(item) != {"attribute", "resource"}:
+                raise RefreshPlanError("refresh relevant attribute is invalid")
+            resource = item.get("resource")
+            attribute = item.get("attribute")
+            if (
+                not isinstance(resource, str)
+                or not isinstance(attribute, list)
+                or any(not isinstance(part, str) for part in attribute)
+            ):
+                raise RefreshPlanError("refresh relevant attribute is invalid")
+            result.add((resource, tuple(attribute)))
+        return result
+
+    observed = normalize(value)
+    expected = normalize(EXPECTED_RELEVANT_ATTRIBUTES)
+    if len(observed) != len(value) or observed != expected:
+        raise RefreshPlanError("refresh relevant-attribute set is not exact")
+
+
 def _validate_plan(
     plan: Mapping[str, Any],
     *,
@@ -549,38 +939,46 @@ def _validate_plan(
     embedded_state: Mapping[str, Any],
     now: datetime,
 ) -> str:
-    if (
-        plan.get("format_version") != recovery.EXPECTED_FORMAT_VERSION
-        or plan.get("terraform_version") != recovery.EXPECTED_TOFU_VERSION
-        or plan.get("errored") is not False
-    ):
-        raise RefreshPlanError("refresh plan format or status is invalid")
-    for optional in ("applyable", "complete"):
-        if optional in plan and plan[optional] is not True:
-            raise RefreshPlanError(f"refresh plan reports {optional}=false")
     if plan.get("resource_changes") not in (None, []):
         raise RefreshPlanError("refresh plan contains an Azure resource action")
     if plan.get("deferred_changes") not in (None, []):
         raise RefreshPlanError("refresh plan contains deferred changes")
     if plan.get("action_invocations") not in (None, []):
         raise RefreshPlanError("refresh plan contains action invocations")
+    plan_fields = set(plan)
+    if plan_fields - OPTIONAL_EMPTY_PLAN_FIELDS != EXPECTED_PLAN_FIELDS or any(
+        plan.get(name) != [] for name in plan_fields & OPTIONAL_EMPTY_PLAN_FIELDS
+    ):
+        raise RefreshPlanError("refresh plan field set is not exact")
+    if (
+        plan.get("format_version") != recovery.EXPECTED_FORMAT_VERSION
+        or plan.get("terraform_version") != recovery.EXPECTED_TOFU_VERSION
+        or plan.get("errored") is not False
+    ):
+        raise RefreshPlanError("refresh plan format or status is invalid")
     timestamp = recovery._validate_plan_timestamp(plan, now=now)
     recovery._validate_provider_configuration(plan)
     recovery._validate_variables(plan)
     recovery._validate_checks(plan)
+    _validate_relevant_attributes(plan.get("relevant_attributes"))
     if _root_addresses(plan.get("prior_state"), label="prior state") != set(
         recovery.EXPECTED_EXISTING_ADDRESSES
     ):
         raise RefreshPlanError("refresh prior-state inventory is not exact")
     if _root_addresses(plan.get("planned_values"), label="planned values") != set():
         raise RefreshPlanError("refresh planned inventory is not exact")
-    _validate_drift(
+    drift_by_address = _validate_drift(
         plan,
         external_attributes=_state_attributes(external_state),
         embedded_attributes=_state_attributes(embedded_state),
     )
     _validate_output_changes(
         plan, external_state=external_state, embedded_state=embedded_state
+    )
+    _validate_embedded_state(
+        external_state,
+        embedded_state,
+        drift_by_address=drift_by_address,
     )
     return timestamp
 
@@ -644,6 +1042,7 @@ def _validate_artifacts(
     now: datetime,
     expected_saved_plan_sha256: str | None = None,
 ) -> Mapping[str, Any]:
+    _validate_pre_refresh_state_digest(state_bytes)
     plan_sha256 = recovery._sha256_bytes(saved_plan_bytes)
     if (
         expected_saved_plan_sha256 is not None
