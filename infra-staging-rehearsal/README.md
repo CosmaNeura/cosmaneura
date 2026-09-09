@@ -286,7 +286,11 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    OpenTofu output to the identity-bound owner-only
    `state-refresh-apply.log`, and only then replaces itself with the executable
    snapshot. Treat that log as sensitive local evidence: never publish it or
-   submit it for review. The TTY ceremony prevents accidental
+   submit it for review. The final Azure CLI backend environment selects only
+   the reviewed subscription; the saved plan's provider configuration retains
+   the tenant binding. Supplying both selectors to current Azure CLI credential
+   handling is forbidden because it refuses before loading state. The TTY
+   ceremony prevents accidental
    invocation; it is not cryptographic human-identity proof. This narrowly
    trusted workstation flow assumes exclusive control of the local operator UID
    and cannot make its

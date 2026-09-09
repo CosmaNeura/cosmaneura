@@ -1052,7 +1052,6 @@ def _execution_environment(
         "TF_DATA_DIR": str(execution_dir),
         "TF_IN_AUTOMATION": "1",
         "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID,
-        "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID,
         "ARM_ENVIRONMENT": "public",
         "ARM_USE_CLI": "true",
         "ARM_USE_AZUREAD": "true",

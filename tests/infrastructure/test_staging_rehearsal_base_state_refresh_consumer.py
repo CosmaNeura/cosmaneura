@@ -538,6 +538,7 @@ def test_execution_environment_is_closed_and_exact(tmp_path: Path) -> None:
     assert result["PATH"].startswith("/trusted/bin:")
     assert result["TF_DATA_DIR"] == str(tmp_path)
     assert result["ARM_SUBSCRIPTION_ID"] == consumer.recovery.EXPECTED_SUBSCRIPTION_ID
+    assert "ARM_TENANT_ID" not in result
     assert not any("PROXY" in name for name in result)
 
 
