@@ -885,6 +885,8 @@ def _open_apply_log(
         execution_dir, label="execution directory"
     )
     descriptor: int | None = None
+    created = False
+    completed = False
     try:
         descriptor = os.open(
             APPLY_LOG_NAME,
@@ -897,18 +899,57 @@ def _open_apply_log(
             0o600,
             dir_fd=parent,
         )
+        created = True
         os.fchmod(descriptor, 0o600)
         os.fsync(descriptor)
         os.fsync(parent)
         identity = _apply_log_identity(path, descriptor)
         result = descriptor
         descriptor = None
+        completed = True
         return path, result, identity
     except OSError:
         _fail("apply_log.unavailable")
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
+        try:
+            if created and not completed and descriptor is not None:
+                _unlink_matching_empty_apply_log(parent, descriptor=descriptor)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(parent)
+
+
+def _unlink_matching_empty_apply_log(parent: int, *, descriptor: int) -> None:
+    try:
+        descriptor_metadata = os.fstat(descriptor)
+        path_metadata = os.stat(APPLY_LOG_NAME, dir_fd=parent, follow_symlinks=False)
+        if (
+            stat.S_ISLNK(path_metadata.st_mode)
+            or not stat.S_ISREG(descriptor_metadata.st_mode)
+            or descriptor_metadata.st_uid != os.geteuid()
+            or descriptor_metadata.st_nlink != 1
+            or stat.S_IMODE(descriptor_metadata.st_mode) != 0o600
+            or descriptor_metadata.st_size != 0
+            or _metadata_identity(descriptor_metadata)
+            != _metadata_identity(path_metadata)
+        ):
+            _fail("apply_log.changed")
+        os.unlink(APPLY_LOG_NAME, dir_fd=parent)
+        os.fsync(parent)
+    except OSError:
+        _fail("apply_log.changed")
+
+
+def _remove_unclaimed_apply_log(path: Path, descriptor: int) -> None:
+    if path.name != APPLY_LOG_NAME:
+        _fail("apply_log.changed")
+    parent = recovery._open_protected_directory(
+        path.parent, label="execution directory"
+    )
+    try:
+        _unlink_matching_empty_apply_log(parent, descriptor=descriptor)
+    finally:
         os.close(parent)
 
 
@@ -1087,6 +1128,7 @@ def consume(
         )
         tofu_descriptor: int | None = None
         tofu_snapshot: Path | None = None
+        apply_log_path: Path | None = None
         apply_log_descriptor: int | None = None
         claim_created = False
         try:
@@ -1222,17 +1264,27 @@ def consume(
             _require_before_deadline(deadline)
             os.execve(exec_path, argv, environment)
         finally:
-            if apply_log_descriptor is not None:
-                os.close(apply_log_descriptor)
-            if tofu_descriptor is not None:
+            try:
+                if apply_log_descriptor is not None:
+                    try:
+                        if apply_log_path is not None and not claim_created:
+                            _remove_unclaimed_apply_log(
+                                apply_log_path, apply_log_descriptor
+                            )
+                    finally:
+                        os.close(apply_log_descriptor)
+            finally:
                 try:
-                    if tofu_snapshot is not None and not claim_created:
-                        _remove_unclaimed_executable_snapshot(
-                            tofu_snapshot, tofu_descriptor
-                        )
+                    if tofu_descriptor is not None:
+                        try:
+                            if tofu_snapshot is not None and not claim_created:
+                                _remove_unclaimed_executable_snapshot(
+                                    tofu_snapshot, tofu_descriptor
+                                )
+                        finally:
+                            os.close(tofu_descriptor)
                 finally:
-                    os.close(tofu_descriptor)
-            os.close(plan_descriptor)
+                    os.close(plan_descriptor)
     _fail("execve.returned")
 
 

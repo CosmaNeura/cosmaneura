@@ -570,8 +570,11 @@ def test_ambient_environment_overrides_are_refused(
         consumer._reject_ambient_environment()
 
 
-def test_consume_execs_only_exact_reviewed_refresh_plan(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("claim_refuses", [False, True])
+def test_consume_execs_only_exact_reviewed_refresh_plan_and_cleans_preclaim_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    claim_refuses: bool,
 ) -> None:
     tmp_path.chmod(0o700)
     plan = tmp_path / "refresh.tfplan"
@@ -662,15 +665,22 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
     monkeypatch.setattr(
         consumer, "_revalidate_pinned_executable", lambda *_args, **_kwargs: None
     )
-    monkeypatch.setattr(
-        consumer,
-        "_claim",
-        lambda directory, digest, facts: captured.update(
+
+    def claim(directory: Path, digest: str, facts: dict[str, Any]) -> None:
+        captured.update(
             claim_directory=directory,
             claim_digest=digest,
             claim=facts,
             checks_at_claim=len(deadline_checks),
-        ),
+        )
+        if claim_refuses:
+            raise consumer.ConsumerError("claim.exists_or_unavailable")
+
+    monkeypatch.setattr(consumer, "_claim", claim)
+    monkeypatch.setattr(
+        consumer,
+        "_remove_unclaimed_executable_snapshot",
+        lambda *_args, **_kwargs: captured.update(snapshot_removed=True),
     )
     monkeypatch.setattr(
         consumer,
@@ -693,7 +703,8 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
         raise Executed
 
     monkeypatch.setattr(os, "execve", execve)
-    with pytest.raises(Executed):
+    expected_error = consumer.ConsumerError if claim_refuses else Executed
+    with pytest.raises(expected_error):
         consumer.consume(
             saved_plan=plan,
             state_json=state,
@@ -701,6 +712,10 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
             expected_source_commit=SOURCE,
             expected_saved_plan_sha256=PLAN_DIGEST,
         )
+    if claim_refuses:
+        assert captured["snapshot_removed"] is True
+        assert not (execution / consumer.APPLY_LOG_NAME).exists()
+        return
     assert captured["path"] == str(tofu)
     assert captured["argv"][-1] == f"/dev/fd/{descriptor}"
     assert captured["argv"][2:4] == ["apply", "-input=false"]
@@ -715,6 +730,7 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
     assert captured["preserved"] == {descriptor, tofu_descriptor}
     assert captured["checks_at_redirect"] > captured["checks_at_claim"]
     assert len(deadline_checks) > captured["checks_at_redirect"]
+    assert (execution / consumer.APPLY_LOG_NAME).exists()
 
 
 def test_consumer_source_has_no_subprocess_apply_path() -> None:
