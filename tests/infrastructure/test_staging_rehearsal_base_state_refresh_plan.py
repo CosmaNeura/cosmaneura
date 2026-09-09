@@ -550,14 +550,24 @@ def test_refresh_plan_rejects_normalization_tampering(target: str) -> None:
         )
 
 
-def test_state_binding_ignores_only_check_result_serialization() -> None:
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    [
+        ("lineage", "00000000-0000-0000-0000-000000000000"),
+        ("serial", 9),
+        ("resources", []),
+        ("outputs", {}),
+    ],
+)
+def test_state_binding_ignores_only_check_result_serialization(
+    field: str, changed_value: Any
+) -> None:
     before = _state(refreshed=False)
     after = copy.deepcopy(before)
     after["check_results"] = [{"status": "pass"}]
-    project = refresh._state_binding_projection
-    assert refresh._json_equal(project(before), project(after))
-    after["serial"] = 9
-    assert not refresh._json_equal(project(before), project(after))
+    assert refresh._state_bindings_equal(before, after)
+    after[field] = changed_value
+    assert not refresh._state_bindings_equal(before, after)
 
 
 def test_fixed_generation_uses_refresh_only_and_no_target(
