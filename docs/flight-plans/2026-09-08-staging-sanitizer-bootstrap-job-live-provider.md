@@ -23,12 +23,17 @@ slice.
 
 One plan permits one token request and at most four sequential ARM GETs. The
 adapter supplies every URL, query, header, method, and timeout; callers cannot
-override them. It disables ambient proxies and redirects through the existing
-hardened runtime adapter, never retries, retains successful response bytes only
-inside sealed process-local objects, and discards 404 bodies. Any mismatch,
-redirect, malformed or oversized response, clock failure, timeout, reuse, or
-unexpected provider behavior produces a bounded content-free refusal and no
-partial result.
+override them. The production construction path creates the hardened opener and
+deadline internally, and recompiles the hash-pinned scalar transport policy at
+consumption time. It disables ambient proxies and redirects through the
+existing hardened runtime adapter and never retries. Successful response bytes
+are validated and digested inside the transport, then discarded; 404 bodies are
+discarded without reading. Returned objects contain only authenticated metadata
+and body digests. A future semantic observer must consume response bytes inside
+the transport before metadata is returned, without adding a body-bearing bridge
+to the returned object. Any mismatch, redirect, malformed or oversized
+response, clock failure, timeout, reuse, or unexpected provider behavior
+produces a bounded content-free refusal and no partial result.
 
 The provider transport and sealed request model are implemented, but semantic
 job observation, attachment authentication, live activation, control-plane

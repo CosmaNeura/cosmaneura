@@ -157,6 +157,7 @@ def _http_error(url: str, status: int) -> urllib.error.HTTPError:
 
 
 def _provider(
+    monkeypatch: pytest.MonkeyPatch,
     *,
     phase: str = "present",
     arm_responses: list[Any] | None = None,
@@ -177,13 +178,13 @@ def _provider(
             for request in plan._requests
         ]
     arm_opener = FakeOpener(arm_responses)
+    monkeypatch.setattr(adapters, "_default_opener", lambda: arm_opener)
+    monkeypatch.setattr(adapters, "_wall_clock_deadline", _deadline)
+    monkeypatch.setattr(provider, "_utc_now", clock)
+    monkeypatch.setattr(provider, "_monotonic_now", monotonic)
     live = provider.AzureBootstrapJobLiveProvider._from_reviewed_plan(
         plan=plan,
         token_source=_token_source(identity_opener, client_id=client_id),
-        arm_opener=arm_opener,
-        clock=clock,
-        monotonic=monotonic,
-        deadline_factory=_deadline,
     )
     return live, plan, identity_opener, arm_opener
 
@@ -305,9 +306,25 @@ def test_plan_is_exact_type_sealed_tamper_evident_and_nonserializable() -> None:
     object.__setattr__(plan, "request_plan_sha256", "0" * 64)
     assert not plan._is_valid()
 
+    for invalid_group in (".", "..", "resource-group."):
+        with pytest.raises(
+            provider.SanitizerBootstrapJobLiveProviderFailure,
+            match="^bootstrap_job_live_provider.plan_invalid$",
+        ):
+            provider._seal_reviewed_read_plan(
+                phase="present",
+                identity_client_id=CLIENT_ID,
+                private_registry_resource_id=REGISTRY_ID.replace(
+                    "cosmaneura-staging-rehearsal-control", invalid_group
+                ),
+                private_registry_acrpull_role_assignment_name=ROLE_ASSIGNMENT_NAME,
+            )
 
-def test_present_plan_uses_one_token_and_exact_get_sequence() -> None:
-    live, plan, identity_opener, arm_opener = _provider()
+
+def test_present_plan_uses_one_token_and_exact_get_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, plan, identity_opener, arm_opener = _provider(monkeypatch)
     responses = live.read_all()
 
     assert len(identity_opener.calls) == 1
@@ -331,9 +348,10 @@ def test_present_plan_uses_one_token_and_exact_get_sequence() -> None:
         }
         assert response._is_authenticated_for(plan, request_item)
         assert response.status == 200
-        raw = provider._consume_response_body(response, plan=plan, request=request_item)
-        assert response.body_sha256 == hashlib.sha256(raw).hexdigest()
+        expected_body = json.dumps({"key": request_item.key}).encode()
+        assert response.body_sha256 == hashlib.sha256(expected_body).hexdigest()
         assert not hasattr(response, "_body")
+        assert not hasattr(response, "_reader")
 
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
@@ -346,7 +364,7 @@ def test_present_plan_uses_one_token_and_exact_get_sequence() -> None:
 
 @pytest.mark.parametrize("phase", ("initial_absence", "final_absence"))
 def test_absence_plans_accept_only_exact_404s_without_retaining_error_bodies(
-    phase: str,
+    phase: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plan = _plan(phase)
     errors = []
@@ -355,7 +373,7 @@ def test_absence_plans_accept_only_exact_404s_without_retaining_error_bodies(
         url = f"{adapters.ARM_ORIGIN}{request_item.resource_id}?{query}"
         errors.append(_http_error(url, 404))
     live, actual_plan, identity_opener, arm_opener = _provider(
-        phase=phase, arm_responses=errors
+        monkeypatch, phase=phase, arm_responses=errors
     )
 
     responses = live.read_all()
@@ -368,10 +386,9 @@ def test_absence_plans_accept_only_exact_404s_without_retaining_error_bodies(
         for item, request_item in zip(responses, actual_plan._requests, strict=True)
     )
     assert all(
-        provider._consume_response_body(item, plan=actual_plan, request=request_item)
-        == b""
-        for item, request_item in zip(responses, actual_plan._requests, strict=True)
+        item.body_sha256 == hashlib.sha256(b"").hexdigest() for item in responses
     )
+    assert all(not hasattr(item, "_reader") for item in responses)
 
 
 def test_transport_requires_exact_plan_identity_and_configuration() -> None:
@@ -384,9 +401,12 @@ def test_transport_requires_exact_plan_identity_and_configuration() -> None:
         provider.AzureBootstrapJobLiveProvider._from_reviewed_plan(
             plan=plan,
             token_source=_token_source(identity_opener, client_id=WRONG_CLIENT_ID),
-            arm_opener=FakeOpener([]),
-            deadline_factory=_deadline,
         )
+    assert tuple(
+        inspect.signature(
+            provider.AzureBootstrapJobLiveProvider._from_reviewed_plan
+        ).parameters
+    ) == ("plan", "token_source")
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match="^bootstrap_job_live_provider.transport_invalid$",
@@ -394,31 +414,32 @@ def test_transport_requires_exact_plan_identity_and_configuration() -> None:
         provider.AzureBootstrapJobLiveProvider()
 
 
-def test_transport_configuration_and_consumption_gate_are_immutable() -> None:
-    live, _plan_value, _identity, _arm = _provider()
+def test_transport_configuration_and_consumption_gate_are_immutable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, _plan_value, _identity, _arm = _provider(monkeypatch)
     assert not hasattr(live, "_policy")
     assert not hasattr(live, "_used")
-    for name, value in (
-        ("management_origin", "https://attacker.example"),
-        ("oauth_resource", "https://attacker.example/"),
-        ("request_timeout_seconds", 60),
-        ("maximum_elapsed_seconds", 999),
-        ("maximum_response_bytes", 999999999),
+    for name in (
+        "_arm_opener",
+        "_claim",
+        "_clock",
+        "_deadline_factory",
+        "_monotonic",
+        "_plan",
+        "_token_source",
+        "_transport",
     ):
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(live._transport, name, value)
+        assert not hasattr(live, name)
+    with pytest.raises(AttributeError):
+        object.__setattr__(live, "_transport", object())
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match="^bootstrap_job_live_provider.transport_invalid$",
     ):
-        live._arm_opener = FakeOpener([])
+        live._execute = lambda: ()
 
     live.read_all()
-    with pytest.raises(
-        provider.SanitizerBootstrapJobLiveProviderFailure,
-        match="^bootstrap_job_live_provider.transport_invalid$",
-    ):
-        live._claim = lambda: None
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match="^bootstrap_job_live_provider.already_used$",
@@ -426,9 +447,11 @@ def test_transport_configuration_and_consumption_gate_are_immutable() -> None:
         live.read_all()
 
 
-def test_remaining_elapsed_budget_caps_each_arm_request() -> None:
+def test_remaining_elapsed_budget_caps_each_arm_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ticks = iter([0.0] * 14 + [122.0] * 10)
-    live, _plan_value, _identity, arm = _provider(monotonic=ticks.__next__)
+    live, _plan_value, _identity, arm = _provider(monkeypatch, monotonic=ticks.__next__)
     live.read_all()
     assert [timeout for _request, timeout in arm.calls] == [30, 30, 30, 28]
 
@@ -459,9 +482,11 @@ def test_remaining_elapsed_budget_caps_each_arm_request() -> None:
     ),
 )
 def test_provider_failures_are_bounded_and_content_free(
-    response: Any, code: str
+    response: Any, code: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    live, _plan_value, _identity, _arm = _provider(arm_responses=[response])
+    live, _plan_value, _identity, _arm = _provider(
+        monkeypatch, arm_responses=[response]
+    )
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match=rf"^bootstrap_job_live_provider\.{code}$",
@@ -470,7 +495,9 @@ def test_provider_failures_are_bounded_and_content_free(
     assert "secret" not in str(caught.value)
 
 
-def test_status_or_url_mismatch_refuses_without_retry() -> None:
+def test_status_or_url_mismatch_refuses_without_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     plan = _plan()
     first = plan._requests[0]
     query = urllib.parse.urlencode({"api-version": first.api_version})
@@ -482,7 +509,9 @@ def test_status_or_url_mismatch_refuses_without_retry() -> None:
             "redirect_refused",
         ),
     ):
-        live, _plan_value, _identity, arm = _provider(arm_responses=[response])
+        live, _plan_value, _identity, arm = _provider(
+            monkeypatch, arm_responses=[response]
+        )
         with pytest.raises(
             provider.SanitizerBootstrapJobLiveProviderFailure,
             match=rf"^bootstrap_job_live_provider\.{code}$",
@@ -491,7 +520,9 @@ def test_status_or_url_mismatch_refuses_without_retry() -> None:
         assert len(arm.calls) == 1
 
 
-def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call() -> None:
+def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for clock, monotonic, code in (
         (lambda: datetime(2033, 5, 18), lambda: 1.0, "clock_invalid"),
         (
@@ -502,7 +533,9 @@ def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call() -> Non
         (lambda: NOW, lambda: 10**10000, "clock_invalid"),
         (lambda: NOW, iter((1.0, 200.0)).__next__, "deadline"),
     ):
-        live, _plan_value, identity, arm = _provider(clock=clock, monotonic=monotonic)
+        live, _plan_value, identity, arm = _provider(
+            monkeypatch, clock=clock, monotonic=monotonic
+        )
         with pytest.raises(
             provider.SanitizerBootstrapJobLiveProviderFailure,
             match=rf"^bootstrap_job_live_provider\.{code}$",
@@ -513,8 +546,10 @@ def test_invalid_clock_and_elapsed_deadline_refuse_before_provider_call() -> Non
         assert len(identity.calls) in {0, 1}
 
 
-def test_response_is_sealed_tamper_evident_and_nonserializable() -> None:
-    live, plan, _identity, _arm = _provider()
+def test_response_is_sealed_tamper_evident_and_nonserializable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live, plan, _identity, _arm = _provider(monkeypatch)
     response = live.read_all()[0]
     request_item = plan._requests[0]
 
@@ -530,6 +565,10 @@ def test_response_is_sealed_tamper_evident_and_nonserializable() -> None:
         dataclasses.astuple(cast(Any, response))
     with pytest.raises(AttributeError):
         getattr(response, "_body")
+    with pytest.raises(AttributeError):
+        getattr(response, "_reader")
+    assert not hasattr(provider, "_BODY_ACCESS_SEAL")
+    assert not hasattr(provider, "_consume_response_body")
     with pytest.raises(
         provider.SanitizerBootstrapJobLiveProviderFailure,
         match="^bootstrap_job_live_provider.response_invalid$",

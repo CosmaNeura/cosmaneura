@@ -69,13 +69,13 @@ ROLE_ASSIGNMENT_API_VERSION = "2022-04-01"
 PHASES = ("initial_absence", "present", "final_absence")
 REGISTRY_ID_RE = re.compile(
     rf"^/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/"
-    r"[A-Za-z0-9._()-]{1,90}/providers/Microsoft\.ContainerRegistry/"
+    r"[A-Za-z0-9._()-]{0,89}[A-Za-z0-9_()-]/"
+    r"providers/Microsoft\.ContainerRegistry/"
     r"registries/[a-z0-9]{5,50}$"
 )
 _PLAN_SEAL = object()
 _REQUEST_SEAL = object()
 _RESPONSE_SEAL = object()
-_BODY_ACCESS_SEAL = object()
 
 CLAIMS = dict.fromkeys(
     (
@@ -603,24 +603,24 @@ def _monotonic_value(clock: Callable[[], float]) -> float:
 
 
 class AuthenticatedBootstrapJobArmRead:
-    """Opaque exact-response bytes bound to one sealed read-plan request."""
+    """Authenticated metadata for one exact read; response bytes are discarded."""
 
     __slots__ = (
         "_api_version",
-        "_reader",
         "_request_plan_sha256",
         "_resource_id",
         "_seal",
+        "_validator",
         "body_sha256",
         "key",
         "observed_at",
         "status",
     )
     _api_version: str
-    _reader: Callable[[object], bytes]
     _request_plan_sha256: str
     _resource_id: str
     _seal: object
+    _validator: Callable[[AuthenticatedBootstrapJobArmRead], bool]
     body_sha256: str
     key: str
     observed_at: datetime
@@ -648,10 +648,10 @@ class AuthenticatedBootstrapJobArmRead:
         self, plan: BootstrapJobLiveReadPlan, request: _ArmReadRequest
     ) -> bool:
         try:
-            raw = self._reader(_BODY_ACCESS_SEAL)
             return (
                 type(self) is AuthenticatedBootstrapJobArmRead
                 and self._seal is _RESPONSE_SEAL
+                and self._validator(self)
                 and plan._is_valid()
                 and request._is_valid()
                 and any(request is item for item in plan._requests)
@@ -659,9 +659,14 @@ class AuthenticatedBootstrapJobArmRead:
                 and self.status == request.expected_status
                 and self._resource_id == request.resource_id
                 and self._api_version == request.api_version
-                and type(raw) is bytes
-                and self.body_sha256 == hashlib.sha256(raw).hexdigest()
-                and (self.status == 200 or raw == b"")
+                and type(self.body_sha256) is str
+                and re.fullmatch(r"[0-9a-f]{64}", self.body_sha256) is not None
+                and (
+                    self.status == 200
+                    or hmac.compare_digest(
+                        self.body_sha256, hashlib.sha256(b"").hexdigest()
+                    )
+                )
                 and self._request_plan_sha256 == plan.request_plan_sha256
                 and type(self.observed_at) is datetime
                 and self.observed_at.tzinfo is not None
@@ -672,32 +677,70 @@ class AuthenticatedBootstrapJobArmRead:
             return False
 
 
-def _response_reader(raw: bytes) -> Callable[[object], bytes]:
-    retained = bytes(raw)
+def _response_validator(
+    *,
+    key: str,
+    status: int,
+    body_sha256: str,
+    observed_at: datetime,
+    resource_id: str,
+    api_version: str,
+    request_plan_sha256: str,
+) -> Callable[[AuthenticatedBootstrapJobArmRead], bool]:
+    """Bind immutable response metadata without retaining provider bytes."""
 
-    def read(seal: object) -> bytes:
-        if seal is not _BODY_ACCESS_SEAL:
-            _fail("bootstrap_job_live_provider.response_invalid")
-        return retained
+    def validate(value: AuthenticatedBootstrapJobArmRead) -> bool:
+        try:
+            return (
+                type(value) is AuthenticatedBootstrapJobArmRead
+                and value._seal is _RESPONSE_SEAL
+                and value.key == key
+                and value.status == status
+                and hmac.compare_digest(value.body_sha256, body_sha256)
+                and value.observed_at == observed_at
+                and value._resource_id == resource_id
+                and value._api_version == api_version
+                and value._request_plan_sha256 == request_plan_sha256
+            )
+        except Exception:
+            return False
 
-    return read
+    return validate
 
 
-def _consume_response_body(
-    response: AuthenticatedBootstrapJobArmRead,
+def _authenticated_response_metadata(
     *,
     plan: BootstrapJobLiveReadPlan,
     request: _ArmReadRequest,
-) -> bytes:
-    """Private same-process bridge for the future semantic observer."""
-
-    if type(
-        response
-    ) is not AuthenticatedBootstrapJobArmRead or not response._is_authenticated_for(
-        plan, request
-    ):
+    status: int,
+    body_sha256: str,
+    observed_at: datetime,
+) -> AuthenticatedBootstrapJobArmRead:
+    value = object.__new__(AuthenticatedBootstrapJobArmRead)
+    metadata = {
+        "key": request.key,
+        "status": status,
+        "body_sha256": body_sha256,
+        "observed_at": observed_at,
+        "_resource_id": request.resource_id,
+        "_api_version": request.api_version,
+        "_request_plan_sha256": plan.request_plan_sha256,
+        "_seal": _RESPONSE_SEAL,
+    }
+    validator = _response_validator(
+        key=request.key,
+        status=status,
+        body_sha256=body_sha256,
+        observed_at=observed_at,
+        resource_id=request.resource_id,
+        api_version=request.api_version,
+        request_plan_sha256=plan.request_plan_sha256,
+    )
+    for name, item in {**metadata, "_validator": validator}.items():
+        object.__setattr__(value, name, item)
+    if not value._is_authenticated_for(plan, request):
         _fail("bootstrap_job_live_provider.response_invalid")
-    return response._reader(_BODY_ACCESS_SEAL)
+    return value
 
 
 def _one_shot_claim() -> Callable[[], None]:
@@ -714,27 +757,98 @@ def _one_shot_claim() -> Callable[[], None]:
     return claim
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
+def _monotonic_now() -> float:
+    return time.monotonic()
+
+
+def _read_one(
+    request_item: _ArmReadRequest,
+    *,
+    token: str,
+    timeout_seconds: int,
+    transport: _TransportConfiguration,
+    arm_opener: adapters._HttpOpener,
+    deadline_factory: Callable[[int], Any],
+) -> tuple[int, str]:
+    """Read, validate, digest, and discard one exact ARM response body."""
+
+    query = urllib.parse.urlencode({"api-version": request_item.api_version})
+    url = f"{transport.management_origin}{request_item.resource_id}?{query}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+            "Authorization": f"Bearer {token}",
+        },
+        method="GET",
+    )
+    try:
+        with deadline_factory(timeout_seconds):
+            try:
+                response = arm_opener.open(request, timeout=timeout_seconds)
+            except urllib.error.HTTPError as error:
+                try:
+                    status = error.code
+                    final_url = error.geturl()
+                except Exception:
+                    _fail("bootstrap_job_live_provider.response_invalid")
+                finally:
+                    error.close()
+                if type(status) is not int or type(final_url) is not str:
+                    _fail("bootstrap_job_live_provider.response_invalid")
+                if 300 <= status < 400 or final_url != url:
+                    _fail("bootstrap_job_live_provider.redirect_refused")
+                if status != request_item.expected_status or status != 404:
+                    _fail("bootstrap_job_live_provider.provider_refused")
+                return status, hashlib.sha256(b"").hexdigest()
+
+            with response:
+                try:
+                    status = response.status
+                    final_url = response.geturl()
+                except Exception:
+                    _fail("bootstrap_job_live_provider.response_invalid")
+                if type(status) is not int or type(final_url) is not str:
+                    _fail("bootstrap_job_live_provider.response_invalid")
+                if 300 <= status < 400 or final_url != url:
+                    _fail("bootstrap_job_live_provider.redirect_refused")
+                if status != request_item.expected_status:
+                    _fail("bootstrap_job_live_provider.provider_refused")
+                if status == 404:
+                    return status, hashlib.sha256(b"").hexdigest()
+                if status != 200:
+                    _fail("bootstrap_job_live_provider.provider_refused")
+                observed_status, _media_type, raw = adapters._read_json_response(  # noqa: SLF001
+                    response,
+                    expected_url=url,
+                    maximum_bytes=transport.maximum_response_bytes,
+                )
+                if observed_status != 200:
+                    _fail("bootstrap_job_live_provider.provider_refused")
+                adapters._load_mapping(  # noqa: SLF001
+                    raw, "bootstrap_job_live_provider.response_invalid"
+                )
+                return status, hashlib.sha256(raw).hexdigest()
+    except SanitizerBootstrapJobLiveProviderFailure:
+        raise
+    except adapters.RuntimeAdapterFailure as error:
+        if str(error) == "http_response.too_large":
+            _fail("bootstrap_job_live_provider.response_too_large")
+        _fail("bootstrap_job_live_provider.response_invalid")
+    except Exception:
+        _fail("bootstrap_job_live_provider.provider_unavailable")
+
+
 class AzureBootstrapJobLiveProvider:
     """One-use, GET-only ARM transport constructed from a sealed plan."""
 
-    __slots__ = (
-        "_arm_opener",
-        "_claim",
-        "_clock",
-        "_deadline_factory",
-        "_monotonic",
-        "_plan",
-        "_token_source",
-        "_transport",
-    )
-    _arm_opener: adapters._HttpOpener
-    _claim: Callable[[], None]
-    _clock: Callable[[], datetime]
-    _deadline_factory: Callable[[int], Any]
-    _monotonic: Callable[[], float]
-    _plan: BootstrapJobLiveReadPlan
-    _token_source: adapters.ManagedIdentityTokenSource
-    _transport: _TransportConfiguration
+    __slots__ = ("_execute",)
+    _execute: Callable[[], tuple[AuthenticatedBootstrapJobArmRead, ...]]
 
     def __init__(self) -> None:
         _fail("bootstrap_job_live_provider.transport_invalid")
@@ -751,163 +865,97 @@ class AzureBootstrapJobLiveProvider:
         *,
         plan: BootstrapJobLiveReadPlan,
         token_source: adapters.ManagedIdentityTokenSource,
-        arm_opener: adapters._HttpOpener | None = None,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC).replace(
-            microsecond=0
-        ),
-        monotonic: Callable[[], float] = time.monotonic,
-        deadline_factory: Callable[[int], Any] = adapters._wall_clock_deadline,
     ) -> AzureBootstrapJobLiveProvider:
-        transport = _compile_transport_configuration(
-            load_bootstrap_job_live_provider_policy()
-        )
         if (
             cls is not AzureBootstrapJobLiveProvider
             or type(plan) is not BootstrapJobLiveReadPlan
             or not plan._is_valid()
             or type(token_source) is not adapters.ManagedIdentityTokenSource
             or token_source._client_id != plan._identity_client_id  # noqa: SLF001
-            or arm_opener is not None
-            and not callable(getattr(arm_opener, "open", None))
-            or not all(callable(item) for item in (clock, monotonic, deadline_factory))
         ):
             _fail("bootstrap_job_live_provider.transport_invalid")
+        try:
+            arm_opener = adapters._default_opener()  # noqa: SLF001
+            deadline_factory = adapters._wall_clock_deadline  # noqa: SLF001
+            clock = _utc_now
+            monotonic = _monotonic_now
+        except Exception:
+            _fail("bootstrap_job_live_provider.transport_invalid")
+        if not callable(getattr(arm_opener, "open", None)) or not all(
+            callable(item) for item in (deadline_factory, clock, monotonic)
+        ):
+            _fail("bootstrap_job_live_provider.transport_invalid")
+        claim = _one_shot_claim()
+
+        def execute() -> tuple[AuthenticatedBootstrapJobArmRead, ...]:
+            claim()
+            if not plan._is_valid():
+                _fail("bootstrap_job_live_provider.plan_invalid")
+            if (
+                type(token_source) is not adapters.ManagedIdentityTokenSource
+                or token_source._client_id != plan._identity_client_id  # noqa: SLF001
+            ):
+                _fail("bootstrap_job_live_provider.transport_invalid")
+
+            # The hash-pinned policy is reopened and compiled into fresh local
+            # scalars at the point of consumption. No externally reachable
+            # transport configuration can redirect the bearer token.
+            transport = _compile_transport_configuration(
+                load_bootstrap_job_live_provider_policy()
+            )
+            started = _monotonic_value(monotonic)
+            deadline = started + transport.maximum_elapsed_seconds
+
+            def remaining_timeout() -> int:
+                remaining = math.floor(deadline - _monotonic_value(monotonic))
+                if remaining < 1:
+                    _fail("bootstrap_job_live_provider.deadline")
+                return min(transport.request_timeout_seconds, remaining)
+
+            def checkpoint() -> datetime:
+                remaining_timeout()
+                return _trusted_utc(clock)
+
+            checkpoint()
+            if remaining_timeout() < transport.request_timeout_seconds:
+                _fail("bootstrap_job_live_provider.deadline")
+            try:
+                token = token_source.get_token(
+                    resource=transport.oauth_resource,
+                    timeout_seconds=transport.request_timeout_seconds,
+                )
+            except Exception:
+                _fail("bootstrap_job_live_provider.identity_failed")
+            checkpoint()
+            responses: list[AuthenticatedBootstrapJobArmRead] = []
+            for request_item in plan._requests:
+                checkpoint()
+                status, body_sha256 = _read_one(
+                    request_item,
+                    token=token,
+                    timeout_seconds=remaining_timeout(),
+                    transport=transport,
+                    arm_opener=arm_opener,
+                    deadline_factory=deadline_factory,
+                )
+                observed_at = checkpoint()
+                responses.append(
+                    _authenticated_response_metadata(
+                        plan=plan,
+                        request=request_item,
+                        status=status,
+                        body_sha256=body_sha256,
+                        observed_at=observed_at,
+                    )
+                )
+            return tuple(responses)
+
         value = object.__new__(cls)
-        for name, item in {
-            "_plan": plan,
-            "_token_source": token_source,
-            "_arm_opener": arm_opener or adapters._default_opener(),  # noqa: SLF001
-            "_clock": clock,
-            "_monotonic": monotonic,
-            "_deadline_factory": deadline_factory,
-            "_transport": transport,
-            "_claim": _one_shot_claim(),
-        }.items():
-            object.__setattr__(value, name, item)
+        object.__setattr__(value, "_execute", execute)
         return value
 
-    def _read_one(
-        self, request_item: _ArmReadRequest, *, token: str, timeout_seconds: int
-    ) -> tuple[int, bytes]:
-        query = urllib.parse.urlencode({"api-version": request_item.api_version})
-        url = f"{self._transport.management_origin}{request_item.resource_id}?{query}"
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Accept": "application/json",
-                "Accept-Encoding": "identity",
-                "Authorization": f"Bearer {token}",
-            },
-            method="GET",
-        )
-        try:
-            with self._deadline_factory(timeout_seconds):
-                try:
-                    response = self._arm_opener.open(request, timeout=timeout_seconds)
-                except urllib.error.HTTPError as error:
-                    try:
-                        status = error.code
-                        final_url = error.geturl()
-                    except Exception:
-                        _fail("bootstrap_job_live_provider.response_invalid")
-                    finally:
-                        error.close()
-                    if type(status) is not int or type(final_url) is not str:
-                        _fail("bootstrap_job_live_provider.response_invalid")
-                    if 300 <= status < 400 or final_url != url:
-                        _fail("bootstrap_job_live_provider.redirect_refused")
-                    if status != request_item.expected_status or status != 404:
-                        _fail("bootstrap_job_live_provider.provider_refused")
-                    return status, b""
-
-                with response:
-                    try:
-                        status = response.status
-                        final_url = response.geturl()
-                    except Exception:
-                        _fail("bootstrap_job_live_provider.response_invalid")
-                    if type(status) is not int or type(final_url) is not str:
-                        _fail("bootstrap_job_live_provider.response_invalid")
-                    if 300 <= status < 400 or final_url != url:
-                        _fail("bootstrap_job_live_provider.redirect_refused")
-                    if status != request_item.expected_status:
-                        _fail("bootstrap_job_live_provider.provider_refused")
-                    if status == 404:
-                        return status, b""
-                    if status != 200:
-                        _fail("bootstrap_job_live_provider.provider_refused")
-                    observed_status, _media_type, raw = adapters._read_json_response(  # noqa: SLF001
-                        response,
-                        expected_url=url,
-                        maximum_bytes=self._transport.maximum_response_bytes,
-                    )
-                    if observed_status != 200:
-                        _fail("bootstrap_job_live_provider.provider_refused")
-                    adapters._load_mapping(  # noqa: SLF001
-                        raw, "bootstrap_job_live_provider.response_invalid"
-                    )
-                    return status, bytes(raw)
-        except SanitizerBootstrapJobLiveProviderFailure:
-            raise
-        except adapters.RuntimeAdapterFailure as error:
-            if str(error) == "http_response.too_large":
-                _fail("bootstrap_job_live_provider.response_too_large")
-            _fail("bootstrap_job_live_provider.response_invalid")
-        except Exception:
-            _fail("bootstrap_job_live_provider.provider_unavailable")
-
     def read_all(self) -> tuple[AuthenticatedBootstrapJobArmRead, ...]:
-        self._claim()
-        if not self._plan._is_valid():
-            _fail("bootstrap_job_live_provider.plan_invalid")
-        started = _monotonic_value(self._monotonic)
-        deadline = started + self._transport.maximum_elapsed_seconds
-
-        def remaining_timeout() -> int:
-            remaining = math.floor(deadline - _monotonic_value(self._monotonic))
-            if remaining < 1:
-                _fail("bootstrap_job_live_provider.deadline")
-            return min(self._transport.request_timeout_seconds, remaining)
-
-        def checkpoint() -> datetime:
-            remaining_timeout()
-            return _trusted_utc(self._clock)
-
-        checkpoint()
-        if remaining_timeout() < self._transport.request_timeout_seconds:
-            _fail("bootstrap_job_live_provider.deadline")
-        try:
-            token = self._token_source.get_token(
-                resource=self._transport.oauth_resource,
-                timeout_seconds=self._transport.request_timeout_seconds,
-            )
-        except Exception:
-            _fail("bootstrap_job_live_provider.identity_failed")
-        checkpoint()
-        responses: list[AuthenticatedBootstrapJobArmRead] = []
-        for request_item in self._plan._requests:
-            checkpoint()
-            status, raw = self._read_one(
-                request_item, token=token, timeout_seconds=remaining_timeout()
-            )
-            observed_at = checkpoint()
-            response = object.__new__(AuthenticatedBootstrapJobArmRead)
-            for name, item in {
-                "key": request_item.key,
-                "status": status,
-                "body_sha256": hashlib.sha256(raw).hexdigest(),
-                "observed_at": observed_at,
-                "_resource_id": request_item.resource_id,
-                "_api_version": request_item.api_version,
-                "_reader": _response_reader(raw),
-                "_request_plan_sha256": self._plan.request_plan_sha256,
-                "_seal": _RESPONSE_SEAL,
-            }.items():
-                object.__setattr__(response, name, item)
-            if not response._is_authenticated_for(self._plan, request_item):
-                _fail("bootstrap_job_live_provider.response_invalid")
-            responses.append(response)
-        return tuple(responses)
+        return self._execute()
 
 
 def build_bootstrap_job_live_provider() -> NoReturn:
