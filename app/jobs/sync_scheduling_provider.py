@@ -9,7 +9,12 @@ from app.services.scheduling_acuity import (
     AcuitySchedulingProvider,
     get_acuity_integration,
 )
-from app.services.scheduling_provider import resolve_event
+from app.services.scheduling_google_calendar import (
+    GoogleCalendarIntegrationInvalid,
+    GoogleCalendarSchedulingProvider,
+    get_google_calendar_integration,
+)
+from app.services.scheduling_provider import SchedulingProvider, resolve_event
 
 from app.models.doctor import Doctor
 from app.models.patient_external_identity import SchedulingProviderSource
@@ -20,9 +25,28 @@ _MAX_LOG_COUNT = 10_000
 # back a forward sync re-checks for edits to already-synced appointments.
 _FORWARD_SYNC_LOOKBACK = timedelta(days=1)
 
+_INTEGRATION_INVALID_EXCEPTIONS = (
+    AcuityIntegrationInvalid,
+    GoogleCalendarIntegrationInvalid,
+)
+
 
 def _bounded_count(value: int) -> int:
     return min(value, _MAX_LOG_COUNT)
+
+
+def _build_provider(
+    doctor: Doctor, provider_source: SchedulingProviderSource
+) -> SchedulingProvider | None:
+    if provider_source == SchedulingProviderSource.acuity:
+        if get_acuity_integration(doctor) is None:
+            return None
+        return AcuitySchedulingProvider(doctor)
+    if provider_source == SchedulingProviderSource.google_calendar:
+        if get_google_calendar_integration(doctor) is None:
+            return None
+        return GoogleCalendarSchedulingProvider(doctor)
+    return None
 
 
 def perform(doctor_id: str, source: str) -> None:
@@ -40,21 +64,11 @@ def perform(doctor_id: str, source: str) -> None:
         )
         return
 
-    if provider_source == SchedulingProviderSource.acuity:
-        if get_acuity_integration(doctor) is None:
-            log.info(
-                "scheduling sync skipped",
-                event_code="scheduling_sync_integration_missing",
-                doctor_ref=doctor_ref,
-                source=source,
-            )
-            return
-        provider = AcuitySchedulingProvider(doctor)
-    else:
-        # GoogleCalendarSchedulingProvider lands in a follow-up PR.
+    provider = _build_provider(doctor, provider_source)
+    if provider is None:
         log.info(
             "scheduling sync skipped",
-            event_code="scheduling_sync_provider_not_implemented",
+            event_code="scheduling_sync_integration_missing",
             doctor_ref=doctor_ref,
             source=source,
         )
@@ -63,7 +77,7 @@ def perform(doctor_id: str, source: str) -> None:
     since = datetime.now(timezone.utc) - _FORWARD_SYNC_LOOKBACK
     try:
         events = provider.fetch_upcoming(doctor, since)
-    except AcuityIntegrationInvalid:
+    except _INTEGRATION_INVALID_EXCEPTIONS:
         log.info(
             "scheduling sync skipped",
             event_code="scheduling_sync_integration_invalid",

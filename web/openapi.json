@@ -907,6 +907,51 @@
         ]
       }
     },
+    "/internal/v1/google-calendar-auth-url": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Google Calendar Auth Url",
+        "operationId": "google_calendar_auth_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulingAuthUrlResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/google-calendar-connect": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Google Calendar Disconnect",
+        "operationId": "google_calendar_disconnect",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/zoom-revoked-ack": {
       "post": {
         "tags": [

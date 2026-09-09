@@ -1017,6 +1017,47 @@ def acuity_disconnect(request: Request) -> None:
         integration.delete()
 
 
+@internal_api_app.get("/google-calendar-auth-url", name="google_calendar_auth_url")
+def google_calendar_auth_url(
+    request: Request, response: Response
+) -> SchedulingAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    issued = scheduling_oauth_state.issue_scheduling_oauth_state(
+        SchedulingProviderSource.google_calendar, str(doctor.id)
+    )
+    response.set_cookie(
+        key=scheduling_oauth_state.scheduling_oauth_binding_cookie(
+            SchedulingProviderSource.google_calendar
+        ),
+        value=issued.browser_binding,
+        max_age=scheduling_oauth_state.SCHEDULING_OAUTH_STATE_TTL_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("google_calendar_oauth_start").include_query_params(
+            state=issued.state
+        )
+    )
+    return SchedulingAuthUrlResponse(url=url)
+
+
+@internal_api_app.delete(
+    "/google-calendar-connect",
+    name="google_calendar_disconnect",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def google_calendar_disconnect(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    integration = DoctorSchedulingIntegration.get(
+        doctor_id=doctor.id, source=SchedulingProviderSource.google_calendar
+    )
+    if integration is not None:
+        integration.delete()
+
+
 @internal_api_app.post(
     "/zoom-revoked-ack", name="zoom_revoked_ack", status_code=status.HTTP_204_NO_CONTENT
 )
