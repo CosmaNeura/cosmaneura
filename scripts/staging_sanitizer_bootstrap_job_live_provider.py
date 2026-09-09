@@ -25,22 +25,8 @@ try:
     from scripts import (
         staging_restore_sanitizer_bootstrap_job_attachment_contract as attachment,
     )
-    from scripts.staging_restore_runtime_adapters import (
-        ARM_ORIGIN,
-        ARM_RESOURCE,
-        MAXIMUM_PROVIDER_BYTES,
-        REQUEST_TIMEOUT_SECONDS,
-        UUID_RE,
-    )
 except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
     import staging_restore_sanitizer_bootstrap_job_attachment_contract as attachment
-    from staging_restore_runtime_adapters import (
-        ARM_ORIGIN,
-        ARM_RESOURCE,
-        MAXIMUM_PROVIDER_BYTES,
-        REQUEST_TIMEOUT_SECONDS,
-        UUID_RE,
-    )
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +40,16 @@ ATTACHMENT_CONTRACT_SHA256 = (
 )
 ACTIVATION_FAILURE = "activation.sanitizer_bootstrap_job_live_provider_unavailable"
 MAXIMUM_POLICY_BYTES = 64 * 1024
+# Keep the dormant compiler structurally isolated from the executable restore
+# adapters. These values are closed-world policy pins, not imported capabilities.
+ARM_ORIGIN = "https://management.azure.com"
+ARM_RESOURCE = "https://management.azure.com/"
+REQUEST_TIMEOUT_SECONDS = 30
+MAXIMUM_PROVIDER_BYTES = 1_048_576
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 CONTROL_RESOURCE_GROUP = "cosmaneura-staging-rehearsal-control"
 IDENTITY_NAME = "cosmaneura-staging-restore-bootstrap-job"
