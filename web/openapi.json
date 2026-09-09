@@ -952,6 +952,127 @@
         ]
       }
     },
+    "/internal/v1/scheduling-review": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scheduling Review List",
+        "description": "Pending roster-sync rows this doctor has not yet resolved.",
+        "operationId": "scheduling_review_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AmbiguousPatientMatchResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Scheduling Review List Internal V1 Scheduling Review Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/scheduling-review/{match_id}/confirm": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scheduling Review Confirm",
+        "operationId": "scheduling_review_confirm",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmSchedulingReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/scheduling-review/{match_id}/dismiss": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scheduling Review Dismiss",
+        "operationId": "scheduling_review_dismiss",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/zoom-revoked-ack": {
       "post": {
         "tags": [
@@ -2607,6 +2728,72 @@
         ],
         "title": "AcceptBaaBody"
       },
+      "AmbiguousPatientMatchResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SchedulingProviderSource"
+          },
+          "candidate_patient_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Patient Name"
+          },
+          "candidate_patient_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Patient Email"
+          },
+          "candidate_patient_phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Patient Phone"
+          },
+          "candidate_appointment_start_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Candidate Appointment Start At"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "candidate_patient_name",
+          "candidate_patient_email",
+          "candidate_patient_phone",
+          "candidate_appointment_start_at",
+          "created_at"
+        ],
+        "title": "AmbiguousPatientMatchResponse"
+      },
       "Appointment": {
         "properties": {
           "id": {
@@ -2944,6 +3131,47 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "ConfirmSchedulingReviewRequest": {
+        "properties": {
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "new_patient_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Patient Name"
+          },
+          "new_patient_date_of_birth": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Patient Date Of Birth"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConfirmSchedulingReviewRequest"
       },
       "CreateLabPanel": {
         "properties": {
@@ -5233,6 +5461,14 @@
         ],
         "title": "SchedulingAuthUrlResponse"
       },
+      "SchedulingProviderSource": {
+        "type": "string",
+        "enum": [
+          "acuity",
+          "google_calendar"
+        ],
+        "title": "SchedulingProviderSource"
+      },
       "SettingsData": {
         "properties": {
           "doctor_id": {
@@ -5264,6 +5500,14 @@
           "zoom_revoked": {
             "type": "boolean",
             "title": "Zoom Revoked"
+          },
+          "acuity_connected": {
+            "type": "boolean",
+            "title": "Acuity Connected"
+          },
+          "google_calendar_connected": {
+            "type": "boolean",
+            "title": "Google Calendar Connected"
           },
           "email": {
             "anyOf": [
@@ -5315,6 +5559,8 @@
           "biography",
           "zoom_connected",
           "zoom_revoked",
+          "acuity_connected",
+          "google_calendar_connected",
           "email",
           "onboarding_completed",
           "practice_ready",
