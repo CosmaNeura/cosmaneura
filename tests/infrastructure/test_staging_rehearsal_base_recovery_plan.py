@@ -666,7 +666,7 @@ def test_cli_cloud_environment_is_pinned(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home)  # noqa: E702
+    home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
     runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
     (modules / "azure" / "cli" / "__main__.py").write_text('import json,os\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir())}))\n')
@@ -676,13 +676,10 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)
     environment = {"AZURE_CONFIG_DIR": str(config), recovery.AZURE_CONFIG_BINDING_ENV: binding}
     result = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False); observed = json.loads(result.stdout)
-    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values)
-    assert not Path(observed["path"]).exists()
+    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and not Path(observed["path"]).exists()
     for name in ("config", "msal_token_cache.json"):
-        environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; (config / name).write_bytes(b"changed")
-        refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
-        assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n"
-        (config / name).write_bytes(values[name])
+        environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; (config / name).write_bytes(b"changed"); refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
+        assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n"; (config / name).write_bytes(values[name])
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]
     moved = home / ".azure-old"; config.rename(moved); shutil.copytree(moved, config)
     refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)

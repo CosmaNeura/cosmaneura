@@ -979,8 +979,7 @@ def _azure_cli_wrapper(runtime_directory: Path) -> bytes:
     python = homebrew / "Cellar" / "python@3.14" / python_version / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     lines = ["#!/bin/sh", "set -eu"]
     lines.extend(f"export {name}={shlex.quote(value)}" for name, value in _azure_cli_environment(runtime_directory).items())
-    guard = shlex.quote(_azure_cli_guard_source(runtime_directory))
-    lines.append(f'exec {shlex.quote(str(python))} -sP -c {guard} "$@"')
+    guard = shlex.quote(_azure_cli_guard_source(runtime_directory)); lines.append(f'exec {shlex.quote(str(python))} -sP -c {guard} "$@"')  # noqa: E702
     return ("\n".join(lines) + "\n").encode()
 # fmt: on
 
