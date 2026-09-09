@@ -454,6 +454,14 @@ def _state_binding_projection(state: Mapping[str, Any]) -> Mapping[str, Any]:
     return {name: value for name, value in state.items() if name != "check_results"}
 
 
+def _state_bindings_equal(
+    actual: Mapping[str, Any], expected: Mapping[str, Any]
+) -> bool:
+    return _json_equal(
+        _state_binding_projection(actual), _state_binding_projection(expected)
+    )
+
+
 def _validate_pre_refresh_state_digest(state_bytes: bytes) -> None:
     if recovery._sha256_bytes(state_bytes) != EXPECTED_PRE_REFRESH_STATE_SHA256:
         raise RefreshPlanError("pre-refresh state digest is not the reviewed snapshot")
@@ -1172,9 +1180,7 @@ def _validate_artifacts(
     remote = recovery._load_json_bytes(
         remote_state_bytes, label="remote pre-refresh state"
     )
-    if not _json_equal(
-        _state_binding_projection(external), _state_binding_projection(remote)
-    ):
+    if not _state_bindings_equal(external, remote):
         raise RefreshPlanError("remote state differs from the protected snapshot")
     recovery._validate_state(
         external, label="pre-refresh state snapshot", expected_serial=PRE_REFRESH_SERIAL
@@ -1255,7 +1261,7 @@ def create_and_validate_state_refresh_plan(
             tofu=tofu, output_parent=saved_plan.parent, data_dir=data_dir
         )
         remote_after = _pull_remote_state(tofu=tofu, data_dir=data_dir)
-        if not _json_equal(
+        if not _state_bindings_equal(
             recovery._load_json_bytes(remote_before, label="remote state before plan"),
             recovery._load_json_bytes(remote_after, label="remote state after plan"),
         ):
