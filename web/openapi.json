@@ -862,6 +862,51 @@
         ]
       }
     },
+    "/internal/v1/acuity-auth-url": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Acuity Auth Url",
+        "operationId": "acuity_auth_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulingAuthUrlResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/acuity-connect": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Acuity Disconnect",
+        "operationId": "acuity_disconnect",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/zoom-revoked-ack": {
       "post": {
         "tags": [
@@ -4673,6 +4718,43 @@
             "type": "string",
             "format": "date-time",
             "title": "Date Of Birth"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "as given by the originating system; never used to auto-match across records"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone",
+            "description": "as given by the originating system; never used to auto-match across records"
+          },
+          "created_by_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By System",
+            "description": "the system that created this patient record. gui, api, acuity, google_calendar, etc",
+            "default": "gui"
           }
         },
         "type": "object",
@@ -5091,6 +5173,20 @@
           "meetings"
         ],
         "title": "ScheduleResponse"
+      },
+      "SchedulingAuthUrlResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "SchedulingAuthUrlResponse"
       },
       "SettingsData": {
         "properties": {

@@ -28,6 +28,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.scheduling_oauth_state as scheduling_oauth_state
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
 import app.services.zoom_capture_authorization as zoom_capture_authorization
@@ -112,6 +113,7 @@ from app.models.baa import (
 from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_scheduling_integration import DoctorSchedulingIntegration
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
@@ -128,6 +130,7 @@ from app.models.note_type_customization import (
 )
 from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
+from app.models.patient_external_identity import SchedulingProviderSource
 from app.models.patient_medication import (
     MedicationKind,
     MedicationSource,
@@ -968,6 +971,50 @@ def zoom_disconnect(request: Request) -> None:
     # An intentional disconnect should not surface as an unexpected revoke
     # toast next time the doctor opens the app.
     get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
+
+
+class SchedulingAuthUrlResponse(BaseModel, extra="forbid"):
+    url: str
+
+
+@internal_api_app.get("/acuity-auth-url", name="acuity_auth_url")
+def acuity_auth_url(request: Request, response: Response) -> SchedulingAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    issued = scheduling_oauth_state.issue_scheduling_oauth_state(
+        SchedulingProviderSource.acuity, str(doctor.id)
+    )
+    response.set_cookie(
+        key=scheduling_oauth_state.scheduling_oauth_binding_cookie(
+            SchedulingProviderSource.acuity
+        ),
+        value=issued.browser_binding,
+        max_age=scheduling_oauth_state.SCHEDULING_OAUTH_STATE_TTL_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("acuity_oauth_start").include_query_params(
+            state=issued.state
+        )
+    )
+    return SchedulingAuthUrlResponse(url=url)
+
+
+@internal_api_app.delete(
+    "/acuity-connect", name="acuity_disconnect", status_code=status.HTTP_204_NO_CONTENT
+)
+def acuity_disconnect(request: Request) -> None:
+    # TODO also call Acuity's /oauth2/disconnect so the grant is revoked on
+    # their side, not just forgotten here (mirrors zoom_service.revoke_token,
+    # which does call Zoom's revoke endpoint).
+    doctor: Doctor = request.state.doctor
+    integration = DoctorSchedulingIntegration.get(
+        doctor_id=doctor.id, source=SchedulingProviderSource.acuity
+    )
+    if integration is not None:
+        integration.delete()
 
 
 @internal_api_app.post(
