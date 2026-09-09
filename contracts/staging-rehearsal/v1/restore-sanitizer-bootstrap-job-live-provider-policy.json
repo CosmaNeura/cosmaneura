@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-sanitizer-bootstrap-job-live-provider-v1",
+  "closed_world": true,
+  "upstream_policy": {
+    "policy_id": "cosmaneura-staging-sanitizer-bootstrap-job-attachment-envelope-v1",
+    "sha256": "sha256:9ee7cae5d675ea8727e09254c1d0a5396c043994a54c39d4b50290a168f088d2"
+  },
+  "transport": {
+    "management_origin": "https://management.azure.com",
+    "oauth_resource": "https://management.azure.com/",
+    "method": "GET",
+    "request_timeout_seconds": 30,
+    "maximum_elapsed_seconds": 150,
+    "maximum_response_bytes": 1048576,
+    "maximum_token_requests": 1,
+    "maximum_arm_get_requests_per_plan": 4,
+    "accepted_statuses": [
+      200,
+      404
+    ],
+    "ambient_credentials_permitted": false,
+    "ambient_proxy_permitted": false,
+    "caller_body_headers_method_query_or_url_permitted": false,
+    "disk_materialization_permitted": false,
+    "polling_permitted": false,
+    "redirects_permitted": false,
+    "retries_permitted": false,
+    "raw_provider_body_public": false
+  },
+  "resources": {
+    "subscription_id": "bab2a709-1fcb-4c87-a9fc-802f7477ec13",
+    "control_resource_group": "cosmaneura-staging-rehearsal-control",
+    "bootstrap_identity_name": "cosmaneura-staging-restore-bootstrap-job",
+    "bootstrap_job_name": "cosmaneura-stg-restore-bootstrap",
+    "bootstrap_identity_api_version": "2023-01-31",
+    "bootstrap_job_api_version": "2024-03-01",
+    "private_registry_acrpull_role_assignment_api_version": "2022-04-01",
+    "private_registry_resource_id_source": "future_authenticated_restore_runtime_binding.private_registry.resource_id",
+    "private_registry_acrpull_role_assignment_name_source": "future_create_only_control_plane.provider_observed_name",
+    "bootstrap_identity_client_id_source": "future_authenticated_bootstrap_identity.client_id"
+  },
+  "plans": {
+    "initial_absence": [
+      {
+        "key": "bootstrap_job",
+        "expected_status": 404
+      },
+      {
+        "key": "bootstrap_identity",
+        "expected_status": 404
+      },
+      {
+        "key": "private_registry_acrpull_role_assignment",
+        "expected_status": 404
+      }
+    ],
+    "present": [
+      {
+        "key": "bootstrap_identity",
+        "expected_status": 200
+      },
+      {
+        "key": "private_registry_acrpull_role_assignment",
+        "expected_status": 200
+      },
+      {
+        "key": "bootstrap_job",
+        "expected_status": 200
+      },
+      {
+        "key": "bootstrap_job_executions",
+        "expected_status": 200
+      }
+    ],
+    "final_absence": [
+      {
+        "key": "bootstrap_job",
+        "expected_status": 404
+      },
+      {
+        "key": "private_registry_acrpull_role_assignment",
+        "expected_status": 404
+      },
+      {
+        "key": "bootstrap_identity",
+        "expected_status": 404
+      }
+    ]
+  },
+  "claims": {
+    "bootstrap_job_configuration_authenticated": false,
+    "bootstrap_job_execution_authenticated": false,
+    "bootstrap_job_identity_attachment_authenticated": false,
+    "bootstrap_identity_current_live_state_authenticated": false,
+    "bootstrap_authority_authenticated": false,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "provider_mutation_authority": false,
+    "runtime_authority": false,
+    "sanitizer_authority": false,
+    "workflow_integrated": false,
+    "executable": false
+  },
+  "status": {
+    "sealed_request_plan_implemented": true,
+    "one_shot_get_transport_implemented": true,
+    "bootstrap_job_semantic_observer_implemented": false,
+    "bootstrap_job_attachment_authenticator_implemented": false,
+    "live_provider_calls_enabled": false,
+    "workflow_integrated": false,
+    "executable": false,
+    "activation_ready": false,
+    "public_activation_failure": "activation.sanitizer_bootstrap_job_live_provider_unavailable",
+    "activation_blockers": [
+      "authenticated_runtime_binding_unavailable",
+      "authenticated_bootstrap_identity_unavailable",
+      "authenticated_bootstrap_image_unavailable",
+      "bootstrap_job_semantic_observer_unimplemented",
+      "bootstrap_job_attachment_authenticator_unimplemented",
+      "bootstrap_control_plane_adapter_unimplemented",
+      "workflow_integration_unimplemented"
+    ]
+  }
+}
