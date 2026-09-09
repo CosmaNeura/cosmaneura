@@ -219,6 +219,9 @@ MAX_CLAIM_BYTES = 16 * 1024
 MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 CLAIM_NAME_PREFIX = ".base-state-refresh-apply-claimed-v1-"
 EXECUTABLE_SNAPSHOT_PREFIX = ".state-refresh-tofu-"
+EXECUTABLE_SNAPSHOT_RE = re.compile(
+    rf"{re.escape(EXECUTABLE_SNAPSHOT_PREFIX)}[0-9a-f]{{64}}-[0-9a-f]{{32}}"
+)
 AZURE_CLI_ENTRYPOINTS = (
     Path("/opt/homebrew/bin/az"),
     Path("/usr/local/bin/az"),
@@ -343,7 +346,7 @@ def _validate_path_ancestry(path: Path, *, leaf_directory: bool = False) -> None
         if leaf and current.is_symlink():
             continue
         mode = stat.S_IMODE(metadata.st_mode)
-        if mode & 0o002 or (mode & 0o020 and metadata.st_uid != os.geteuid()):
+        if mode & 0o022:
             _fail("local_path.unsafe")
         if (leaf and leaf_directory and not stat.S_ISDIR(metadata.st_mode)) or (
             not leaf and not stat.S_ISDIR(metadata.st_mode)
@@ -647,8 +650,12 @@ def _open_pinned_executable(
     parent = recovery._open_protected_directory(
         snapshot_directory, label="execution directory"
     )
-    snapshot_name = f"{EXECUTABLE_SNAPSHOT_PREFIX}{expected_sha256}"
+    snapshot_name = (
+        f"{EXECUTABLE_SNAPSHOT_PREFIX}{expected_sha256}-{secrets.token_hex(16)}"
+    )
     snapshot_path = snapshot_directory / snapshot_name
+    created = False
+    completed = False
     try:
         source = os.open(
             path,
@@ -675,6 +682,7 @@ def _open_pinned_executable(
             0o500,
             dir_fd=parent,
         )
+        created = True
         digest = hashlib.sha256()
         remaining = before.st_size
         while remaining:
@@ -699,13 +707,13 @@ def _open_pinned_executable(
         ):
             _fail("runtime.changed")
         os.fsync(parent)
-        os.close(writer)
-        writer = None
         descriptor = os.open(
             snapshot_name,
             os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
             dir_fd=parent,
         )
+        os.close(writer)
+        writer = None
         _revalidate_pinned_executable(
             descriptor,
             snapshot_path=snapshot_path,
@@ -715,16 +723,54 @@ def _open_pinned_executable(
             _fail("runtime.changed")
         result = descriptor
         descriptor = None
+        completed = True
         return snapshot_path, result
     except OSError:
         _fail("runtime.changed")
     finally:
+        if created and not completed:
+            reference = descriptor if descriptor is not None else writer
+            if reference is not None:
+                _unlink_matching_executable_snapshot(
+                    parent,
+                    snapshot_name=snapshot_name,
+                    descriptor=reference,
+                )
         if descriptor is not None:
             os.close(descriptor)
         if writer is not None:
             os.close(writer)
         if source is not None:
             os.close(source)
+        os.close(parent)
+
+
+def _unlink_matching_executable_snapshot(
+    parent: int, *, snapshot_name: str, descriptor: int
+) -> None:
+    if EXECUTABLE_SNAPSHOT_RE.fullmatch(snapshot_name) is None:
+        _fail("runtime.changed")
+    try:
+        path_metadata = os.stat(snapshot_name, dir_fd=parent, follow_symlinks=False)
+        if stat.S_ISLNK(path_metadata.st_mode) or _metadata_identity(
+            path_metadata
+        ) != _metadata_identity(os.fstat(descriptor)):
+            _fail("runtime.changed")
+        os.unlink(snapshot_name, dir_fd=parent)
+        os.fsync(parent)
+    except OSError:
+        _fail("runtime.changed")
+
+
+def _remove_unclaimed_executable_snapshot(snapshot_path: Path, descriptor: int) -> None:
+    parent = recovery._open_protected_directory(
+        snapshot_path.parent, label="execution directory"
+    )
+    try:
+        _unlink_matching_executable_snapshot(
+            parent, snapshot_name=snapshot_path.name, descriptor=descriptor
+        )
+    finally:
         os.close(parent)
 
 
@@ -996,6 +1042,8 @@ def consume(
             saved_plan, expected_sha256=expected_saved_plan_sha256
         )
         tofu_descriptor: int | None = None
+        tofu_snapshot: Path | None = None
+        claim_created = False
         try:
             tofu_sha256 = receipt.get("open_tofu_sha256")
             if not isinstance(tofu_sha256, str):
@@ -1093,6 +1141,7 @@ def consume(
                     "apply_outcome": "unknown",
                 },
             )
+            claim_created = True
             _require_before_deadline(deadline)
             _redirect_standard_streams()
             _close_ambient_descriptors({plan_descriptor, tofu_descriptor})
@@ -1117,7 +1166,13 @@ def consume(
             os.execve(exec_path, argv, environment)
         finally:
             if tofu_descriptor is not None:
-                os.close(tofu_descriptor)
+                try:
+                    if tofu_snapshot is not None and not claim_created:
+                        _remove_unclaimed_executable_snapshot(
+                            tofu_snapshot, tofu_descriptor
+                        )
+                finally:
+                    os.close(tofu_descriptor)
             os.close(plan_descriptor)
     _fail("execve.returned")
 

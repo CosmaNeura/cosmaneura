@@ -174,9 +174,18 @@ def test_open_pinned_executable_binds_descriptor_and_digest(tmp_path: Path) -> N
         snapshot_directory=execution,
         expected_sha256=digest,
     )
+    second_snapshot, second_descriptor = consumer._open_pinned_executable(
+        executable,
+        snapshot_directory=execution,
+        expected_sha256=digest,
+    )
+    consumer._remove_unclaimed_executable_snapshot(second_snapshot, second_descriptor)
+    os.close(second_descriptor)
     try:
         assert os.read(descriptor, 32) == b"reviewed-executable"
         assert snapshot.parent == execution
+        assert second_snapshot != snapshot
+        assert not second_snapshot.exists()
         assert snapshot.stat().st_mode & 0o777 == 0o500
         assert not os.get_inheritable(descriptor)
         executable.chmod(0o700)
@@ -211,6 +220,35 @@ def test_private_executable_snapshot_runs(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_executable_snapshot_is_removed_on_preclaim_refusal(tmp_path: Path) -> None:
+    executable = tmp_path / "tofu"
+    execution = tmp_path / "execution"
+    executable.write_bytes(b"reviewed-executable")
+    executable.chmod(0o500)
+    execution.mkdir(mode=0o700)
+    with pytest.raises(consumer.ConsumerError, match="runtime.changed"):
+        consumer._open_pinned_executable(
+            executable,
+            snapshot_directory=execution,
+            expected_sha256="0" * 64,
+        )
+    assert list(execution.iterdir()) == []
+
+
+def test_path_ancestry_rejects_operator_owned_group_writable_component(
+    tmp_path: Path,
+) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir(mode=0o700)
+    executable = shared / "tool"
+    executable.write_bytes(b"tool")
+    executable.chmod(0o500)
+    consumer._validate_path_ancestry(executable)
+    shared.chmod(0o770)
+    with pytest.raises(consumer.ConsumerError, match="local_path.unsafe"):
+        consumer._validate_path_ancestry(executable)
 
 
 def test_redirect_standard_streams_uses_character_sink(

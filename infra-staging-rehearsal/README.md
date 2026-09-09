@@ -279,7 +279,8 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    The consumer repeats exact-source, plan, provider, backend, and current
    remote-state validation, requires an interactive exact statement and random
    challenge, copies the reviewed plan into an unlinked descriptor, copies
-   OpenTofu into an owner-only executable snapshot retained by descriptor,
+   OpenTofu into a collision-resistant owner-only executable snapshot retained
+   by descriptor,
    creates a digest-scoped owner-only claim beside the saved plan, closes
    ambient descriptors, redirects output streams, and only then replaces itself
    with the executable snapshot. The TTY ceremony prevents accidental
@@ -290,6 +291,15 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    and append-only claim broker before widening that threat model. Agents must
    never invoke this command. Do not retry after a claim is created; make and
    review a fresh plan instead.
+
+   Every Python, OpenTofu, Azure CLI, and Azure configuration path component
+   must reject group and world writes. Standard Homebrew installations may
+   leave `/opt/homebrew/bin` or `/opt/homebrew/Cellar` group-writable; the human
+   operator must harden those directories before invocation rather than weaken
+   the consumer. A pre-claim retry must use a fresh protected execution
+   directory. An executable snapshot is safely removed after a pre-claim
+   refusal; after a claim exists it is retained as a bounded forensic artifact.
+   Snapshot names are collision-resistant across attempts.
 7. Immediately capture the resulting remote state in a new owner-only file.
    It must retain the exact lineage and 28-address inventory, contain no tainted
    or deposed instances, and be exactly serial 9. Preserve the serial-8 snapshot
