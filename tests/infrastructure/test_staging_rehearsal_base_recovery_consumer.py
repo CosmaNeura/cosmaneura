@@ -769,8 +769,8 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     monkeypatch.setattr(consumer.handoff, '_operator_paths', lambda: (Path('/operator'), Path('/operator/.azure'), 'x' * 64))
     monkeypatch.setattr(consumer.handoff, '_pinned_process_environment', lambda *_: nullcontext())
     monkeypatch.setattr(consumer, '_validate_local', lambda **_: order.append('local') or binding)
-    runtime_binding = ((1, 2, os.geteuid(), 1, 0o700, 3, 4), (5, 6, os.geteuid(), 1, 0o700, 7, 8))
-    monkeypatch.setattr(consumer, '_runtime_home_binding', lambda _: order.append('runtime-home') or runtime_binding)
+    null_home_binding = (1, 2, 0, 1, 0o666, 3, 4)
+    monkeypatch.setattr(consumer, '_null_home_binding', lambda: order.append('null-home') or null_home_binding)
     monkeypatch.setattr(consumer, '_confirm_operator', lambda *_args, **_kwargs: order.append('confirm'))
     monkeypatch.setattr(consumer, '_revalidate_operator_tty', lambda: order.append('tty'))
     reader = _Reader()
@@ -789,11 +789,11 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     monkeypatch.setattr(consumer.os, 'execve', execve)
     with pytest.raises(OSError, match='simulated'):
         consumer.consume_handoff(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=RECEIPT_DIGEST, expected_azure_principal_sha256=PRINCIPAL_DIGEST, clock=lambda: NOW)
-    assert order == ['local', 'live', 'local', 'runtime-home', 'confirm', 'preclaim', 'runtime-home', 'pin-plan', 'tty', 'action-time', 'runtime-home', 'claim', 'runtime-home', 'execve']
+    assert order == ['local', 'live', 'local', 'null-home', 'confirm', 'preclaim', 'null-home', 'pin-plan', 'tty', 'action-time', 'null-home', 'claim', 'null-home', 'execve']
     path, argv, environment = calls[0]
     assert path == '/trusted/tofu'
     assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
-    assert environment == consumer._execution_environment(azure_cli=binding.tofu.with_name('az'), home=Path('/operator'), azure_config=Path('/operator/.azure'), azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution) and environment['HOME'] == str(binding.tofu.parent / 'azure-home') and environment['NETRC'] == os.devnull and environment['TF_CLI_CONFIG_FILE'] == os.devnull
+    assert environment == consumer._execution_environment(azure_cli=binding.tofu.with_name('az'), azure_config=Path('/operator/.azure'), azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution) and environment['HOME'] == os.devnull and environment['NETRC'] == os.devnull and environment['TF_CLI_CONFIG_FILE'] == os.devnull
     with pytest.raises(OSError):
         os.fstat(plan_descriptor)
     marker = execution / consumer.CLAIM_NAME
@@ -806,10 +806,9 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
 
 
 @pytest.mark.parametrize('mutation_stage', ['preclaim', 'postclaim'])
-def test_runtime_home_mutation_refuses_before_exec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation_stage: str) -> None:
+def test_null_home_binding_change_refuses_before_exec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation_stage: str) -> None:
     plan, state, execution, receipt = _artifacts(tmp_path)
     runtime = tmp_path / 'runtime'; runtime.mkdir(mode=0o700); tofu = runtime / 'tofu'; tofu.write_bytes(b'tofu'); tofu.chmod(0o500)  # noqa: E702
-    runtime_home = runtime / 'azure-home'; runtime_home.mkdir(mode=0o700); (runtime_home / '.terraform.d').mkdir(mode=0o700)  # noqa: E702
     binding = _binding(execution, plan=plan, tofu=tofu); reader = _Reader(); exec_calls: list[int] = []; descriptors: list[int] = []  # noqa: E702
     monkeypatch.setattr(consumer, '_reject_ambient_environment', lambda: None)
     monkeypatch.setattr(consumer.handoff, '_python_runtime_binding', _python_binding)
@@ -819,7 +818,12 @@ def test_runtime_home_mutation_refuses_before_exec(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(consumer, '_validate_local', lambda **_: binding)
     monkeypatch.setattr(consumer, '_validate_live', lambda *_args, **_kwargs: (reader, NOW, b'live-snapshot'))
     monkeypatch.setattr(consumer, '_confirm_operator', lambda *_args, **_kwargs: None)
-    def mutate_home() -> None: (runtime_home / '.netrc').write_bytes(b'hostile')
+    changed = False
+    def null_home_binding() -> tuple[int, ...]: return (1, 2, 0, 1, 0o666, 3, int(changed))
+    monkeypatch.setattr(consumer, '_null_home_binding', null_home_binding)
+    def mutate_home() -> None:
+        nonlocal changed
+        changed = True
     def preclaim(*_args: Any, **_kwargs: Any) -> datetime:
         if mutation_stage == 'preclaim': mutate_home()  # noqa: E701
         return NOW

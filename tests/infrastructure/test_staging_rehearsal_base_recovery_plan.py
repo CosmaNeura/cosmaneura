@@ -11,6 +11,7 @@ import os
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import zipfile
@@ -271,6 +272,8 @@ def test_real_opentofu_plan_decodes_from_captured_bytes(
     for command in commands:
         subprocess.run(command, check=True, capture_output=True)
     monkeypatch.setattr(recovery, "REHEARSAL_ROOT", module)
+    (module / ".terraform").mkdir(mode=0o700, exist_ok=True)
+    (module / ".terraform" / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME).mkdir(mode=0o700)
 
     decoded = recovery._show_saved_plan(
         plan_path.read_bytes(),
@@ -654,12 +657,12 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
         runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir); assert recovery._snapshot_and_verify_runtime(data_dir=data_dir) == runtime
     finally:
         os.umask(previous_umask)
-    runtime_home = runtime.azure_cli.parent / "azure-home"; terraform_home = runtime_home / ".terraform.d"  # noqa: E702
-    assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent) and not stale.exists() and {path.name for path in runtime_home.iterdir()} == {".terraform.d"} and not any(terraform_home.iterdir())
+    assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent) and not stale.exists() and not (runtime.azure_cli.parent / "azure-home").exists()
     assert runtime.azure_cli_closure_sha256 == closure_sha256 and runtime.tofu.stat().st_mode & 0o777 == runtime.azure_cli.stat().st_mode & 0o777 == 0o500
-    _protected_file(runtime_home / ".netrc", b"hostile", mode=0o600)
-    with pytest.raises(recovery.RecoveryPlanError, match="runtime home is not exact"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
-    (runtime_home / ".netrc").unlink()
+    null_home_binding = recovery._validated_null_home()
+    with open(os.devnull, "wb") as sink:
+        sink.write(b"probe")
+    assert recovery._azure_cli_environment(runtime.azure_cli.parent)["HOME"] == os.devnull and stat.S_ISCHR(os.stat(os.devnull, follow_symlinks=False).st_mode) and recovery._validated_null_home() == null_home_binding
     runtime.azure_cli.chmod(0o700)
     with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
 
@@ -681,27 +684,28 @@ def test_cli_cloud_environment_is_pinned(tmp_path: Path, monkeypatch: pytest.Mon
     for name in scrubbed:
         monkeypatch.setenv(name, "hostile")
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
-    environment = recovery._normalized_environment(data_dir=DATA_DIR); expected = {"ARM_ENVIRONMENT": "public", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID, "ARM_USE_AZUREAD": "true", "ARM_USE_CLI": "true", "AZURE_CONFIG_DIR": str(home / ".azure"), recovery.AZURE_CONFIG_BINDING_ENV: recovery._validated_azure_config(home)[1], "AZURE_CORE_COLLECT_TELEMETRY": "false", "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true", "AZURE_CORE_ONLY_SHOW_ERRORS": "true", "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_LOGGING_ENABLE_LOG_FILE": "false", "CHECKPOINT_DISABLE": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": str(home), "LANG": "C", "LC_ALL": "C", "NETRC": os.devnull, "PATH": f"{recovery.EXPECTED_AZURE_CLI_PATH.parent}:/usr/bin:/bin", "TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
+    runtime_directory = DATA_DIR / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME
+    environment = recovery._normalized_environment(data_dir=DATA_DIR); expected = {"ARM_ENVIRONMENT": "public", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID, "ARM_USE_AZUREAD": "true", "ARM_USE_CLI": "true", "AZURE_CONFIG_DIR": str(home / ".azure"), recovery.AZURE_CONFIG_BINDING_ENV: recovery._validated_azure_config(home)[1], "AZURE_CORE_COLLECT_TELEMETRY": "false", "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true", "AZURE_CORE_ONLY_SHOW_ERRORS": "true", "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_LOGGING_ENABLE_LOG_FILE": "false", "CHECKPOINT_DISABLE": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": os.devnull, "LANG": "C", "LC_ALL": "C", "NETRC": os.devnull, "PATH": f"{runtime_directory}:/usr/bin:/bin", "TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
+    expected.update(recovery._azure_cli_environment(runtime_directory))
     assert environment == expected
 
 
 def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
-    runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); runtime_home = runtime / "azure-home"; runtime_home.mkdir(mode=0o700); (runtime_home / ".terraform.d").mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
+    runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
     (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,signal,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:(Path.home()/".netrc").write_bytes(b"hostile")\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nif "signal-cleanup-entry" in sys.argv:\n original_pthread_sigmask=signal.pthread_sigmask;pause_cleanup=True\n def pthread_sigmask(how,mask):\n  global pause_cleanup\n  if pause_cleanup:\n   pause_cleanup=False;print("cleanup-entry-ready",flush=True);time.sleep(0.5)\n  return original_pthread_sigmask(how,mask)\n signal.pthread_sigmask=pthread_sigmask\nif "signal-cleanup" in sys.argv:\n original_fchmod=os.fchmod\n def fchmod(fd,mode):\n  if mode == 0o700:print("snapshot-cleanup-ready",flush=True);time.sleep(0.5)\n  return original_fchmod(fd,mode)\n os.fchmod=fchmod\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
-    assert recovery._azure_cli_environment(runtime)["HOME"] == str(runtime / "azure-home"); monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": str(runtime / "azure-home"), "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
+    assert recovery._azure_cli_environment(runtime)["HOME"] == os.devnull; monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": os.devnull, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
     lock = runtime / recovery.AZURE_CONFIG_LOCK_NAME; lock.touch(mode=0o600); lock.chmod(0o600); wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)  # noqa: E702
     environment = {"AZURE_CONFIG_DIR": str(config), recovery.AZURE_CONFIG_BINDING_ENV: binding}
     result = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
     assert result.returncode == 0, (result.stdout, result.stderr)
     observed = json.loads(result.stdout)
-    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and observed["home"] == str(runtime / "azure-home") and not observed["netrc"] and not Path(observed["path"]).exists()
+    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and observed["home"] == os.devnull and not observed["netrc"] and not Path(observed["path"]).exists()
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; mutated_home = subprocess.run([wrapper, "mutate-home-during"], env=environment, capture_output=True, check=False)  # noqa: E702
-    assert mutated_home.returncode == 2 and mutated_home.stderr == b"azure_cli_guard_refused\n" and (runtime_home / ".netrc").read_bytes() == b"hostile" and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
-    (runtime_home / ".netrc").unlink()
+    assert mutated_home.returncode == 2 and mutated_home.stderr == b"azure_cli_guard_refused\n" and not (Path(os.devnull) / ".netrc").exists() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
     for name in ("config", "msal_token_cache.json"):
         environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; (config / name).write_bytes(b"changed"); refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
         assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n"; (config / name).write_bytes(values[name])
@@ -742,13 +746,14 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     assert process.stdout is not None; selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ); assert selector.select(5) and process.stdout.readline() == b"snapshot-assignment-ready\n"; selector.close()  # noqa: E702
     process.send_signal(signal.SIGTERM); stdout, stderr = process.communicate(timeout=5)  # noqa: E702
     assert process.returncode == 2 and stdout == b"" and stderr == b"azure_cli_guard_refused\n" and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir()) and not any(path.name in values for path in runtime.rglob("*"))
-    sitecustomize.write_text(f'import os\nfrom pathlib import Path\noriginal_setitem=os.environ.__class__.__setitem__\ndef setitem(self,key,value):\n if key == "AZURE_CONFIG_DIR" and isinstance(value,str) and ".azure-config-" in value:(Path({str(runtime_home)!r})/".netrc").write_bytes(b"hostile")\n return original_setitem(self,key,value)\nos.environ.__class__.__setitem__=setitem\n')
+    hostile_home = tmp_path / "hostile-home"; hostile_home.mkdir(mode=0o700)
+    sitecustomize.write_text(f'import os\noriginal_setitem=os.environ.__class__.__setitem__\ndef setitem(self,key,value):\n if key == "AZURE_CONFIG_DIR" and isinstance(value,str) and ".azure-config-" in value:original_setitem(self,"HOME",{str(hostile_home)!r})\n return original_setitem(self,key,value)\nos.environ.__class__.__setitem__=setitem\n')
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; home_changed_before_module = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)  # noqa: E702
-    assert home_changed_before_module.returncode == 2 and home_changed_before_module.stdout == b"" and home_changed_before_module.stderr == b"azure_cli_guard_refused\n" and (runtime_home / ".netrc").read_bytes() == b"hostile" and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
-    (runtime_home / ".netrc").unlink()
-    sitecustomize.write_text('import os\noriginal_open=os.open\noriginal_fstat=os.fstat\nsnapshot_fd=None\nfailed=False\ndef open(path,flags,mode=0o777,*,dir_fd=None):\n global snapshot_fd\n result=original_open(path,flags,mode,dir_fd=dir_fd)\n if isinstance(path,str) and path.startswith(".azure-config-"):snapshot_fd=result\n return result\ndef fstat(fd):\n global failed\n if fd == snapshot_fd and not failed:\n  failed=True;raise OSError("injected fstat failure")\n return original_fstat(fd)\nos.open=open\nos.fstat=fstat\n')
+    assert home_changed_before_module.returncode == 2 and home_changed_before_module.stdout == b"" and home_changed_before_module.stderr == b"azure_cli_guard_refused\n" and not any(hostile_home.iterdir()) and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
+    mkdir_marker = tmp_path / "snapshot-mkdir-hook-fired"; fstat_marker = tmp_path / "snapshot-fstat-hook-fired"
+    sitecustomize.write_text(f'import os\nfrom pathlib import Path\noriginal_mkdir=os.mkdir\noriginal_fstat=os.fstat\nsnapshot_created=False\nfailed=False\ndef mkdir(path,mode=0o777,*,dir_fd=None):\n global snapshot_created\n result=original_mkdir(path,mode,dir_fd=dir_fd)\n if isinstance(path,str) and path.startswith(".azure-config-"):\n  snapshot_created=True;Path({str(mkdir_marker)!r}).touch()\n return result\ndef fstat(fd):\n global failed\n if snapshot_created and not failed:\n  failed=True;Path({str(fstat_marker)!r}).touch();raise OSError("injected fstat failure")\n return original_fstat(fd)\nos.mkdir=mkdir\nos.fstat=fstat\n')
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)  # noqa: E702
-    assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n" and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
+    assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n" and mkdir_marker.is_file() and fstat_marker.is_file() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
     sitecustomize.unlink(); environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; renamed_current = subprocess.run([wrapper, "rename-cleanup"], env=environment, capture_output=True, check=False)  # noqa: E702
     renamed_snapshots = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-") and path.name.endswith("-moved")]
     assert renamed_current.returncode == 2 and renamed_current.stderr == b"azure_cli_guard_refused\n" and len(renamed_snapshots) == 1 and not any(renamed_snapshots[0].iterdir()) and not any(path.name in values for path in runtime.rglob("*"))
@@ -906,12 +911,12 @@ def test_subprocess_is_bounded_and_kills_its_group(
     assert seen == {"new_session": True, "killpg": recovery.signal.SIGKILL}
 
 
-def test_subprocess_refuses_runtime_home_mutation_before_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    data_dir = tmp_path / "data"; data_dir.mkdir(mode=0o700); runtime = data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME; runtime.mkdir(mode=0o700); runtime_home = runtime / "azure-home"; runtime_home.mkdir(mode=0o700); (runtime_home / ".terraform.d").mkdir(mode=0o700); marker = tmp_path / "executed"  # noqa: E702
-    def mutate_during_environment_build(**_: Any) -> dict[str, str]:
-        _protected_file(runtime_home / ".netrc", b"hostile", mode=0o600)
-        return {"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
-    monkeypatch.setattr(recovery, "_normalized_environment", mutate_during_environment_build)
-    with pytest.raises(recovery.RecoveryPlanError, match="changed before execution"):
+def test_subprocess_refuses_missing_runtime_before_environment_or_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    data_dir = tmp_path / "data"; data_dir.mkdir(mode=0o700); marker = tmp_path / "executed"; calls: list[str] = []  # noqa: E702
+    def restore_during_environment_build(**_: Any) -> dict[str, str]:
+        calls.append("environment"); (data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME).mkdir(mode=0o700)
+        return {"HOME": os.devnull, "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
+    monkeypatch.setattr(recovery, "_normalized_environment", restore_during_environment_build)
+    with pytest.raises(recovery.RecoveryPlanError, match="trusted runtime directory (?:path )?is unavailable"):
         recovery._run_process([sys.executable, "-c", f"from pathlib import Path;Path({str(marker)!r}).touch()"], cwd=tmp_path, timeout_seconds=5, data_dir=data_dir)
-    assert not marker.exists()
+    assert calls == [] and not marker.exists() and not (data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME).exists()

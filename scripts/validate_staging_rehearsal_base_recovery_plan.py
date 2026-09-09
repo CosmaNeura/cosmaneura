@@ -823,7 +823,7 @@ def _runtime_file_record(
 # fmt: off
 def _azure_directory_identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, stat.S_IMODE(value.st_mode)
 def _azure_file_identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_size, value.st_mtime_ns, value.st_ctime_ns
-def _runtime_home_directory_binding(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_mtime_ns, value.st_ctime_ns
+def _null_home_binding(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_rdev
 def _validated_azure_config(home: Path) -> tuple[Path, str]:
     if not home.is_absolute() or home != Path(os.path.abspath(home)): raise RecoveryPlanError("Azure CLI home path is invalid")  # noqa: E701
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
@@ -1045,89 +1045,41 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
         os.close(lock)
 
 
-def _prepare_and_verify_runtime_home(
-    runtime_directory: Path, *, create_missing: bool
-) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    home = runtime_directory / "azure-home"
-    terraform_home = home / ".terraform.d"
-    for directory, label in (
-        (home, "trusted runtime home"),
-        (terraform_home, "trusted OpenTofu home"),
-    ):
-        if directory.exists():
-            _require_protected_directory(directory, label=label)
-        elif create_missing:
-            _create_protected_directory(directory, label=label)
-        else:
-            raise RecoveryPlanError(f"{label} is unavailable")
-    runtime_descriptor: int | None = None
-    home_descriptor: int | None = None
-    terraform_descriptor: int | None = None
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+def _validated_null_home() -> tuple[int, ...]:
+    path = Path(os.devnull)
+    if path != Path("/dev/null"):
+        raise RecoveryPlanError("null HOME path is not exact")
+    _reject_symlink_components(path, label="null HOME")
+    current = Path(path.anchor)
+    for part in path.parts[1:-1]:
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except OSError as exc:
+            raise RecoveryPlanError("null HOME path is unavailable") from exc
+        if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise RecoveryPlanError("null HOME path is unsafe")
+    descriptor: int | None = None
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        runtime_descriptor = _open_protected_directory(
-            runtime_directory, label="trusted runtime directory"
-        )
-        home_descriptor = os.open("azure-home", flags, dir_fd=runtime_descriptor)
-        terraform_descriptor = os.open(".terraform.d", flags, dir_fd=home_descriptor)
-        home_before = os.fstat(home_descriptor)
-        terraform_before = os.fstat(terraform_descriptor)
-        for metadata, descriptor, label in (
-            (home_before, home_descriptor, "trusted runtime home"),
-            (terraform_before, terraform_descriptor, "trusted OpenTofu home"),
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        linked = os.stat(path, follow_symlinks=False)
+        binding = _null_home_binding(before)
+        if (
+            not stat.S_ISCHR(before.st_mode)
+            or before.st_uid != 0
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o666
+            or binding != _null_home_binding(linked)
         ):
-            if (
-                not stat.S_ISDIR(metadata.st_mode)
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o700
-            ):
-                raise RecoveryPlanError(f"{label} is unsafe")
-            _require_safe_acl(descriptor, label=label)
-        if set(os.listdir(home_descriptor)) != {".terraform.d"} or os.listdir(
-            terraform_descriptor
-        ):
-            raise RecoveryPlanError("trusted runtime home is not exact")
-        home_after = os.fstat(home_descriptor)
-        terraform_after = os.fstat(terraform_descriptor)
-        home_linked = os.stat(
-            "azure-home", dir_fd=runtime_descriptor, follow_symlinks=False
-        )
-        terraform_linked = os.stat(
-            ".terraform.d", dir_fd=home_descriptor, follow_symlinks=False
-        )
+            raise RecoveryPlanError("null HOME device is unsafe")
+        return binding
     except OSError as exc:
-        raise RecoveryPlanError("trusted runtime home is unavailable") from exc
+        raise RecoveryPlanError("null HOME device is unavailable") from exc
     finally:
-        for descriptor in (terraform_descriptor, home_descriptor, runtime_descriptor):
-            if descriptor is not None:
-                os.close(descriptor)
-    bindings = (
-        _runtime_home_directory_binding(home_before),
-        _runtime_home_directory_binding(terraform_before),
-    )
-    if bindings != (
-        _runtime_home_directory_binding(home_after),
-        _runtime_home_directory_binding(terraform_after),
-    ) or bindings != (
-        _runtime_home_directory_binding(home_linked),
-        _runtime_home_directory_binding(terraform_linked),
-    ):
-        raise RecoveryPlanError("trusted runtime home changed during validation")
-    return bindings
-
-
-def _runtime_home_matches(
-    runtime_directory: Path,
-    expected: tuple[tuple[int, ...], tuple[int, ...]],
-) -> bool:
-    try:
-        return (
-            _prepare_and_verify_runtime_home(runtime_directory, create_missing=False)
-            == expected
-        )
-    except RecoveryPlanError:
-        return False
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _azure_cli_closure_entries(
@@ -1277,7 +1229,7 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
         "AZURE_LOGGING_ENABLE_LOG_FILE": "false",
         "AZURE_CORE_USE_MSAL_HTTP_CACHE": "false",
         "DYLD_LIBRARY_PATH": ":".join(map(str, library_directories)),
-        "HOME": str(runtime_directory / "azure-home"),
+        "HOME": os.devnull,
         "NETRC": os.devnull,
         "OPENSSL_CONF": os.devnull,
         "OPENSSL_MODULES": str(openssl_modules),
@@ -1296,7 +1248,6 @@ def _azure_cli_guard_source(runtime_directory: Path) -> str:
     source = r"""import ctypes,errno,fcntl,hashlib,json,os,runpy,secrets,shutil,signal,stat,sys
 EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None)
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
-def directory_binding(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_mtime_ns,value.st_ctime_ns
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
 def acl_state(fd):
     if sys.platform=="darwin":
@@ -1325,17 +1276,15 @@ def acl_state(fd):
 def safe_acl(fd,deny_only=False):
     has_acl,has_allow=acl_state(fd)
     if has_allow or (has_acl and not deny_only):raise ValueError
-def validate_home():
-    descriptors=[]
+def validate_null_home():
+    if os.environ.get("HOME")!=os.devnull:raise ValueError
+    fd=None
     try:
-        home_fd=os.open("azure-home",DIRECTORY_FLAGS,dir_fd=parent_fd);descriptors.append(home_fd);terraform_fd=os.open(".terraform.d",DIRECTORY_FLAGS,dir_fd=home_fd);descriptors.append(terraform_fd);home_before=os.fstat(home_fd);terraform_before=os.fstat(terraform_fd)
-        if not stat.S_ISDIR(home_before.st_mode) or home_before.st_uid!=os.geteuid() or stat.S_IMODE(home_before.st_mode)!=0o700 or not stat.S_ISDIR(terraform_before.st_mode) or terraform_before.st_uid!=os.geteuid() or stat.S_IMODE(terraform_before.st_mode)!=0o700:raise ValueError
-        safe_acl(home_fd);safe_acl(terraform_fd)
-        if set(os.listdir(home_fd))!={".terraform.d"} or os.listdir(terraform_fd):raise ValueError
-        home_after=os.fstat(home_fd);terraform_after=os.fstat(terraform_fd);home_linked=os.stat("azure-home",dir_fd=parent_fd,follow_symlinks=False);terraform_linked=os.stat(".terraform.d",dir_fd=home_fd,follow_symlinks=False);bindings=(directory_binding(home_before),directory_binding(terraform_before))
-        if bindings!=(directory_binding(home_after),directory_binding(terraform_after)) or bindings!=(directory_binding(home_linked),directory_binding(terraform_linked)):raise ValueError
-        return bindings
-    finally:[os.close(fd) for fd in reversed(descriptors)]
+        fd=os.open(os.devnull,os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0));before=os.fstat(fd);linked=os.stat(os.devnull,follow_symlinks=False);binding=(before.st_dev,before.st_ino,before.st_uid,before.st_nlink,stat.S_IMODE(before.st_mode),before.st_rdev)
+        if not stat.S_ISCHR(before.st_mode) or before.st_uid!=0 or before.st_nlink!=1 or stat.S_IMODE(before.st_mode)!=0o666 or binding!=(linked.st_dev,linked.st_ino,linked.st_uid,linked.st_nlink,stat.S_IMODE(linked.st_mode),linked.st_rdev):raise ValueError
+        return binding
+    finally:
+        if fd is not None:os.close(fd)
 def capture(source):
     if not os.path.isabs(source) or os.path.normpath(source)!=source or os.path.basename(source)!=".azure":raise ValueError
     home=os.path.dirname(source);descriptors=[]
@@ -1396,7 +1345,7 @@ def cleanup():
             created_metadata=os.fstat(created_fd);created_identity=(created_metadata.st_dev,created_metadata.st_ino,created_metadata.st_uid)
             if created_fd_was_established:
                 metadata_safe=stat.S_ISDIR(created_metadata.st_mode) and created_metadata.st_uid==os.geteuid() and stat.S_IMODE(created_metadata.st_mode)==0o700
-                if snapshot_identity is None or not remove_snapshot(snapshot_name,created_fd,snapshot_identity):raise ValueError
+                if not remove_snapshot(snapshot_name,created_fd,snapshot_identity if snapshot_identity is not None else created_identity):raise ValueError
                 try:safe_acl(created_fd)
                 except (OSError,ValueError):metadata_safe=False
                 if not metadata_safe:ok=False
@@ -1434,7 +1383,7 @@ try:
         previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
         if any(value in previous_mask for value in TERMINATION_SIGNALS):raise ValueError
         for value in TERMINATION_SIGNALS:signal.signal(value,terminate)
-        expected_binding=os.environ.pop(BINDING_ENV)
+        null_home_binding=validate_null_home();expected_binding=os.environ.pop(BINDING_ENV)
         if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
         binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
         if binding!=expected_binding:raise ValueError
@@ -1444,7 +1393,6 @@ try:
         if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
         safe_acl(lock_fd);fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lock_current=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
         if file_identity(lock_metadata)!=file_identity(lock_current) or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
-        home_binding=validate_home()
         stale_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS);stale_failed=False
         try:
             for stale_name in sorted(os.listdir(parent_fd)):
@@ -1489,11 +1437,9 @@ try:
     except BaseException:
         print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
     try:
-        if validate_home()!=home_binding:raise ValueError
-    except (OSError,ValueError):print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
-    runpy.run_module("azure.cli",run_name="__main__")
-    try:
-        if validate_home()!=home_binding:raise ValueError
+        if validate_null_home()!=null_home_binding:raise ValueError
+        runpy.run_module("azure.cli",run_name="__main__")
+        if validate_null_home()!=null_home_binding:raise ValueError
     except (OSError,ValueError):print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
 finally:
     cleanup_ok,cleanup_interrupted=cleanup_until_complete()
@@ -1842,7 +1788,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
     )
     azure_cli_directory = (
         runtime_directory
-        if runtime_directory is not None and runtime_directory.is_dir()
+        if runtime_directory is not None
         else EXPECTED_AZURE_CLI_PATH.parent
     )
     environment = {
@@ -1861,7 +1807,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
-        "HOME": str(home),
+        "HOME": os.devnull,
         "LANG": "C",
         "LC_ALL": "C",
         "NETRC": os.devnull,
@@ -1874,7 +1820,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         azure_config_directory, azure_config_binding = _validated_azure_config(home)
         environment.update({"AZURE_CONFIG_DIR": str(azure_config_directory), AZURE_CONFIG_BINDING_ENV: azure_config_binding})  # noqa: E702  # fmt: skip
         environment["TF_DATA_DIR"] = str(data_dir)
-        if runtime_directory is not None and runtime_directory.is_dir():
+        if runtime_directory is not None:
             environment.update(_azure_cli_environment(runtime_directory))
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
     if ssh_auth_sock:
@@ -1898,21 +1844,15 @@ def _run_process(
     max_output_bytes: int = 8 * 1024 * 1024,
     data_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    runtime_home_binding: tuple[tuple[int, ...], tuple[int, ...]] | None = None
-    runtime_directory: Path | None = None
+    null_home_binding = _validated_null_home()
     if data_dir is not None:
-        runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
-        if runtime_directory.is_dir():
-            runtime_home_binding = _prepare_and_verify_runtime_home(
-                runtime_directory, create_missing=False
-            )
+        _require_protected_directory(
+            data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME,
+            label="trusted runtime directory",
+        )
     environment = _normalized_environment(data_dir=data_dir)
-    if (
-        runtime_home_binding is not None
-        and runtime_directory is not None
-        and not _runtime_home_matches(runtime_directory, runtime_home_binding)
-    ):
-        raise RecoveryPlanError("trusted runtime home changed before execution")
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed before execution")
     try:
         process = subprocess.Popen(
             list(arguments),
@@ -1955,12 +1895,8 @@ def _run_process(
                     )
                 streams[key.data].append(chunk)
         returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
-        if (
-            runtime_home_binding is not None
-            and runtime_directory is not None
-            and not _runtime_home_matches(runtime_directory, runtime_home_binding)
-        ):
-            raise RecoveryPlanError("trusted runtime home changed during execution")
+        if _validated_null_home() != null_home_binding:
+            raise RecoveryPlanError("null HOME changed during execution")
     except (OSError, subprocess.TimeoutExpired, RecoveryPlanError) as exc:
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -2035,7 +1971,7 @@ def _snapshot_and_verify_runtime_with_protected_umask(
             _create_protected_directory(directory, label=f"trusted {name}")
         if any(directory.iterdir()):
             raise RecoveryPlanError(f"trusted {name} directory is not empty")
-    _prepare_and_verify_runtime_home(runtime_directory, create_missing=True)
+    null_home_binding = _validated_null_home()
     tofu = _snapshot_executable(
         EXPECTED_TOFU_PATH,
         runtime_directory / "tofu",
@@ -2056,7 +1992,6 @@ def _snapshot_and_verify_runtime_with_protected_umask(
         AZURE_CONFIG_LOCK_NAME,
         "az",
         "azure-extensions",
-        "azure-home",
         "homebrew",
         "tofu",
     }:
@@ -2086,7 +2021,8 @@ def _snapshot_and_verify_runtime_with_protected_umask(
     )
     if azure_cloud.returncode != 0 or _sha256_bytes(_canonical_json_bytes(_load_json_bytes(azure_cloud.stdout, label="Azure cloud output"))) != EXPECTED_AZURE_CLOUD_SHA256:  # fmt: skip
         raise RecoveryPlanError("the Azure cloud manifest is not pinned")
-    _prepare_and_verify_runtime_home(runtime_directory, create_missing=False)
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed during runtime validation")
     _validate_runtime_snapshot(
         tofu, label="OpenTofu", expected_sha256=EXPECTED_TOFU_SHA256
     )
@@ -2098,7 +2034,8 @@ def _snapshot_and_verify_runtime_with_protected_umask(
         _canonical_json_bytes(
             {
                 "azure_cli_closure_sha256": azure_cli_closure_sha256,
-                "azure_cli_config_policy": "private-config-dedicated-home-v3",
+                "azure_cli_config_policy": "private-config-null-home-v4",
+                "null_home_binding": null_home_binding,
                 "azure_cloud_sha256": EXPECTED_AZURE_CLOUD_SHA256,
                 "azure_cli_wrapper_sha256": wrapper_sha256,
                 "open_tofu_sha256": EXPECTED_TOFU_SHA256,

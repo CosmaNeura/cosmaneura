@@ -602,16 +602,14 @@ def _open_pinned_plan(saved_plan: Path, *, expected_sha256: str, expected_identi
 def _execution_arguments(tofu: Path, plan_descriptor: int) -> list[str]:
     return [str(tofu), f'-chdir={recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
 
-def _runtime_home_binding(tofu: Path) -> tuple[tuple[int, ...], tuple[int, ...]]:
+def _null_home_binding() -> tuple[int, ...]:
     try:
-        return recovery._prepare_and_verify_runtime_home(
-            tofu.parent, create_missing=False
-        )
+        return recovery._validated_null_home()
     except recovery.RecoveryPlanError:
         _fail('runtime.changed')
 
 
-def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, azure_config_binding: str, execution_dir: Path) -> dict[str, str]:
+def _execution_environment(*, azure_cli: Path, azure_config: Path, azure_config_binding: str, execution_dir: Path) -> dict[str, str]:
     path = ':'.join(dict.fromkeys((str(azure_cli.parent), '/usr/bin', '/bin')))
     environment = {
         'PATH': path, 'LC_ALL': 'C', 'LANG': 'C',
@@ -676,13 +674,13 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
         final = _validate_local(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, receipt_path=receipt_path, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256, expected_receipt_sha256=expected_receipt_sha256, python_binding=python_binding, clock=clock, boot_session=boot_session)
         if initial != final:
             _fail('binding.changed')
-        runtime_home_binding = _runtime_home_binding(final.tofu)
+        null_home_binding = _null_home_binding()
         deadline = time.monotonic() + CONFIRMATION_SECONDS
         _confirm_operator(final, expected_source_commit, expected_saved_plan_sha256, expected_receipt_sha256, deadline, challenge_source)
         newest_arm_date = _revalidate_preclaim(final, execution_dir=execution_dir, reader=reader, expected_source_commit=expected_source_commit, expected_principal_sha256=expected_azure_principal_sha256, expected_live_snapshot=live_snapshot, deadline=deadline, clock=clock)
-        if _runtime_home_binding(final.tofu) != runtime_home_binding:
+        if _null_home_binding() != null_home_binding:
             _fail('runtime.changed')
-        environment = _execution_environment(azure_cli=final.tofu.with_name('az'), home=home, azure_config=azure_config, azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution_dir)
+        environment = _execution_environment(azure_cli=final.tofu.with_name('az'), azure_config=azure_config, azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution_dir)
         plan_descriptor: int | None = None
         try:
             plan_descriptor = _open_pinned_plan(saved_plan, expected_sha256=expected_saved_plan_sha256, expected_identity=final.identities[0])
@@ -701,11 +699,11 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
                 'apply_outcome': 'unknown',
             }
             _require_deadline(deadline)
-            if _runtime_home_binding(final.tofu) != runtime_home_binding:
+            if _null_home_binding() != null_home_binding:
                 _fail('runtime.changed')
             _claim(execution_dir, claim)
             _require_deadline(deadline)
-            if _runtime_home_binding(final.tofu) != runtime_home_binding:
+            if _null_home_binding() != null_home_binding:
                 _fail('runtime.changed')
             os.execve(str(final.tofu), argv, environment)
             _fail('execve.returned')
