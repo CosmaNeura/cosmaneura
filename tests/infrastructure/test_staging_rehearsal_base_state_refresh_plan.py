@@ -495,13 +495,10 @@ def test_state_binding_ignores_only_check_result_serialization() -> None:
     before = _state(refreshed=False)
     after = copy.deepcopy(before)
     after["check_results"] = [{"status": "pass"}]
-    assert refresh._state_binding_projection(
-        before
-    ) == refresh._state_binding_projection(after)
+    project = refresh._state_binding_projection
+    assert refresh._json_equal(project(before), project(after))
     after["serial"] = 9
-    assert refresh._state_binding_projection(
-        before
-    ) != refresh._state_binding_projection(after)
+    assert not refresh._json_equal(project(before), project(after))
 
 
 def test_fixed_generation_uses_refresh_only_and_no_target(

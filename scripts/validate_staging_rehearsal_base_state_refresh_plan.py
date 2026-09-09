@@ -816,8 +816,10 @@ def _validate_drift(
     drift = plan.get("resource_drift")
     if not isinstance(drift, Sequence) or isinstance(drift, (str, bytes)):
         raise RefreshPlanError("refresh drift is missing")
-    by_address = {
-        item.get("address"): item for item in drift if isinstance(item, Mapping)
+    by_address: dict[str, Mapping[str, Any]] = {
+        address: item
+        for item in drift
+        if isinstance(item, Mapping) and isinstance(address := item.get("address"), str)
     }
     if len(by_address) != len(drift) or set(by_address) != EXPECTED_DRIFT_ADDRESSES:
         raise RefreshPlanError("refresh drift address set is not exact")
