@@ -78,11 +78,26 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id', name=op.f('ambiguous_patient_match_pkey')),
     comment='"Needs your confirmation" queue for a SchedulingProvider roster-sync\nevent that had no deterministic PatientExternalIdentity match. A\ncandidate name/email/phone is shown as-is; it is never auto-applied — a\ndoctor always resolves the row explicitly. See\ncontracts/scheduling-provider-v1.md.\n\nScoped to roster sync only, not Zoom capture: Zoom never records without\na prior explicit, occurrence-scoped authorization (see\napp/services/zoom_webhooks.py::_consume_bound_appointment), which is\nalso this platform\'s recording-consent gate — a "capture first, match\nlater" path would mean recording before consent exists, so it isn\'t\nbuilt (decided 2026-09-09).'
     )
-    op.create_index('uq_appointment_doctor_external_id', 'appointment', ['doctor_id', 'external_id'], unique=True, postgresql_where=sa.text('external_id IS NOT NULL'))
     op.add_column('patient', sa.Column('email', sqlmodel.sql.sqltypes.AutoString(), nullable=True, comment='as given by the originating system; never used to auto-match across records'))
     op.add_column('patient', sa.Column('phone', sqlmodel.sql.sqltypes.AutoString(), nullable=True, comment='as given by the originating system; never used to auto-match across records'))
     op.add_column('patient', sa.Column('created_by_system', sqlmodel.sql.sqltypes.AutoString(), nullable=True, comment='the system that created this patient record. gui, api, acuity, google_calendar, etc'))
     # ### end Alembic commands ###
+
+    # appointment is a live table (CLAUDE.md), so this index is created
+    # CONCURRENTLY rather than as part of the block above: a plain
+    # CREATE UNIQUE INDEX takes an ACCESS EXCLUSIVE lock that blocks reads
+    # and writes for the duration (squawk's require-concurrent-index-creation
+    # rule). CONCURRENTLY cannot run inside a transaction, hence the
+    # autocommit block. IF NOT EXISTS makes a retried migration safe if a
+    # prior run created the index but failed before recording the revision
+    # (squawk's prefer-robust-stmts rule) — CONCURRENTLY has no op.create_index
+    # equivalent for that flag, so this is raw SQL.
+    with op.get_context().autocommit_block():
+        op.execute(
+            "CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "
+            "uq_appointment_doctor_external_id ON appointment (doctor_id, external_id) "
+            "WHERE external_id IS NOT NULL"
+        )
 
 
 def downgrade() -> None:
@@ -90,7 +105,10 @@ def downgrade() -> None:
     op.drop_column('patient', 'created_by_system')
     op.drop_column('patient', 'phone')
     op.drop_column('patient', 'email')
-    op.drop_index('uq_appointment_doctor_external_id', table_name='appointment', postgresql_where=sa.text('external_id IS NOT NULL'))
+    with op.get_context().autocommit_block():
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS uq_appointment_doctor_external_id"
+        )
     op.drop_table('ambiguous_patient_match')
     op.drop_table('patient_external_identity')
     op.drop_table('doctor_scheduling_integration')
