@@ -12,6 +12,7 @@ import pwd
 import re
 import selectors
 import shlex
+import shutil
 import signal
 import stat
 import subprocess
@@ -44,6 +45,50 @@ EXPECTED_AZURE_CLI_SHA256 = (
 EXPECTED_AZURE_CLI_VERSION_SHA256 = (
     "95aba806efb5d25cc23df04924a6da51f7571a08a6e21283c29c96a10a0b91a0"
 )
+EXPECTED_HOMEBREW_ROOT = Path("/opt/homebrew")
+EXPECTED_AZURE_CLI_FORMULAE: Mapping[str, str] = {
+    "azure-cli": "2.89.1",
+    "ca-certificates": "2026-08-13",
+    "libsodium": "1.0.22",
+    "libyaml": "0.2.5",
+    "lz4": "1.10.0",
+    "mpdecimal": "4.0.1",
+    "openssl@3": "3.6.3",
+    "python@3.14": "3.14.7",
+    "readline": "8.3.3",
+    "sqlite": "3.53.4",
+    "xz": "5.8.3",
+    "zstd": "1.5.7_1",
+}
+# Canonical content/type/executable-bit manifest for every file and symlink in
+# the Azure CLI Homebrew formula plus its complete non-system runtime closure.
+EXPECTED_AZURE_CLI_CLOSURE_SHA256 = (
+    "eb13dfaf7731f89ed7bf68591cfc6da4b6df4f27752354db4d3be8caa7049383"
+)
+EXPECTED_PATCHED_PYTHON_BINARIES: Mapping[str, tuple[int, str]] = {
+    (
+        "Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/"
+        "bin/python3.14"
+    ): (
+        52_448,
+        "e8179bf1ac3710499f164f877a3713bbaa34b5921beb70881f5dcd4c45a17827",
+    ),
+    (
+        "Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/"
+        "Resources/Python.app/Contents/MacOS/Python"
+    ): (
+        51_392,
+        "0d6d087edcbab138b3cf861429e6bd66e963f5ca0f3113b2c0a98939d24ea27b",
+    ),
+}
+REJECTED_SAVED_PLAN_SHA256S: frozenset[str] = frozenset(
+    {
+        # Rejected by independent review on 2026-09-09. This artifact predates
+        # the complete runtime, state-projection, and exact no-op bindings and
+        # must never regain authorization merely because later code can parse it.
+        "2f16bcb6fdeddeca55987084511361f030c7bd5648435d7487461eb540f7ab36",
+    }
+)
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
 EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
@@ -54,6 +99,8 @@ MAXIMUM_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAXIMUM_PLAN_JSON_BYTES = 128 * 1024 * 1024
 MAXIMUM_PLAN_ARCHIVE_BYTES = 256 * 1024 * 1024
 MAXIMUM_EXECUTABLE_BYTES = 128 * 1024 * 1024
+MAXIMUM_RUNTIME_CLOSURE_BYTES = 768 * 1024 * 1024
+MAXIMUM_RUNTIME_CLOSURE_ENTRIES = 50_000
 MAXIMUM_PLAN_AGE = timedelta(hours=4)
 MAXIMUM_CLOCK_SKEW = timedelta(minutes=5)
 TRUSTED_RUNTIME_DIRECTORY_NAME = ".trusted-runtime-bin"
@@ -388,6 +435,8 @@ class RuntimeSnapshot:
     tofu_sha256: str
     azure_cli_sha256: str
     azure_cli_version_sha256: str
+    azure_cli_closure_sha256: str
+    runtime_snapshot_sha256: str
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -631,6 +680,419 @@ def _snapshot_executable(
     return destination
 
 
+def _runtime_file_record(path: Path, *, label: str) -> tuple[Any, ...]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RecoveryPlanError(f"{label} is not a regular file")
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        before_identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        after_identity = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        )
+        if before_identity != after_identity:
+            raise RecoveryPlanError(f"{label} changed while it was hashed")
+        return (
+            "file",
+            bool(stat.S_IMODE(before.st_mode) & 0o111),
+            before.st_size,
+            digest.hexdigest(),
+        )
+    except OSError as exc:
+        raise RecoveryPlanError(f"{label} could not be hashed") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _azure_cli_closure_entries(
+    homebrew_root: Path, *, snapshot: bool
+) -> Mapping[str, tuple[Any, ...]]:
+    if not homebrew_root.is_absolute() or homebrew_root != Path(
+        os.path.abspath(homebrew_root)
+    ):
+        raise RecoveryPlanError("Azure CLI closure root is invalid")
+    entries: dict[str, tuple[Any, ...]] = {}
+    total_bytes = 0
+
+    def add(path: Path) -> None:
+        nonlocal total_bytes
+        try:
+            metadata = os.lstat(path)
+        except OSError as exc:
+            raise RecoveryPlanError("Azure CLI closure entry is unavailable") from exc
+        if metadata.st_uid not in {0, os.geteuid()}:
+            raise RecoveryPlanError("Azure CLI closure ownership is not trusted")
+        mode = stat.S_IMODE(metadata.st_mode)
+        relative = path.relative_to(homebrew_root).as_posix()
+        if relative in entries:
+            raise RecoveryPlanError("Azure CLI closure contains a duplicate entry")
+        if stat.S_ISLNK(metadata.st_mode):
+            try:
+                target = os.readlink(path)
+            except OSError as exc:
+                raise RecoveryPlanError(
+                    "Azure CLI closure link is unavailable"
+                ) from exc
+            if Path(target).is_absolute():
+                raise RecoveryPlanError("Azure CLI closure contains an absolute link")
+            lexical_target = Path(os.path.abspath(path.parent / target))
+            if not lexical_target.is_relative_to(homebrew_root):
+                raise RecoveryPlanError("Azure CLI closure link escapes its root")
+            try:
+                resolved_target = path.resolve(strict=True)
+            except OSError as exc:
+                raise RecoveryPlanError("Azure CLI closure link is invalid") from exc
+            if not resolved_target.is_relative_to(homebrew_root):
+                raise RecoveryPlanError("Azure CLI closure link escapes its root")
+            entries[relative] = ("link", target)
+        elif stat.S_ISDIR(metadata.st_mode):
+            if (snapshot and mode & 0o222) or (not snapshot and mode & 0o022):
+                raise RecoveryPlanError("Azure CLI closure permissions are not trusted")
+            entries[relative] = ("directory",)
+        elif stat.S_ISREG(metadata.st_mode):
+            if (snapshot and mode & 0o222) or (not snapshot and mode & 0o022):
+                raise RecoveryPlanError("Azure CLI closure permissions are not trusted")
+            record = _runtime_file_record(path, label="Azure CLI closure file")
+            total_bytes += int(record[2])
+            if total_bytes > MAXIMUM_RUNTIME_CLOSURE_BYTES:
+                raise RecoveryPlanError("Azure CLI closure is too large")
+            entries[relative] = record
+        else:
+            raise RecoveryPlanError("Azure CLI closure contains an unsafe file type")
+        if len(entries) > MAXIMUM_RUNTIME_CLOSURE_ENTRIES:
+            raise RecoveryPlanError("Azure CLI closure contains too many entries")
+
+    for formula, version in sorted(EXPECTED_AZURE_CLI_FORMULAE.items()):
+        formula_root = homebrew_root / "Cellar" / formula / version
+        _reject_symlink_components(formula_root, label="Azure CLI formula")
+        add(formula_root)
+        for directory, names, files in os.walk(formula_root, followlinks=False):
+            names.sort()
+            files.sort()
+            for name in (*names, *files):
+                add(Path(directory) / name)
+        opt_link = homebrew_root / "opt" / formula
+        try:
+            target = os.readlink(opt_link)
+        except OSError as exc:
+            raise RecoveryPlanError("Azure CLI formula link is unavailable") from exc
+        if target != f"../Cellar/{formula}/{version}":
+            raise RecoveryPlanError("Azure CLI formula link target is not pinned")
+        add(opt_link)
+    return entries
+
+
+def _runtime_entries_sha256(entries: Mapping[str, tuple[Any, ...]]) -> str:
+    return _sha256_bytes(
+        _canonical_json_bytes([[name, *entries[name]] for name in sorted(entries)])
+    )
+
+
+def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
+    homebrew = runtime_directory / "homebrew"
+    azure_version = EXPECTED_AZURE_CLI_FORMULAE["azure-cli"]
+    python_version = EXPECTED_AZURE_CLI_FORMULAE["python@3.14"]
+    library_directories = [
+        homebrew
+        / "Cellar"
+        / "python@3.14"
+        / python_version
+        / "Frameworks"
+        / "Python.framework"
+        / "Versions"
+        / "3.14",
+        *(
+            homebrew / "opt" / formula / "lib"
+            for formula in (
+                "libsodium",
+                "libyaml",
+                "lz4",
+                "mpdecimal",
+                "openssl@3",
+                "readline",
+                "sqlite",
+                "xz",
+                "zstd",
+            )
+        ),
+    ]
+    site_packages = (
+        homebrew
+        / "Cellar"
+        / "azure-cli"
+        / azure_version
+        / "libexec"
+        / "lib"
+        / "python3.14"
+        / "site-packages"
+    )
+    python_home = (
+        homebrew
+        / "Cellar"
+        / "python@3.14"
+        / python_version
+        / "Frameworks"
+        / "Python.framework"
+        / "Versions"
+        / "3.14"
+    )
+    certificate = site_packages / "certifi" / "cacert.pem"
+    openssl_modules = homebrew / "opt" / "openssl@3" / "lib" / "ossl-modules"
+    return {
+        "AZ_INSTALLER": "HOMEBREW",
+        "DYLD_LIBRARY_PATH": ":".join(map(str, library_directories)),
+        "OPENSSL_CONF": os.devnull,
+        "OPENSSL_MODULES": str(openssl_modules),
+        "PYTHONHASHSEED": "0",
+        "PYTHONHOME": str(python_home),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": str(site_packages),
+        "PYTHONSAFEPATH": "1",
+        "REQUESTS_CA_BUNDLE": str(certificate),
+        "SSL_CERT_FILE": str(certificate),
+    }
+
+
+def _azure_cli_wrapper(runtime_directory: Path) -> bytes:
+    homebrew = runtime_directory / "homebrew"
+    python_version = EXPECTED_AZURE_CLI_FORMULAE["python@3.14"]
+    python = (
+        homebrew
+        / "Cellar"
+        / "python@3.14"
+        / python_version
+        / "Frameworks"
+        / "Python.framework"
+        / "Versions"
+        / "3.14"
+        / "bin"
+        / "python3.14"
+    )
+    lines = ["#!/bin/sh", "set -eu"]
+    lines.extend(
+        f"export {name}={shlex.quote(value)}"
+        for name, value in _azure_cli_environment(runtime_directory).items()
+    )
+    lines.append(f'exec {shlex.quote(str(python))} -sP -m azure.cli "$@"')
+    return ("\n".join(lines) + "\n").encode()
+
+
+def _expected_azure_cli_snapshot_entries(
+    source_entries: Mapping[str, tuple[Any, ...]], runtime_directory: Path
+) -> Mapping[str, tuple[Any, ...]]:
+    expected = dict(source_entries)
+    version = EXPECTED_AZURE_CLI_FORMULAE["azure-cli"]
+    relative = f"Cellar/azure-cli/{version}/libexec/pyvenv.cfg"
+    source_path = EXPECTED_HOMEBREW_ROOT / relative
+    try:
+        source_bytes = source_path.read_bytes()
+    except OSError as exc:
+        raise RecoveryPlanError("Azure CLI Python environment is unavailable") from exc
+    replaced = source_bytes.replace(
+        str(EXPECTED_HOMEBREW_ROOT).encode(),
+        str(runtime_directory / "homebrew").encode(),
+    )
+    if replaced == source_bytes:
+        raise RecoveryPlanError("Azure CLI Python environment is not relocatable")
+    source_record = expected.get(relative)
+    if source_record is None or source_record[0] != "file":
+        raise RecoveryPlanError("Azure CLI Python environment is incomplete")
+    expected[relative] = (
+        "file",
+        source_record[1],
+        len(replaced),
+        _sha256_bytes(replaced),
+    )
+    for binary, (size, sha256) in EXPECTED_PATCHED_PYTHON_BINARIES.items():
+        source_record = expected.get(binary)
+        if source_record is None or source_record[:2] != ("file", True):
+            raise RecoveryPlanError("Azure CLI Python runtime is incomplete")
+        expected[binary] = ("file", True, size, sha256)
+    signature_directory = (
+        "Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/"
+        "Resources/Python.app/Contents/_CodeSignature"
+    )
+    expected[signature_directory] = ("directory",)
+    expected[f"{signature_directory}/CodeResources"] = (
+        "file",
+        False,
+        2_706,
+        "7d4ec6cd1f3d7672036476d3383df692b89db41c1d03b4a4c0744f4a76785c58",
+    )
+    return expected
+
+
+def _write_existing_snapshot_file(path: Path, value: bytes) -> None:
+    flags = (
+        os.O_WRONLY
+        | os.O_TRUNC
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        offset = 0
+        while offset < len(value):
+            offset += os.write(descriptor, value[offset:])
+        os.fchmod(descriptor, 0o400)
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise RecoveryPlanError("Azure CLI snapshot could not be relocated") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _patch_snapshot_python(homebrew: Path) -> None:
+    source_dependency = (
+        "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/"
+        "Python.framework/Versions/3.14/Python"
+    )
+    replacements = {
+        next(
+            name
+            for name in EXPECTED_PATCHED_PYTHON_BINARIES
+            if name.endswith("bin/python3.14")
+        ): "@executable_path/../Python",
+        next(
+            name
+            for name in EXPECTED_PATCHED_PYTHON_BINARIES
+            if name.endswith("Contents/MacOS/Python")
+        ): "@executable_path/../../../../Python",
+    }
+    environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"}
+    for relative, replacement in replacements.items():
+        binary = homebrew / relative
+        for command in (
+            [
+                "/usr/bin/install_name_tool",
+                "-change",
+                source_dependency,
+                replacement,
+                str(binary),
+            ],
+            ["/usr/bin/codesign", "--force", "--sign", "-", str(binary)],
+        ):
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=homebrew,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RecoveryPlanError(
+                    "Azure CLI Python runtime could not be relocated"
+                ) from exc
+            if result.returncode != 0:
+                raise RecoveryPlanError(
+                    "Azure CLI Python runtime could not be relocated"
+                )
+
+
+def _harden_runtime_tree(root: Path) -> None:
+    for directory, names, files in os.walk(root, topdown=False, followlinks=False):
+        for name in files:
+            path = Path(directory) / name
+            metadata = os.lstat(path)
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RecoveryPlanError("Azure CLI snapshot contains an unsafe file")
+            os.chmod(path, 0o500 if metadata.st_mode & 0o111 else 0o400)
+        for name in names:
+            path = Path(directory) / name
+            if not path.is_symlink():
+                os.chmod(path, 0o500)
+    os.chmod(root, 0o500)
+
+
+def _snapshot_azure_cli_closure(
+    runtime_directory: Path,
+) -> tuple[Path, str]:
+    source_entries = _azure_cli_closure_entries(EXPECTED_HOMEBREW_ROOT, snapshot=False)
+    if _runtime_entries_sha256(source_entries) != EXPECTED_AZURE_CLI_CLOSURE_SHA256:
+        raise RecoveryPlanError("Azure CLI runtime closure is not pinned")
+    snapshot_homebrew = runtime_directory / "homebrew"
+    if not snapshot_homebrew.exists():
+        snapshot_homebrew.mkdir(mode=0o700)
+        (snapshot_homebrew / "Cellar").mkdir(mode=0o700)
+        (snapshot_homebrew / "opt").mkdir(mode=0o700)
+        for formula, version in sorted(EXPECTED_AZURE_CLI_FORMULAE.items()):
+            source = EXPECTED_HOMEBREW_ROOT / "Cellar" / formula / version
+            destination = snapshot_homebrew / "Cellar" / formula / version
+            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.copytree(
+                source,
+                destination,
+                symlinks=True,
+                copy_function=shutil.copy,
+            )
+            os.symlink(
+                f"../Cellar/{formula}/{version}", snapshot_homebrew / "opt" / formula
+            )
+        pyvenv = (
+            snapshot_homebrew
+            / "Cellar"
+            / "azure-cli"
+            / EXPECTED_AZURE_CLI_FORMULAE["azure-cli"]
+            / "libexec"
+            / "pyvenv.cfg"
+        )
+        source_pyvenv = EXPECTED_HOMEBREW_ROOT / pyvenv.relative_to(snapshot_homebrew)
+        relocated = source_pyvenv.read_bytes().replace(
+            str(EXPECTED_HOMEBREW_ROOT).encode(), str(snapshot_homebrew).encode()
+        )
+        _write_existing_snapshot_file(pyvenv, relocated)
+        _patch_snapshot_python(snapshot_homebrew)
+        _harden_runtime_tree(snapshot_homebrew)
+    expected_entries = _expected_azure_cli_snapshot_entries(
+        source_entries, runtime_directory
+    )
+    snapshot_entries = _azure_cli_closure_entries(snapshot_homebrew, snapshot=True)
+    if snapshot_entries != expected_entries:
+        raise RecoveryPlanError("Azure CLI runtime snapshot is not exact")
+    if (
+        _runtime_entries_sha256(
+            _azure_cli_closure_entries(EXPECTED_HOMEBREW_ROOT, snapshot=False)
+        )
+        != EXPECTED_AZURE_CLI_CLOSURE_SHA256
+    ):
+        raise RecoveryPlanError("Azure CLI runtime changed during snapshot")
+    wrapper = runtime_directory / "az"
+    wrapper_bytes = _azure_cli_wrapper(runtime_directory)
+    wrapper_sha256 = _sha256_bytes(wrapper_bytes)
+    if not wrapper.exists():
+        _write_protected_file(wrapper, wrapper_bytes, label="Azure CLI wrapper")
+        os.chmod(wrapper, 0o500)
+    _validate_runtime_snapshot(
+        wrapper, label="Azure CLI wrapper", expected_sha256=wrapper_sha256
+    )
+    return wrapper, _runtime_entries_sha256(snapshot_entries)
+
+
 def _provider_tree_sha256(data_dir: Path) -> str:
     root = data_dir / "providers"
     paths = sorted(root.rglob("terraform-provider-*"))
@@ -776,6 +1238,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
         "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
         "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
+        "AZURE_LOGGING_ENABLE_LOG_FILE": "false",
         "CHECKPOINT_DISABLE": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
         "GIT_CONFIG_NOSYSTEM": "1",
@@ -791,6 +1254,8 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
     }
     if data_dir is not None:
         environment["TF_DATA_DIR"] = str(data_dir)
+        if runtime_directory is not None and runtime_directory.is_dir():
+            environment.update(_azure_cli_environment(runtime_directory))
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
     if ssh_auth_sock:
         try:
@@ -916,17 +1381,17 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         label="OpenTofu",
         expected_sha256=EXPECTED_TOFU_SHA256,
     )
-    azure_cli = _snapshot_executable(
+    _trusted_executable_source(
         EXPECTED_AZURE_CLI_PATH,
-        runtime_directory / "az",
-        label="Azure CLI",
+        label="pinned Azure CLI entrypoint",
         expected_sha256=EXPECTED_AZURE_CLI_SHA256,
     )
+    azure_cli, azure_cli_closure_sha256 = _snapshot_azure_cli_closure(runtime_directory)
     try:
         runtime_names = {entry.name for entry in runtime_directory.iterdir()}
     except OSError as exc:
         raise RecoveryPlanError("trusted runtime directory is unavailable") from exc
-    if runtime_names != {"az", "tofu"}:
+    if runtime_names != {"az", "homebrew", "tofu"}:
         raise RecoveryPlanError("trusted runtime executable set is not exact")
     _verify_tofu_version(tofu, data_dir=data_dir)
     azure_version = _run_process(
@@ -947,8 +1412,18 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
     _validate_runtime_snapshot(
         tofu, label="OpenTofu", expected_sha256=EXPECTED_TOFU_SHA256
     )
+    wrapper_sha256 = _sha256_bytes(_azure_cli_wrapper(runtime_directory))
     _validate_runtime_snapshot(
-        azure_cli, label="Azure CLI", expected_sha256=EXPECTED_AZURE_CLI_SHA256
+        azure_cli, label="Azure CLI wrapper", expected_sha256=wrapper_sha256
+    )
+    runtime_snapshot_sha256 = _sha256_bytes(
+        _canonical_json_bytes(
+            {
+                "azure_cli_closure_sha256": azure_cli_closure_sha256,
+                "azure_cli_wrapper_sha256": wrapper_sha256,
+                "open_tofu_sha256": EXPECTED_TOFU_SHA256,
+            }
+        )
     )
     return RuntimeSnapshot(
         tofu=tofu,
@@ -956,6 +1431,8 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         tofu_sha256=EXPECTED_TOFU_SHA256,
         azure_cli_sha256=EXPECTED_AZURE_CLI_SHA256,
         azure_cli_version_sha256=azure_version_sha256,
+        azure_cli_closure_sha256=azure_cli_closure_sha256,
+        runtime_snapshot_sha256=runtime_snapshot_sha256,
     )
 
 
@@ -983,6 +1460,33 @@ def _show_saved_plan(plan_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
         raise RecoveryPlanError("the saved plan could not be decoded by OpenTofu")
     if not result.stdout or len(result.stdout) > MAXIMUM_PLAN_JSON_BYTES:
         raise RecoveryPlanError("derived plan JSON size is outside the accepted range")
+    return result.stdout
+
+
+def _show_state(state_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
+    with tempfile.TemporaryFile(prefix="cosmaneura-recovery-state-") as state_file:
+        state_file.write(state_bytes)
+        state_file.flush()
+        state_file.seek(0)
+        descriptor = state_file.fileno()
+        result = _run_process(
+            [
+                str(tofu),
+                f"-chdir={REHEARSAL_ROOT}",
+                "show",
+                "-json",
+                f"/dev/fd/{descriptor}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            timeout_seconds=120,
+            pass_fds=(descriptor,),
+            max_output_bytes=MAXIMUM_PLAN_JSON_BYTES,
+            data_dir=data_dir,
+        )
+    if result.returncode != 0:
+        raise RecoveryPlanError("the state projection could not be decoded by OpenTofu")
+    if not result.stdout or len(result.stdout) > MAXIMUM_PLAN_JSON_BYTES:
+        raise RecoveryPlanError("derived state JSON size is outside the accepted range")
     return result.stdout
 
 
@@ -1716,7 +2220,98 @@ def _expected_create_change(address: str) -> Mapping[str, Any]:
     raise RecoveryPlanError("expected create address has no exact value contract")
 
 
-def _validate_noop_change(resource_change: Mapping[str, Any], *, address: str) -> None:
+def _projected_state_resources(
+    state_projection: Mapping[str, Any],
+) -> Mapping[str, Mapping[str, Any]]:
+    if (
+        state_projection.get("format_version") != "1.0"
+        or state_projection.get("terraform_version") != EXPECTED_TOFU_VERSION
+    ):
+        raise RecoveryPlanError("state projection format or runtime is not pinned")
+    values = state_projection.get("values")
+    if not isinstance(values, Mapping):
+        raise RecoveryPlanError("state projection values are missing")
+    root_module = values.get("root_module")
+    if not isinstance(root_module, Mapping) or set(root_module) != {"resources"}:
+        raise RecoveryPlanError("state projection root module is not exact")
+    resources = root_module.get("resources")
+    if not isinstance(resources, Sequence) or isinstance(resources, (str, bytes)):
+        raise RecoveryPlanError("state projection resources are invalid")
+    output: dict[str, Mapping[str, Any]] = {}
+    required = {
+        "address",
+        "mode",
+        "type",
+        "name",
+        "index",
+        "provider_name",
+        "schema_version",
+        "values",
+        "sensitive_values",
+    }
+    optional = {"depends_on", "identity", "identity_schema_version"}
+    for resource in resources:
+        if not isinstance(resource, Mapping):
+            raise RecoveryPlanError("state projection contains an invalid resource")
+        address = resource.get("address")
+        if not isinstance(address, str) or address in output:
+            raise RecoveryPlanError("state projection contains an invalid address")
+        keys = set(resource)
+        if not required <= keys or keys - required - optional:
+            raise RecoveryPlanError(
+                f"state projection resource schema differs: {address}"
+            )
+        identity_keys = {"identity", "identity_schema_version"}
+        if keys & identity_keys and not identity_keys <= keys:
+            raise RecoveryPlanError(
+                f"state projection identity schema differs: {address}"
+            )
+        metadata = _resource_change_metadata(address)
+        if any(
+            _canonical_json_bytes(resource.get(name)) != _canonical_json_bytes(expected)
+            for name, expected in metadata.items()
+        ):
+            raise RecoveryPlanError(
+                f"state projection resource metadata differs: {address}"
+            )
+        expected_identity = EXPECTED_STATE_IDENTITIES.get(address)
+        values_document = resource.get("values")
+        if (
+            expected_identity is None
+            or resource.get("schema_version") != expected_identity[1]
+            or not isinstance(values_document, Mapping)
+            or values_document.get("id") != expected_identity[2]
+            or not isinstance(resource.get("sensitive_values"), Mapping)
+        ):
+            raise RecoveryPlanError(
+                f"state projection resource identity differs: {address}"
+            )
+        if "depends_on" in resource and (
+            not isinstance(resource["depends_on"], Sequence)
+            or isinstance(resource["depends_on"], (str, bytes))
+            or not all(isinstance(item, str) for item in resource["depends_on"])
+        ):
+            raise RecoveryPlanError(
+                f"state projection dependencies are invalid: {address}"
+            )
+        if "identity" in resource and (
+            not isinstance(resource["identity"], Mapping)
+            or isinstance(resource.get("identity_schema_version"), bool)
+            or not isinstance(resource.get("identity_schema_version"), int)
+        ):
+            raise RecoveryPlanError(f"state projection identity is invalid: {address}")
+        output[address] = resource
+    if set(output) != EXPECTED_EXISTING_ADDRESSES:
+        raise RecoveryPlanError("state projection differs from recovery inventory")
+    return output
+
+
+def _validate_noop_change(
+    resource_change: Mapping[str, Any],
+    *,
+    address: str,
+    state_resource: Mapping[str, Any],
+) -> None:
     metadata = _resource_change_metadata(address)
     if set(resource_change) != {*metadata, "change"} or any(
         _canonical_json_bytes(resource_change.get(name))
@@ -1736,33 +2331,50 @@ def _validate_noop_change(resource_change: Mapping[str, Any], *, address: str) -
         "after_sensitive",
     }
     identity_keys = {"before_identity", "after_identity"}
-    if frozenset(change) not in {
-        frozenset(base_keys),
-        frozenset(base_keys | identity_keys),
-    }:
+    state_has_identity = "identity" in state_resource
+    expected_change_keys = base_keys | (identity_keys if state_has_identity else set())
+    if set(change) != expected_change_keys:
         raise RecoveryPlanError(f"existing resource action schema differs: {address}")
     if change.get("actions") != ["no-op"]:
         raise RecoveryPlanError(f"existing resource would change: {address}")
-    before = change.get("before")
-    if not isinstance(before, Mapping) or _canonical_json_bytes(
-        before
-    ) != _canonical_json_bytes(change.get("after")):
-        raise RecoveryPlanError(f"existing resource values would change: {address}")
-    if _canonical_json_bytes(change.get("before_sensitive")) != _canonical_json_bytes(
-        change.get("after_sensitive")
+    expected_values = state_resource["values"]
+    if any(
+        _canonical_json_bytes(change.get(name))
+        != _canonical_json_bytes(expected_values)
+        for name in ("before", "after")
     ):
         raise RecoveryPlanError(
-            f"existing resource sensitivity would change: {address}"
+            f"existing resource values differ from protected state: {address}"
+        )
+    expected_sensitive = state_resource["sensitive_values"]
+    if any(
+        _canonical_json_bytes(change.get(name))
+        != _canonical_json_bytes(expected_sensitive)
+        for name in ("before_sensitive", "after_sensitive")
+    ):
+        raise RecoveryPlanError(
+            f"existing resource sensitivity differs from protected state: {address}"
         )
     if change.get("after_unknown") != {}:
         raise RecoveryPlanError(f"existing resource has unknown values: {address}")
-    if identity_keys <= set(change) and _canonical_json_bytes(
-        change["before_identity"]
-    ) != _canonical_json_bytes(change["after_identity"]):
-        raise RecoveryPlanError(f"existing resource identity would change: {address}")
+    if state_has_identity:
+        expected_identity = state_resource["identity"]
+        if any(
+            _canonical_json_bytes(change.get(name))
+            != _canonical_json_bytes(expected_identity)
+            for name in identity_keys
+        ):
+            raise RecoveryPlanError(
+                f"existing resource identity differs from protected state: {address}"
+            )
 
 
-def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
+def _validate_plan(
+    plan: Mapping[str, Any],
+    *,
+    now: datetime,
+    state_projection: Mapping[str, Any],
+) -> str:
     if plan.get("format_version") != EXPECTED_FORMAT_VERSION:
         raise RecoveryPlanError("plan JSON format version is not pinned")
     if plan.get("terraform_version") != EXPECTED_TOFU_VERSION:
@@ -1785,16 +2397,18 @@ def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
     _validate_checks(plan)
 
     prior_state = plan.get("prior_state")
-    if not isinstance(prior_state, Mapping):
-        raise RecoveryPlanError("plan prior state is missing")
-    values = prior_state.get("values")
-    if not isinstance(values, Mapping):
-        raise RecoveryPlanError("plan prior-state values are missing")
-    root_module = values.get("root_module")
-    if not isinstance(root_module, Mapping):
-        raise RecoveryPlanError("plan prior-state root module is missing")
-    if _module_addresses(root_module) != set(EXPECTED_EXISTING_ADDRESSES):
-        raise RecoveryPlanError("plan prior state differs from recovery inventory")
+    expected_prior_state = {
+        "format_version": state_projection.get("format_version"),
+        "terraform_version": state_projection.get("terraform_version"),
+        "values": state_projection.get("values"),
+    }
+    if not isinstance(prior_state, Mapping) or _canonical_json_bytes(
+        prior_state
+    ) != _canonical_json_bytes(expected_prior_state):
+        raise RecoveryPlanError(
+            "plan prior state differs from the protected state projection"
+        )
+    state_resources = _projected_state_resources(state_projection)
 
     changes = plan.get("resource_changes")
     if not isinstance(changes, Sequence) or isinstance(changes, (str, bytes)):
@@ -1816,7 +2430,9 @@ def _validate_plan(plan: Mapping[str, Any], *, now: datetime) -> str:
             "plan resource address set is not the exact recovery set"
         )
     for address in EXPECTED_EXISTING_ADDRESSES:
-        _validate_noop_change(observed[address], address=address)
+        _validate_noop_change(
+            observed[address], address=address, state_resource=state_resources[address]
+        )
     for address in EXPECTED_CREATE_ADDRESSES:
         if _canonical_json_bytes(observed[address]) != _canonical_json_bytes(
             _expected_create_change(address)
@@ -1840,6 +2456,8 @@ def _validate_captured_artifacts(
     expected_saved_plan_sha256: str | None = None,
 ) -> Mapping[str, Any]:
     saved_plan_sha256 = _sha256_bytes(saved_plan_bytes)
+    if saved_plan_sha256 in REJECTED_SAVED_PLAN_SHA256S:
+        raise RecoveryPlanError("saved plan digest is permanently rejected")
     if (
         expected_saved_plan_sha256 is not None
         and saved_plan_sha256 != expected_saved_plan_sha256
@@ -1876,11 +2494,18 @@ def _validate_captured_artifacts(
             "protected snapshot"
         )
 
+    state_projection_bytes = _show_state(
+        state_bytes, tofu=runtime.tofu, data_dir=data_dir
+    )
+    state_projection = _load_json_bytes(
+        state_projection_bytes, label="derived state JSON"
+    )
+    _projected_state_resources(state_projection)
     plan_json_bytes = _show_saved_plan(
         saved_plan_bytes, tofu=runtime.tofu, data_dir=data_dir
     )
     plan = _load_json_bytes(plan_json_bytes, label="derived plan JSON")
-    plan_timestamp = _validate_plan(plan, now=now)
+    plan_timestamp = _validate_plan(plan, now=now, state_projection=state_projection)
     return {
         "schema_version": 2,
         "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v2",
@@ -1894,6 +2519,7 @@ def _validate_captured_artifacts(
         "state_serial": serial,
         "state_json_sha256": _sha256_bytes(state_bytes),
         "state_semantic_sha256": state_semantic_sha256,
+        "state_projection_sha256": _sha256_bytes(state_projection_bytes),
         "embedded_state_sha256": _sha256_bytes(embedded_state_bytes),
         "saved_plan_sha256": saved_plan_sha256,
         "derived_plan_json_sha256": _sha256_bytes(plan_json_bytes),
@@ -1904,6 +2530,9 @@ def _validate_captured_artifacts(
         "azure_cli_source_path": str(EXPECTED_AZURE_CLI_PATH),
         "azure_cli_sha256": runtime.azure_cli_sha256,
         "azure_cli_version_sha256": runtime.azure_cli_version_sha256,
+        "azure_cli_source_closure_sha256": EXPECTED_AZURE_CLI_CLOSURE_SHA256,
+        "azure_cli_closure_sha256": runtime.azure_cli_closure_sha256,
+        "runtime_snapshot_sha256": runtime.runtime_snapshot_sha256,
         "trusted_runtime_snapshotted": True,
         "validated_nonempty_change_set": True,
         "artifact_policy_complete": True,
@@ -1976,6 +2605,8 @@ def revalidate_recovery_plan(
 ) -> Mapping[str, Any]:
     if re.fullmatch(r"[0-9a-f]{64}", expected_saved_plan_sha256) is None:
         raise RecoveryPlanError("expected saved-plan digest is invalid")
+    if expected_saved_plan_sha256 in REJECTED_SAVED_PLAN_SHA256S:
+        raise RecoveryPlanError("saved plan digest is permanently rejected")
     saved_plan_bytes = _read_protected_file(
         saved_plan, label="saved plan", required_mode=0o400
     )

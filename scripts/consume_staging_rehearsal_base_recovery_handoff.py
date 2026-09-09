@@ -54,11 +54,12 @@ TIMESTAMP_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$
 RECEIPT_FIELDS = frozenset({
     'schema_version', 'policy_id', 'source_commit', 'source_tree_sha256',
     'handoff_source_sha256', 'provider_lock_sha256', 'state_lineage',
-    'state_serial', 'state_json_sha256', 'remote_state_sha256',
+    'state_serial', 'state_json_sha256', 'state_projection_sha256', 'remote_state_sha256',
     'saved_plan_sha256', 'derived_plan_json_sha256', 'backend_metadata_sha256',
     'open_tofu_sha256', 'execution_provider_tree_sha256',
     'python_executable_sha256', 'python_runtime_sha256', 'azure_cli_sha256',
-    'azure_cli_version_sha256', 'azure_tls_ca_bundle_sha256',
+    'azure_cli_version_sha256', 'azure_cli_source_closure_sha256',
+    'azure_cli_closure_sha256', 'runtime_snapshot_sha256', 'azure_tls_ca_bundle_sha256',
     'azure_config_binding_sha256', 'base_validation_receipt_sha256',
     'machine_binding_sha256', 'nonce_sha256', 'live_snapshot_sha256',
     'observed_at', 'expires_at', 'existing_azure_resource_count',
@@ -262,12 +263,16 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'state_lineage': recovery.EXPECTED_LINEAGE,
         'state_serial': recovery.EXPECTED_RECOVERY_SERIAL,
         'state_json_sha256': base.get('state_json_sha256'),
+        'state_projection_sha256': base.get('state_projection_sha256'),
         'saved_plan_sha256': expected_saved_plan_sha256,
         'derived_plan_json_sha256': base.get('derived_plan_json_sha256'),
         'backend_metadata_sha256': base.get('backend_metadata_sha256'),
         'open_tofu_sha256': base.get('open_tofu_sha256'),
         'azure_cli_sha256': base.get('azure_cli_sha256'),
         'azure_cli_version_sha256': base.get('azure_cli_version_sha256'),
+        'azure_cli_source_closure_sha256': base.get('azure_cli_source_closure_sha256'),
+        'azure_cli_closure_sha256': base.get('azure_cli_closure_sha256'),
+        'runtime_snapshot_sha256': base.get('runtime_snapshot_sha256'),
         'execution_provider_tree_sha256': base.get('execution_provider_tree_sha256'),
         'python_executable_sha256': python_binding.get('python_executable_sha256'),
         'python_runtime_sha256': python_binding.get('python_runtime_sha256'),
@@ -298,6 +303,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'azure_cli_source_path': str(recovery.EXPECTED_AZURE_CLI_PATH),
         'azure_cli_sha256': recovery.EXPECTED_AZURE_CLI_SHA256,
         'azure_cli_version_sha256': recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
+        'azure_cli_source_closure_sha256': recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256,
         'trusted_runtime_snapshotted': True,
         'validated_nonempty_change_set': True,
         'artifact_policy_complete': True,
@@ -308,7 +314,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
     }
     if any(base.get(name) != value or type(base.get(name)) is not type(value) for name, value in base_exact.items()):
         _fail('plan.authorization_mismatch')
-    if not isinstance(base.get('state_semantic_sha256'), str) or HASH_RE.fullmatch(str(base['state_semantic_sha256'])) is None:
+    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
         _fail('plan.authorization_mismatch')
     if expires - observed != handoff.RECEIPT_LIFETIME or now < observed - handoff.MAX_CLOCK_SKEW or now >= expires:
         _fail('receipt.expired')
@@ -488,7 +494,7 @@ def _validate_live(binding: LocalBinding, *, execution_dir: Path, expected_princ
     if first_state != receipt.get('remote_state_sha256'):
         _fail('remote_state.changed')
     attributes = handoff._state_attributes(_canonical(expected_state))
-    reader = reader_factory()
+    reader = handoff._trusted_reader(reader_factory, data_dir=execution_dir, base=binding.base)
     first = handoff._capture_snapshot(reader, attributes)
     reader.refresh_account()
     second = handoff._capture_snapshot(reader, attributes)
@@ -599,12 +605,13 @@ def _execution_arguments(tofu: Path, plan_descriptor: int) -> list[str]:
 
 def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, execution_dir: Path) -> dict[str, str]:
     path = ':'.join(dict.fromkeys((str(azure_cli.parent), '/usr/bin', '/bin')))
-    return {
+    environment = {
         'HOME': str(home), 'PATH': path, 'LC_ALL': 'C', 'LANG': 'C',
         'AZURE_CONFIG_DIR': str(azure_config), 'AZURE_CORE_ONLY_SHOW_ERRORS': 'true',
         'AZURE_CORE_COLLECT_TELEMETRY': 'false',
         'AZURE_CORE_DISABLE_CONFIRM_PROMPT': 'true',
         'AZURE_EXTENSION_USE_DYNAMIC_INSTALL': 'no',
+        'AZURE_LOGGING_ENABLE_LOG_FILE': 'false',
         'CHECKPOINT_DISABLE': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_NO_REPLACE_OBJECTS': '1',
         'GIT_TERMINAL_PROMPT': '0', 'TF_CLI_CONFIG_FILE': os.devnull,
@@ -613,6 +620,8 @@ def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, e
         'ARM_TENANT_ID': recovery.EXPECTED_TENANT_ID, 'ARM_ENVIRONMENT': 'public',
         'ARM_USE_CLI': 'true', 'ARM_USE_AZUREAD': 'true',
     }
+    environment.update(recovery._azure_cli_environment(azure_cli.parent))
+    return environment
 
 
 def _claim(execution_dir: Path, facts: Mapping[str, Any]) -> None:
@@ -650,6 +659,8 @@ def _reject_ambient_environment() -> None:
 def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path, expected_source_commit: str, expected_saved_plan_sha256: str, expected_receipt_sha256: str, expected_azure_principal_sha256: str, reader_factory: Callable[[], Any]=handoff.AzureManagementReader, clock: Callable[[], datetime]=lambda: datetime.now(UTC), boot_session: Callable[[], bytes]=handoff._boot_session, challenge_source: Callable[[int], bytes]=secrets.token_bytes) -> NoReturn:
     if COMMIT_RE.fullmatch(expected_source_commit) is None or any(HASH_RE.fullmatch(value) is None for value in (expected_saved_plan_sha256, expected_receipt_sha256, expected_azure_principal_sha256)):
         _fail('expected_binding.invalid')
+    if expected_saved_plan_sha256 in recovery.REJECTED_SAVED_PLAN_SHA256S:
+        _fail('saved_plan.rejected')
     _reject_ambient_environment()
     python_binding = handoff._python_runtime_binding()
     azure_cli = handoff._resolve_azure_cli()
