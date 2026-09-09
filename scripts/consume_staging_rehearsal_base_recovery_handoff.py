@@ -606,7 +606,7 @@ def _execution_arguments(tofu: Path, plan_descriptor: int) -> list[str]:
 def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, azure_config_binding: str, execution_dir: Path) -> dict[str, str]:
     path = ':'.join(dict.fromkeys((str(azure_cli.parent), '/usr/bin', '/bin')))
     environment = {
-        'HOME': str(home), 'PATH': path, 'LC_ALL': 'C', 'LANG': 'C',
+        'PATH': path, 'LC_ALL': 'C', 'LANG': 'C',
         'AZURE_CONFIG_DIR': str(azure_config), 'AZURE_CORE_ONLY_SHOW_ERRORS': 'true',
         recovery.AZURE_CONFIG_BINDING_ENV: azure_config_binding,
         'CHECKPOINT_DISABLE': '1', 'GIT_CONFIG_GLOBAL': os.devnull,

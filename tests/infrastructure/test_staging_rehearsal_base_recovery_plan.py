@@ -620,6 +620,7 @@ def test_parent_swap_keeps_open_directory(
 def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, data_dir = tmp_path / "source", tmp_path / "data"
     source.mkdir(mode=0o700); data_dir.mkdir(mode=0o700)  # noqa: E702
+    runtime_directory = data_dir / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME; runtime_directory.mkdir(mode=0o700); stale = runtime_directory / ".azure-config-stale1"; stale.mkdir(mode=0o700); _protected_file(stale / "msal_token_cache.json", b"stale", mode=0o600)  # noqa: E702
     tofu = _protected_file(source / "tofu", b"tofu-binary", mode=0o500)
     azure_cli = _protected_file(source / "az", b"azure-cli", mode=0o500)
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
@@ -638,8 +639,12 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
 
     monkeypatch.setattr(recovery, "_run_process", fake_run); monkeypatch.setattr(recovery, "_snapshot_azure_cli_closure", fake_snapshot_azure_cli_closure)  # noqa: E702
     runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
-    assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent)
+    runtime_home = runtime.azure_cli.parent / "azure-home"; terraform_home = runtime_home / ".terraform.d"  # noqa: E702
+    assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent) and not stale.exists() and {path.name for path in runtime_home.iterdir()} == {".terraform.d"} and not any(terraform_home.iterdir())
     assert runtime.azure_cli_closure_sha256 == closure_sha256 and runtime.tofu.stat().st_mode & 0o777 == runtime.azure_cli.stat().st_mode & 0o777 == 0o500
+    _protected_file(runtime_home / ".netrc", b"hostile", mode=0o600)
+    with pytest.raises(recovery.RecoveryPlanError, match="runtime home is not exact"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
+    (runtime_home / ".netrc").unlink()
     runtime.azure_cli.chmod(0o700)
     with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"): recovery._snapshot_and_verify_runtime(data_dir=data_dir)
 
@@ -667,16 +672,16 @@ def test_cli_cloud_environment_is_pinned(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
-    runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (modules / "azure" / "cli").mkdir(parents=True)
+    runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (runtime / "azure-home").mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
-    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir())}))\n')
+    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,sys\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}))\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
-    monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
+    assert recovery._azure_cli_environment(runtime)["HOME"] == str(runtime / "azure-home"); monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": str(runtime / "azure-home"), "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
     wrapper = runtime / "az"; wrapper.write_bytes(recovery._azure_cli_wrapper(runtime)); wrapper.chmod(0o500)
     environment = {"AZURE_CONFIG_DIR": str(config), recovery.AZURE_CONFIG_BINDING_ENV: binding}
     result = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False); observed = json.loads(result.stdout)
-    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and not Path(observed["path"]).exists()
+    assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and observed["home"] == str(runtime / "azure-home") and not observed["netrc"] and not Path(observed["path"]).exists()
     for name in ("config", "msal_token_cache.json"):
         environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; (config / name).write_bytes(b"changed"); refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
         assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n"; (config / name).write_bytes(values[name])
@@ -684,8 +689,15 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     moved = home / ".azure-old"; config.rename(moved); shutil.copytree(moved, config)
     refused = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)
     assert refused.returncode == 2 and refused.stderr == b"azure_cli_guard_refused\n"
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; broken = subprocess.run([wrapper, "break-cleanup"], env=environment, capture_output=True, check=False)
+    assert broken.returncode == 2 and b"azure_cli_guard_refused\n" in broken.stderr and not any(path.name in values for path in runtime.rglob("*"))
 def test_azure_config_capture_rejects_directory_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home, values = _azure_home(tmp_path, monkeypatch); config = home / ".azure"  # noqa: E702
+    config.chmod(0o755)
+    with pytest.raises(recovery.RecoveryPlanError, match="path is unsafe"): recovery._validated_azure_config(home)
+    config.chmod(0o700); (config / "msal_token_cache.json").chmod(0o644)
+    with pytest.raises(recovery.RecoveryPlanError, match="not exact"): recovery._validated_azure_config(home)
+    (config / "msal_token_cache.json").chmod(0o600)
     replacement, moved = home / ".replacement", home / ".moved"; shutil.copytree(config, replacement)
     real_open, swapped = os.open, False
     def swap_after_directory_open(path: Any, flags: int, mode: int=0o777, *, dir_fd: int | None=None) -> int:
