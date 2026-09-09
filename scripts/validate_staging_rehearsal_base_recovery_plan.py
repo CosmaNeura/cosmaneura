@@ -1555,7 +1555,7 @@ def capture(source):
         if directory_identity(home_metadata)!=directory_identity(os.stat(home,follow_symlinks=False)) or directory_identity(config_metadata)!=directory_identity(os.stat(".azure",dir_fd=home_fd,follow_symlinks=False)):raise ValueError
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
-snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False
+snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False;snapshot_files=[]
 def unlink_entry(parent,name,metadata,expected_device,expected_mount):
     ok=True;entry_fd=None
     if stat.S_ISLNK(metadata.st_mode):ok=False
@@ -1622,6 +1622,16 @@ def remove_snapshot(name,fd,identity):
         try:os.stat(name,dir_fd=parent_fd,follow_symlinks=False);return False
         except FileNotFoundError:return True
     except OSError:return False
+def close_snapshot_files():
+    ok=True
+    for _name,fd,identity in snapshot_files:
+        try:
+            metadata=os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or identity!=(metadata.st_dev,metadata.st_ino,metadata.st_uid) or metadata.st_nlink!=0:ok=False
+        except OSError:ok=False
+        try:os.close(fd)
+        except OSError:ok=False
+    snapshot_files.clear();return ok
 def cleanup():
     global snapshot_fd,parent_fd,lock_fd
     ok=True;previous_mask=None
@@ -1647,6 +1657,7 @@ def cleanup():
         finally:
             if created_fd is not None:os.close(created_fd)
             snapshot_fd=None
+    if not close_snapshot_files():ok=False
     if parent_fd is not None:
         try:os.close(parent_fd)
         except OSError:ok=False
@@ -1720,8 +1731,9 @@ try:
                 while offset<len(value):offset+=os.write(fd,value[offset:])
                 os.fchmod(fd,0o600);os.fsync(fd);written=os.fstat(fd)
                 if stat.S_IMODE(written.st_mode)!=0o600 or written.st_uid!=os.geteuid() or written.st_nlink!=1:raise ValueError
-                safe_acl(fd)
-            finally:os.close(fd)
+                safe_acl(fd);snapshot_files.append((name,fd,(written.st_dev,written.st_ino,written.st_uid)));fd=None
+            finally:
+                if fd is not None:os.close(fd)
         os.fsync(snapshot_fd);os.environ["AZURE_CONFIG_DIR"]=snapshot;sys.argv=["az",*sys.argv[1:]]
     except BaseException:
         print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
@@ -2143,6 +2155,7 @@ def _run_process(
     environment = _normalized_environment(data_dir=data_dir)
     if _validated_null_home() != null_home_binding:
         raise RecoveryPlanError("null HOME changed before execution")
+    process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
             list(arguments),
@@ -2158,6 +2171,8 @@ def _run_process(
         )
     except OSError as exc:
         raise RecoveryPlanError("required local command did not complete") from exc
+    if process is None:
+        raise RecoveryPlanError("required local command did not complete")
     assert process.stdout is not None
     assert process.stderr is not None
     stdout_fd = process.stdout.fileno()
