@@ -326,18 +326,17 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    ```
 
    Create mode itself invokes the fixed `tofu plan` command with
-   `-refresh=true` and three exact reversible inputs. It copies digest-pinned
-   OpenTofu and the full pinned Azure CLI Homebrew closure to an owner-only
-   runtime, verifies their manifests, and excludes ambient proxy, TLS, Python,
-   OpenTofu, Git, and Azure-provider overrides. Backend, cloud, workspace,
-   subscription, and tenant are fixed. The read-only (`0400`) saved plan must
-   bind the reviewed source/lockfile, a semantically identical serial-9 state
-   (except transient `check_results`), projected prior state, all no-op values,
-   sensitivity and identity, and exact envelopes for 28 no-ops plus eleven
-   creates. Drift, updates, deletes, replacements, irreversible flags, extra
-   fields/resources, non-passing checks, provider changes, or detached/insecure
-   artifacts fail closed. Retain the digest-only JSON receipt
-   in the protected operator packet; do not persist a raw plan-JSON export.
+   `-refresh=true`, the three exact reversible inputs, no ambient OpenTofu,
+   Git, or Azure-provider overrides, and pinned OpenTofu 1.12.5. It fixes the
+   backend to the reviewed subscription, storage coordinates, Azure public cloud, and default workspace; the provider configuration pins the tenant. It writes a read-only
+   (`0400`) saved plan only after validating JSON derived from those exact
+   binary bytes. The plan archive must contain the exact reviewed Terraform
+   source and provider lockfile, embed lineage and serial 9, be no more than
+   four hours old, and contain exactly 28 no-ops plus eleven creates. Drift,
+   updates, deletes, replacements, irreversible flags, extra resources,
+   non-passing checks, provider changes, or detached/insecure artifacts fail
+   closed. Retain the digest-only JSON receipt in the protected operator
+   packet; do not persist a raw plan-JSON export.
 9. A different reviewer must independently inspect the saved plan, receipt,
    current state metadata, and current live readback. Immediately before apply,
    fetch `origin/master` again, pull a new protected state snapshot, and run

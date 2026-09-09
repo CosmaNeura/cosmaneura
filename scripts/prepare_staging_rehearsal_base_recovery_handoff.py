@@ -234,16 +234,12 @@ def _resolve_azure_cli() -> Path:
 def _operator_paths() -> tuple[Path, Path, str]:
     try:
         home = Path(pwd.getpwuid(os.geteuid()).pw_dir).resolve(strict=True)
-        config = (home / '.azure').resolve(strict=True)
-    except (KeyError, OSError):
+        config, binding = recovery._validated_azure_config(home)
+    except (KeyError, OSError, recovery.RecoveryPlanError):
         _fail('azure_cli.environment_invalid')
     _validate_path_ancestry(home, leaf_directory=True)
     _validate_path_ancestry(config, leaf_directory=True)
-    bindings = []
-    for path in (home, config):
-        metadata = path.stat()
-        bindings.append((metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode)))
-    return (home, config, _digest(_canonical(bindings)))
+    return (home, config, binding)
 
 def _python_runtime_binding() -> Mapping[str, str]:
     unsafe = {'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'}
@@ -314,18 +310,21 @@ class AzureManagementReader:
         self._runtime_data_dir = runtime_data_dir
         self._closure_sha256 = closure_sha256
         self._runtime_snapshot_sha256 = runtime_snapshot_sha256
-        self._home, self._azure_config, self.azure_config_binding_sha256 = _operator_paths()
+        self._home, self._azure_config, _ = _operator_paths()
         self._az_executable_sha256 = recovery._executable_sha256(self._az, label='Azure CLI')
         self.azure_cli_sha256 = source_sha256 or self._az_executable_sha256
         self.account: Mapping[str, Any] = {}
         self.refresh_account()
         version = self._az_json('version')
         self.azure_cli_version_sha256 = _digest(_canonical(version))
+        if _digest(_canonical(self._az_json('cloud'))) != recovery.EXPECTED_AZURE_CLOUD_SHA256:
+            _fail('azure_cloud.invalid')
         token = self._az_json('token')
         access_token = token.get('accessToken')
         if not isinstance(access_token, str) or not 100 < len(access_token) <= 64 * 1024 or token.get('tokenType') != 'Bearer' or (token.get('subscription') != SUBSCRIPTION) or (token.get('tenant') != TENANT):
             _fail('azure_token.invalid')
         self._token = access_token
+        self.azure_config_binding_sha256 = _operator_paths()[2]
         self.dates: list[datetime] = []
         self._deadline = time.monotonic() + MAX_READBACK_SECONDS
         self._bytes_read = 0
@@ -333,12 +332,12 @@ class AzureManagementReader:
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(), urllib.request.HTTPSHandler(context=context))
 
     def _az_json(self, operation: str) -> Mapping[str, Any]:
-        commands = {'account': ('account', 'show', '--subscription', SUBSCRIPTION), 'version': ('version',), 'token': ('account', 'get-access-token', '--subscription', SUBSCRIPTION, '--resource', f'{ARM_ORIGIN}/')}
+        commands = {'account': ('account', 'show', '--subscription', SUBSCRIPTION), 'version': ('version',), 'cloud': ('cloud', 'show', '--name', 'AzureCloud'), 'token': ('account', 'get-access-token', '--subscription', SUBSCRIPTION, '--resource', f'{ARM_ORIGIN}/')}
         arguments = commands.get(operation)
         if arguments is None:
             _fail('azure_cli.operation_invalid')
         path = ':'.join(dict.fromkeys((str(self._az.parent), '/usr/bin', '/bin')))
-        command = ['/usr/bin/env', '-i', f'HOME={self._home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={self._azure_config}', 'AZURE_CORE_ONLY_SHOW_ERRORS=true', 'AZURE_LOGGING_ENABLE_LOG_FILE=false', str(self._az), *arguments, '--only-show-errors', '--output', 'json']
+        command = ['/usr/bin/env', '-i', f'HOME={self._home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={self._azure_config}', *(f'{name}={value}' for name, value in recovery._azure_cli_environment(self._az.parent).items()), str(self._az), *arguments, '--only-show-errors', '--output', 'json']
         timeout = 60.0
         if self._action_window_started:
             remaining = self._deadline - time.monotonic()
@@ -369,7 +368,7 @@ class AzureManagementReader:
         if self._runtime_data_dir is not None:
             runtime = recovery._snapshot_and_verify_runtime(data_dir=self._runtime_data_dir)
             runtime_changed = runtime_changed or runtime.azure_cli != self._az or runtime.azure_cli_sha256 != self.azure_cli_sha256 or runtime.azure_cli_closure_sha256 != self._closure_sha256 or runtime.runtime_snapshot_sha256 != self._runtime_snapshot_sha256
-        if runtime_changed or _digest(_canonical(self._az_json('version'))) != self.azure_cli_version_sha256 or _hardened_tls_context()[1] != self.azure_tls_ca_bundle_sha256 or _operator_paths()[2] != self.azure_config_binding_sha256:
+        if runtime_changed or _digest(_canonical(self._az_json('version'))) != self.azure_cli_version_sha256 or _digest(_canonical(self._az_json('cloud'))) != recovery.EXPECTED_AZURE_CLOUD_SHA256 or _hardened_tls_context()[1] != self.azure_tls_ca_bundle_sha256 or _operator_paths()[2] != self.azure_config_binding_sha256:
             _fail('azure_runtime.changed')
 
     def _url(self, resource_id: str, api_version: str, query: Mapping[str, str] | None=None) -> str:

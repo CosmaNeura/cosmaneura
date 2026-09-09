@@ -43,8 +43,10 @@ EXPECTED_AZURE_CLI_SHA256 = (
     "e62d2f82b3c4d2a98202154e2a01638b656059e25c25605c56732516527dc6df"
 )
 EXPECTED_AZURE_CLI_VERSION_SHA256 = (
-    "95aba806efb5d25cc23df04924a6da51f7571a08a6e21283c29c96a10a0b91a0"
+    "98b3412b818478b3ef731be86fd539b32628e5621342f4873ac325c87428facc"
 )
+EXPECTED_AZURE_CONFIG_SHA256S = {"config": "b8258f4205b85a305ac3811432073f56fddf4a63b4472485778bfde0f5a69553", "clouds.config": "2189f3b4fe7357a59f5fcdf8f6e35382784aa2862b5262e5dc89d8e615bfc3ed"}  # fmt: skip
+EXPECTED_AZURE_CLOUD_SHA256 = "1f30818094483f03f402801991b418f9065244acc8c871047ca46e5ce58b872f"  # fmt: skip
 EXPECTED_HOMEBREW_ROOT = Path("/opt/homebrew")
 EXPECTED_AZURE_CLI_FORMULAE: Mapping[str, str] = {
     "azure-cli": "2.89.1",
@@ -680,7 +682,9 @@ def _snapshot_executable(
     return destination
 
 
-def _runtime_file_record(path: Path, *, label: str) -> tuple[Any, ...]:
+def _runtime_file_record(
+    path: Path, *, label: str, capture: bytearray | None = None
+) -> tuple[Any, ...]:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor: int | None = None
     try:
@@ -691,6 +695,8 @@ def _runtime_file_record(path: Path, *, label: str) -> tuple[Any, ...]:
         digest = hashlib.sha256()
         while chunk := os.read(descriptor, 1024 * 1024):
             digest.update(chunk)
+            if capture is not None:
+                capture.extend(chunk)
         after = os.fstat(descriptor)
         before_identity = (
             before.st_dev,
@@ -719,6 +725,26 @@ def _runtime_file_record(path: Path, *, label: str) -> tuple[Any, ...]:
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _validated_azure_config(home: Path) -> tuple[Path, str]:
+    config, bindings = home / ".azure", []
+    identity = lambda value: (value.st_dev, value.st_ino, value.st_uid, value.st_nlink, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)  # noqa: E731  # fmt: skip
+    try:
+        for path in (home, config):
+            metadata = os.lstat(path)
+            if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o022:  # fmt: skip
+                raise RecoveryPlanError("Azure CLI configuration path is unsafe")
+            bindings.append((metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode)))  # fmt: skip
+        for name, expected in EXPECTED_AZURE_CONFIG_SHA256S.items():
+            path, before = config / name, os.lstat(config / name)
+            record, after = _runtime_file_record(path, label=f"Azure CLI {name}"), os.lstat(path)  # fmt: skip
+            if identity(before) != identity(after) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) & 0o022 or record[3] != expected:  # fmt: skip
+                raise RecoveryPlanError("Azure CLI configuration is not exact")
+            bindings.append((name, *record))
+    except OSError as exc:
+        raise RecoveryPlanError("Azure CLI configuration is unavailable") from exc
+    return config, _sha256_bytes(_canonical_json_bytes(bindings))
 
 
 def _azure_cli_closure_entries(
@@ -807,6 +833,7 @@ def _runtime_entries_sha256(entries: Mapping[str, tuple[Any, ...]]) -> str:
 
 def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
     homebrew = runtime_directory / "homebrew"
+    extensions = runtime_directory / "azure-extensions"
     azure_version = EXPECTED_AZURE_CLI_FORMULAE["azure-cli"]
     python_version = EXPECTED_AZURE_CLI_FORMULAE["python@3.14"]
     library_directories = [
@@ -857,6 +884,15 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
     openssl_modules = homebrew / "opt" / "openssl@3" / "lib" / "ossl-modules"
     return {
         "AZ_INSTALLER": "HOMEBREW",
+        "AZURE_CORE_COLLECT_TELEMETRY": "false",
+        "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
+        "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
+        "AZURE_EXTENSION_DEV_SOURCES": "",
+        "AZURE_EXTENSION_DIR": str(extensions),
+        "AZURE_EXTENSION_SYS_DIR": str(extensions),
+        "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no",
+        "AZURE_LOGGING_ENABLE_LOG_FILE": "false",
+        "AZURE_CORE_USE_MSAL_HTTP_CACHE": "false",
         "DYLD_LIBRARY_PATH": ":".join(map(str, library_directories)),
         "OPENSSL_CONF": os.devnull,
         "OPENSSL_MODULES": str(openssl_modules),
@@ -895,21 +931,18 @@ def _azure_cli_wrapper(runtime_directory: Path) -> bytes:
 
 
 def _expected_azure_cli_snapshot_entries(
-    source_entries: Mapping[str, tuple[Any, ...]], runtime_directory: Path
+    source_entries: Mapping[str, tuple[Any, ...]],
+    runtime_directory: Path,
+    source_pyvenv: bytes,
 ) -> Mapping[str, tuple[Any, ...]]:
     expected = dict(source_entries)
     version = EXPECTED_AZURE_CLI_FORMULAE["azure-cli"]
     relative = f"Cellar/azure-cli/{version}/libexec/pyvenv.cfg"
-    source_path = EXPECTED_HOMEBREW_ROOT / relative
-    try:
-        source_bytes = source_path.read_bytes()
-    except OSError as exc:
-        raise RecoveryPlanError("Azure CLI Python environment is unavailable") from exc
-    replaced = source_bytes.replace(
+    replaced = source_pyvenv.replace(
         str(EXPECTED_HOMEBREW_ROOT).encode(),
         str(runtime_directory / "homebrew").encode(),
     )
-    if replaced == source_bytes:
+    if replaced == source_pyvenv:
         raise RecoveryPlanError("Azure CLI Python environment is not relocatable")
     source_record = expected.get(relative)
     if source_record is None or source_record[0] != "file":
@@ -1036,6 +1069,10 @@ def _snapshot_azure_cli_closure(
     if _runtime_entries_sha256(source_entries) != EXPECTED_AZURE_CLI_CLOSURE_SHA256:
         raise RecoveryPlanError("Azure CLI runtime closure is not pinned")
     snapshot_homebrew = runtime_directory / "homebrew"
+    pyvenv_relative = f"Cellar/azure-cli/{EXPECTED_AZURE_CLI_FORMULAE['azure-cli']}/libexec/pyvenv.cfg"
+    source_pyvenv = bytearray()
+    if _runtime_file_record(EXPECTED_HOMEBREW_ROOT / pyvenv_relative, label="Azure CLI Python environment", capture=source_pyvenv) != source_entries.get(pyvenv_relative):  # fmt: skip
+        raise RecoveryPlanError("Azure CLI Python environment changed after manifest")
     if not snapshot_homebrew.exists():
         snapshot_homebrew.mkdir(mode=0o700)
         (snapshot_homebrew / "Cellar").mkdir(mode=0o700)
@@ -1061,15 +1098,14 @@ def _snapshot_azure_cli_closure(
             / "libexec"
             / "pyvenv.cfg"
         )
-        source_pyvenv = EXPECTED_HOMEBREW_ROOT / pyvenv.relative_to(snapshot_homebrew)
-        relocated = source_pyvenv.read_bytes().replace(
+        relocated = bytes(source_pyvenv).replace(
             str(EXPECTED_HOMEBREW_ROOT).encode(), str(snapshot_homebrew).encode()
         )
         _write_existing_snapshot_file(pyvenv, relocated)
         _patch_snapshot_python(snapshot_homebrew)
         _harden_runtime_tree(snapshot_homebrew)
     expected_entries = _expected_azure_cli_snapshot_entries(
-        source_entries, runtime_directory
+        source_entries, runtime_directory, bytes(source_pyvenv)
     )
     snapshot_entries = _azure_cli_closure_entries(snapshot_homebrew, snapshot=True)
     if snapshot_entries != expected_entries:
@@ -1227,13 +1263,14 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         if runtime_directory is not None and runtime_directory.is_dir()
         else EXPECTED_AZURE_CLI_PATH.parent
     )
+    azure_config_directory, _ = _validated_azure_config(home)
     environment = {
         "ARM_ENVIRONMENT": "public",
         "ARM_SUBSCRIPTION_ID": EXPECTED_SUBSCRIPTION_ID,
         "ARM_TENANT_ID": EXPECTED_TENANT_ID,
         "ARM_USE_AZUREAD": "true",
         "ARM_USE_CLI": "true",
-        "AZURE_CONFIG_DIR": str(home / ".azure"),
+        "AZURE_CONFIG_DIR": str(azure_config_directory),
         "AZURE_CORE_COLLECT_TELEMETRY": "false",
         "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
         "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
@@ -1375,6 +1412,14 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         _create_protected_directory(
             runtime_directory, label="trusted runtime directory"
         )
+    for name in ("azure-extensions",):
+        directory = runtime_directory / name
+        if directory.exists():
+            _require_protected_directory(directory, label=f"trusted {name}")
+        else:
+            _create_protected_directory(directory, label=f"trusted {name}")
+        if any(directory.iterdir()):
+            raise RecoveryPlanError(f"trusted {name} directory is not empty")
     tofu = _snapshot_executable(
         EXPECTED_TOFU_PATH,
         runtime_directory / "tofu",
@@ -1391,7 +1436,7 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         runtime_names = {entry.name for entry in runtime_directory.iterdir()}
     except OSError as exc:
         raise RecoveryPlanError("trusted runtime directory is unavailable") from exc
-    if runtime_names != {"az", "homebrew", "tofu"}:
+    if runtime_names != {"az", "azure-extensions", "homebrew", "tofu"}:
         raise RecoveryPlanError("trusted runtime executable set is not exact")
     _verify_tofu_version(tofu, data_dir=data_dir)
     azure_version = _run_process(
@@ -1409,6 +1454,15 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
     azure_version_sha256 = _sha256_bytes(_canonical_json_bytes(azure_version_document))
     if azure_version_sha256 != EXPECTED_AZURE_CLI_VERSION_SHA256:
         raise RecoveryPlanError("the Azure CLI version manifest is not pinned")
+    azure_cloud = _run_process(
+        [str(azure_cli), "cloud", "show", "--name", "AzureCloud"],
+        cwd=REPOSITORY_ROOT,
+        timeout_seconds=60,
+        max_output_bytes=1024 * 1024,
+        data_dir=data_dir,
+    )
+    if azure_cloud.returncode != 0 or _sha256_bytes(_canonical_json_bytes(_load_json_bytes(azure_cloud.stdout, label="Azure cloud output"))) != EXPECTED_AZURE_CLOUD_SHA256:  # fmt: skip
+        raise RecoveryPlanError("the Azure cloud manifest is not pinned")
     _validate_runtime_snapshot(
         tofu, label="OpenTofu", expected_sha256=EXPECTED_TOFU_SHA256
     )
@@ -1420,6 +1474,8 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         _canonical_json_bytes(
             {
                 "azure_cli_closure_sha256": azure_cli_closure_sha256,
+                "azure_cli_config_policy": "exact-config-empty-extensions-v1",
+                "azure_cloud_sha256": EXPECTED_AZURE_CLOUD_SHA256,
                 "azure_cli_wrapper_sha256": wrapper_sha256,
                 "open_tofu_sha256": EXPECTED_TOFU_SHA256,
             }

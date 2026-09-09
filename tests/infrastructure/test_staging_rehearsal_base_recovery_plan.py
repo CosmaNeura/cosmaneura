@@ -137,15 +137,7 @@ def _source_snapshot() -> Any:
 
 
 def _runtime_snapshot() -> Any:
-    return recovery.RuntimeSnapshot(
-        tofu=TOFU,
-        azure_cli=AZURE_CLI,
-        tofu_sha256=recovery.EXPECTED_TOFU_SHA256,
-        azure_cli_sha256=recovery.EXPECTED_AZURE_CLI_SHA256,
-        azure_cli_version_sha256=recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
-        azure_cli_closure_sha256="f" * 64,
-        runtime_snapshot_sha256="1" * 64,
-    )
+    return recovery.RuntimeSnapshot(TOFU, AZURE_CLI, recovery.EXPECTED_TOFU_SHA256, recovery.EXPECTED_AZURE_CLI_SHA256, recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "f" * 64, "1" * 64)  # fmt: skip
 
 
 def _saved_plan_bytes(
@@ -477,9 +469,7 @@ def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -
         rejected(plan, message)
 
 
-def test_noop_values_sensitivity_identity_and_prior_state_are_exact(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_noop_values_sensitivity_identity_and_prior_state_are_exact(monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
     projection = _valid_state_projection()
     projected = projection["values"]["root_module"]["resources"][0]
     projected.update(values={**projected["values"], "binding": "protected"}, sensitive_values={"binding": True}, identity={"key": "state-bound"}, identity_schema_version=0)  # fmt: skip
@@ -497,15 +487,9 @@ def test_noop_values_sensitivity_identity_and_prior_state_are_exact(
         _validate(monkeypatch, plan=plan, state_projection=projection)
 
 
-def test_rejected_plan_digest_cannot_be_reauthorized(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_rejected_plan_digest_cannot_be_reauthorized(monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
     plan = _saved_plan_bytes()
-    monkeypatch.setattr(
-        recovery,
-        "REJECTED_SAVED_PLAN_SHA256S",
-        frozenset({recovery._sha256_bytes(plan)}),
-    )
+    monkeypatch.setattr(recovery, "REJECTED_SAVED_PLAN_SHA256S", frozenset({recovery._sha256_bytes(plan)}))  # fmt: skip
     with pytest.raises(recovery.RecoveryPlanError, match="permanently rejected"):
         _validate(monkeypatch, saved_plan_bytes=plan)
 
@@ -704,87 +688,55 @@ def test_parent_swap_keeps_open_directory(
 def test_runtime_executables_and_versions_are_snapshotted_and_pinned(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    source = tmp_path / "source"
-    source.mkdir(mode=0o700)
+    # fmt: off
+    source, data_dir = tmp_path / "source", tmp_path / "data"
+    source.mkdir(mode=0o700); data_dir.mkdir(mode=0o700)  # noqa: E702
     tofu = _protected_file(source / "tofu", b"tofu-binary", mode=0o500)
     azure_cli = _protected_file(source / "az", b"azure-cli", mode=0o500)
-    data_dir = tmp_path / "data"
-    data_dir.mkdir(mode=0o700)
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
-    monkeypatch.setattr(recovery, "EXPECTED_TOFU_PATH", tofu)
-    monkeypatch.setattr(recovery, "EXPECTED_AZURE_CLI_PATH", azure_cli)
-    monkeypatch.setattr(
-        recovery, "EXPECTED_TOFU_SHA256", hashlib.sha256(tofu.read_bytes()).hexdigest()
-    )
-    monkeypatch.setattr(
-        recovery,
-        "EXPECTED_AZURE_CLI_SHA256",
-        hashlib.sha256(azure_cli.read_bytes()).hexdigest(),
-    )
-    monkeypatch.setattr(
-        recovery,
-        "EXPECTED_AZURE_CLI_VERSION_SHA256",
-        hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(),
-    )
-
+    pins = {"EXPECTED_TOFU_PATH": tofu, "EXPECTED_AZURE_CLI_PATH": azure_cli, "EXPECTED_TOFU_SHA256": hashlib.sha256(tofu.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_SHA256": hashlib.sha256(azure_cli.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_VERSION_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(), "EXPECTED_AZURE_CLOUD_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest()}
+    for name, value in pins.items(): monkeypatch.setattr(recovery, name, value)  # noqa: E701
     closure_sha256 = "c" * 64
 
-    def fake_snapshot_azure_cli_closure(
-        runtime_directory: Path,
-    ) -> tuple[Path, str]:
+    def fake_snapshot_azure_cli_closure(runtime_directory: Path) -> tuple[Path, str]:
         (runtime_directory / "homebrew").mkdir(mode=0o700, exist_ok=True)
         wrapper = runtime_directory / "az"
         if not wrapper.exists():
-            wrapper.write_bytes(recovery._azure_cli_wrapper(runtime_directory))
-            wrapper.chmod(0o500)
+            wrapper.write_bytes(recovery._azure_cli_wrapper(runtime_directory)); wrapper.chmod(0o500)  # noqa: E702
         return wrapper, closure_sha256
 
-    def fake_run(
-        arguments: list[str], **kwargs: Any
-    ) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         assert kwargs["data_dir"] == data_dir
-        output = (
-            b'{"terraform_version":"1.12.5"}'
-            if arguments[-2:] == ["version", "-json"]
-            else json.dumps(azure_version).encode()
-        )
+        output = b'{"terraform_version":"1.12.5"}' if arguments[-2:] == ["version", "-json"] else json.dumps(azure_version).encode()
         return subprocess.CompletedProcess(arguments, 0, output, b"")
 
-    monkeypatch.setattr(recovery, "_run_process", fake_run)
-    monkeypatch.setattr(
-        recovery, "_snapshot_azure_cli_closure", fake_snapshot_azure_cli_closure
-    )
+    monkeypatch.setattr(recovery, "_run_process", fake_run); monkeypatch.setattr(recovery, "_snapshot_azure_cli_closure", fake_snapshot_azure_cli_closure)  # noqa: E702
     runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
-    assert runtime.tofu.read_bytes() == tofu.read_bytes()
-    assert runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(
-        runtime.azure_cli.parent
-    )
-    assert runtime.azure_cli_closure_sha256 == closure_sha256
-    assert runtime.tofu.stat().st_mode & 0o777 == 0o500
-    assert runtime.azure_cli.stat().st_mode & 0o777 == 0o500
-
+    assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent)
+    assert runtime.azure_cli_closure_sha256 == closure_sha256 and runtime.tofu.stat().st_mode & 0o777 == runtime.azure_cli.stat().st_mode & 0o777 == 0o500
     runtime.azure_cli.chmod(0o700)
     with pytest.raises(recovery.RecoveryPlanError, match="snapshot is not exact"):
         recovery._snapshot_and_verify_runtime(data_dir=data_dir)
+    # fmt: on
 
 
 def test_azure_cli_closure_digest_binds_dependency_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root = tmp_path.resolve() / "homebrew"
-    formula = root / "Cellar" / "azure-cli" / "1"
+    root = tmp_path.resolve() / "homebrew"; formula = root / "Cellar" / "azure-cli" / "1"  # noqa: E702  # fmt: skip
     formula.mkdir(parents=True)
     dependency = _protected_file(formula / "dependency.py", b"trusted", mode=0o400)
-    opt = root / "opt"
-    opt.mkdir()
+    opt = root / "opt"; opt.mkdir()  # noqa: E702
     (opt / "azure-cli").symlink_to("../Cellar/azure-cli/1")
     monkeypatch.setattr(recovery, "EXPECTED_AZURE_CLI_FORMULAE", {"azure-cli": "1"})
     digest = lambda: recovery._runtime_entries_sha256(recovery._azure_cli_closure_entries(root, snapshot=False))  # noqa: E731  # fmt: skip
+    captured = bytearray()
+    record = recovery._runtime_file_record(dependency, label="dependency", capture=captured)
     before = digest()
     dependency.chmod(0o600)
     dependency.write_bytes(b"changed")
     dependency.chmod(0o400)
-    assert before != digest()
+    assert bytes(captured) == b"trusted" and record != recovery._runtime_file_record(dependency, label="dependency") and before != digest()  # fmt: skip
 
 
 def test_cli_cloud_environment_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:

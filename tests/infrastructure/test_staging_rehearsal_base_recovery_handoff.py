@@ -413,7 +413,8 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     az.chmod(448)
     commands: list[list[str]] = []
     version = {'azure-cli': '2.77.0'}
-    outputs = [{'id': handoff.SUBSCRIPTION, 'tenantId': handoff.TENANT, 'environmentName': 'AzureCloud', 'state': 'Enabled', 'user': {'type': 'user', 'name': 'operator'}}, version, {'accessToken': 's' * 200, 'tokenType': 'Bearer', 'subscription': handoff.SUBSCRIPTION, 'tenant': handoff.TENANT}, version]
+    cloud = {'name': 'AzureCloud'}
+    outputs = [{'id': handoff.SUBSCRIPTION, 'tenantId': handoff.TENANT, 'environmentName': 'AzureCloud', 'state': 'Enabled', 'user': {'type': 'user', 'name': 'operator'}}, version, cloud, {'accessToken': 's' * 200, 'tokenType': 'Bearer', 'subscription': handoff.SUBSCRIPTION, 'tenant': handoff.TENANT}, version, cloud]
 
     def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         commands.append(arguments)
@@ -422,6 +423,7 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     opener = _Opener()
     handlers: list[Any] = []
     monkeypatch.setattr(handoff, '_resolve_azure_cli', lambda: az)
+    monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CLOUD_SHA256', handoff._digest(handoff._canonical(cloud)))
     monkeypatch.setattr(handoff, '_operator_paths', lambda: (tmp_path, tmp_path / '.azure', 'd' * 64))
     monkeypatch.setattr(handoff.recovery, '_executable_sha256', lambda *_, **__: 'a' * 64)
     runtime = handoff.recovery.RuntimeSnapshot(Path('/trusted/tofu'), az, '0' * 64, '1' * 64, handoff._digest(handoff._canonical(version)), '2' * 64, '3' * 64)
@@ -433,11 +435,12 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     assert reader.azure_tls_ca_bundle_sha256 == 'c' * 64
     assert reader.azure_config_binding_sha256 == 'd' * 64
     prefix = ['/usr/bin/env', '-i', f'HOME={tmp_path}']
-    assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and ('PYTHONPATH' not in ' '.join(command)) for command in commands))
+    assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and any(item.startswith('PYTHONPATH=') for item in command) and f'AZURE_EXTENSION_DIR={tmp_path / "azure-extensions"}' in command for command in commands))
     assert all(f'AZURE_CONFIG_DIR={tmp_path / ".azure"}' in command for command in commands)
     assert commands[0][-8:] == [str(az), 'account', 'show', '--subscription', handoff.SUBSCRIPTION, '--only-show-errors', '--output', 'json']
     assert commands[1][-4:] == ['version', '--only-show-errors', '--output', 'json']
-    assert commands[2][-10:] == [str(az), 'account', 'get-access-token', '--subscription', handoff.SUBSCRIPTION, '--resource', 'https://management.azure.com/', '--only-show-errors', '--output', 'json']
+    assert commands[2][-8:] == [str(az), 'cloud', 'show', '--name', 'AzureCloud', '--only-show-errors', '--output', 'json']
+    assert commands[3][-10:] == [str(az), 'account', 'get-access-token', '--subscription', handoff.SUBSCRIPTION, '--resource', 'https://management.azure.com/', '--only-show-errors', '--output', 'json']
     reader.revalidate_runtime()
     assert any((isinstance(value, urllib.request.ProxyHandler) and getattr(value, 'proxies') == {} for value in handlers))
     assert any((isinstance(value, handoff._NoRedirect) for value in handlers))
@@ -543,12 +546,18 @@ def test_cli_and_operator_home_ignore_ambient_path_and_home(monkeypatch: pytest.
         home = tmp_path / 'home'
         home.mkdir(mode=448)
         (home / '.azure').mkdir(mode=448)
+        for name, value in {'config': b'config', 'clouds.config': b'cloud'}.items():
+            (home / '.azure' / name).write_bytes(value)
+        monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CONFIG_SHA256S', {name: hashlib.sha256(value).hexdigest() for name, value in {'config': b'config', 'clouds.config': b'cloud'}.items()})
         monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
         monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())
         monkeypatch.setenv('PATH', str(tmp_path / 'evil'))
         monkeypatch.setenv('HOME', str(tmp_path / 'evil-home'))
         assert handoff._resolve_azure_cli() == az
         assert handoff._operator_paths()[:2] == (home, home / '.azure')
+        (home / '.azure' / 'config').write_bytes(b'mutated')
+        with pytest.raises(handoff.HandoffError, match='environment_invalid'):
+            handoff._operator_paths()
 
 def test_python_import_and_transport_environment_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert handoff.recovery.__file__ is not None
