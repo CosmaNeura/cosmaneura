@@ -914,7 +914,24 @@ def _open_azure_config_lock(runtime_directory: Path) -> int:
         os.close(parent)
 
 
-def _scrub_azure_config_snapshot(descriptor: int) -> bool:
+def _scrub_azure_config_directory(
+    descriptor: int,
+    *,
+    expected_device: int,
+    remaining_entries: list[int],
+    depth: int,
+) -> bool:
+    try:
+        root = os.fstat(descriptor)
+    except OSError:
+        return False
+    if (
+        not stat.S_ISDIR(root.st_mode)
+        or root.st_uid != os.geteuid()
+        or root.st_dev != expected_device
+        or depth > 64
+    ):
+        return False
     scrubbed = True
     try:
         os.fchmod(descriptor, 0o700)
@@ -925,7 +942,11 @@ def _scrub_azure_config_snapshot(descriptor: int) -> bool:
     except OSError:
         return False
     for entry in entries:
+        child: int | None = None
         try:
+            if remaining_entries[0] <= 0:
+                return False
+            remaining_entries[0] -= 1
             metadata = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
             if metadata.st_uid != os.geteuid() or not (
                 stat.S_ISDIR(metadata.st_mode)
@@ -935,17 +956,69 @@ def _scrub_azure_config_snapshot(descriptor: int) -> bool:
                 scrubbed = False
                 continue
             if stat.S_ISDIR(metadata.st_mode):
-                shutil.rmtree(entry, dir_fd=descriptor)
+                if metadata.st_dev != expected_device:
+                    scrubbed = False
+                    continue
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+                child = os.open(entry, flags, dir_fd=descriptor)
+                opened = os.fstat(child)
+                linked = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
+                identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or opened.st_dev != expected_device
+                    or opened.st_uid != os.geteuid()
+                    or identity != (opened.st_dev, opened.st_ino, opened.st_uid)
+                    or identity != (linked.st_dev, linked.st_ino, linked.st_uid)
+                ):
+                    scrubbed = False
+                    continue
+                if not _scrub_azure_config_directory(
+                    child,
+                    expected_device=expected_device,
+                    remaining_entries=remaining_entries,
+                    depth=depth + 1,
+                ):
+                    scrubbed = False
+                current = os.fstat(child)
+                linked = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
+                if (
+                    identity != (current.st_dev, current.st_ino, current.st_uid)
+                    or identity != (linked.st_dev, linked.st_ino, linked.st_uid)
+                    or os.listdir(child)
+                ):
+                    scrubbed = False
+                    continue
+                os.rmdir(entry, dir_fd=descriptor)
             else:
+                if metadata.st_dev != expected_device:
+                    scrubbed = False
+                    continue
                 os.unlink(entry, dir_fd=descriptor)
         except OSError:
             scrubbed = False
+        finally:
+            if child is not None:
+                try:
+                    os.close(child)
+                except OSError:
+                    scrubbed = False
     try:
         if os.listdir(descriptor):
             scrubbed = False
     except OSError:
         scrubbed = False
     return scrubbed
+
+
+def _scrub_azure_config_snapshot(descriptor: int, *, expected_device: int) -> bool:
+    return _scrub_azure_config_directory(
+        descriptor,
+        expected_device=expected_device,
+        remaining_entries=[MAXIMUM_RUNTIME_CLOSURE_ENTRIES],
+        depth=0,
+    )
 
 
 def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
@@ -957,8 +1030,7 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
         parent = _open_protected_directory(
             runtime_directory, label="trusted runtime directory"
         )
-        if not shutil.rmtree.avoids_symlink_attacks:
-            raise RecoveryPlanError("secure Azure configuration cleanup is unavailable")
+        parent_device = os.fstat(parent).st_dev
         for name in sorted(os.listdir(parent)):
             if re.fullmatch(r"\.azure-config-[A-Za-z0-9_-]{6,96}", name) is None:
                 continue
@@ -982,7 +1054,9 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                     continue
                 identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
                 metadata_safe = stat.S_IMODE(metadata.st_mode) in {0o500, 0o700}
-                scrubbed = _scrub_azure_config_snapshot(descriptor)
+                scrubbed = _scrub_azure_config_snapshot(
+                    descriptor, expected_device=parent_device
+                )
                 try:
                     _require_safe_acl(
                         descriptor, label="stale Azure configuration snapshot"
@@ -1245,8 +1319,8 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
 
 # fmt: off
 def _azure_cli_guard_source(runtime_directory: Path) -> str:
-    source = r"""import ctypes,errno,fcntl,hashlib,json,os,runpy,secrets,shutil,signal,stat,sys
-EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None)
+    source = r"""import ctypes,errno,fcntl,hashlib,json,os,runpy,secrets,signal,stat,sys
+EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None);CLEANUP_LIMIT=50000;CLEANUP_DEPTH=64
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
 def acl_state(fd):
@@ -1309,21 +1383,44 @@ def capture(source):
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
 snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False
-def scrub(fd):
+def scrub_directory(fd,expected_device,budget,depth):
+    try:root=os.fstat(fd)
+    except OSError:return False
+    if not stat.S_ISDIR(root.st_mode) or root.st_uid!=os.geteuid() or root.st_dev!=expected_device or depth>CLEANUP_DEPTH:return False
     ok=True
     try:os.fchmod(fd,0o700)
     except OSError:ok=False
     try:names=os.listdir(fd)
     except OSError:return False
     for name in names:
+        child=None
         try:
+            if budget[0]<=0:return False
+            budget[0]-=1
             metadata=os.stat(name,dir_fd=fd,follow_symlinks=False)
             if metadata.st_uid!=os.geteuid() or not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)):ok=False;continue
-            if stat.S_ISDIR(metadata.st_mode):shutil.rmtree(name,dir_fd=fd)
-            else:os.unlink(name,dir_fd=fd)
+            if stat.S_ISDIR(metadata.st_mode):
+                if metadata.st_dev!=expected_device:ok=False;continue
+                child=os.open(name,DIRECTORY_FLAGS,dir_fd=fd);opened=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False);identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid)
+                if not stat.S_ISDIR(opened.st_mode) or opened.st_dev!=expected_device or opened.st_uid!=os.geteuid() or identity!=(opened.st_dev,opened.st_ino,opened.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):ok=False;continue
+                if not scrub_directory(child,expected_device,budget,depth+1):ok=False
+                current=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid) or os.listdir(child):ok=False;continue
+                os.rmdir(name,dir_fd=fd)
+            else:
+                if metadata.st_dev!=expected_device:ok=False;continue
+                os.unlink(name,dir_fd=fd)
         except OSError:ok=False
+        finally:
+            if child is not None:
+                try:os.close(child)
+                except OSError:ok=False
     try:return ok and not os.listdir(fd)
     except OSError:return False
+def scrub(fd):
+    try:expected_device=os.fstat(parent_fd).st_dev
+    except OSError:return False
+    return scrub_directory(fd,expected_device,[CLEANUP_LIMIT],0)
 def remove_snapshot(name,fd,identity):
     if not scrub(fd):return False
     try:
@@ -1379,7 +1476,7 @@ def valid_snapshot_name(name):
 def terminate(signum,_frame):raise SystemExit(128+signum)
 try:
     try:
-        if not shutil.rmtree.avoids_symlink_attacks or not hasattr(signal,"pthread_sigmask"):raise ValueError
+        if not hasattr(signal,"pthread_sigmask"):raise ValueError
         previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
         if any(value in previous_mask for value in TERMINATION_SIGNALS):raise ValueError
         for value in TERMINATION_SIGNALS:signal.signal(value,terminate)
@@ -1895,13 +1992,12 @@ def _run_process(
                     )
                 streams[key.data].append(chunk)
         returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
-        if _validated_null_home() != null_home_binding:
-            raise RecoveryPlanError("null HOME changed during execution")
     except (OSError, subprocess.TimeoutExpired, RecoveryPlanError) as exc:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         process.stdout.close()
         process.stderr.close()
         process.wait()
@@ -1914,6 +2010,8 @@ def _run_process(
     stderr = b"".join(streams[stderr_fd])
     process.stdout.close()
     process.stderr.close()
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed during execution")
     return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
 
 

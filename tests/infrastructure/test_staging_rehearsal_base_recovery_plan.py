@@ -694,7 +694,7 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
     runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
-    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,signal,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:(Path.home()/".netrc").write_bytes(b"hostile")\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nif "signal-cleanup-entry" in sys.argv:\n original_pthread_sigmask=signal.pthread_sigmask;pause_cleanup=True\n def pthread_sigmask(how,mask):\n  global pause_cleanup\n  if pause_cleanup:\n   pause_cleanup=False;print("cleanup-entry-ready",flush=True);time.sleep(0.5)\n  return original_pthread_sigmask(how,mask)\n signal.pthread_sigmask=pthread_sigmask\nif "signal-cleanup" in sys.argv:\n original_fchmod=os.fchmod\n def fchmod(fd,mode):\n  if mode == 0o700:print("snapshot-cleanup-ready",flush=True);time.sleep(0.5)\n  return original_fchmod(fd,mode)\n os.fchmod=fchmod\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
+    (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,signal,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:(Path.home()/".netrc").write_bytes(b"hostile")\nif "device-boundary-cleanup" in sys.argv:\n mounted=p/"mounted";mounted.mkdir();(mounted/"sentinel").write_bytes(b"keep");original_stat=os.stat\n def stat_with_device_boundary(path,*args,**kwargs):\n  result=original_stat(path,*args,**kwargs)\n  if path == "mounted" and kwargs.get("dir_fd") is not None and kwargs.get("follow_symlinks") is False:\n   values=list(result);values[2]+=1;return os.stat_result(values)\n  return result\n os.stat=stat_with_device_boundary\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nif "signal-cleanup-entry" in sys.argv:\n original_pthread_sigmask=signal.pthread_sigmask;pause_cleanup=True\n def pthread_sigmask(how,mask):\n  global pause_cleanup\n  if pause_cleanup:\n   pause_cleanup=False;print("cleanup-entry-ready",flush=True);time.sleep(0.5)\n  return original_pthread_sigmask(how,mask)\n signal.pthread_sigmask=pthread_sigmask\nif "signal-cleanup" in sys.argv:\n original_fchmod=os.fchmod\n def fchmod(fd,mode):\n  if mode == 0o700:print("snapshot-cleanup-ready",flush=True);time.sleep(0.5)\n  return original_fchmod(fd,mode)\n os.fchmod=fchmod\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
     assert recovery._azure_cli_environment(runtime)["HOME"] == os.devnull; monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": os.devnull, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
@@ -704,6 +704,10 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     assert result.returncode == 0, (result.stdout, result.stderr)
     observed = json.loads(result.stdout)
     assert result.returncode == 0 and observed["path"] != str(config) and observed["files"] == sorted(values) and observed["home"] == os.devnull and not observed["netrc"] and not Path(observed["path"]).exists()
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; boundary = subprocess.run([wrapper, "device-boundary-cleanup"], env=environment, capture_output=True, check=False)  # noqa: E702
+    retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
+    assert boundary.returncode == 2 and boundary.stderr == b"azure_cli_guard_refused\n" and len(retained) == 1 and (retained[0] / "mounted" / "sentinel").read_bytes() == b"keep" and not any(path.name in values for path in runtime.rglob("*"))
+    shutil.rmtree(retained[0])
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; mutated_home = subprocess.run([wrapper, "mutate-home-during"], env=environment, capture_output=True, check=False)  # noqa: E702
     assert mutated_home.returncode == 2 and mutated_home.stderr == b"azure_cli_guard_refused\n" and not (Path(os.devnull) / ".netrc").exists() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
     for name in ("config", "msal_token_cache.json"):
@@ -728,7 +732,7 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; renamed_stale = subprocess.run([wrapper, "version"], env=environment, capture_output=True, check=False)  # noqa: E702
     assert renamed_stale.returncode == 2 and renamed_stale.stderr == b"azure_cli_guard_refused\n" and not stale_rename.exists() and moved_stale.is_dir() and not any(moved_stale.iterdir()) and not any(path.name in values for path in runtime.rglob("*"))
     moved_stale.rmdir()
-    sitecustomize.write_text('import sys,time\ndef hook(event,args):\n if event == "shutil.rmtree" and args and args[0] == "pause-cleanup":\n  print("stale-cleanup-ready",flush=True);time.sleep(0.5)\nsys.addaudithook(hook)\n')
+    sitecustomize.write_text('import os,time\noriginal_open=os.open\npaused=False\ndef open(path,flags,mode=0o777,*,dir_fd=None):\n global paused\n result=original_open(path,flags,mode,dir_fd=dir_fd)\n if path == "pause-cleanup" and dir_fd is not None and not paused:\n  paused=True;print("stale-cleanup-ready",flush=True);time.sleep(0.5)\n return result\nos.open=open\n')
     stale = runtime / ".azure-config-stale-signal"; pause = stale / "pause-cleanup"; stale.mkdir(mode=0o700); pause.mkdir(mode=0o700); _protected_file(pause / "msal_token_cache.json", b"stale", mode=0o600)  # noqa: E702
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; process = subprocess.Popen([wrapper, "version"], env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # noqa: E702
     assert process.stdout is not None; selector = selectors.DefaultSelector(); selector.register(process.stdout, selectors.EVENT_READ); assert selector.select(5) and process.stdout.readline() == b"stale-cleanup-ready\n"; selector.close()  # noqa: E702
@@ -813,6 +817,22 @@ def test_stale_snapshot_rename_away_scrubs_original(tmp_path: Path, monkeypatch:
     monkeypatch.setattr(recovery.os, "fchmod", rename_after_open)
     with pytest.raises(recovery.RecoveryPlanError, match="snapshot changed"): recovery._remove_stale_azure_config_snapshots(runtime)
     assert not stale.exists() and moved.is_dir() and not any(moved.iterdir())
+
+
+def test_snapshot_scrub_refuses_device_boundary_without_traversing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    snapshot = tmp_path / "snapshot"; mounted = snapshot / "mounted"; mounted.mkdir(parents=True, mode=0o700); sentinel = _protected_file(mounted / "sentinel", b"keep", mode=0o600)  # noqa: E702
+    descriptor = os.open(snapshot, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)); expected_device = os.fstat(descriptor).st_dev; real_stat = os.stat  # noqa: E702
+    def cross_device(path: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        result = real_stat(path, *args, **kwargs)
+        if path == "mounted" and kwargs.get("dir_fd") == descriptor and kwargs.get("follow_symlinks") is False:
+            values = list(result); values[stat.ST_DEV] = expected_device + 1; return os.stat_result(values)  # noqa: E702
+        return result
+    monkeypatch.setattr(recovery.os, "stat", cross_device)
+    try:
+        assert not recovery._scrub_azure_config_snapshot(descriptor, expected_device=expected_device)
+    finally:
+        os.close(descriptor)
+    assert sentinel.read_bytes() == b"keep"
 
 
 def test_azure_config_capture_rejects_directory_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -909,6 +929,15 @@ def test_subprocess_is_bounded_and_kills_its_group(
             timeout_seconds=0.01,
         )
     assert seen == {"new_session": True, "killpg": recovery.signal.SIGKILL}
+
+
+def test_post_execution_runtime_change_does_not_signal_reaped_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bindings = iter(((1,), (1,), (2,))); signals: list[tuple[int, int]] = []  # noqa: E702
+    monkeypatch.setattr(recovery, "_validated_null_home", lambda: next(bindings))
+    monkeypatch.setattr(recovery.os, "killpg", lambda pid, value: signals.append((pid, value)))
+    with pytest.raises(recovery.RecoveryPlanError, match="null HOME changed during execution"):
+        recovery._run_process([sys.executable, "-c", "pass"], cwd=tmp_path, timeout_seconds=5)
+    assert signals == []
 
 
 def test_subprocess_refuses_missing_runtime_before_environment_or_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
