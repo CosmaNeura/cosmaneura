@@ -1,8 +1,8 @@
 """add_scheduling_provider_adapter
 
-Revision ID: 60a2e397d0dc
+Revision ID: 17803c3c4718
 Revises: 9a2399212488
-Create Date: 2026-09-09 14:54:07.607051
+Create Date: 2026-09-09 15:12:59.027109
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '60a2e397d0dc'
+revision: str = '17803c3c4718'
 down_revision: Union[str, None] = '9a2399212488'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,8 +33,8 @@ def upgrade() -> None:
     sa.Column('source', postgresql.ENUM('acuity', 'google_calendar', name='schedulingprovidersource', create_type=False), nullable=False, comment='which SchedulingProvider adapter this grant is for'),
     sa.Column('provider_calendar_ref', sqlmodel.sql.sqltypes.AutoString(), nullable=False, comment='calendar/account identifier within the provider (e.g. Acuity calendarID, Google calendar ID)'),
     sa.Column('access_token', sa.Text(), nullable=False, comment='OAuth access token — stored encrypted at rest (AES-256/Fernet)'),
-    sa.Column('refresh_token', sa.Text(), nullable=False, comment='OAuth refresh token — stored encrypted at rest (AES-256/Fernet)'),
-    sa.Column('token_expires_at', sa.DateTime(timezone=True), nullable=False, comment='When the current access_token expires'),
+    sa.Column('refresh_token', sa.Text(), nullable=True, comment='OAuth refresh token — stored encrypted at rest (AES-256/Fernet). Null if the provider issues none.'),
+    sa.Column('token_expires_at', sa.DateTime(timezone=True), nullable=True, comment="When the current access_token expires. Null if the provider's token does not expire."),
     sa.Column('last_backfilled_at', sa.DateTime(timezone=True), nullable=True, comment='Set once the one-time historical backfill has completed for this integration'),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('doctor_scheduling_integration_doctor_id_fkey')),
     sa.PrimaryKeyConstraint('id', name=op.f('doctor_scheduling_integration_pkey')),

@@ -39,13 +39,20 @@ class DoctorSchedulingIntegration(
     access_token: str = Field(sa_column=Column(EncryptedType(), nullable=False))
     "OAuth access token — stored encrypted at rest (AES-256/Fernet)"
 
-    refresh_token: str = Field(sa_column=Column(EncryptedType(), nullable=False))
-    "OAuth refresh token — stored encrypted at rest (AES-256/Fernet)"
-
-    token_expires_at: datetime = Field(
-        sa_column=Column(DateTime(timezone=True), nullable=False)
+    # Nullable: unlike Zoom/Google, Acuity's documented OAuth2 flow issues no
+    # refresh token and no expiry (https://developers.acuityscheduling.com/docs/oauth2).
+    # Google Calendar does have real refresh/expiry semantics; both are
+    # stored on one table since the field is meaningful for at least one
+    # provider and adapters that don't use it simply leave it null.
+    refresh_token: str | None = Field(
+        default=None, sa_column=Column(EncryptedType(), nullable=True)
     )
-    "When the current access_token expires"
+    "OAuth refresh token — stored encrypted at rest (AES-256/Fernet). Null if the provider issues none."
+
+    token_expires_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    "When the current access_token expires. Null if the provider's token does not expire."
 
     last_backfilled_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
