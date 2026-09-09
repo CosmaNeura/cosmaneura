@@ -282,8 +282,11 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    OpenTofu into a collision-resistant owner-only executable snapshot retained
    by descriptor,
    creates a digest-scoped owner-only claim beside the saved plan, closes
-   ambient descriptors, redirects output streams, and only then replaces itself
-   with the executable snapshot. The TTY ceremony prevents accidental
+   ambient descriptors, redirects standard input to the null device and
+   OpenTofu output to the identity-bound owner-only
+   `state-refresh-apply.log`, and only then replaces itself with the executable
+   snapshot. Treat that log as sensitive local evidence: never publish it or
+   submit it for review. The TTY ceremony prevents accidental
    invocation; it is not cryptographic human-identity proof. This narrowly
    trusted workstation flow assumes exclusive control of the local operator UID
    and cannot make its

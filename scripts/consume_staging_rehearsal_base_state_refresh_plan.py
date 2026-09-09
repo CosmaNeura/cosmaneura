@@ -167,6 +167,7 @@ MAX_CLAIM_BYTES = 16 * 1024
 MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 CLAIM_NAME_PREFIX = ".base-state-refresh-apply-claimed-v1-"
 EXECUTABLE_SNAPSHOT_PREFIX = ".state-refresh-tofu-"
+APPLY_LOG_NAME = "state-refresh-apply.log"
 EXECUTABLE_SNAPSHOT_RE = re.compile(
     rf"{re.escape(EXECUTABLE_SNAPSHOT_PREFIX)}[0-9a-f]{{64}}-[0-9a-f]{{32}}"
 )
@@ -847,22 +848,95 @@ def _protected_directory_identity(path: Path) -> Mapping[str, int]:
         os.close(descriptor)
 
 
+def _apply_log_identity(path: Path, descriptor: int) -> Mapping[str, int | str]:
+    try:
+        descriptor_metadata = os.fstat(descriptor)
+        path_metadata = path.lstat()
+        descriptor_flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    except (OSError, ValueError):
+        _fail("apply_log.changed")
+    if (
+        path.name != APPLY_LOG_NAME
+        or stat.S_ISLNK(path_metadata.st_mode)
+        or not stat.S_ISREG(descriptor_metadata.st_mode)
+        or not stat.S_ISREG(path_metadata.st_mode)
+        or descriptor_metadata.st_uid != os.geteuid()
+        or descriptor_metadata.st_nlink != 1
+        or stat.S_IMODE(descriptor_metadata.st_mode) != 0o600
+        or descriptor_flags & os.O_ACCMODE != os.O_WRONLY
+        or not descriptor_flags & os.O_APPEND
+        or _metadata_identity(descriptor_metadata) != _metadata_identity(path_metadata)
+    ):
+        _fail("apply_log.changed")
+    return {
+        "name": APPLY_LOG_NAME,
+        "device": descriptor_metadata.st_dev,
+        "inode": descriptor_metadata.st_ino,
+        "mode": stat.S_IMODE(descriptor_metadata.st_mode),
+        "uid": descriptor_metadata.st_uid,
+    }
+
+
+def _open_apply_log(
+    execution_dir: Path,
+) -> tuple[Path, int, Mapping[str, int | str]]:
+    path = execution_dir / APPLY_LOG_NAME
+    parent = recovery._open_protected_directory(
+        execution_dir, label="execution directory"
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            APPLY_LOG_NAME,
+            os.O_WRONLY
+            | os.O_APPEND
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=parent,
+        )
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.fsync(parent)
+        identity = _apply_log_identity(path, descriptor)
+        result = descriptor
+        descriptor = None
+        return path, result, identity
+    except OSError:
+        _fail("apply_log.unavailable")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
 def _require_before_deadline(deadline: float) -> None:
     if time.monotonic() >= deadline:
         _fail("operator.confirmation_timeout")
 
 
-def _redirect_standard_streams() -> None:
+def _redirect_standard_streams(apply_log_descriptor: int) -> None:
     descriptor: int | None = None
     try:
+        log_metadata = os.fstat(apply_log_descriptor)
+        if (
+            not stat.S_ISREG(log_metadata.st_mode)
+            or log_metadata.st_uid != os.geteuid()
+            or log_metadata.st_nlink != 1
+            or stat.S_IMODE(log_metadata.st_mode) != 0o600
+        ):
+            _fail("apply_log.changed")
         descriptor = os.open(
             os.devnull,
             os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
         )
         if not stat.S_ISCHR(os.fstat(descriptor).st_mode):
             _fail("runtime.changed")
-        for target in (0, 1, 2):
-            os.dup2(descriptor, target, inheritable=True)
+        os.dup2(descriptor, 0, inheritable=True)
+        for target in (1, 2):
+            os.dup2(apply_log_descriptor, target, inheritable=True)
     except OSError:
         _fail("runtime.changed")
     finally:
@@ -1013,6 +1087,7 @@ def consume(
         )
         tofu_descriptor: int | None = None
         tofu_snapshot: Path | None = None
+        apply_log_descriptor: int | None = None
         claim_created = False
         try:
             tofu_sha256 = receipt.get("open_tofu_sha256")
@@ -1045,6 +1120,9 @@ def consume(
             ) != receipt.get("backend_metadata_sha256"):
                 _fail("runtime.changed")
             execution_directory_identity = _protected_directory_identity(execution_dir)
+            apply_log_path, apply_log_descriptor, apply_log_identity = _open_apply_log(
+                execution_dir
+            )
             exec_path = str(tofu_snapshot)
             argv = [
                 exec_path,
@@ -1108,12 +1186,21 @@ def consume(
                     "argv_sha256": _digest(_canonical(argv)),
                     "environment_sha256": _digest(_canonical(environment)),
                     "execution_directory_identity": execution_directory_identity,
+                    "apply_log_identity": apply_log_identity,
                     "apply_outcome": "unknown",
                 },
             )
             claim_created = True
             _require_before_deadline(deadline)
-            _redirect_standard_streams()
+            if (
+                apply_log_descriptor is None
+                or _apply_log_identity(apply_log_path, apply_log_descriptor)
+                != apply_log_identity
+            ):
+                _fail("apply_log.changed")
+            _redirect_standard_streams(apply_log_descriptor)
+            os.close(apply_log_descriptor)
+            apply_log_descriptor = None
             _close_ambient_descriptors({plan_descriptor, tofu_descriptor})
             if not os.get_inheritable(plan_descriptor) or os.get_inheritable(
                 tofu_descriptor
@@ -1135,6 +1222,8 @@ def consume(
             _require_before_deadline(deadline)
             os.execve(exec_path, argv, environment)
         finally:
+            if apply_log_descriptor is not None:
+                os.close(apply_log_descriptor)
             if tofu_descriptor is not None:
                 try:
                     if tofu_snapshot is not None and not claim_created:

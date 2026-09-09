@@ -108,7 +108,10 @@ The later isolated synthetic-only rehearsal remains mandatory.
    owner-only descriptor across `execve`, and replaces itself with OpenTofu
    1.12.5 using `/dev/fd/<n>` rather than the mutable plan pathname. It offers no
    yes flag, alternate binary, extra Terraform argument, environment override,
-   or automation interface. Never run it from CI or an agent. If anything fails
+   or automation interface. OpenTofu stdout and stderr go only to an
+   identity-bound owner-only `state-refresh-apply.log` in the execution
+   directory; treat it as sensitive local evidence and never publish or submit
+   it for review. Never run the consumer from CI or an agent. If anything fails
    after the claim is created—including `execve` or OpenTofu itself—do not delete
    or overwrite the claim; create and review a new plan, directory, and handoff.
    After a successful human apply, record post-apply state and ARM readback, then
