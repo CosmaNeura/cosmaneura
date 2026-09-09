@@ -794,6 +794,8 @@ def _claim(
     plan_directory: Path,
     expected_saved_plan_sha256: str,
     facts: Mapping[str, Any],
+    *,
+    on_created: Callable[[], None] | None = None,
 ) -> None:
     payload = _canonical(facts) + b"\n"
     if len(payload) > MAX_CLAIM_BYTES:
@@ -813,6 +815,8 @@ def _claim(
             0o400,
             dir_fd=parent,
         )
+        if on_created is not None:
+            on_created()
         _write_all(descriptor, payload)
         os.fchmod(descriptor, 0o400)
         os.fsync(descriptor)
@@ -1131,6 +1135,11 @@ def consume(
         apply_log_path: Path | None = None
         apply_log_descriptor: int | None = None
         claim_created = False
+
+        def record_claim_created() -> None:
+            nonlocal claim_created
+            claim_created = True
+
         try:
             tofu_sha256 = receipt.get("open_tofu_sha256")
             if not isinstance(tofu_sha256, str):
@@ -1231,8 +1240,8 @@ def consume(
                     "apply_log_identity": apply_log_identity,
                     "apply_outcome": "unknown",
                 },
+                on_created=record_claim_created,
             )
-            claim_created = True
             _require_before_deadline(deadline)
             if (
                 apply_log_descriptor is None
