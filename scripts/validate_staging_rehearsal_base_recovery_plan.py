@@ -1252,22 +1252,18 @@ def cleanup():
     ok=True;previous_mask=None
     try:previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
     except (AttributeError,OSError):ok=False
-    if snapshot_created and snapshot_fd is None and snapshot_name is not None and parent_fd is not None:
-        created_fd=None
+    if snapshot_created and snapshot_name is not None and parent_fd is not None:
+        created_fd=snapshot_fd;created_fd_was_established=created_fd is not None
         try:
-            created_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);created_metadata=os.fstat(created_fd);created_linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
-            if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or directory_identity(created_metadata)!=directory_identity(created_linked) or os.listdir(created_fd):raise ValueError
-            safe_acl(created_fd);os.rmdir(snapshot_name,dir_fd=parent_fd)
-            try:os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False);raise ValueError
-            except FileNotFoundError:pass
+            if created_fd is None:created_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
+            created_metadata=os.fstat(created_fd);created_linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False);created_identity=(created_metadata.st_dev,created_metadata.st_ino,created_metadata.st_uid)
+            if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or (not created_fd_was_established and (created_identity!=(created_linked.st_dev,created_linked.st_ino,created_linked.st_uid) or os.listdir(created_fd))) or (snapshot_identity is not None and snapshot_identity!=created_identity):raise ValueError
+            safe_acl(created_fd)
+            if not remove_snapshot(snapshot_name,created_fd,created_identity):raise ValueError
         except (OSError,ValueError):ok=False
         finally:
             if created_fd is not None:os.close(created_fd)
-    if snapshot_fd is not None:
-        ok=snapshot_identity is not None and remove_snapshot(snapshot_name,snapshot_fd,snapshot_identity) and ok
-        try:os.close(snapshot_fd)
-        except OSError:ok=False
-        snapshot_fd=None
+            snapshot_fd=None
     if parent_fd is not None:
         try:os.close(parent_fd)
         except OSError:ok=False
@@ -1282,57 +1278,57 @@ def valid_snapshot_name(name):
     suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
 def terminate(signum,_frame):raise SystemExit(128+signum)
 try:
-    if not shutil.rmtree.avoids_symlink_attacks or not hasattr(signal,"pthread_sigmask"):raise ValueError
-    previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
-    if any(value in previous_mask for value in TERMINATION_SIGNALS):raise ValueError
-    for value in TERMINATION_SIGNALS:signal.signal(value,terminate)
-    expected_binding=os.environ.pop(BINDING_ENV)
-    if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
-    binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
-    if binding!=expected_binding:raise ValueError
-    parent_fd=os.open(PARENT,DIRECTORY_FLAGS);parent_metadata=os.fstat(parent_fd);safe_acl(parent_fd)
-    if parent_metadata.st_uid!=os.geteuid() or stat.S_IMODE(parent_metadata.st_mode)!=0o700:raise ValueError
-    lock_fd=os.open(LOCK,LOCK_FLAGS,dir_fd=parent_fd);lock_metadata=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
-    if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
-    safe_acl(lock_fd);fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lock_current=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
-    if file_identity(lock_metadata)!=file_identity(lock_current) or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
-    stale_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
     try:
-        for stale_name in os.listdir(parent_fd):
-            if not valid_snapshot_name(stale_name):continue
-            stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
-            try:
-                stale_metadata=os.fstat(stale_fd);stale_linked=os.stat(stale_name,dir_fd=parent_fd,follow_symlinks=False)
-                if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid() or stat.S_IMODE(stale_metadata.st_mode) not in (0o500,0o700) or directory_identity(stale_metadata)!=directory_identity(stale_linked):raise ValueError
-                safe_acl(stale_fd);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
-                if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
-            finally:os.close(stale_fd)
-    finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
-    creation_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
-    try:
-        for _ in range(16):
-            snapshot_name=".azure-config-"+secrets.token_hex(16)
-            try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);snapshot_created=True;break
-            except FileExistsError:continue
-        else:raise ValueError
-        snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
-        if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
-        safe_acl(snapshot_fd)
-    finally:signal.pthread_sigmask(signal.SIG_SETMASK,creation_mask)
-    for name,value in captures.items():
-        fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=snapshot_fd)
+        if not shutil.rmtree.avoids_symlink_attacks or not hasattr(signal,"pthread_sigmask"):raise ValueError
+        previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+        if any(value in previous_mask for value in TERMINATION_SIGNALS):raise ValueError
+        for value in TERMINATION_SIGNALS:signal.signal(value,terminate)
+        expected_binding=os.environ.pop(BINDING_ENV)
+        if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
+        binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
+        if binding!=expected_binding:raise ValueError
+        parent_fd=os.open(PARENT,DIRECTORY_FLAGS);parent_metadata=os.fstat(parent_fd);safe_acl(parent_fd)
+        if parent_metadata.st_uid!=os.geteuid() or stat.S_IMODE(parent_metadata.st_mode)!=0o700:raise ValueError
+        lock_fd=os.open(LOCK,LOCK_FLAGS,dir_fd=parent_fd);lock_metadata=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
+        if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
+        safe_acl(lock_fd);fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lock_current=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
+        if file_identity(lock_metadata)!=file_identity(lock_current) or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
+        stale_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
         try:
-            safe_acl(fd);offset=0
-            while offset<len(value):offset+=os.write(fd,value[offset:])
-            os.fchmod(fd,0o600);os.fsync(fd);written=os.fstat(fd)
-            if stat.S_IMODE(written.st_mode)!=0o600 or written.st_uid!=os.geteuid() or written.st_nlink!=1:raise ValueError
-            safe_acl(fd)
-        finally:os.close(fd)
-    os.fsync(snapshot_fd)
-except BaseException:
-    cleanup();print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
-os.environ["AZURE_CONFIG_DIR"]=snapshot;sys.argv=["az",*sys.argv[1:]]
-try:runpy.run_module("azure.cli",run_name="__main__")
+            for stale_name in os.listdir(parent_fd):
+                if not valid_snapshot_name(stale_name):continue
+                stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
+                try:
+                    stale_metadata=os.fstat(stale_fd);stale_linked=os.stat(stale_name,dir_fd=parent_fd,follow_symlinks=False)
+                    if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid() or stat.S_IMODE(stale_metadata.st_mode) not in (0o500,0o700) or directory_identity(stale_metadata)!=directory_identity(stale_linked):raise ValueError
+                    safe_acl(stale_fd);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
+                    if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
+                finally:os.close(stale_fd)
+        finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
+        creation_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS);previous_umask=os.umask(0o077)
+        try:
+            for _ in range(16):
+                snapshot_name=".azure-config-"+secrets.token_hex(16)
+                try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);snapshot_created=True;break
+                except FileExistsError:continue
+            else:raise ValueError
+            snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
+            if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
+            safe_acl(snapshot_fd)
+        finally:os.umask(previous_umask);signal.pthread_sigmask(signal.SIG_SETMASK,creation_mask)
+        for name,value in captures.items():
+            fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=snapshot_fd)
+            try:
+                safe_acl(fd);offset=0
+                while offset<len(value):offset+=os.write(fd,value[offset:])
+                os.fchmod(fd,0o600);os.fsync(fd);written=os.fstat(fd)
+                if stat.S_IMODE(written.st_mode)!=0o600 or written.st_uid!=os.geteuid() or written.st_nlink!=1:raise ValueError
+                safe_acl(fd)
+            finally:os.close(fd)
+        os.fsync(snapshot_fd);os.environ["AZURE_CONFIG_DIR"]=snapshot;sys.argv=["az",*sys.argv[1:]]
+    except BaseException:
+        print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    runpy.run_module("azure.cli",run_name="__main__")
 finally:
     if not cleanup():print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
 """
