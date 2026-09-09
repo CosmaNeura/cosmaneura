@@ -13,18 +13,32 @@ override, run at most once with one replica and no retry, and be deleted after
 the lifecycle. Its only compute identity is the separately authenticated
 `cosmaneura-staging-restore-bootstrap-job` UAMI. Its sole Azure RBAC assignment
 is the built-in `AcrPull` role scoped to the authenticated private registry.
+The image registry resource, host, repository, job registry entry, and pull
+identity must all resolve to that same authenticated registry and UAMI. The
+registry must be private, credentialless, and reachable only through its exact
+private endpoint and DNS binding.
 System identity, federation, any other RBAC, additional identities, secrets,
 passwords, connection strings, ambient credentials, volumes, public database
 access, and VNet peering remain forbidden.
 
-The future control-plane adapter must hold external stability authority before
-job creation through final job and database-authority absence readback. It must
-create, observe, authenticate, start, poll, stop, delete, and observe in the
-reviewed order; it may issue at most one start request and may not retry an
-ambiguous outcome. The database session must close before temporary PostgreSQL
-administrator removal, administrator absence must be proven before job
-deletion, and job/identity-attachment absence must be proven before identity
-deletion. Success, failure, and uncertainty all require teardown.
+The future control-plane adapter must hold external stability authority across
+the complete ordered lifecycle: UAMI creation, exact `AcrPull` creation,
+private-network and exhaustive effective-authority readback, job creation,
+empty pre-start execution inventory, one unmodified start, terminal execution
+and replica observation, database-session close and administrator removal, job
+deletion, `AcrPull` deletion, UAMI deletion, and every final absence readback.
+It may issue at most one start request and may not retry an ambiguous outcome.
+Success requires exactly one provider-observed execution with status
+`Succeeded`, one successful replica, and zero failed replicas. Success,
+failure, timeout, stop, and uncertainty all require the same teardown.
+
+Pre-start evidence explicitly covers the private Container Apps environment,
+subnet route table and NSG, private registry endpoint and DNS, target database
+endpoint and DNS, exact job/identity/registry attachment, exhaustive direct and
+inherited RBAC inventory, and execution history. The offline validator rejects
+non-exact nested Python types, aliases, cycles, floats, excessive depth or node
+counts, oversized scalars, and oversized on-disk policy bytes before
+serialization or unbounded file reads.
 
 The contract pins the existing bootstrap-binding and restore-runtime-binding
 policies. Every authority and implementation claim remains false. Public
@@ -36,4 +50,4 @@ and authenticate their live attachment, and implement the one-shot control
 plane. Recovery for this slice is a code-only revert.
 
 Contract SHA-256:
-`sha256:7d85f301ac94f04fc6aa4c78b845f3ca3875ea8ac54bb4b1e7c105548a2b9207`.
+`sha256:c4c2fba892666061f9e36b03e61469ea739af7be896054113090a80df8b79069`.

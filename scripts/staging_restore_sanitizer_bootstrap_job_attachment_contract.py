@@ -30,7 +30,7 @@ CONTRACT_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-bootstrap-job-attachment-contract.json"
 )
-CONTRACT_SHA256 = "7d85f301ac94f04fc6aa4c78b845f3ca3875ea8ac54bb4b1e7c105548a2b9207"
+CONTRACT_SHA256 = "c4c2fba892666061f9e36b03e61469ea739af7be896054113090a80df8b79069"
 BOOTSTRAP_BINDING_PLAN_CONTRACT_SHA256 = (
     "2e670cfc42a64c1f33e21791eb4795832d4c3be39141c7cde4186cd7c90739c2"
 )
@@ -39,8 +39,62 @@ RESTORE_RUNTIME_BINDING_POLICY_SHA256 = (
 )
 ACTIVATION_FAILURE = "activation.sanitizer_bootstrap_job_attachment_unavailable"
 MAXIMUM_CONTRACT_BYTES = 64 * 1024
+MAXIMUM_CONTRACT_DEPTH = 16
+MAXIMUM_CONTRACT_NODES = 4096
+MAXIMUM_CONTRACT_SCALAR_CHARACTERS = 8192
+MAXIMUM_CONTRACT_INTEGER_BITS = 64
 JOB_NAME = "cosmaneura-stg-restore-bootstrap"
 IDENTITY_NAME = "cosmaneura-staging-restore-bootstrap-job"
+
+REQUIRED_STAGE_ORDER = (
+    "acquire_external_stability_authority",
+    "create_bootstrap_identity",
+    "create_private_registry_acrpull_role_assignment",
+    "observe_identity_and_exhaustive_effective_authorization_inventory",
+    "observe_private_registry_and_network_path",
+    "create_bootstrap_job",
+    "observe_job_configuration_identity_and_registry_attachment",
+    "observe_pre_start_execution_history_empty",
+    "start_bootstrap_job_once_without_overrides",
+    "observe_provider_execution_name",
+    "poll_to_terminal_or_stop_once_on_bounded_timeout",
+    "observe_terminal_execution_and_replica_result",
+    "close_database_session",
+    "remove_bootstrap_database_administrator",
+    "observe_bootstrap_database_administrator_absence",
+    "delete_bootstrap_job",
+    "observe_bootstrap_job_and_identity_attachment_absence",
+    "delete_private_registry_acrpull_role_assignment",
+    "observe_private_registry_acrpull_role_assignment_absence",
+    "delete_bootstrap_identity",
+    "observe_bootstrap_identity_and_effective_authorization_absence",
+    "release_external_stability_authority",
+)
+REQUIRED_PRE_START_PROVIDER_OBSERVATIONS = (
+    "container_apps_environment_configuration",
+    "infrastructure_subnet_configuration",
+    "infrastructure_subnet_route_table_configuration",
+    "infrastructure_subnet_network_security_group_configuration",
+    "private_registry_configuration",
+    "private_registry_private_endpoint_configuration",
+    "private_registry_private_dns_binding",
+    "target_database_configuration",
+    "target_database_private_endpoint_configuration",
+    "target_database_private_dns_binding",
+    "bootstrap_identity_resource",
+    "exhaustive_direct_and_inherited_role_assignment_inventory",
+    "bootstrap_job_configuration",
+    "bootstrap_job_identity_and_registry_attachment",
+    "bootstrap_job_execution_history",
+)
+REQUIRED_FINAL_ABSENCE_OBSERVATIONS = (
+    "bootstrap_database_administrator",
+    "bootstrap_job",
+    "bootstrap_job_identity_attachment",
+    "private_registry_acrpull_role_assignment",
+    "bootstrap_identity",
+    "bootstrap_identity_effective_authorization_inventory",
+)
 
 CLAIMS = dict.fromkeys(
     (
@@ -101,6 +155,58 @@ def _canonical(value: Any) -> bytes:
         _fail("bootstrap_job_attachment_contract.invalid")
 
 
+def _validate_exact_json_tree(value: Any) -> None:
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    seen_containers: set[int] = set()
+    node_count = 0
+    scalar_characters = 0
+
+    while stack:
+        current, depth = stack.pop()
+        node_count += 1
+        if node_count > MAXIMUM_CONTRACT_NODES or depth > MAXIMUM_CONTRACT_DEPTH:
+            _fail("bootstrap_job_attachment_contract.invalid")
+
+        if type(current) is dict:
+            identity = id(current)
+            if identity in seen_containers:
+                _fail("bootstrap_job_attachment_contract.invalid")
+            seen_containers.add(identity)
+            node_count += len(current)
+            if node_count > MAXIMUM_CONTRACT_NODES:
+                _fail("bootstrap_job_attachment_contract.invalid")
+            for name, nested in current.items():
+                if type(name) is not str:
+                    _fail("bootstrap_job_attachment_contract.invalid")
+                scalar_characters += len(name)
+                if (
+                    len(name) > MAXIMUM_CONTRACT_SCALAR_CHARACTERS
+                    or scalar_characters > MAXIMUM_CONTRACT_BYTES
+                ):
+                    _fail("bootstrap_job_attachment_contract.invalid")
+                stack.append((nested, depth + 1))
+        elif type(current) is list:
+            identity = id(current)
+            if identity in seen_containers:
+                _fail("bootstrap_job_attachment_contract.invalid")
+            seen_containers.add(identity)
+            stack.extend((nested, depth + 1) for nested in current)
+        elif type(current) is str:
+            scalar_characters += len(current)
+            if (
+                len(current) > MAXIMUM_CONTRACT_SCALAR_CHARACTERS
+                or scalar_characters > MAXIMUM_CONTRACT_BYTES
+            ):
+                _fail("bootstrap_job_attachment_contract.invalid")
+        elif type(current) is int:
+            if current.bit_length() > MAXIMUM_CONTRACT_INTEGER_BITS:
+                _fail("bootstrap_job_attachment_contract.invalid")
+        elif type(current) is bool or current is None:
+            continue
+        else:
+            _fail("bootstrap_job_attachment_contract.invalid")
+
+
 def _parse(raw: bytes, *, expected_sha256: str) -> dict[str, Any]:
     if (
         type(raw) is not bytes
@@ -117,6 +223,14 @@ def _parse(raw: bytes, *, expected_sha256: str) -> dict[str, Any]:
             result[name] = value
         return result
 
+    def integer(value: str) -> int:
+        if len(value) > 20:
+            _fail("bootstrap_job_attachment_contract.invalid")
+        result = int(value)
+        if result.bit_length() > MAXIMUM_CONTRACT_INTEGER_BITS:
+            _fail("bootstrap_job_attachment_contract.invalid")
+        return result
+
     try:
         document = json.loads(
             raw,
@@ -124,6 +238,10 @@ def _parse(raw: bytes, *, expected_sha256: str) -> dict[str, Any]:
             parse_constant=lambda _value: _fail(
                 "bootstrap_job_attachment_contract.invalid"
             ),
+            parse_float=lambda _value: _fail(
+                "bootstrap_job_attachment_contract.invalid"
+            ),
+            parse_int=integer,
         )
     except SanitizerBootstrapJobAttachmentContractFailure:
         raise
@@ -131,12 +249,14 @@ def _parse(raw: bytes, *, expected_sha256: str) -> dict[str, Any]:
         _fail("bootstrap_job_attachment_contract.invalid")
     if type(document) is not dict:
         _fail("bootstrap_job_attachment_contract.invalid")
+    _validate_exact_json_tree(document)
     return document
 
 
 def _read_contract() -> tuple[dict[str, Any], bytes]:
     try:
-        raw = CONTRACT_PATH.read_bytes()
+        with CONTRACT_PATH.open("rb") as handle:
+            raw = handle.read(MAXIMUM_CONTRACT_BYTES + 1)
     except OSError:
         _fail("bootstrap_job_attachment_contract.invalid")
     return _parse(raw, expected_sha256=CONTRACT_SHA256), raw
@@ -247,6 +367,20 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "private_registry_pull_role_definition_id": "/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d",
         "private_registry_pull_role_assignment_required": True,
         "private_registry_pull_scope_source": "future_authenticated_restore_runtime_binding.private_registry.resource_id",
+        "job_registry_configuration_exactly_one_entry_required": True,
+        "job_registry_server_source": "future_authenticated_restore_runtime_binding.private_registry.host",
+        "job_registry_identity_source": "bootstrap_binding_plan.retained_authenticated_bootstrap_identity_evidence.private_identity.resource_id",
+        "direct_and_inherited_authorization_inventory_required": True,
+        "authorization_inventory_query_scope_source": "subscription.id",
+        "authorization_inventory_must_include_management_group_subscription_resource_group_and_resource_scopes": True,
+        "exact_effective_role_assignment_count_during_job": 1,
+        "exact_effective_role_definition_ids_during_job": [
+            "/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d"
+        ],
+        "effective_role_assignment_set_must_equal_private_registry_acrpull": True,
+        "unlisted_direct_or_inherited_role_assignment_permitted": False,
+        "subscription_uami_inventory_must_contain_exactly_one_matching_identity_during_job": True,
+        "subscription_uami_and_effective_role_assignment_counts_after_teardown": 0,
         "other_azure_rbac_assignments_permitted": False,
         "persistent_compute_attachment_permitted": False,
         "identity_resource_client_principal_and_tenant_ids_must_match_authenticated_ancestry": True,
@@ -260,6 +394,14 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "digest_pinned_image_required": True,
         "image_tag_permitted": False,
         "private_registry_only": True,
+        "image_registry_resource_id_must_equal_source": "future_authenticated_restore_runtime_binding.private_registry.resource_id",
+        "image_registry_host_must_equal_source": "future_authenticated_restore_runtime_binding.private_registry.host",
+        "image_repository_must_equal_source": "future_authenticated_restore_runtime_binding.private_registry.repository",
+        "image_digest_pattern": "sha256:[0-9a-f]{64}",
+        "image_reference_must_equal_registry_host_repository_at_sha256_digest": True,
+        "job_image_reference_must_equal_authenticated_image_reference": True,
+        "provider_observed_repository_and_digest_readback_required": True,
+        "job_registry_entry_server_and_identity_must_be_provider_observed": True,
         "registry_pull_identity_must_equal_bootstrap_identity": True,
         "shell_entrypoint_permitted": False,
         "caller_command_or_argument_override_permitted": False,
@@ -277,12 +419,31 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "implementation_selected": False,
         "control_vnet_resource_id_source": "future_authenticated_restore_runtime_binding.runtime.container_apps_environment.control_vnet_resource_id",
         "infrastructure_subnet_resource_id_source": "future_authenticated_restore_runtime_binding.runtime.container_apps_environment.infrastructure_subnet_resource_id",
+        "environment_internal_only_required": True,
+        "environment_public_network_access_required": "Disabled",
+        "environment_default_outbound_access_required": False,
         "private_environment_required": True,
         "public_ingress_permitted": False,
         "public_database_access_permitted": False,
         "vnet_peering_permitted": False,
         "target_database_private_endpoint_required": True,
         "target_private_dns_binding_required": True,
+        "target_database_public_network_access_required": "Disabled",
+        "private_registry_resource_id_source": "future_authenticated_restore_runtime_binding.private_registry.resource_id",
+        "private_registry_host_source": "future_authenticated_restore_runtime_binding.private_registry.host",
+        "private_registry_public_network_access_required": "Disabled",
+        "private_registry_admin_credentials_enabled_required": False,
+        "private_registry_anonymous_pull_enabled_required": False,
+        "private_registry_private_endpoint_resource_id_source": "future_authenticated_restore_runtime_binding.private_registry.private_endpoint_resource_id",
+        "private_registry_private_dns_zone_id_source": "future_authenticated_restore_runtime_binding.private_registry.private_dns_zone_resource_id",
+        "private_registry_private_dns_link_id_source": "future_authenticated_restore_runtime_binding.private_registry.private_dns_link_resource_id",
+        "private_registry_private_dns_zone_required": "privatelink.azurecr.io",
+        "infrastructure_subnet_route_table_observation_required": True,
+        "infrastructure_subnet_network_security_group_observation_required": True,
+        "environment_and_subnet_configuration_must_equal_authenticated_runtime_binding": True,
+        "route_table_network_security_group_and_egress_must_equal_authenticated_network_policy": True,
+        "private_registry_configuration_endpoint_and_dns_must_equal_authenticated_runtime_binding": True,
+        "target_database_configuration_endpoint_and_dns_must_equal_authenticated_controller_receipt": True,
         "explicit_allowlist_egress_required": True,
         "unlisted_egress_permitted": False,
     }:
@@ -291,8 +452,10 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
     if control != {
         "implementation_selected": False,
         "external_stability_authority_required_before_job_create": True,
-        "external_stability_authority_must_span_final_job_and_database_authority_absence_readback": True,
-        "exact_create_observe_start_poll_terminal_or_stop_delete_observe_order_required": True,
+        "external_stability_authority_must_span_every_final_absence_readback": True,
+        "required_stage_order": list(REQUIRED_STAGE_ORDER),
+        "bootstrap_identity_creation_and_readback_required": True,
+        "private_registry_pull_assignment_creation_and_readback_required": True,
         "job_configuration_observation_required_before_start": True,
         "job_identity_attachment_authentication_required_before_start": True,
         "maximum_start_requests": 1,
@@ -303,6 +466,8 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "bootstrap_administrator_absence_required_before_job_delete": True,
         "job_and_identity_attachment_absence_required_before_identity_delete": True,
         "private_registry_pull_assignment_absence_required_before_identity_delete": True,
+        "bootstrap_identity_deletion_and_absence_readback_required": True,
+        "private_registry_pull_assignment_deletion_and_absence_readback_required": True,
         "teardown_required_after_success_failure_or_uncertainty": True,
         "caller_provider_client_or_transport_permitted": False,
     }:
@@ -312,7 +477,22 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "fresh_live_provider_observation_required": True,
         "same_process_authentication_and_use_required": True,
         "exact_job_resource_configuration_execution_and_identity_projections_required": True,
+        "required_pre_start_provider_observations": list(
+            REQUIRED_PRE_START_PROVIDER_OBSERVATIONS
+        ),
+        "pre_start_execution_inventory_must_be_empty": True,
+        "post_start_execution_inventory_must_contain_exactly_one": True,
+        "provider_observed_execution_name_must_match_started_execution": True,
+        "successful_terminal_execution_status_required": "Succeeded",
+        "successful_replica_count_required": 1,
+        "failed_replica_count_required": 0,
+        "stopped_failed_or_unknown_execution_is_not_success": True,
+        "effective_authorization_inventory_must_include_direct_and_inherited_assignments": True,
+        "effective_authorization_inventory_must_be_exhaustive_at_subscription_scope": True,
         "job_and_identity_readback_must_be_repeated_before_and_after_execution": True,
+        "required_final_absence_observations": list(
+            REQUIRED_FINAL_ABSENCE_OBSERVATIONS
+        ),
         "raw_provider_bodies_identity_ids_tokens_or_credentials_may_be_public": False,
         "serialized_seal_or_cross_process_authority_permitted": False,
         "retrospective_or_expired_evidence_permitted": False,
@@ -358,6 +538,7 @@ def validate_bootstrap_job_attachment_contract(
         _fail("bootstrap_job_attachment_contract.invalid")
     template, _raw = _read_contract()
     try:
+        _validate_exact_json_tree(contract)
         canonical = _canonical(contract)
         document = _parse(
             canonical, expected_sha256=hashlib.sha256(canonical).hexdigest()
