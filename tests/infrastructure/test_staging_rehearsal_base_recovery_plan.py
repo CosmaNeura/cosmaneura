@@ -828,6 +828,19 @@ def test_stale_snapshot_rename_away_scrubs_original(tmp_path: Path, monkeypatch:
     assert not stale.exists() and moved.is_dir() and not any(moved.iterdir())
 
 
+def test_stale_cleanup_keeps_lock_bound_to_original_runtime_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = tmp_path / "runtime"; moved = tmp_path / "runtime-moved"; replacement = tmp_path / "runtime-replacement"; runtime.mkdir(mode=0o700); replacement.mkdir(mode=0o700)  # noqa: E702
+    old_snapshot = runtime / ".azure-config-old123"; old_snapshot.mkdir(mode=0o700); _protected_file(old_snapshot / "msal_token_cache.json", b"old", mode=0o600)  # noqa: E702
+    replacement_snapshot = replacement / ".azure-config-active1"; replacement_snapshot.mkdir(mode=0o700); sentinel = _protected_file(replacement_snapshot / "sentinel", b"keep", mode=0o600)  # noqa: E702
+    real_open_lock = recovery._open_azure_config_lock
+    def lock_then_replace(parent: int) -> int:
+        descriptor = real_open_lock(parent); runtime.rename(moved); replacement.rename(runtime); return descriptor  # noqa: E702
+    monkeypatch.setattr(recovery, "_open_azure_config_lock", lock_then_replace)
+    with pytest.raises(recovery.RecoveryPlanError, match="snapshot changed"):
+        recovery._remove_stale_azure_config_snapshots(runtime)
+    assert not (moved / old_snapshot.name).exists() and (runtime / replacement_snapshot.name / sentinel.name).read_bytes() == b"keep"
+
+
 def test_snapshot_scrub_refuses_same_device_mount_boundary_without_traversing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     snapshot = tmp_path / "snapshot"; mounted = snapshot / "mounted"; mounted.mkdir(parents=True, mode=0o700); sentinel = _protected_file(mounted / "sentinel", b"keep", mode=0o600)  # noqa: E702
     descriptor = os.open(snapshot, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)); expected_device = os.fstat(descriptor).st_dev; expected_mount = recovery._mount_identity(descriptor)  # noqa: E702
@@ -942,6 +955,17 @@ def test_post_execution_runtime_change_does_not_signal_reaped_process_group(tmp_
     with pytest.raises(recovery.RecoveryPlanError, match="null HOME changed during execution"):
         recovery._run_process([sys.executable, "-c", "pass"], cwd=tmp_path, timeout_seconds=5)
     assert signals == []
+
+
+def test_subprocess_start_failure_is_reported_without_process_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    signals: list[tuple[int, int]] = []
+    def refuse_start(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("missing executable")
+    monkeypatch.setattr(recovery.subprocess, "Popen", refuse_start)
+    monkeypatch.setattr(recovery.os, "killpg", lambda pid, value: signals.append((pid, value)))
+    with pytest.raises(recovery.RecoveryPlanError, match="required local command did not complete") as error:
+        recovery._run_process(["/missing"], cwd=tmp_path, timeout_seconds=5)
+    assert isinstance(error.value.__cause__, OSError) and signals == []
 
 
 def test_subprocess_refuses_missing_runtime_before_environment_or_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

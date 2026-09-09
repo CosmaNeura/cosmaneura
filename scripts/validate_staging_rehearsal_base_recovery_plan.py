@@ -855,10 +855,7 @@ def _validated_azure_config(home: Path) -> tuple[Path, str]:
 # fmt: on
 
 
-def _open_azure_config_lock(runtime_directory: Path) -> int:
-    parent = _open_protected_directory(
-        runtime_directory, label="trusted runtime directory"
-    )
+def _open_azure_config_lock(parent: int) -> int:
     descriptor: int | None = None
     try:
         flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -910,8 +907,6 @@ def _open_azure_config_lock(runtime_directory: Path) -> int:
         if descriptor is not None:
             os.close(descriptor)
         raise
-    finally:
-        os.close(parent)
 
 
 def _mount_identity(descriptor: int) -> tuple[Any, ...]:
@@ -1097,16 +1092,19 @@ def _scrub_azure_config_snapshot(
 
 
 def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
-    lock = _open_azure_config_lock(runtime_directory)
     parent: int | None = None
+    lock: int | None = None
     unsafe_found = False
     changed_found = False
     try:
         parent = _open_protected_directory(
             runtime_directory, label="trusted runtime directory"
         )
-        parent_device = os.fstat(parent).st_dev
+        parent_metadata = os.fstat(parent)
+        parent_identity = _azure_directory_identity(parent_metadata)
+        parent_device = parent_metadata.st_dev
         parent_mount = _mount_identity(parent)
+        lock = _open_azure_config_lock(parent)
         for name in sorted(os.listdir(parent)):
             if re.fullmatch(r"\.azure-config-[A-Za-z0-9_-]{6,96}", name) is None:
                 continue
@@ -1183,6 +1181,23 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
                     os.close(descriptor)
                 except OSError:
                     unsafe_found = True
+        verification: int | None = None
+        try:
+            verification = _open_protected_directory(
+                runtime_directory, label="trusted runtime directory"
+            )
+            if (
+                parent_identity != _azure_directory_identity(os.fstat(parent))
+                or parent_identity != _azure_directory_identity(os.fstat(verification))
+                or _mount_identity(parent) != parent_mount
+                or _mount_identity(verification) != parent_mount
+            ):
+                changed_found = True
+        except RecoveryPlanError:
+            changed_found = True
+        finally:
+            if verification is not None:
+                os.close(verification)
         if unsafe_found:
             raise RecoveryPlanError("stale Azure configuration snapshot is unsafe")
         if changed_found:
@@ -1192,9 +1207,10 @@ def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
             "stale Azure configuration snapshot could not be removed"
         ) from exc
     finally:
+        if lock is not None:
+            os.close(lock)
         if parent is not None:
             os.close(parent)
-        os.close(lock)
 
 
 def _validated_null_home() -> tuple[int, ...]:
