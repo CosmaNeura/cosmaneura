@@ -30,7 +30,7 @@ CONTRACT_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-bootstrap-job-attachment-contract.json"
 )
-CONTRACT_SHA256 = "f9255a4244ddea01f1d5b1b9cd2455ecf5d2e2e8a2f953be6c9aef8709f59760"
+CONTRACT_SHA256 = "9ee7cae5d675ea8727e09254c1d0a5396c043994a54c39d4b50290a168f088d2"
 BOOTSTRAP_BINDING_PLAN_CONTRACT_SHA256 = (
     "2e670cfc42a64c1f33e21791eb4795832d4c3be39141c7cde4186cd7c90739c2"
 )
@@ -366,6 +366,10 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "replica_timeout_seconds": 900,
         "parallelism": 1,
         "replica_completion_count": 1,
+        "application_container_count": 1,
+        "init_container_count": 0,
+        "sidecar_or_additional_containers_permitted": False,
+        "complete_container_image_list_must_equal_single_authenticated_image_reference": True,
         "minimum_executions": 0,
         "maximum_executions": 1,
         "start_overrides_permitted": False,
