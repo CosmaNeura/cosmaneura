@@ -399,7 +399,7 @@ def test_exact_field_provenance(
         assert not value._is_authenticated()
 
 
-def test_authenticated_value_does_not_survive_fork(
+def test_authenticated_value_does_not_survive_fork_when_registry_clear_is_hostile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     parent_pid = os.getpid()
@@ -407,13 +407,27 @@ def test_authenticated_value_does_not_survive_fork(
     value = auth.authenticate_bootstrap_identity_teardown_evidence(
         evidence_directory=directory
     )
+    registry_type = weakref.WeakKeyDictionary
+    original_popitem = registry_type.popitem
+
+    def raising_popitem(registry: Any) -> Any:
+        setattr(registry_type, "popitem", original_popitem)
+        raise RuntimeError("inherited registry clear failed")
+
+    monkeypatch.setattr(registry_type, "popitem", raising_popitem)
     read_fd, write_fd = os.pipe()
     child_pid = os.fork()
     if child_pid == 0:
         os.close(read_fd)
         exit_code = 0
         try:
-            os.write(write_fd, b"1" if value._is_authenticated() else b"0")
+            verified = value._is_authenticated()
+            try:
+                auth._public_projection(value)
+                projection_refused = False
+            except auth.BootstrapIdentityTeardownEvidenceFailure:
+                projection_refused = True
+            os.write(write_fd, b"0" if not verified and projection_refused else b"1")
         except BaseException:
             exit_code = 2
         finally:

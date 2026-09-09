@@ -828,7 +828,7 @@ def _build_provenance(
     scalar_types = (str, bool, int)
     type_error, value_error, base_error = TypeError, ValueError, Exception
     new_value = object.__new__
-    key = random_bytes(32)
+    key: bytes | None = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
     registry_type = weakref.WeakKeyDictionary
     mappingproxy_type = type_of(type_read_attr(value_type, "__dict__"))
@@ -855,11 +855,9 @@ def _build_provenance(
     value_mro, value_namespaces = capture_namespaces(value_type)
     registry_mro, registry_namespaces = capture_namespaces(registry_type)
     registry_operations = captured_attributes(
-        registry_namespaces, ("get", "__setitem__", "pop", "clear")
+        registry_namespaces, ("get", "__setitem__", "pop")
     )
-    registry_get, registry_set, registry_pop, registry_clear = (
-        item[2] for item in registry_operations
-    )
+    registry_get, registry_set, registry_pop = (item[2] for item in registry_operations)
     slot_descriptors = tuple_type(
         (name, raw_resolve(value_namespaces, name)[1])
         for name in (*public_fields, *private_fields)
@@ -871,10 +869,13 @@ def _build_provenance(
         value_namespaces,
         ("__getattribute__", "__hash__", "__eq__", *public_fields, *private_fields),
     )
-    issued: weakref.WeakKeyDictionary[
-        AuthenticatedBootstrapIdentityTeardownEvidence,
-        tuple[int, bytes, tuple[tuple[str, Any], ...]],
-    ] = registry_type()
+    issued: (
+        weakref.WeakKeyDictionary[
+            AuthenticatedBootstrapIdentityTeardownEvidence,
+            tuple[int, bytes, tuple[tuple[str, Any], ...]],
+        ]
+        | None
+    ) = registry_type()
 
     def class_shape_intact() -> bool:
         try:
@@ -935,9 +936,16 @@ def _build_provenance(
         )
 
     def reset_after_fork() -> None:
-        nonlocal key
-        registry_clear(issued)
-        key = random_bytes(32)
+        nonlocal issued, key
+        issued = None
+        key = None
+        try:
+            replacement_issued = registry_type()
+            replacement_key = random_bytes(32)
+        except base_error:
+            return
+        issued = replacement_issued
+        key = replacement_key
 
     register_at_fork(after_in_child=reset_after_fork)
 
@@ -1001,6 +1009,8 @@ def _build_provenance(
         expected_snapshot: bytes,
         public_projection: tuple[tuple[str, Any], ...],
     ) -> str:
+        if key is None:
+            raise value_error
         material = canonical(
             {
                 "domain": provenance_domain,
@@ -1020,6 +1030,7 @@ def _build_provenance(
             if (
                 type_of(value) is not value_type
                 or not class_shape_intact()
+                or issued is None
                 or read_slot(value, "_seal") is not seal
             ):
                 return None
@@ -1122,6 +1133,8 @@ def _build_provenance(
             "_proof_sha256",
             proof(value, expected_snapshot, public_projection),
         )
+        if issued is None or key is None:
+            fail("bootstrap_identity_teardown_evidence.output_invalid")
         registry_set(
             issued, value, (process_id(), expected_snapshot, public_projection)
         )
