@@ -1124,6 +1124,7 @@ def create_and_validate_state_refresh_plan(
     state_bytes = recovery._read_protected_file(
         state_json, label="pre-refresh state snapshot", required_mode=0o600
     )
+    _validate_pre_refresh_state_digest(state_bytes)
     source_before = _source_snapshot(expected_source_commit)
     tofu = recovery._resolve_and_verify_tofu()
     with tempfile.TemporaryDirectory(
@@ -1180,6 +1181,7 @@ def revalidate_state_refresh_plan(
     state_bytes = recovery._read_protected_file(
         state_json, label="pre-refresh state snapshot", required_mode=0o600
     )
+    _validate_pre_refresh_state_digest(state_bytes)
     if execution_dir.parent != saved_plan.parent:
         raise RefreshPlanError("execution directory must share the saved-plan parent")
     recovery._create_protected_directory(execution_dir, label="execution directory")

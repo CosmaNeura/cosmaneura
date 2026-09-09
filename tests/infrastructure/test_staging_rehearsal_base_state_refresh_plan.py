@@ -384,6 +384,36 @@ def test_pre_refresh_state_digest_is_exact(monkeypatch: pytest.MonkeyPatch) -> N
         refresh._validate_pre_refresh_state_digest(changed)
 
 
+def test_digest_mismatch_precedes_provider_access(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[bool] = []
+    monkeypatch.setattr(recovery, "_reject_symlink_components", lambda *_, **__: None)
+    monkeypatch.setattr(recovery, "_require_protected_directory", lambda *_, **__: None)
+    monkeypatch.setattr(recovery, "_read_protected_file", lambda *_, **__: b"wrong")
+    monkeypatch.setattr(
+        recovery, "_resolve_and_verify_tofu", lambda: called.append(True)
+    )
+    operations = (
+        lambda: refresh.create_and_validate_state_refresh_plan(
+            saved_plan=tmp_path / "plan",
+            state_json=tmp_path / "state",
+            expected_source_commit="a" * 40,
+        ),
+        lambda: refresh.revalidate_state_refresh_plan(
+            saved_plan=tmp_path / "plan",
+            state_json=tmp_path / "state",
+            execution_dir=tmp_path / "execution",
+            expected_source_commit="a" * 40,
+            expected_saved_plan_sha256="b" * 64,
+        ),
+    )
+    for operation in operations:
+        with pytest.raises(refresh.RefreshPlanError, match="reviewed snapshot"):
+            operation()
+    assert called == []
+
+
 @pytest.mark.parametrize("target", ["role", "storage", "output"])
 def test_refresh_plan_rejects_normalization_tampering(target: str) -> None:
     plan, before, after = _plan()
