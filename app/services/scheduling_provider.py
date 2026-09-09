@@ -15,17 +15,16 @@ from app import log
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.session_manager import get_session
+from app.models.ambiguous_patient_match import (
+    AmbiguousPatientMatch,
+    AmbiguousPatientMatchStatus,
+)
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.patient_external_identity import (
     PatientExternalIdentity,
     SchedulingProviderSource,
-)
-from app.models.unassigned_recording import (
-    UnassignedRecording,
-    UnassignedRecordingReason,
-    UnassignedRecordingStatus,
 )
 from sqlmodel import select
 
@@ -77,7 +76,7 @@ class ResolutionOutcome(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     appointment: Appointment | None = None
-    queued: UnassignedRecording | None = None
+    queued: AmbiguousPatientMatch | None = None
 
 
 def _doctor_ref(doctor_id) -> str:
@@ -155,9 +154,8 @@ def resolve_event(
 
         # No confident match. Never fuzzy-match by name/date of birth here —
         # queue for the doctor to confirm instead.
-        queued = UnassignedRecording(
+        queued = AmbiguousPatientMatch(
             doctor_id=doctor.id,
-            reason=UnassignedRecordingReason.scheduling_sync_ambiguous_patient,
             source=event.source,
             external_appointment_ref=event.external_appointment_ref,
             external_patient_ref=event.external_patient_ref,
@@ -179,7 +177,7 @@ def resolve_event(
 
 
 def confirm_queued_match(
-    queued: UnassignedRecording, *, patient: Patient, resolved_by: str
+    queued: AmbiguousPatientMatch, *, patient: Patient, resolved_by: str
 ) -> Appointment:
     """A doctor confirms which Patient a queued scheduling-sync row belongs to.
 
@@ -187,11 +185,6 @@ def confirm_queued_match(
     source-side identity auto-resolves on every later sync, and marks the
     queue row resolved.
     """
-    assert queued.reason == UnassignedRecordingReason.scheduling_sync_ambiguous_patient
-    assert queued.source is not None
-    assert queued.external_appointment_ref is not None
-    assert queued.candidate_appointment_start_at is not None
-
     with get_session() as session:
         appointment = Appointment(
             doctor_id=queued.doctor_id,
@@ -215,9 +208,9 @@ def confirm_queued_match(
         session.commit()
         session.refresh(appointment)
 
-        db_queued = session.get(UnassignedRecording, queued.id)
+        db_queued = session.get(AmbiguousPatientMatch, queued.id)
         assert db_queued is not None
-        db_queued.status = UnassignedRecordingStatus.resolved
+        db_queued.status = AmbiguousPatientMatchStatus.resolved
         db_queued.resolved_patient_id = patient.id
         db_queued.resolved_appointment_id = appointment.id
         db_queued.resolved_at = datetime.now(timezone.utc)
