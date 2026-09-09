@@ -278,10 +278,18 @@ merged before step 3 begins; this source correction alone authorizes nothing.
 
    The consumer repeats exact-source, plan, provider, backend, and current
    remote-state validation, requires an interactive exact statement and random
-   challenge, pins the reviewed plan by an open descriptor, creates an
-   owner-only one-use claim, and only then replaces itself with OpenTofu. Agents
-   must never invoke this command. Do not retry after a claim is created; make
-   and review a fresh plan instead.
+   challenge, copies the reviewed plan into an unlinked descriptor, copies
+   OpenTofu into an owner-only executable snapshot retained by descriptor,
+   creates a digest-scoped owner-only claim beside the saved plan, closes
+   ambient descriptors, redirects output streams, and only then replaces itself
+   with the executable snapshot. The TTY ceremony prevents accidental
+   invocation; it is not cryptographic human-identity proof. This narrowly
+   trusted workstation flow assumes exclusive control of the local operator UID
+   and cannot make its
+   claim non-removable against that same UID. Use a separate privileged approval
+   and append-only claim broker before widening that threat model. Agents must
+   never invoke this command. Do not retry after a claim is created; make and
+   review a fresh plan instead.
 7. Immediately capture the resulting remote state in a new owner-only file.
    It must retain the exact lineage and 28-address inventory, contain no tainted
    or deposed instances, and be exactly serial 9. Preserve the serial-8 snapshot

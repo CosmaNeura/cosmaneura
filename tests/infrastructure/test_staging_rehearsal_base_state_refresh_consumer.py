@@ -70,6 +70,39 @@ def test_cli_bootstraps_under_isolated_python() -> None:
     assert b"--expected-saved-plan-sha256" in result.stdout
 
 
+def test_bootstrap_source_requires_exact_owner_only_regular_bytes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "validator.py"
+    source.write_bytes(b"VALUE = 1\n")
+    source.chmod(0o600)
+    digest = consumer._digest(source.read_bytes())
+    assert consumer._read_bootstrap_source(source, digest) == b"VALUE = 1\n"
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        consumer._read_bootstrap_source(source, "0" * 64)
+    source.chmod(0o620)
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        consumer._read_bootstrap_source(source, digest)
+    source.chmod(0o600)
+    tmp_path.chmod(0o720)
+    with pytest.raises(RuntimeError, match="bootstrap source refused"):
+        consumer._read_bootstrap_source(source, digest)
+
+
+def test_bootstrap_source_refuses_links(tmp_path: Path) -> None:
+    source = tmp_path / "validator.py"
+    alias = tmp_path / "alias.py"
+    hardlink = tmp_path / "hardlink.py"
+    source.write_bytes(b"VALUE = 1\n")
+    source.chmod(0o600)
+    alias.symlink_to(source)
+    os.link(source, hardlink)
+    digest = consumer._digest(source.read_bytes())
+    for path in (alias, source, hardlink):
+        with pytest.raises(RuntimeError, match="bootstrap source refused"):
+            consumer._read_bootstrap_source(path, digest)
+
+
 def test_open_pinned_plan_binds_descriptor_and_digest(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     plan = tmp_path / "refresh.tfplan"
@@ -79,8 +112,12 @@ def test_open_pinned_plan_binds_descriptor_and_digest(tmp_path: Path) -> None:
         plan, expected_sha256=consumer._digest(b"reviewed-plan")
     )
     try:
+        plan.chmod(0o600)
+        plan.write_bytes(b"replaced-plan")
+        plan.chmod(0o400)
         assert os.read(descriptor, 32) == b"reviewed-plan"
         assert os.get_inheritable(descriptor)
+        assert os.fstat(descriptor).st_nlink == 0
     finally:
         os.close(descriptor)
     with pytest.raises(consumer.ConsumerError, match="saved_plan.changed"):
@@ -92,12 +129,14 @@ def test_revalidate_pinned_plan_detects_late_change(tmp_path: Path) -> None:
     plan = tmp_path / "refresh.tfplan"
     plan.write_bytes(b"reviewed-plan")
     plan.chmod(0o400)
-    descriptor = os.open(plan, os.O_RDONLY)
+    descriptor = consumer._open_pinned_plan(
+        plan, expected_sha256=consumer._digest(b"reviewed-plan")
+    )
     try:
         consumer._revalidate_pinned_plan(
             descriptor, expected_sha256=consumer._digest(b"reviewed-plan")
         )
-        plan.chmod(0o600)
+        os.fchmod(descriptor, 0o600)
         with pytest.raises(consumer.ConsumerError, match="saved_plan.changed"):
             consumer._revalidate_pinned_plan(
                 descriptor, expected_sha256=consumer._digest(b"reviewed-plan")
@@ -109,14 +148,172 @@ def test_revalidate_pinned_plan_detects_late_change(tmp_path: Path) -> None:
 def test_claim_is_bounded_owner_only_and_one_use(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     facts = {"policy_id": "test", "apply_outcome": "unknown"}
-    consumer._claim(tmp_path, facts)
-    claim = tmp_path / consumer.CLAIM_NAME
+    consumer._claim(tmp_path, PLAN_DIGEST, facts)
+    claim = tmp_path / consumer._claim_name(PLAN_DIGEST)
     assert claim.read_bytes() == consumer._canonical(facts) + b"\n"
     assert claim.stat().st_mode & 0o777 == 0o400
     with pytest.raises(consumer.ConsumerError, match="claim.exists_or_unavailable"):
-        consumer._claim(tmp_path, facts)
+        consumer._claim(tmp_path, PLAN_DIGEST, facts)
     with pytest.raises(consumer.ConsumerError, match="claim.invalid"):
-        consumer._claim(tmp_path / "other", {"value": "x" * consumer.MAX_CLAIM_BYTES})
+        consumer._claim(
+            tmp_path / "other",
+            PLAN_DIGEST,
+            {"value": "x" * consumer.MAX_CLAIM_BYTES},
+        )
+
+
+def test_open_pinned_executable_binds_descriptor_and_digest(tmp_path: Path) -> None:
+    executable = tmp_path / "tofu"
+    execution = tmp_path / "execution"
+    executable.write_bytes(b"reviewed-executable")
+    executable.chmod(0o500)
+    execution.mkdir(mode=0o700)
+    digest = consumer._digest(executable.read_bytes())
+    snapshot, descriptor = consumer._open_pinned_executable(
+        executable,
+        snapshot_directory=execution,
+        expected_sha256=digest,
+    )
+    try:
+        assert os.read(descriptor, 32) == b"reviewed-executable"
+        assert snapshot.parent == execution
+        assert snapshot.stat().st_mode & 0o777 == 0o500
+        assert not os.get_inheritable(descriptor)
+        executable.chmod(0o700)
+        executable.write_bytes(b"changed-executable")
+        consumer._revalidate_pinned_executable(
+            descriptor, snapshot_path=snapshot, expected_sha256=digest
+        )
+        snapshot.chmod(0o700)
+        with pytest.raises(consumer.ConsumerError, match="runtime.changed"):
+            consumer._revalidate_pinned_executable(
+                descriptor, snapshot_path=snapshot, expected_sha256=digest
+            )
+    finally:
+        os.close(descriptor)
+
+
+def test_private_executable_snapshot_runs(tmp_path: Path) -> None:
+    execution = tmp_path / "execution"
+    execution.mkdir(mode=0o700)
+    executable = Path("/usr/bin/true")
+    snapshot, descriptor = consumer._open_pinned_executable(
+        executable,
+        snapshot_directory=execution,
+        expected_sha256=consumer._digest(executable.read_bytes()),
+    )
+    os.close(descriptor)
+    result = subprocess.run(
+        [snapshot],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_redirect_standard_streams_uses_character_sink(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = os.stat(os.devnull)
+    duplicates: list[tuple[int, int, bool]] = []
+    closed: list[int] = []
+    monkeypatch.setattr(os, "open", lambda *_args, **_kwargs: 9)
+    monkeypatch.setattr(os, "fstat", lambda _: metadata)
+    monkeypatch.setattr(
+        os,
+        "dup2",
+        lambda source, target, *, inheritable: duplicates.append(
+            (source, target, inheritable)
+        ),
+    )
+    monkeypatch.setattr(os, "close", closed.append)
+    consumer._redirect_standard_streams()
+    assert duplicates == [(9, 0, True), (9, 1, True), (9, 2, True)]
+    assert closed == [9]
+
+
+def _isolated_consumer_import() -> str:
+    return (
+        "import importlib.util,sys;"
+        f"path={str(SCRIPT)!r};"
+        "spec=importlib.util.spec_from_file_location('consumer_child',path);"
+        "module=importlib.util.module_from_spec(spec);"
+        "sys.modules[spec.name]=module;"
+        "spec.loader.exec_module(module);"
+    )
+
+
+def test_redirected_exec_does_not_emit_child_output(tmp_path: Path) -> None:
+    emitter = tmp_path / "emitter"
+    emitter.write_text(
+        "#!/bin/sh\nprintf 'protected-stdout'\nprintf 'protected-stderr' >&2\n",
+        encoding="ascii",
+    )
+    emitter.chmod(0o500)
+    command = (
+        _isolated_consumer_import()
+        + "module._redirect_standard_streams();"
+        + f"module.os.execve({str(emitter)!r},['emitter'],{{'PATH':'/usr/bin:/bin'}})"
+    )
+    result = subprocess.run(
+        [sys.executable, "-IS", "-c", command],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout == b""
+    assert result.stderr == b""
+
+
+def test_close_ambient_descriptors_preserves_only_plan_and_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ranges: list[tuple[int, int]] = []
+    monkeypatch.setattr(consumer.resource, "getrlimit", lambda _: (20, 20))
+    monkeypatch.setattr(
+        os, "closerange", lambda start, end: ranges.append((start, end))
+    )
+    monkeypatch.setattr(os, "fstat", lambda _: object())
+    monkeypatch.setattr(os, "listdir", lambda _: ["0", "1", "2", "4", "7"])
+    consumer._close_ambient_descriptors({4, 7})
+    assert ranges == [(3, 4), (5, 7), (8, 20)]
+
+
+def test_close_ambient_descriptors_removes_inherited_child_descriptor() -> None:
+    descriptors = tuple(os.open(os.devnull, os.O_RDONLY) for _ in range(3))
+    plan, executable, extra = descriptors
+    command = _isolated_consumer_import() + (
+        f"module._close_ambient_descriptors({{{plan},{executable}}});"
+        f"module.os.fstat({plan});module.os.fstat({executable});"
+        "closed=False\n"
+        f"try:\n module.os.fstat({extra})\n"
+        "except OSError:\n closed=True\n"
+        "raise SystemExit(0 if closed else 9)"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-IS", "-c", command],
+            pass_fds=descriptors,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_deadline_is_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(consumer.time, "monotonic", lambda: 200.0)
+    with pytest.raises(consumer.ConsumerError, match="operator.confirmation_timeout"):
+        consumer._require_before_deadline(200.0)
 
 
 def test_confirmation_requires_exact_state_only_statement(
@@ -227,7 +424,12 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
         lambda _: consumer.recovery.SourceSnapshot(SOURCE, {}, b"lock", "f" * 64),
     )
     monkeypatch.setattr(consumer, "_confirm_operator", lambda *_args, **_kwargs: 200.0)
-    monkeypatch.setattr(consumer.time, "monotonic", lambda: 100.0)
+    deadline_checks: list[float] = []
+    monkeypatch.setattr(
+        consumer.time,
+        "monotonic",
+        lambda: deadline_checks.append(100.0) or deadline_checks[-1],
+    )
     monkeypatch.setattr(
         consumer.refresh, "_pull_remote_state", lambda **_: state.read_bytes()
     )
@@ -243,8 +445,15 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
         consumer.refresh, "_validate_pre_refresh_state_digest", lambda _: None
     )
     descriptor = os.open(plan, os.O_RDONLY)
+    os.set_inheritable(descriptor, True)
     monkeypatch.setattr(
         consumer, "_open_pinned_plan", lambda *_args, **_kwargs: descriptor
+    )
+    tofu_descriptor = os.open(tofu, os.O_RDONLY)
+    monkeypatch.setattr(
+        consumer,
+        "_open_pinned_executable",
+        lambda *_args, **_kwargs: (tofu, tofu_descriptor),
     )
     monkeypatch.setattr(consumer.recovery, "_resolve_and_verify_tofu", lambda: tofu)
     monkeypatch.setattr(consumer, "_validate_path_ancestry", lambda _: None)
@@ -266,7 +475,29 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
         consumer, "_revalidate_pinned_plan", lambda *_args, **_kwargs: None
     )
     monkeypatch.setattr(
-        consumer, "_claim", lambda directory, facts: captured.update(claim=facts)
+        consumer, "_revalidate_pinned_executable", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_claim",
+        lambda directory, digest, facts: captured.update(
+            claim_directory=directory,
+            claim_digest=digest,
+            claim=facts,
+            checks_at_claim=len(deadline_checks),
+        ),
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_redirect_standard_streams",
+        lambda: captured.update(
+            redirected=True, checks_at_redirect=len(deadline_checks)
+        ),
+    )
+    monkeypatch.setattr(
+        consumer,
+        "_close_ambient_descriptors",
+        lambda descriptors: captured.update(preserved=descriptors),
     )
 
     class Executed(Exception):
@@ -285,12 +516,19 @@ def test_consume_execs_only_exact_reviewed_refresh_plan(
             expected_source_commit=SOURCE,
             expected_saved_plan_sha256=PLAN_DIGEST,
         )
+    assert captured["path"] == str(tofu)
     assert captured["argv"][-1] == f"/dev/fd/{descriptor}"
     assert captured["argv"][2:4] == ["apply", "-input=false"]
+    assert captured["claim_directory"] == tmp_path
+    assert captured["claim_digest"] == PLAN_DIGEST
     assert captured["claim"]["apply_outcome"] == "unknown"
     assert captured["claim"]["python_runtime_sha256"] == "9" * 64
     assert captured["claim"]["azure_cli_sha256"] == "8" * 64
     assert captured["environment"]["TF_DATA_DIR"] == str(execution)
+    assert captured["redirected"] is True
+    assert captured["preserved"] == {descriptor, tofu_descriptor}
+    assert captured["checks_at_redirect"] > captured["checks_at_claim"]
+    assert len(deadline_checks) > captured["checks_at_redirect"]
 
 
 def test_consumer_source_has_no_subprocess_apply_path() -> None:

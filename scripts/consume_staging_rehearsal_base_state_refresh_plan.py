@@ -1,5 +1,9 @@
 #!/opt/homebrew/bin/python3 -IS
-"""Human-only one-use consumer for the staging base state-refresh plan."""
+"""Founder-operated one-use consumer for the staging base state-refresh plan.
+
+The TTY ceremony prevents accidental invocation; it is not cryptographic proof
+of human identity. The protected local operator account is a trust boundary.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,12 @@ import json
 import os
 import pwd
 import re
+import resource
 import secrets
 import select
 import stat
 import sys
+import tempfile
 import time
 import types
 from collections.abc import Callable, Mapping, Sequence
@@ -34,16 +40,128 @@ _VALIDATOR = (
 _RECOVERY_VALIDATOR = _VALIDATOR.with_name(
     "validate_staging_rehearsal_base_recovery_plan.py"
 )
+_BOOTSTRAP_DIGESTS = {
+    _RECOVERY_VALIDATOR.name: "0eaf0693016a52c8ab48b16fa7870aaefce8fb784c6732d1a9258456e1a4cb9e",
+    _VALIDATOR.name: "33193f1c7d5bbbad042da7d12118d506cb38250355a59fcd7119cdd5deafaca4",
+}
+_MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
 _RECOVERY_QUALIFIED_NAME = "scripts.validate_staging_rehearsal_base_recovery_plan"
 _RECOVERY_ATTRIBUTE = "validate_staging_rehearsal_base_recovery_plan"
 _MISSING = object()
+
+
+def _read_bootstrap_source(path: Path, expected_sha256: str) -> bytes:
+    directory: int | None = None
+    descriptor: int | None = None
+    try:
+        directory = os.open(
+            path.parent,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        directory_before = os.fstat(directory)
+        if (
+            not stat.S_ISDIR(directory_before.st_mode)
+            or directory_before.st_uid != os.geteuid()
+            or stat.S_IMODE(directory_before.st_mode) & 0o022
+        ):
+            raise RuntimeError("bootstrap source refused")
+        directory_identity = (
+            directory_before.st_dev,
+            directory_before.st_ino,
+            directory_before.st_mode,
+            directory_before.st_uid,
+            directory_before.st_nlink,
+            directory_before.st_mtime_ns,
+            directory_before.st_ctime_ns,
+        )
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or not 0 < before.st_size <= _MAX_BOOTSTRAP_SOURCE_BYTES
+        ):
+            raise RuntimeError("bootstrap source refused")
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_uid,
+            before.st_nlink,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        )
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        value = b"".join(chunks)
+        after = os.fstat(descriptor)
+        directory_after = os.fstat(directory)
+        if (
+            remaining
+            or len(value) != before.st_size
+            or identity
+            != (
+                after.st_dev,
+                after.st_ino,
+                after.st_mode,
+                after.st_uid,
+                after.st_nlink,
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            or directory_identity
+            != (
+                directory_after.st_dev,
+                directory_after.st_ino,
+                directory_after.st_mode,
+                directory_after.st_uid,
+                directory_after.st_nlink,
+                directory_after.st_mtime_ns,
+                directory_after.st_ctime_ns,
+            )
+            or hashlib.sha256(value).hexdigest() != expected_sha256
+        ):
+            raise RuntimeError("bootstrap source refused")
+        return value
+    except OSError as exc:
+        raise RuntimeError("bootstrap source refused") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory is not None:
+            os.close(directory)
+
+
 try:
+    recovery_source = _read_bootstrap_source(
+        _RECOVERY_VALIDATOR, _BOOTSTRAP_DIGESTS[_RECOVERY_VALIDATOR.name]
+    )
+    refresh_source = _read_bootstrap_source(
+        _VALIDATOR, _BOOTSTRAP_DIGESTS[_VALIDATOR.name]
+    )
     recovery = types.ModuleType("validate_staging_rehearsal_base_recovery_plan")
     recovery.__file__ = str(_RECOVERY_VALIDATOR)
     sys.modules[recovery.__name__] = recovery
     exec(
         compile(
-            _RECOVERY_VALIDATOR.read_bytes(),
+            recovery_source,
             str(_RECOVERY_VALIDATOR),
             "exec",
             dont_inherit=True,
@@ -65,9 +183,7 @@ try:
         refresh.__file__ = str(_VALIDATOR)
         sys.modules[refresh.__name__] = refresh
         exec(
-            compile(
-                _VALIDATOR.read_bytes(), str(_VALIDATOR), "exec", dont_inherit=True
-            ),
+            compile(refresh_source, str(_VALIDATOR), "exec", dont_inherit=True),
             refresh.__dict__,
         )
     finally:
@@ -100,7 +216,9 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 CONFIRMATION_SECONDS = 120.0
 MAX_PROMPT_BYTES = 256
 MAX_CLAIM_BYTES = 16 * 1024
-CLAIM_NAME = ".base-state-refresh-apply-claimed-v1"
+MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
+CLAIM_NAME_PREFIX = ".base-state-refresh-apply-claimed-v1-"
+EXECUTABLE_SNAPSHOT_PREFIX = ".state-refresh-tofu-"
 AZURE_CLI_ENTRYPOINTS = (
     Path("/opt/homebrew/bin/az"),
     Path("/usr/local/bin/az"),
@@ -170,7 +288,6 @@ def _reject_ambient_environment() -> None:
     )
     if (
         sys.gettrace() is not None
-        or sys.getprofile() is not None
         or sys.prefix != sys.base_prefix
         or any(
             name in forbidden_exact or name.startswith(forbidden_prefixes)
@@ -416,6 +533,7 @@ def _metadata_identity(metadata: os.stat_result) -> tuple[int, ...]:
         metadata.st_nlink,
         metadata.st_size,
         metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
     )
 
 
@@ -423,14 +541,15 @@ def _open_pinned_plan(saved_plan: Path, *, expected_sha256: str) -> int:
     parent = recovery._open_protected_directory(
         saved_plan.parent, label="saved state-refresh plan directory"
     )
-    descriptor: int | None = None
+    source: int | None = None
+    pinned: int | None = None
     try:
-        descriptor = os.open(
+        source = os.open(
             saved_plan.name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
             dir_fd=parent,
         )
-        before = os.fstat(descriptor)
+        before = os.fstat(source)
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
@@ -441,29 +560,49 @@ def _open_pinned_plan(saved_plan: Path, *, expected_sha256: str) -> int:
             _fail("saved_plan.changed")
         identity = _metadata_identity(before)
         digest = hashlib.sha256()
-        remaining = before.st_size
-        while remaining:
-            chunk = os.read(descriptor, min(1024 * 1024, remaining))
-            if not chunk:
-                break
-            digest.update(chunk)
-            remaining -= len(chunk)
-        if (
-            remaining
-            or _metadata_identity(os.fstat(descriptor)) != identity
-            or digest.hexdigest() != expected_sha256
-            or os.lseek(descriptor, 0, os.SEEK_SET) != 0
-        ):
-            _fail("saved_plan.changed")
-        os.set_inheritable(descriptor, True)
-        if not os.get_inheritable(descriptor):
+        with tempfile.TemporaryFile(
+            prefix=".state-refresh-plan-", dir=saved_plan.parent
+        ) as anonymous:
+            anonymous_descriptor = anonymous.fileno()
+            os.fchmod(anonymous_descriptor, 0o400)
+            remaining = before.st_size
+            while remaining:
+                chunk = os.read(source, min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                digest.update(chunk)
+                _write_all(anonymous_descriptor, chunk)
+                remaining -= len(chunk)
+            os.fsync(anonymous_descriptor)
+            snapshot = os.fstat(anonymous_descriptor)
+            if (
+                remaining
+                or _metadata_identity(os.fstat(source)) != identity
+                or digest.hexdigest() != expected_sha256
+                or not stat.S_ISREG(snapshot.st_mode)
+                or snapshot.st_uid != os.geteuid()
+                or snapshot.st_nlink != 0
+                or stat.S_IMODE(snapshot.st_mode) != 0o400
+                or snapshot.st_size != before.st_size
+                or os.lseek(anonymous_descriptor, 0, os.SEEK_SET) != 0
+            ):
+                _fail("saved_plan.changed")
+            pinned = os.dup(anonymous_descriptor)
+        os.set_inheritable(pinned, True)
+        if not os.get_inheritable(pinned):
             _fail("saved_plan.unavailable")
-        return descriptor
+        result = pinned
+        pinned = None
+        return result
+    except OSError:
+        _fail("saved_plan.changed")
     except Exception:
-        if descriptor is not None:
-            os.close(descriptor)
         raise
     finally:
+        if pinned is not None:
+            os.close(pinned)
+        if source is not None:
+            os.close(source)
         os.close(parent)
 
 
@@ -473,7 +612,7 @@ def _revalidate_pinned_plan(descriptor: int, *, expected_sha256: str) -> None:
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.geteuid()
-            or before.st_nlink != 1
+            or before.st_nlink != 0
             or stat.S_IMODE(before.st_mode) != 0o400
             or not 0 < before.st_size <= recovery.MAXIMUM_ARTIFACT_BYTES
             or os.lseek(descriptor, 0, os.SEEK_SET) != 0
@@ -499,17 +638,156 @@ def _revalidate_pinned_plan(descriptor: int, *, expected_sha256: str) -> None:
         _fail("saved_plan.changed")
 
 
-def _claim(execution_dir: Path, facts: Mapping[str, Any]) -> None:
+def _open_pinned_executable(
+    path: Path, *, snapshot_directory: Path, expected_sha256: str
+) -> tuple[Path, int]:
+    source: int | None = None
+    writer: int | None = None
+    descriptor: int | None = None
+    parent = recovery._open_protected_directory(
+        snapshot_directory, label="execution directory"
+    )
+    snapshot_name = f"{EXECUTABLE_SNAPSHOT_PREFIX}{expected_sha256}"
+    snapshot_path = snapshot_directory / snapshot_name
+    try:
+        source = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        before = os.fstat(source)
+        identity = _metadata_identity(before)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid not in {0, os.geteuid()}
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or not before.st_mode & 0o111
+            or not 0 < before.st_size <= MAX_EXECUTABLE_BYTES
+        ):
+            _fail("runtime.changed")
+        writer = os.open(
+            snapshot_name,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o500,
+            dir_fd=parent,
+        )
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(source, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            _write_all(writer, chunk)
+            remaining -= len(chunk)
+        os.fchmod(writer, 0o500)
+        os.fsync(writer)
+        written = os.fstat(writer)
+        if (
+            remaining
+            or _metadata_identity(os.fstat(source)) != identity
+            or digest.hexdigest() != expected_sha256
+            or not stat.S_ISREG(written.st_mode)
+            or written.st_uid != os.geteuid()
+            or written.st_nlink != 1
+            or stat.S_IMODE(written.st_mode) != 0o500
+            or written.st_size != before.st_size
+        ):
+            _fail("runtime.changed")
+        os.fsync(parent)
+        os.close(writer)
+        writer = None
+        descriptor = os.open(
+            snapshot_name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent,
+        )
+        _revalidate_pinned_executable(
+            descriptor,
+            snapshot_path=snapshot_path,
+            expected_sha256=expected_sha256,
+        )
+        if os.get_inheritable(descriptor):
+            _fail("runtime.changed")
+        result = descriptor
+        descriptor = None
+        return snapshot_path, result
+    except OSError:
+        _fail("runtime.changed")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if writer is not None:
+            os.close(writer)
+        if source is not None:
+            os.close(source)
+        os.close(parent)
+
+
+def _revalidate_pinned_executable(
+    descriptor: int, *, snapshot_path: Path, expected_sha256: str
+) -> None:
+    try:
+        before = os.fstat(descriptor)
+        identity = _metadata_identity(before)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o500
+            or not 0 < before.st_size <= MAX_EXECUTABLE_BYTES
+            or os.lseek(descriptor, 0, os.SEEK_SET) != 0
+        ):
+            _fail("runtime.changed")
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if (
+            remaining
+            or _metadata_identity(os.fstat(descriptor)) != identity
+            or digest.hexdigest() != expected_sha256
+            or os.lseek(descriptor, 0, os.SEEK_SET) != 0
+        ):
+            _fail("runtime.changed")
+        path_metadata = snapshot_path.lstat()
+        if stat.S_ISLNK(path_metadata.st_mode) or _metadata_identity(
+            path_metadata
+        ) != _metadata_identity(before):
+            _fail("runtime.changed")
+    except OSError:
+        _fail("runtime.changed")
+
+
+def _claim_name(expected_saved_plan_sha256: str) -> str:
+    if HASH_RE.fullmatch(expected_saved_plan_sha256) is None:
+        _fail("claim.invalid")
+    return f"{CLAIM_NAME_PREFIX}{expected_saved_plan_sha256}"
+
+
+def _claim(
+    plan_directory: Path,
+    expected_saved_plan_sha256: str,
+    facts: Mapping[str, Any],
+) -> None:
     payload = _canonical(facts) + b"\n"
     if len(payload) > MAX_CLAIM_BYTES:
         _fail("claim.invalid")
     parent = recovery._open_protected_directory(
-        execution_dir, label="execution directory"
+        plan_directory, label="saved state-refresh plan directory"
     )
     descriptor: int | None = None
     try:
         descriptor = os.open(
-            CLAIM_NAME,
+            _claim_name(expected_saved_plan_sha256),
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
@@ -537,6 +815,77 @@ def _claim(execution_dir: Path, facts: Mapping[str, Any]) -> None:
         if descriptor is not None:
             os.close(descriptor)
         os.close(parent)
+
+
+def _protected_directory_identity(path: Path) -> Mapping[str, int]:
+    descriptor = recovery._open_protected_directory(path, label="execution directory")
+    try:
+        metadata = os.fstat(descriptor)
+        return {
+            "device": metadata.st_dev,
+            "inode": metadata.st_ino,
+            "mode": stat.S_IMODE(metadata.st_mode),
+            "uid": metadata.st_uid,
+        }
+    finally:
+        os.close(descriptor)
+
+
+def _require_before_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        _fail("operator.confirmation_timeout")
+
+
+def _redirect_standard_streams() -> None:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            os.devnull,
+            os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        if not stat.S_ISCHR(os.fstat(descriptor).st_mode):
+            _fail("runtime.changed")
+        for target in (0, 1, 2):
+            os.dup2(descriptor, target, inheritable=True)
+    except OSError:
+        _fail("runtime.changed")
+    finally:
+        if descriptor is not None and descriptor > 2:
+            os.close(descriptor)
+
+
+def _close_ambient_descriptors(preserved: set[int]) -> None:
+    if any(fd <= 2 for fd in preserved) or len(preserved) != 2:
+        _fail("runtime.changed")
+    try:
+        for descriptor in preserved:
+            os.fstat(descriptor)
+        maximum = resource.getrlimit(resource.RLIMIT_NOFILE)[0]
+        if maximum == resource.RLIM_INFINITY:
+            maximum = 1024 * 1024
+        start = 3
+        for descriptor in sorted(preserved):
+            os.closerange(start, descriptor)
+            start = descriptor + 1
+        os.closerange(start, int(maximum))
+        for descriptor in preserved:
+            os.fstat(descriptor)
+        unexpected: list[int] = []
+        for name in os.listdir("/dev/fd"):
+            if not name.isdecimal():
+                continue
+            descriptor = int(name)
+            if descriptor <= 2 or descriptor in preserved:
+                continue
+            try:
+                os.fstat(descriptor)
+            except OSError:
+                continue
+            unexpected.append(descriptor)
+        if unexpected:
+            _fail("runtime.changed")
+    except OSError:
+        _fail("runtime.changed")
 
 
 def _execution_environment(
@@ -628,11 +977,6 @@ def consume(
         ):
             _fail("validation_receipt.invalid")
         consumer_sha256 = _consumer_source_digest(expected_source_commit)
-        deadline = _confirm_operator(
-            expected_source_commit,
-            expected_saved_plan_sha256,
-            challenge_source=challenge_source,
-        )
         state_bytes = recovery._read_protected_file(
             state_json, label="pre-refresh state snapshot", required_mode=0o600
         )
@@ -643,23 +987,6 @@ def consume(
             tofu, label="OpenTofu"
         ) != receipt.get("open_tofu_sha256"):
             _fail("runtime.changed")
-        remote_bytes = refresh._pull_remote_state(
-            tofu=tofu,
-            data_dir=execution_dir,
-        )
-        state = recovery._load_json_bytes(
-            state_bytes, label="pre-refresh state snapshot"
-        )
-        remote = recovery._load_json_bytes(
-            remote_bytes, label="remote pre-refresh state"
-        )
-        if not refresh._json_equal(
-            refresh._state_binding_projection(state),
-            refresh._state_binding_projection(remote),
-        ):
-            _fail("remote_state.changed")
-        if time.monotonic() >= deadline:
-            _fail("operator.confirmation_timeout")
         if _consumer_source_digest(expected_source_commit) != consumer_sha256:
             _fail("consumer_source.changed")
         source = refresh._source_snapshot(expected_source_commit)
@@ -668,64 +995,130 @@ def consume(
         plan_descriptor = _open_pinned_plan(
             saved_plan, expected_sha256=expected_saved_plan_sha256
         )
-        if (
-            recovery._provider_tree_sha256(execution_dir)
-            != receipt.get("execution_provider_tree_sha256")
-            or recovery._backend_snapshot(tofu=tofu, data_dir=execution_dir)
-            != receipt.get("backend_metadata_sha256")
-            or time.monotonic() >= deadline
-        ):
+        tofu_descriptor: int | None = None
+        try:
+            tofu_sha256 = receipt.get("open_tofu_sha256")
+            if not isinstance(tofu_sha256, str):
+                _fail("validation_receipt.invalid")
+            tofu_snapshot, tofu_descriptor = _open_pinned_executable(
+                tofu,
+                snapshot_directory=execution_dir,
+                expected_sha256=tofu_sha256,
+            )
+            remote_bytes = refresh._pull_remote_state(
+                tofu=tofu_snapshot,
+                data_dir=execution_dir,
+            )
+            state = recovery._load_json_bytes(
+                state_bytes, label="pre-refresh state snapshot"
+            )
+            remote = recovery._load_json_bytes(
+                remote_bytes, label="remote pre-refresh state"
+            )
+            if not refresh._json_equal(
+                refresh._state_binding_projection(state),
+                refresh._state_binding_projection(remote),
+            ):
+                _fail("remote_state.changed")
+            if recovery._provider_tree_sha256(execution_dir) != receipt.get(
+                "execution_provider_tree_sha256"
+            ) or recovery._backend_snapshot(
+                tofu=tofu_snapshot, data_dir=execution_dir
+            ) != receipt.get("backend_metadata_sha256"):
+                _fail("runtime.changed")
+            execution_directory_identity = _protected_directory_identity(execution_dir)
+            exec_path = str(tofu_snapshot)
+            argv = [
+                exec_path,
+                f"-chdir={recovery.REHEARSAL_ROOT}",
+                "apply",
+                "-input=false",
+                "-lock=true",
+                "-lock-timeout=0s",
+                "-no-color",
+                f"/dev/fd/{plan_descriptor}",
+            ]
+            environment = _execution_environment(
+                home=home,
+                azure_config=azure_config,
+                azure_cli=azure_cli,
+                execution_dir=execution_dir,
+            )
+            deadline = _confirm_operator(
+                expected_source_commit,
+                expected_saved_plan_sha256,
+                challenge_source=challenge_source,
+            )
+            tty = _validate_operator_tty()
+            os.close(tty)
+            _revalidate_pinned_plan(
+                plan_descriptor, expected_sha256=expected_saved_plan_sha256
+            )
+            _revalidate_pinned_executable(
+                tofu_descriptor,
+                snapshot_path=tofu_snapshot,
+                expected_sha256=tofu_sha256,
+            )
+            final_source = refresh._source_snapshot(expected_source_commit)
+            if (
+                final_source.tree_sha256 != receipt.get("source_tree_sha256")
+                or _protected_directory_identity(execution_dir)
+                != execution_directory_identity
+                or recovery._provider_tree_sha256(execution_dir)
+                != receipt.get("execution_provider_tree_sha256")
+                or recovery._backend_snapshot(
+                    tofu=tofu_snapshot, data_dir=execution_dir
+                )
+                != receipt.get("backend_metadata_sha256")
+                or recovery._executable_sha256(azure_cli, label="Azure CLI")
+                != azure_cli_sha256
+            ):
+                _fail("runtime.changed")
+            _require_before_deadline(deadline)
+            _claim(
+                saved_plan.parent,
+                expected_saved_plan_sha256,
+                {
+                    "schema_version": 1,
+                    "policy_id": "cosmaneura-staging-rehearsal-base-state-refresh-apply-claim-v1",
+                    "source_commit": expected_source_commit,
+                    "saved_plan_sha256": expected_saved_plan_sha256,
+                    "consumer_source_sha256": consumer_sha256,
+                    "python_runtime_sha256": python_runtime_sha256,
+                    "azure_cli_sha256": azure_cli_sha256,
+                    "validation_receipt_sha256": _digest(_canonical(receipt)),
+                    "argv_sha256": _digest(_canonical(argv)),
+                    "environment_sha256": _digest(_canonical(environment)),
+                    "execution_directory_identity": execution_directory_identity,
+                    "apply_outcome": "unknown",
+                },
+            )
+            _require_before_deadline(deadline)
+            _redirect_standard_streams()
+            _close_ambient_descriptors({plan_descriptor, tofu_descriptor})
+            if not os.get_inheritable(plan_descriptor) or os.get_inheritable(
+                tofu_descriptor
+            ):
+                _fail("runtime.changed")
+            _revalidate_pinned_plan(
+                plan_descriptor, expected_sha256=expected_saved_plan_sha256
+            )
+            _revalidate_pinned_executable(
+                tofu_descriptor,
+                snapshot_path=tofu_snapshot,
+                expected_sha256=tofu_sha256,
+            )
+            if (
+                _protected_directory_identity(execution_dir)
+                != execution_directory_identity
+            ):
+                _fail("runtime.changed")
+            _require_before_deadline(deadline)
+            os.execve(exec_path, argv, environment)
+        finally:
+            if tofu_descriptor is not None:
+                os.close(tofu_descriptor)
             os.close(plan_descriptor)
-            _fail("runtime.changed")
-        argv = [
-            str(tofu),
-            f"-chdir={recovery.REHEARSAL_ROOT}",
-            "apply",
-            "-input=false",
-            "-lock=true",
-            "-lock-timeout=0s",
-            "-no-color",
-            f"/dev/fd/{plan_descriptor}",
-        ]
-        environment = _execution_environment(
-            home=home,
-            azure_config=azure_config,
-            azure_cli=azure_cli,
-            execution_dir=execution_dir,
-        )
-        tty = _validate_operator_tty()
-        os.close(tty)
-        if time.monotonic() >= deadline:
-            os.close(plan_descriptor)
-            _fail("operator.confirmation_timeout")
-        _revalidate_pinned_plan(
-            plan_descriptor, expected_sha256=expected_saved_plan_sha256
-        )
-        if (
-            recovery._executable_sha256(tofu, label="OpenTofu")
-            != receipt.get("open_tofu_sha256")
-            or recovery._executable_sha256(azure_cli, label="Azure CLI")
-            != azure_cli_sha256
-        ):
-            os.close(plan_descriptor)
-            _fail("runtime.changed")
-        _claim(
-            execution_dir,
-            {
-                "schema_version": 1,
-                "policy_id": "cosmaneura-staging-rehearsal-base-state-refresh-apply-claim-v1",
-                "source_commit": expected_source_commit,
-                "saved_plan_sha256": expected_saved_plan_sha256,
-                "consumer_source_sha256": consumer_sha256,
-                "python_runtime_sha256": python_runtime_sha256,
-                "azure_cli_sha256": azure_cli_sha256,
-                "validation_receipt_sha256": _digest(_canonical(receipt)),
-                "argv_sha256": _digest(_canonical(argv)),
-                "environment_sha256": _digest(_canonical(environment)),
-                "apply_outcome": "unknown",
-            },
-        )
-        os.execve(str(tofu), argv, environment)
     _fail("execve.returned")
 
 
