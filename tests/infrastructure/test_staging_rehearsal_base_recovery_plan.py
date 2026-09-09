@@ -625,6 +625,7 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
     pins = {"EXPECTED_TOFU_PATH": tofu, "EXPECTED_AZURE_CLI_PATH": azure_cli, "EXPECTED_TOFU_SHA256": hashlib.sha256(tofu.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_SHA256": hashlib.sha256(azure_cli.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_VERSION_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(), "EXPECTED_AZURE_CLOUD_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest()}
     for name, value in pins.items(): monkeypatch.setattr(recovery, name, value)  # noqa: E701
+    monkeypatch.setattr(recovery, "_trusted_executable_source", lambda path, **_: path)
     closure_sha256 = "c" * 64
 
     def fake_snapshot_azure_cli_closure(runtime_directory: Path) -> tuple[Path, str]:

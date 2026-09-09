@@ -1317,15 +1317,12 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         if runtime_directory is not None and runtime_directory.is_dir()
         else EXPECTED_AZURE_CLI_PATH.parent
     )
-    azure_config_directory, azure_config_binding = _validated_azure_config(home)
     environment = {
         "ARM_ENVIRONMENT": "public",
         "ARM_SUBSCRIPTION_ID": EXPECTED_SUBSCRIPTION_ID,
         "ARM_TENANT_ID": EXPECTED_TENANT_ID,
         "ARM_USE_AZUREAD": "true",
         "ARM_USE_CLI": "true",
-        "AZURE_CONFIG_DIR": str(azure_config_directory),
-        AZURE_CONFIG_BINDING_ENV: azure_config_binding,
         "AZURE_CORE_COLLECT_TELEMETRY": "false",
         "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true",
         "AZURE_CORE_ONLY_SHOW_ERRORS": "true",
@@ -1345,6 +1342,8 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         "TF_INPUT": "0",
     }
     if data_dir is not None:
+        azure_config_directory, azure_config_binding = _validated_azure_config(home)
+        environment.update({"AZURE_CONFIG_DIR": str(azure_config_directory), AZURE_CONFIG_BINDING_ENV: azure_config_binding})  # noqa: E702  # fmt: skip
         environment["TF_DATA_DIR"] = str(data_dir)
         if runtime_directory is not None and runtime_directory.is_dir():
             environment.update(_azure_cli_environment(runtime_directory))
