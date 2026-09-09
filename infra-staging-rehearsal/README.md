@@ -239,7 +239,55 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    exactly serial 8, contain the same 28 addresses, and contain no tainted or
    deposed instance. Any other serial stops this one-time recovery and requires
    a new evidence review.
-5. Fetch `origin/master`, check out its exact current protected-master commit
+5. The first post-untaint full-refresh plan exposed ten provider-state
+   normalizations while retaining zero desired updates, deletes, or
+   replacements. Do not suppress them with `-refresh=false`, broaden the
+   recovery validator, or apply that plan. From exact protected `master`, use
+   the dedicated validator to create a refresh-only saved plan:
+
+   ```sh
+   /opt/homebrew/bin/python3 -IS \
+     scripts/validate_staging_rehearsal_base_state_refresh_plan.py \
+     --mode create \
+     --saved-plan /protected/path/state-refresh.tfplan \
+     --state-json /protected/path/post-untaint-serial-8.tfstate \
+     --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA>
+   ```
+
+   The validator permits exactly the observed policy, five role-definition,
+   storage-account, two subnet, and VNet state normalizations. It requires an
+   empty `resource_changes` set, so the saved plan contains zero Azure resource
+   actions. It validates sensitive storage fields in memory by field, type,
+   length, encoding, and sensitivity metadata; neither their values nor raw
+   plan JSON may be logged or submitted for review. The receipt reports
+   `apply_authorized=false` and binds only digests and non-secret facts.
+6. Independently review the exact source, receipt, sanitized plan facts, and
+   saved-plan digest. A human operator then runs the one-use consumer from an
+   empty environment. The execution directory must not exist beforehand:
+
+   ```sh
+   /usr/bin/env -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+     /opt/homebrew/bin/python3 -IS \
+     scripts/consume_staging_rehearsal_base_state_refresh_plan.py \
+     --saved-plan /protected/path/state-refresh.tfplan \
+     --state-json /protected/path/post-untaint-serial-8.tfstate \
+     --execution-dir /protected/path/state-refresh-execution \
+     --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA> \
+     --expected-saved-plan-sha256 <REVIEWED_PLAN_SHA256>
+   ```
+
+   The consumer repeats exact-source, plan, provider, backend, and current
+   remote-state validation, requires an interactive exact statement and random
+   challenge, pins the reviewed plan by an open descriptor, creates an
+   owner-only one-use claim, and only then replaces itself with OpenTofu. Agents
+   must never invoke this command. Do not retry after a claim is created; make
+   and review a fresh plan instead.
+7. Immediately capture the resulting remote state in a new owner-only file.
+   It must retain the exact lineage and 28-address inventory, contain no tainted
+   or deposed instances, and be exactly serial 9. Preserve the serial-8 snapshot
+   and both SHA-256 values in the protected recovery packet. A full-refresh
+   recovery plan must now report zero drift.
+8. Fetch `origin/master`, check out its exact current protected-master commit
    containing the reviewed recovery merge, and leave both
    `infra-staging-rehearsal/` and the validator clean. Run create mode with that
    full 40-character protected-master SHA:
@@ -248,7 +296,7 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    uv run python scripts/validate_staging_rehearsal_base_recovery_plan.py \
      --mode create \
      --saved-plan /protected/path/recovery.tfplan \
-     --state-json /protected/path/post-untaint.tfstate \
+     --state-json /protected/path/post-refresh-serial-9.tfstate \
      --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA>
    ```
 
@@ -258,13 +306,13 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    backend to the reviewed subscription, storage coordinates, Azure public cloud, and default workspace; the provider configuration pins the tenant. It writes a read-only
    (`0400`) saved plan only after validating JSON derived from those exact
    binary bytes. The plan archive must contain the exact reviewed Terraform
-   source and provider lockfile, embed lineage and serial 8, be no more than
+   source and provider lockfile, embed lineage and serial 9, be no more than
    four hours old, and contain exactly 28 no-ops plus eleven creates. Drift,
    updates, deletes, replacements, irreversible flags, extra resources,
    non-passing checks, provider changes, or detached/insecure artifacts fail
    closed. Retain the digest-only JSON receipt in the protected operator
    packet; do not persist a raw plan-JSON export.
-6. A different reviewer must independently inspect the saved plan, receipt,
+9. A different reviewer must independently inspect the saved plan, receipt,
    current state metadata, and current live readback. Immediately before apply,
    fetch `origin/master` again, pull a new protected state snapshot, and run
    verify mode with the reviewed digest:
@@ -288,7 +336,7 @@ merged before step 3 begins; this source correction alone authorizes nothing.
 
    From the same clean protected-master checkout, use the isolated system
    interpreter to perform the bounded GET-only ARM readback twice and bind it
-   to the exact plan, serial-8 remote state, source, provider runtime, Azure CLI,
+   to the exact plan, serial-9 remote state, source, provider runtime, Azure CLI,
    TLS trust, operator configuration, boot session, and protected execution
    directory. The handoff receipt must be created beside the saved plan and
    must not already exist:
@@ -298,7 +346,7 @@ merged before step 3 begins; this source correction alone authorizes nothing.
      /opt/homebrew/bin/python3 -IS \
      scripts/prepare_staging_rehearsal_base_recovery_handoff.py \
      --saved-plan /protected/path/recovery.tfplan \
-     --state-json /protected/path/immediate-pre-apply.tfstate \
+     --state-json /protected/path/immediate-pre-apply-serial-9.tfstate \
      --execution-dir /protected/path/recovery-execution \
      --receipt /protected/path/recovery-handoff.json \
      --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA> \
@@ -317,7 +365,7 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    separate reviewed human-only consumer revalidates this receipt and its
    one-use machine binding immediately before replacing its process with the
    receipt-bound OpenTofu invocation.
-7. After apply, read back the seven containers, private endpoint and DNS
+10. After apply, read back the seven containers, private endpoint and DNS
    binding, and three container-scoped reader assignments. The result must be
    39 state instances, zero target resources, and no irreversible or activation
    control. Record evidence before proceeding to any later rung.

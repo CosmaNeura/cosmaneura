@@ -62,7 +62,7 @@ def _valid_state() -> dict[str, Any]:
     return {
         "version": 4,
         "terraform_version": recovery.EXPECTED_TOFU_VERSION,
-        "serial": recovery.EXPECTED_POST_UNTAINT_SERIAL,
+        "serial": recovery.EXPECTED_RECOVERY_SERIAL,
         "lineage": recovery.EXPECTED_LINEAGE,
         "outputs": {},
         "resources": [
@@ -188,7 +188,7 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
     plan_json_bytes = json.dumps(_valid_plan()).encode()
     receipt = _validate(monkeypatch, source=source, saved_plan_bytes=plan_bytes)
 
-    expected_facts = {"state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_POST_UNTAINT_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
+    expected_facts = {"state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
     assert {name: receipt[name] for name in expected_facts} == expected_facts
     digest = recovery._sha256_bytes
     expected_hashes = {"state_json_sha256": digest(state_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256}  # fmt: skip
@@ -339,11 +339,11 @@ def test_cli_modes_emit_only_validated_receipt(
 
 
 def test_state_snapshot_safety_regressions(monkeypatch: pytest.MonkeyPatch) -> None:
-    for serial in (7, 9):
+    for serial in (8, 10):
         state = _valid_state()
         state["serial"] = serial
         with pytest.raises(
-            recovery.RecoveryPlanError, match="serial must be exactly 8"
+            recovery.RecoveryPlanError, match="serial must be exactly 9"
         ):
             _validate(monkeypatch, state=state)
     for status in ("tainted", "unknown", "deposed"):

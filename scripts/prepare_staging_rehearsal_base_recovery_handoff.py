@@ -779,7 +779,7 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
     if receipt_path.parent != saved_plan.parent or receipt_path.exists():
         _fail('receipt_path.invalid')
     base = dict(recovery.revalidate_recovery_plan(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
-    if base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != 8 or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
+    if base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
         _fail('plan_receipt.invalid')
     state_bytes = recovery._read_protected_file(state_json, label='state snapshot', required_mode=384)
     if _digest(state_bytes) != base.get('state_json_sha256'):
