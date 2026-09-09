@@ -305,6 +305,7 @@ py_test-ci-infrastructure-sanitizer-bootstrap-binding:
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_module_has_no_database_network_provider_or_process_surface \
 		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_public_factory_remains_terminal \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_job_attachment_contract.py \
 		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
