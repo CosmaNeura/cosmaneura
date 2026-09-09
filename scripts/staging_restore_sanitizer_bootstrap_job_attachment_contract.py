@@ -30,7 +30,7 @@ CONTRACT_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-bootstrap-job-attachment-contract.json"
 )
-CONTRACT_SHA256 = "c4c2fba892666061f9e36b03e61469ea739af7be896054113090a80df8b79069"
+CONTRACT_SHA256 = "f9255a4244ddea01f1d5b1b9cd2455ecf5d2e2e8a2f953be6c9aef8709f59760"
 BOOTSTRAP_BINDING_PLAN_CONTRACT_SHA256 = (
     "2e670cfc42a64c1f33e21791eb4795832d4c3be39141c7cde4186cd7c90739c2"
 )
@@ -48,17 +48,20 @@ IDENTITY_NAME = "cosmaneura-staging-restore-bootstrap-job"
 
 REQUIRED_STAGE_ORDER = (
     "acquire_external_stability_authority",
-    "create_bootstrap_identity",
-    "create_private_registry_acrpull_role_assignment",
-    "observe_identity_and_exhaustive_effective_authorization_inventory",
+    "observe_initial_bootstrap_job_identity_and_acrpull_assignment_absence",
+    "create_bootstrap_identity_with_create_only_semantics",
+    "observe_and_authenticate_bootstrap_identity_with_zero_effective_authority",
+    "create_private_registry_acrpull_role_assignment_with_create_only_semantics",
+    "observe_exact_acrpull_and_exhaustive_effective_authorization_inventory",
     "observe_private_registry_and_network_path",
-    "create_bootstrap_job",
+    "create_bootstrap_job_with_create_only_semantics",
     "observe_job_configuration_identity_and_registry_attachment",
     "observe_pre_start_execution_history_empty",
     "start_bootstrap_job_once_without_overrides",
     "observe_provider_execution_name",
     "poll_to_terminal_or_stop_once_on_bounded_timeout",
     "observe_terminal_execution_and_replica_result",
+    "reobserve_and_authenticate_job_configuration_image_identity_registry_and_pull_attachment",
     "close_database_session",
     "remove_bootstrap_database_administrator",
     "observe_bootstrap_database_administrator_absence",
@@ -69,6 +72,11 @@ REQUIRED_STAGE_ORDER = (
     "delete_bootstrap_identity",
     "observe_bootstrap_identity_and_effective_authorization_absence",
     "release_external_stability_authority",
+)
+REQUIRED_INITIAL_ABSENCE_OBSERVATIONS = (
+    "bootstrap_job",
+    "bootstrap_identity",
+    "private_registry_acrpull_role_assignment",
 )
 REQUIRED_PRE_START_PROVIDER_OBSERVATIONS = (
     "container_apps_environment_configuration",
@@ -454,8 +462,12 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "external_stability_authority_required_before_job_create": True,
         "external_stability_authority_must_span_every_final_absence_readback": True,
         "required_stage_order": list(REQUIRED_STAGE_ORDER),
+        "initial_absence_observation_required_before_any_create": True,
+        "identity_role_assignment_and_job_create_only_outcomes_required": True,
         "bootstrap_identity_creation_and_readback_required": True,
+        "bootstrap_identity_zero_effective_authority_readback_required_before_acrpull_create": True,
         "private_registry_pull_assignment_creation_and_readback_required": True,
+        "private_registry_pull_assignment_readback_required_before_job_create": True,
         "job_configuration_observation_required_before_start": True,
         "job_identity_attachment_authentication_required_before_start": True,
         "maximum_start_requests": 1,
@@ -477,6 +489,9 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "fresh_live_provider_observation_required": True,
         "same_process_authentication_and_use_required": True,
         "exact_job_resource_configuration_execution_and_identity_projections_required": True,
+        "required_initial_absence_observations": list(
+            REQUIRED_INITIAL_ABSENCE_OBSERVATIONS
+        ),
         "required_pre_start_provider_observations": list(
             REQUIRED_PRE_START_PROVIDER_OBSERVATIONS
         ),
@@ -490,6 +505,7 @@ def _validate_semantics(document: Mapping[str, Any]) -> None:
         "effective_authorization_inventory_must_include_direct_and_inherited_assignments": True,
         "effective_authorization_inventory_must_be_exhaustive_at_subscription_scope": True,
         "job_and_identity_readback_must_be_repeated_before_and_after_execution": True,
+        "post_terminal_pre_teardown_job_image_identity_registry_and_pull_attachment_reauthentication_required": True,
         "required_final_absence_observations": list(
             REQUIRED_FINAL_ABSENCE_OBSERVATIONS
         ),

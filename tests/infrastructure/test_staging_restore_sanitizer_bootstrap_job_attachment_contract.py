@@ -218,13 +218,41 @@ def test_future_control_plane_is_single_start_and_teardown_first() -> None:
         is True
     )
     assert control["required_stage_order"] == list(contract_module.REQUIRED_STAGE_ORDER)
+    order = control["required_stage_order"]
     assert control["required_stage_order"][0] == (
         "acquire_external_stability_authority"
     )
     assert control["required_stage_order"][-1] == (
         "release_external_stability_authority"
     )
+    assert order.index(
+        "observe_initial_bootstrap_job_identity_and_acrpull_assignment_absence"
+    ) < order.index("create_bootstrap_identity_with_create_only_semantics")
+    assert order.index(
+        "observe_and_authenticate_bootstrap_identity_with_zero_effective_authority"
+    ) < order.index(
+        "create_private_registry_acrpull_role_assignment_with_create_only_semantics"
+    )
+    assert order.index(
+        "observe_exact_acrpull_and_exhaustive_effective_authorization_inventory"
+    ) < order.index("create_bootstrap_job_with_create_only_semantics")
+    assert order.index("observe_terminal_execution_and_replica_result") + 1 == (
+        order.index(
+            "reobserve_and_authenticate_job_configuration_image_identity_registry_and_pull_attachment"
+        )
+    )
+    assert control["initial_absence_observation_required_before_any_create"] is True
+    assert (
+        control["identity_role_assignment_and_job_create_only_outcomes_required"]
+        is True
+    )
     assert control["bootstrap_identity_creation_and_readback_required"] is True
+    assert (
+        control[
+            "bootstrap_identity_zero_effective_authority_readback_required_before_acrpull_create"
+        ]
+        is True
+    )
     assert (
         control["private_registry_pull_assignment_creation_and_readback_required"]
         is True
@@ -261,6 +289,9 @@ def test_future_control_plane_is_single_start_and_teardown_first() -> None:
     assert control["teardown_required_after_success_failure_or_uncertainty"] is True
     assert evidence["fresh_live_provider_observation_required"] is True
     assert evidence["same_process_authentication_and_use_required"] is True
+    assert evidence["required_initial_absence_observations"] == list(
+        contract_module.REQUIRED_INITIAL_ABSENCE_OBSERVATIONS
+    )
     assert evidence["required_pre_start_provider_observations"] == list(
         contract_module.REQUIRED_PRE_START_PROVIDER_OBSERVATIONS
     )
@@ -270,6 +301,12 @@ def test_future_control_plane_is_single_start_and_teardown_first() -> None:
     assert evidence["successful_replica_count_required"] == 1
     assert evidence["failed_replica_count_required"] == 0
     assert evidence["stopped_failed_or_unknown_execution_is_not_success"] is True
+    assert (
+        evidence[
+            "post_terminal_pre_teardown_job_image_identity_registry_and_pull_attachment_reauthentication_required"
+        ]
+        is True
+    )
     assert evidence["required_final_absence_observations"] == list(
         contract_module.REQUIRED_FINAL_ABSENCE_OBSERVATIONS
     )
@@ -297,6 +334,10 @@ def test_future_control_plane_is_single_start_and_teardown_first() -> None:
         ("network.private_registry_public_network_access_required", "Enabled"),
         ("network.vnet_peering_permitted", True),
         ("future_control_plane.required_stage_order", []),
+        (
+            "future_control_plane.initial_absence_observation_required_before_any_create",
+            False,
+        ),
         ("future_control_plane.maximum_start_requests", 2),
         ("future_control_plane.retry_permitted", True),
         (
@@ -305,6 +346,7 @@ def test_future_control_plane_is_single_start_and_teardown_first() -> None:
         ),
         ("evidence.retrospective_or_expired_evidence_permitted", True),
         ("evidence.pre_start_execution_inventory_must_be_empty", False),
+        ("evidence.required_initial_absence_observations", []),
         ("evidence.required_final_absence_observations", []),
         ("claims.bootstrap_identity_bound_to_single_use_job", True),
         ("status.bootstrap_job_attachment_implemented", True),

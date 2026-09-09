@@ -22,10 +22,14 @@ passwords, connection strings, ambient credentials, volumes, public database
 access, and VNet peering remain forbidden.
 
 The future control-plane adapter must hold external stability authority across
-the complete ordered lifecycle: UAMI creation, exact `AcrPull` creation,
-private-network and exhaustive effective-authority readback, job creation,
-empty pre-start execution inventory, one unmodified start, terminal execution
-and replica observation, database-session close and administrator removal, job
+the complete ordered lifecycle. It first proves the fixed-name UAMI, job, and
+applicable `AcrPull` assignment absent, then uses create-only semantics. It
+authenticates the new UAMI with zero effective authority before creating and
+reading back the exact `AcrPull` assignment. Only then may it observe the
+private network, create the job, prove empty pre-start execution history, and
+issue one unmodified start. After terminal execution and replica observation it
+must reauthenticate the job configuration, image, identity, registry entry,
+and pull attachment before database-session close, administrator removal, job
 deletion, `AcrPull` deletion, UAMI deletion, and every final absence readback.
 It may issue at most one start request and may not retry an ambiguous outcome.
 Success requires exactly one provider-observed execution with status
@@ -50,4 +54,4 @@ and authenticate their live attachment, and implement the one-shot control
 plane. Recovery for this slice is a code-only revert.
 
 Contract SHA-256:
-`sha256:c4c2fba892666061f9e36b03e61469ea739af7be896054113090a80df8b79069`.
+`sha256:f9255a4244ddea01f1d5b1b9cd2455ecf5d2e2e8a2f953be6c9aef8709f59760`.
