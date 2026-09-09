@@ -694,7 +694,7 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     home, values = _azure_home(tmp_path, monkeypatch); config, binding = recovery._validated_azure_config(home); state_refresh_source = (ROOT / "scripts/validate_staging_rehearsal_base_state_refresh_plan.py").read_text(); assert state_refresh_source.count("recovery._snapshot_and_verify_runtime(data_dir=") == 2 and "recovery._resolve_and_verify_tofu()" not in state_refresh_source  # noqa: E702
     runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
-    (modules / "azure" / "cli" / "__main__.py").write_text('import __main__,json,os,signal,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:(Path.home()/".netrc").write_bytes(b"hostile")\nif "mutate-home-exit" in sys.argv:os.environ["HOME"]=sys.argv[-1];raise SystemExit(0)\nif "same-device-mount-cleanup" in sys.argv:\n mounted=p/"mounted";mounted.mkdir();(mounted/"sentinel").write_bytes(b"keep");original_mount_identity=__main__.mount_identity;mount_calls=0\n def changed_mount_identity(fd):\n  global mount_calls\n  mount_calls+=1;value=original_mount_identity(fd);return ("foreign-mount",) if mount_calls >= 3 else value\n __main__.mount_identity=changed_mount_identity\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nif "signal-cleanup-entry" in sys.argv:\n original_pthread_sigmask=signal.pthread_sigmask;pause_cleanup=True\n def pthread_sigmask(how,mask):\n  global pause_cleanup\n  if pause_cleanup:\n   pause_cleanup=False;print("cleanup-entry-ready",flush=True);time.sleep(0.5)\n  return original_pthread_sigmask(how,mask)\n signal.pthread_sigmask=pthread_sigmask\nif "signal-cleanup" in sys.argv:\n original_fchmod=os.fchmod\n def fchmod(fd,mode):\n  if mode == 0o700:print("snapshot-cleanup-ready",flush=True);time.sleep(0.5)\n  return original_fchmod(fd,mode)\n os.fchmod=fchmod\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
+    (modules / "azure" / "cli" / "__main__.py").write_text('import __main__,json,os,signal,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:(Path.home()/".netrc").write_bytes(b"hostile")\nif "mutate-home-exit" in sys.argv:os.environ["HOME"]=sys.argv[-1];raise SystemExit(0)\nif "hardlink-cleanup" in sys.argv:os.link(p/"msal_token_cache.json",sys.argv[-1])\nif "symlink-cleanup" in sys.argv:\n victim=p/"msal_token_cache.json";victim.unlink();victim.symlink_to(sys.argv[-1])\nif "same-device-mount-cleanup" in sys.argv:\n mounted=p/"mounted";mounted.mkdir();(mounted/"sentinel").write_bytes(b"keep");original_mount_identity=__main__.mount_identity;mount_calls=0\n def changed_mount_identity(fd):\n  global mount_calls\n  mount_calls+=1;value=original_mount_identity(fd);return ("foreign-mount",) if mount_calls >= 3 else value\n __main__.mount_identity=changed_mount_identity\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nif "signal-cleanup-entry" in sys.argv:\n original_pthread_sigmask=signal.pthread_sigmask;pause_cleanup=True\n def pthread_sigmask(how,mask):\n  global pause_cleanup\n  if pause_cleanup:\n   pause_cleanup=False;print("cleanup-entry-ready",flush=True);time.sleep(0.5)\n  return original_pthread_sigmask(how,mask)\n signal.pthread_sigmask=pthread_sigmask\nif "signal-cleanup" in sys.argv:\n original_fchmod=os.fchmod\n def fchmod(fd,mode):\n  if mode == 0o700:print("snapshot-cleanup-ready",flush=True);time.sleep(0.5)\n  return original_fchmod(fd,mode)\n os.fchmod=fchmod\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
     assert recovery._azure_cli_environment(runtime)["HOME"] == os.devnull; monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": os.devnull, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
@@ -708,6 +708,16 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
     assert boundary.returncode == 2 and boundary.stderr == b"azure_cli_guard_refused\n" and len(retained) == 1 and (retained[0] / "mounted" / "sentinel").read_bytes() == b"keep" and not any(path.name in values for path in runtime.rglob("*"))
     shutil.rmtree(retained[0])
+    hardlink_external = tmp_path / "hardlink-external"; environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
+    hardlink = subprocess.run([wrapper, "hardlink-cleanup", str(hardlink_external)], env=environment, capture_output=True, check=False)
+    retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
+    assert hardlink.returncode == 2 and hardlink.stderr == b"azure_cli_guard_refused\n" and hardlink_external.read_bytes() == values["msal_token_cache.json"] and len(retained) == 1 and not any(retained[0].iterdir())
+    retained[0].rmdir()
+    symlink_target = tmp_path / "symlink-target"; symlink_target.write_bytes(b"keep"); environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
+    symlink = subprocess.run([wrapper, "symlink-cleanup", str(symlink_target)], env=environment, capture_output=True, check=False)
+    retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
+    assert symlink.returncode == 2 and symlink.stderr == b"azure_cli_guard_refused\n" and symlink_target.read_bytes() == b"keep" and len(retained) == 1 and not any(retained[0].iterdir())
+    retained[0].rmdir()
     environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; mutated_home = subprocess.run([wrapper, "mutate-home-during"], env=environment, capture_output=True, check=False)  # noqa: E702
     assert mutated_home.returncode == 2 and mutated_home.stderr == b"azure_cli_guard_refused\n" and not (Path(os.devnull) / ".netrc").exists() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
     hostile_exit_home = tmp_path / "hostile-exit-home"; hostile_exit_home.mkdir(mode=0o700); environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
@@ -850,6 +860,19 @@ def test_snapshot_scrub_refuses_same_device_mount_boundary_without_traversing(tm
     finally:
         os.close(descriptor)
     assert sentinel.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("entry_type", ["hardlink", "symlink"])
+def test_snapshot_scrub_removes_but_rejects_linked_file(tmp_path: Path, entry_type: str) -> None:
+    snapshot = tmp_path / "snapshot"; snapshot.mkdir(mode=0o700); external = _protected_file(tmp_path / "external", b"keep", mode=0o600); entry = snapshot / "credential"  # noqa: E702
+    if entry_type == "hardlink": os.link(external, entry)  # noqa: E701
+    else: entry.symlink_to(external)  # noqa: E701
+    descriptor = os.open(snapshot, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)); metadata = os.fstat(descriptor)  # noqa: E702
+    try:
+        assert not recovery._scrub_azure_config_snapshot(descriptor, expected_device=metadata.st_dev, expected_mount=recovery._mount_identity(descriptor))
+    finally:
+        os.close(descriptor)
+    assert not entry.exists() and external.read_bytes() == b"keep"
 
 
 def test_azure_config_capture_rejects_directory_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

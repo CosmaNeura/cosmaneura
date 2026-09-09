@@ -974,6 +974,62 @@ def _mount_identity(descriptor: int) -> tuple[Any, ...]:
     raise OSError("mount identity is unsupported")
 
 
+def _unlink_azure_config_entry(
+    parent: int,
+    name: str,
+    metadata: os.stat_result,
+    *,
+    expected_device: int,
+    expected_mount: tuple[Any, ...],
+) -> bool:
+    safe = True
+    descriptor: int | None = None
+    if stat.S_ISLNK(metadata.st_mode):
+        safe = False
+    elif stat.S_ISREG(metadata.st_mode):
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(name, flags, dir_fd=parent)
+            opened = os.fstat(descriptor)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != expected_device
+                or _mount_identity(descriptor) != expected_mount
+                or opened.st_uid != os.geteuid()
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) not in {0o400, 0o600}
+                or _azure_file_identity(metadata) != _azure_file_identity(opened)
+                or _azure_file_identity(metadata) != _azure_file_identity(linked)
+            ):
+                safe = False
+            try:
+                _require_safe_acl(descriptor, label="Azure configuration snapshot file")
+            except RecoveryPlanError:
+                safe = False
+        except OSError:
+            safe = False
+    else:
+        return False
+    try:
+        os.unlink(name, dir_fd=parent)
+    except OSError:
+        safe = False
+    if descriptor is not None:
+        try:
+            if os.fstat(descriptor).st_nlink != 0:
+                safe = False
+        except OSError:
+            safe = False
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                safe = False
+    return safe
+
+
 def _scrub_azure_config_directory(
     descriptor: int,
     *,
@@ -1055,11 +1111,14 @@ def _scrub_azure_config_directory(
                     scrubbed = False
                     continue
                 os.rmdir(entry, dir_fd=descriptor)
-            else:
-                if metadata.st_dev != expected_device:
-                    scrubbed = False
-                    continue
-                os.unlink(entry, dir_fd=descriptor)
+            elif not _unlink_azure_config_entry(
+                descriptor,
+                entry,
+                metadata,
+                expected_device=expected_device,
+                expected_mount=expected_mount,
+            ):
+                scrubbed = False
         except OSError:
             scrubbed = False
         finally:
@@ -1497,6 +1556,27 @@ def capture(source):
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
 snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False
+def unlink_entry(parent,name,metadata,expected_device,expected_mount):
+    ok=True;entry_fd=None
+    if stat.S_ISLNK(metadata.st_mode):ok=False
+    elif stat.S_ISREG(metadata.st_mode):
+        try:
+            entry_fd=os.open(name,FILE_FLAGS,dir_fd=parent);opened=os.fstat(entry_fd);linked=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_dev!=expected_device or mount_identity(entry_fd)!=expected_mount or opened.st_uid!=os.geteuid() or opened.st_nlink!=1 or stat.S_IMODE(opened.st_mode) not in (0o400,0o600) or file_identity(metadata)!=file_identity(opened) or file_identity(metadata)!=file_identity(linked):ok=False
+            try:safe_acl(entry_fd)
+            except (OSError,ValueError):ok=False
+        except OSError:ok=False
+    else:return False
+    try:os.unlink(name,dir_fd=parent)
+    except OSError:ok=False
+    if entry_fd is not None:
+        try:
+            if os.fstat(entry_fd).st_nlink!=0:ok=False
+        except OSError:ok=False
+        finally:
+            try:os.close(entry_fd)
+            except OSError:ok=False
+    return ok
 def scrub_directory(fd,expected_device,expected_mount,budget,depth):
     try:root=os.fstat(fd);current_mount=mount_identity(fd)
     except OSError:return False
@@ -1521,9 +1601,7 @@ def scrub_directory(fd,expected_device,expected_mount,budget,depth):
                 current=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False)
                 if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid) or os.listdir(child):ok=False;continue
                 os.rmdir(name,dir_fd=fd)
-            else:
-                if metadata.st_dev!=expected_device:ok=False;continue
-                os.unlink(name,dir_fd=fd)
+            elif not unlink_entry(fd,name,metadata,expected_device,expected_mount):ok=False
         except OSError:ok=False
         finally:
             if child is not None:
