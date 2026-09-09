@@ -1556,13 +1556,16 @@ def capture(source):
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
 snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False;snapshot_files=[]
-def unlink_entry(parent,name,metadata,expected_device,expected_mount):
+def unlink_entry(parent,name,metadata,expected_device,expected_mount,expected_file=None,removed=None):
     ok=True;entry_fd=None
     if stat.S_ISLNK(metadata.st_mode):ok=False
     elif stat.S_ISREG(metadata.st_mode):
         try:
             entry_fd=os.open(name,FILE_FLAGS,dir_fd=parent);opened=os.fstat(entry_fd);linked=os.stat(name,dir_fd=parent,follow_symlinks=False)
             if not stat.S_ISREG(opened.st_mode) or opened.st_dev!=expected_device or mount_identity(entry_fd)!=expected_mount or opened.st_uid!=os.geteuid() or opened.st_nlink!=1 or stat.S_IMODE(opened.st_mode) not in (0o400,0o600) or file_identity(metadata)!=file_identity(opened) or file_identity(metadata)!=file_identity(linked):ok=False
+            if expected_file is not None:
+                retained_fd,identity=expected_file;retained=os.fstat(retained_fd)
+                if not stat.S_ISREG(retained.st_mode) or identity!=(retained.st_dev,retained.st_ino,retained.st_uid) or identity!=(opened.st_dev,opened.st_ino,opened.st_uid):ok=False
             try:safe_acl(entry_fd)
             except (OSError,ValueError):ok=False
         except OSError:ok=False
@@ -1572,12 +1575,13 @@ def unlink_entry(parent,name,metadata,expected_device,expected_mount):
     if entry_fd is not None:
         try:
             if os.fstat(entry_fd).st_nlink!=0:ok=False
+            elif expected_file is not None and ok and removed is not None:removed.add(name)
         except OSError:ok=False
         finally:
             try:os.close(entry_fd)
             except OSError:ok=False
     return ok
-def scrub_directory(fd,expected_device,expected_mount,budget,depth):
+def scrub_directory(fd,expected_device,expected_mount,budget,depth,expected_files=None,removed=None):
     try:root=os.fstat(fd);current_mount=mount_identity(fd)
     except OSError:return False
     if not stat.S_ISDIR(root.st_mode) or root.st_uid!=os.geteuid() or root.st_dev!=expected_device or current_mount!=expected_mount or depth>CLEANUP_DEPTH:return False
@@ -1597,11 +1601,11 @@ def scrub_directory(fd,expected_device,expected_mount,budget,depth):
                 if metadata.st_dev!=expected_device:ok=False;continue
                 child=os.open(name,DIRECTORY_FLAGS,dir_fd=fd);opened=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False);identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid)
                 if not stat.S_ISDIR(opened.st_mode) or opened.st_dev!=expected_device or opened.st_uid!=os.geteuid() or identity!=(opened.st_dev,opened.st_ino,opened.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):ok=False;continue
-                if not scrub_directory(child,expected_device,expected_mount,budget,depth+1):ok=False
+                if not scrub_directory(child,expected_device,expected_mount,budget,depth+1,None,removed):ok=False
                 current=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False)
                 if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid) or os.listdir(child):ok=False;continue
                 os.rmdir(name,dir_fd=fd)
-            elif not unlink_entry(fd,name,metadata,expected_device,expected_mount):ok=False
+            elif not unlink_entry(fd,name,metadata,expected_device,expected_mount,expected_files.get(name) if depth==0 and expected_files is not None else None,removed):ok=False
         except OSError:ok=False
         finally:
             if child is not None:
@@ -1609,12 +1613,14 @@ def scrub_directory(fd,expected_device,expected_mount,budget,depth):
                 except OSError:ok=False
     try:return ok and not os.listdir(fd)
     except OSError:return False
-def scrub(fd):
+def scrub(fd,expected_files=None,removed=None):
     try:parent_metadata=os.fstat(parent_fd);expected_mount=mount_identity(parent_fd)
     except OSError:return False
-    return scrub_directory(fd,parent_metadata.st_dev,expected_mount,[CLEANUP_LIMIT],0)
-def remove_snapshot(name,fd,identity):
-    if not scrub(fd):return False
+    return scrub_directory(fd,parent_metadata.st_dev,expected_mount,[CLEANUP_LIMIT],0,expected_files,removed)
+def remove_snapshot(name,fd,identity,expected_files=None):
+    removed=set()
+    if not scrub(fd,expected_files,removed):return False
+    if expected_files is not None and set(expected_files)!=removed:return False
     try:
         current=os.fstat(fd);linked=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
         if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):return False
@@ -1644,7 +1650,8 @@ def cleanup():
             created_metadata=os.fstat(created_fd);created_identity=(created_metadata.st_dev,created_metadata.st_ino,created_metadata.st_uid)
             if created_fd_was_established:
                 metadata_safe=stat.S_ISDIR(created_metadata.st_mode) and created_metadata.st_uid==os.geteuid() and stat.S_IMODE(created_metadata.st_mode)==0o700
-                if not remove_snapshot(snapshot_name,created_fd,snapshot_identity if snapshot_identity is not None else created_identity):raise ValueError
+                expected_files={name:(fd,identity) for name,fd,identity in snapshot_files}
+                if not remove_snapshot(snapshot_name,created_fd,snapshot_identity if snapshot_identity is not None else created_identity,expected_files):raise ValueError
                 try:safe_acl(created_fd)
                 except (OSError,ValueError):metadata_safe=False
                 if not metadata_safe:ok=False
