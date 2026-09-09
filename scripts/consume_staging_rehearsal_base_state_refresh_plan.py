@@ -8,6 +8,7 @@ of human identity. The protected local operator account is a trust boundary.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -387,11 +388,21 @@ def _validate_operator_tty() -> int:
             os.tcgetpgrp(fd) != os.getpgrp() for fd in descriptors
         ):
             _fail("operator.tty_mismatch")
+        read_write_tty = next(
+            (
+                fd
+                for fd in descriptors
+                if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDWR
+            ),
+            None,
+        )
+        if read_write_tty is None:
+            _fail("operator.tty_access_invalid")
         # Duplicate the terminal we have already authenticated instead of
         # reopening /dev/tty. Sandboxed macOS terminals can deny that path
         # open even when all inherited descriptors are a valid foreground
-        # TTY; duplicating fd 0 is also immune to path substitution.
-        tty = os.dup(0)
+        # TTY; duplicating its descriptor is also immune to path substitution.
+        tty = os.dup(read_write_tty)
         os.set_inheritable(tty, False)
         metadata = os.fstat(tty)
         if (
