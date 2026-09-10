@@ -67,7 +67,7 @@ UUID_RE = re.compile('^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 BASE_TAGS = {'data-classification': 'non-phi-control-metadata', 'environment': 'staging', 'managed-by': 'opentofu', 'purpose': 'staging-restore-rehearsal-control'}
 AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az'), Path('/usr/bin/az'))
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '21bca04a407423324c55b0e12ed4670fa2c3f6190b74a22b3b2867b63da9b65b'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '8dcca1a837478030cda97c175eb5e2a957011fae877505e64f4eaa343a3ac043'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 
 class HandoffError(ValueError):
@@ -890,7 +890,7 @@ def prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
     with _pinned_process_environment(azure_cli, home):
         return _prepare_handoff(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, receipt_path=receipt_path, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256, reader_factory=reader_factory, clock=clock, nonce_source=nonce_source, boot_session=boot_session, source_binding=source_binding, python_binding=python_binding)
 
-def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path, expected_source_commit: str, expected_saved_plan_sha256: str, reader_factory: Callable[[], ReadOnlyArm], clock: Callable[[], datetime], nonce_source: Callable[[int], bytes], boot_session: Callable[[], bytes], source_binding: Callable[[str, str], str], python_binding: Mapping[str, str]) -> Mapping[str, Any]:
+def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path, expected_source_commit: str, expected_saved_plan_sha256: str, reader_factory: Callable[[], ReadOnlyArm], clock: Callable[[], datetime], nonce_source: Callable[[int], bytes], boot_session: Callable[[], bytes], source_binding: Callable[[str, str], str], python_binding: Mapping[str, Any]) -> Mapping[str, Any]:
     if receipt_path.parent != saved_plan.parent or receipt_path.exists():
         _fail('receipt_path.invalid')
     if expected_saved_plan_sha256 in recovery.REJECTED_SAVED_PLAN_SHA256S:
@@ -900,6 +900,8 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
         'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
         'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
         'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_tree_acl_entry_count': recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
+        'python_tree_acl_sha256': recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
         'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
         'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,

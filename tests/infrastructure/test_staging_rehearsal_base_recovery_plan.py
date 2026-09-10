@@ -210,7 +210,7 @@ def _source_snapshot() -> Any:
 
 
 def _runtime_snapshot() -> Any: return recovery.RuntimeSnapshot(tofu=TOFU, azure_cli=AZURE_CLI, tofu_sha256=recovery.EXPECTED_TOFU_SHA256, azure_cli_sha256=recovery.EXPECTED_AZURE_CLI_SHA256, azure_cli_version_sha256=recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, azure_cli_closure_sha256="f" * 64, runtime_snapshot_sha256="1" * 64)  # fmt: skip
-def _python_binding() -> dict[str, str]: return {'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256, 'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256}  # fmt: skip
+def _python_binding() -> dict[str, Any]: return {'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256, 'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_tree_acl_entry_count': recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT, 'python_tree_acl_sha256': recovery.EXPECTED_PYTHON_TREE_ACL_SHA256, 'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256}  # fmt: skip
 def _saved_plan_bytes(
     *, state: dict[str, Any] | None = None, source: Any | None = None
 ) -> bytes:
@@ -299,7 +299,7 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
     expected_facts = {"schema_version": 3, "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v3", "state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "launcher_execution_authenticated": False, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
     assert {name: receipt[name] for name in expected_facts} == expected_facts
     digest = recovery._sha256_bytes
-    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "python_launcher_sha256": digest(recovery.LAUNCHER_PATH.read_bytes()), "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256, "python_framework_sha256": recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, "python_runtime_manifest_sha256": recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, "python_version_sha256": recovery.EXPECTED_PYTHON_VERSION_SHA256, "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
+    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "python_launcher_sha256": digest(recovery.LAUNCHER_PATH.read_bytes()), "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256, "python_framework_sha256": recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, "python_runtime_manifest_sha256": recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, "python_tree_acl_entry_count": recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT, "python_tree_acl_sha256": recovery.EXPECTED_PYTHON_TREE_ACL_SHA256, "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, "python_version_sha256": recovery.EXPECTED_PYTHON_VERSION_SHA256, "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
     assert {name: receipt[name] for name in expected_hashes} == expected_hashes
     with pytest.raises(recovery.RecoveryPlanError, match="digest"):
         _validate(monkeypatch, expected_digest="0" * 64)
@@ -311,6 +311,7 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
     launcher_source = launcher.read_text(encoding="utf-8")
     assert recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256 in launcher_source
+    assert recovery.EXPECTED_PYTHON_TREE_ACL_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 in launcher_source
     assert '/bin/cp' not in launcher_source
     assert 'exec 3<' not in launcher_source
@@ -323,7 +324,7 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         ).splitlines()
     )
     assert manifest == {
-        "schema_version": "1",
+        "schema_version": "2",
         "python_root": str(recovery.EXPECTED_PYTHON_ROOT),
         "python_executable": str(recovery.EXPECTED_PYTHON_PATH),
         "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256,
@@ -333,6 +334,8 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         "python_tree_entry_count": str(recovery.EXPECTED_PYTHON_TREE_ENTRY_COUNT),
         "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        "python_tree_acl_entry_count": str(recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT),
+        "python_tree_acl_sha256": recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
         "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
     }
     _require_pinned_python_runtime()
@@ -456,6 +459,17 @@ def test_python_launcher_rejects_relocation_validator_mutation_and_unsafe_paths(
     )
     assert baseline.returncode == 0, baseline.stderr
 
+    subprocess.run(
+        ["/bin/chmod", "+a", "everyone allow write", str(validator)], check=True
+    )
+    acl_writable = subprocess.run(
+        [str(launcher), "--help"], check=False, capture_output=True, env={}
+    )
+    assert acl_writable.returncode == 2
+    assert acl_writable.stdout == b""
+    assert acl_writable.stderr == b"recovery_plan_launcher_refused\n"
+    subprocess.run(["/bin/chmod", "-N", str(validator)], check=True)
+
     validator.write_bytes(validator.read_bytes() + b"\n# unauthorized mutation\n")
     modified = subprocess.run(
         [str(launcher), "--help"], check=False, capture_output=True, env={}
@@ -528,6 +542,17 @@ def test_python_launcher_rejects_extension_dependency_mutation(
         [str(launcher), "--help"], check=False, capture_output=True, env={}
     )
     assert baseline.returncode == 0, baseline.stderr
+
+    subprocess.run(
+        ["/bin/chmod", "+a", "everyone allow write", str(extension)], check=True
+    )
+    acl_writable = subprocess.run(
+        [str(launcher), "--help"], check=False, capture_output=True, env={}
+    )
+    assert acl_writable.returncode == 2
+    assert acl_writable.stdout == b""
+    assert acl_writable.stderr == b"recovery_plan_launcher_refused\n"
+    subprocess.run(["/bin/chmod", "-N", str(extension)], check=True)
 
     extension.write_bytes(extension.read_bytes() + b"unauthorized mutation")
     mutated = subprocess.run(

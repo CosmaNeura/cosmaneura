@@ -48,7 +48,7 @@ CONFIRMATION_SECONDS = handoff.MAX_ACTION_READBACK_SECONDS
 CLAIM_NAME = '.base-recovery-apply-claimed-v1'
 NONCE_NAME = '.base-recovery-handoff-nonce'
 POLICY_ID = 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1'
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '21bca04a407423324c55b0e12ed4670fa2c3f6190b74a22b3b2867b63da9b65b'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '8dcca1a837478030cda97c175eb5e2a957011fae877505e64f4eaa343a3ac043'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 HASH_RE = re.compile(r'^[0-9a-f]{64}$')
 COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
@@ -395,6 +395,8 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
         'python_framework_source_path': str(recovery.EXPECTED_PYTHON_FRAMEWORK_PATH),
         'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_tree_acl_entry_count': recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
+        'python_tree_acl_sha256': recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
         'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
         'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,
@@ -413,7 +415,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
     }
     if any(base.get(name) != value or type(base.get(name)) is not type(value) for name, value in base_exact.items()):
         _fail('plan.authorization_mismatch')
-    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'python_launcher_sha256', 'python_runtime_manifest_sha256', 'python_framework_sha256', 'python_tree_content_sha256', 'python_tree_metadata_sha256', 'python_runtime_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
+    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'python_launcher_sha256', 'python_runtime_manifest_sha256', 'python_framework_sha256', 'python_tree_acl_sha256', 'python_tree_content_sha256', 'python_tree_metadata_sha256', 'python_runtime_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
         _fail('plan.authorization_mismatch')
     if expires - observed != handoff.RECEIPT_LIFETIME or now < observed - handoff.MAX_CLOCK_SKEW or now >= expires:
         _fail('receipt.expired')

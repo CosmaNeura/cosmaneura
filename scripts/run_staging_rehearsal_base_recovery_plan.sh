@@ -8,11 +8,13 @@ validator_path='/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-202609
 manifest_path='/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910/scripts/staging_rehearsal_base_recovery_python_runtime.manifest'
 python_root='/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9'
 python_path="$python_root/bin/python3.9"
-validator_sha256='551af41787804c3756521cd8d06559fe43c46296fd9bf685b1a60846bb571fdb'
-manifest_sha256='4f0f0e22c89afc4a373f40deda9b504ae51082504643fde0767079ea238b41dd'
+validator_sha256='5315d524764319f34141a814f1a05af2afbab45256f06205c015e4de0422afa9'
+manifest_sha256='52356ec1f7f1b50603a99dfd0d2967ebfb73bd8ffc51b289facf5c1bd99518c9'
 python_tree_entry_count='2006'
 python_tree_metadata_sha256='102e14547e442dd8be9f2d9585982a1819147d3f08cdcab5db9b12b0036100fb'
 python_tree_content_sha256='63c163925c96a4f5d09c1209556bbfb2dbe9c2b9727dc1ebca1d4f53f010631b'
+python_tree_acl_entry_count='0'
+python_tree_acl_sha256='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 
 refuse() {
   echo 'recovery_plan_launcher_refused' >&2
@@ -32,6 +34,20 @@ trusted_component() {
     root:0|operator:0|operator:"$operator_uid") ;;
     *) refuse ;;
   esac
+  acl_entries=$(
+    /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /bin/ls -lde "$component" |
+      /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /usr/bin/awk 'NR > 1 { print }'
+  ) || refuse
+  case "$acl_entries" in
+    *' allow '*|*' inherited '*) refuse ;;
+  esac
+  if [ -n "$acl_entries" ]; then
+    invalid_acl=$(
+      printf '%s\n' "$acl_entries" |
+        /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /usr/bin/awk "\$0 !~ / deny / { print }"
+    ) || refuse
+    [ -z "$invalid_acl" ] || refuse
+  fi
 }
 
 [ "$0" = "$launcher_path" ] || refuse
@@ -53,7 +69,7 @@ for component in \
   /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework \
   /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions \
   "$python_root" "$python_path" /usr /usr/bin /bin \
-  /usr/bin/env /usr/bin/find /usr/bin/id /usr/bin/shasum \
+  /bin/ls /usr/bin/awk /usr/bin/env /usr/bin/find /usr/bin/id /usr/bin/shasum \
   /usr/bin/stat /usr/bin/wc
 do
   trusted_component "$component" root
@@ -87,6 +103,29 @@ observed_content=$(
 ) || refuse
 observed_content=${observed_content%% *}
 [ "$observed_content" = "$python_tree_content_sha256" ] || refuse
+
+observed_acl_entries=$(
+  /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+    /usr/bin/find -s "$python_root" -xdev -exec /bin/ls -lde {} + |
+    /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin \
+      /usr/bin/awk '/^[[:space:]]*[0-9]+: / { print }'
+) || refuse
+if [ -n "$observed_acl_entries" ]; then
+  observed_acl_count=$(
+    printf '%s\n' "$observed_acl_entries" |
+      /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /usr/bin/wc -l
+  ) || refuse
+  observed_acl_count=${observed_acl_count##* }
+else
+  observed_acl_count=0
+fi
+observed_acl_sha256=$(
+  printf '%s' "$observed_acl_entries" |
+    /usr/bin/env -i LC_ALL=C PATH=/usr/bin:/bin /usr/bin/shasum -a 256
+) || refuse
+observed_acl_sha256=${observed_acl_sha256%% *}
+[ "$observed_acl_count" = "$python_tree_acl_entry_count" ] || refuse
+[ "$observed_acl_sha256" = "$python_tree_acl_sha256" ] || refuse
 
 exec /usr/bin/env -i "$python_path" -IS -c '
 import hashlib

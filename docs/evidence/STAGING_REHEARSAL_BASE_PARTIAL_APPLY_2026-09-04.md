@@ -140,3 +140,10 @@ pass independent review with exactly 28 no-ops, eleven creates, zero drift,
 zero updates, zero deletes, and zero replacements. A second digest-bound
 validation against a fresh state pull is required immediately before each
 human apply. Any other result stops recovery.
+
+The serial-9 recovery plan with SHA-256
+`a3e6319cc0ce0e003b6a74d3e04156c016971ef9a6e9bbe4392179fe89965b56`
+is permanently rejected. Independent review found that its pre-Python launcher
+validated ownership and mode bits but did not reject extended ACL grants on
+trusted source, utility, and runtime paths. No apply or live handoff used that
+plan.

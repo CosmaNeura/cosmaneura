@@ -122,7 +122,10 @@ The launcher starts from an empty environment and authenticates the exact
 root-owned Apple Command Line Tools Python 3.9.6 runtime before Python starts.
 Its compact manifest binds the complete 2,006-entry runtime tree—including the
 interpreter, framework binary, pure-Python modules, extension modules, links,
-owners, modes, and absence of extra entries. Its fixed isolated Python bootstrap
+owners, modes, absence of extended ACL entries, and absence of extra entries.
+Before Python starts, the launcher also rejects allow or inherited ACLs on
+every trusted source and utility path (while permitting only the standard
+deny-only home-directory entries). Its fixed isolated Python bootstrap
 then no-follow opens the validator, bounded-reads and hashes it under pre/post
 identity checks, and compiles those same immutable in-memory bytes. The
 version-3 receipt binds the

@@ -103,11 +103,15 @@ EXPECTED_PYTHON_TREE_METADATA_SHA256 = (
 EXPECTED_PYTHON_TREE_CONTENT_SHA256 = (
     "63c163925c96a4f5d09c1209556bbfb2dbe9c2b9727dc1ebca1d4f53f010631b"
 )
+EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT = 0
+EXPECTED_PYTHON_TREE_ACL_SHA256 = (
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+)
 EXPECTED_PYTHON_RUNTIME_SHA256 = (
-    "d7cac5b4a8a201db4cdea94343b49049c789c369b62136ee60d2673249750914"
+    "03393a80d7f4e206a4652ab74e4df0b3c0170a0d0ef2b7ccc22227bb290be03b"
 )
 EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 = (
-    "4f0f0e22c89afc4a373f40deda9b504ae51082504643fde0767079ea238b41dd"
+    "52356ec1f7f1b50603a99dfd0d2967ebfb73bd8ffc51b289facf5c1bd99518c9"
 )
 EXPECTED_AZURE_CLI_PATH = Path("/opt/homebrew/Cellar/azure-cli/2.89.1/bin/az")
 EXPECTED_AZURE_CLI_SHA256 = (
@@ -166,6 +170,9 @@ REJECTED_SAVED_PLAN_SHA256S: frozenset[str] = frozenset(
         # Rejected by independent review on 2026-09-10 because the process that
         # created it did not bind an isolated, exact Python bootstrap/runtime.
         "1adfc2b7926381e01bd6bced4f50fdab5407d737ee617baef9649c8903405a34",
+        # Rejected by independent review on 2026-09-10 because the launcher did
+        # not reject extended ACLs on its trusted source and runtime paths.
+        "a3e6319cc0ce0e003b6a74d3e04156c016971ef9a6e9bbe4392179fe89965b56",
     }
 )
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -931,7 +938,7 @@ def _require_launcher_bootstrap() -> None:
         raise RecoveryPlanError("the authenticated Python launcher was bypassed")
 
 
-def _python_runtime_binding() -> Mapping[str, str]:
+def _python_runtime_binding() -> Mapping[str, Any]:
     _require_launcher_bootstrap()
     unsafe_environment = {
         "LD_LIBRARY_PATH",
@@ -1009,6 +1016,8 @@ def _python_runtime_binding() -> Mapping[str, str]:
             {
                 "executable_sha256": EXPECTED_PYTHON_SHA256,
                 "framework_sha256": EXPECTED_PYTHON_FRAMEWORK_SHA256,
+                "tree_acl_entry_count": EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
+                "tree_acl_sha256": EXPECTED_PYTHON_TREE_ACL_SHA256,
                 "tree_content_sha256": EXPECTED_PYTHON_TREE_CONTENT_SHA256,
                 "tree_entry_count": EXPECTED_PYTHON_TREE_ENTRY_COUNT,
                 "tree_metadata_sha256": EXPECTED_PYTHON_TREE_METADATA_SHA256,
@@ -1022,6 +1031,8 @@ def _python_runtime_binding() -> Mapping[str, str]:
         "python_executable_sha256": EXPECTED_PYTHON_SHA256,
         "python_framework_sha256": EXPECTED_PYTHON_FRAMEWORK_SHA256,
         "python_runtime_manifest_sha256": manifest_sha256,
+        "python_tree_acl_entry_count": EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
+        "python_tree_acl_sha256": EXPECTED_PYTHON_TREE_ACL_SHA256,
         "python_tree_content_sha256": EXPECTED_PYTHON_TREE_CONTENT_SHA256,
         "python_tree_metadata_sha256": EXPECTED_PYTHON_TREE_METADATA_SHA256,
         "python_version_sha256": version_sha256,
@@ -3751,7 +3762,7 @@ def _validate_captured_artifacts(
     source: SourceSnapshot,
     backend_metadata_sha256: str,
     runtime: RuntimeSnapshot,
-    python_binding: Mapping[str, str],
+    python_binding: Mapping[str, Any],
     data_dir: Path,
     generation_mode: str,
     now: datetime,
@@ -3842,6 +3853,8 @@ def _validate_captured_artifacts(
         "python_runtime_manifest_sha256": python_binding[
             "python_runtime_manifest_sha256"
         ],
+        "python_tree_acl_entry_count": python_binding["python_tree_acl_entry_count"],
+        "python_tree_acl_sha256": python_binding["python_tree_acl_sha256"],
         "python_executable_source_path": str(EXPECTED_PYTHON_PATH),
         "python_executable_sha256": python_binding["python_executable_sha256"],
         "python_framework_source_path": str(EXPECTED_PYTHON_FRAMEWORK_PATH),
