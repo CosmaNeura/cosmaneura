@@ -1472,7 +1472,7 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
 
 # fmt: off
 def _azure_cli_guard_source(runtime_directory: Path) -> str:
-    source = r"""import ctypes,errno,fcntl,hashlib,json,os,runpy,secrets,signal,stat,sys
+    source = r"""import ctypes,errno,fcntl,hashlib,json,os,secrets,signal,stat,subprocess,sys
 EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None);CLEANUP_LIMIT=50000;CLEANUP_DEPTH=64
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
@@ -1684,6 +1684,20 @@ def cleanup_until_complete():
 def valid_snapshot_name(name):
     suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
 def terminate(signum,_frame):raise SystemExit(128+signum)
+def run_cli():
+    child=None
+    try:
+        child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,sys;sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True)
+        returncode=child.wait()
+    except BaseException:
+        if child is not None:
+            if child.poll() is None:
+                try:child.kill()
+                except ProcessLookupError:pass
+            try:child.wait()
+            except (OSError,ChildProcessError):pass
+        raise
+    return 128-returncode if returncode<0 else returncode
 try:
     try:
         if not hasattr(signal,"pthread_sigmask"):raise ValueError
@@ -1746,10 +1760,11 @@ try:
         print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
     try:
         if validate_null_home()!=null_home_binding:raise ValueError
-        try:runpy.run_module("azure.cli",run_name="__main__")
+        try:returncode=run_cli()
         finally:
             if validate_null_home()!=null_home_binding:raise ValueError
     except (OSError,ValueError):print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    raise SystemExit(returncode)
 finally:
     cleanup_ok,cleanup_interrupted=cleanup_until_complete()
     if not cleanup_ok:print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
