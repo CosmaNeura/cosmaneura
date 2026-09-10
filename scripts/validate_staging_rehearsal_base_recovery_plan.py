@@ -1684,19 +1684,26 @@ def cleanup_until_complete():
 def valid_snapshot_name(name):
     suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
 def terminate(signum,_frame):raise SystemExit(128+signum)
+def stop_cli(child):
+    ok=True
+    try:os.killpg(child.pid,signal.SIGKILL)
+    except ProcessLookupError:pass
+    except OSError:ok=False
+    try:child.wait()
+    except (OSError,ChildProcessError):ok=False
+    return ok
 def run_cli():
-    child=None
+    child=None;launch_mask=None
     try:
-        child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,sys;sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True)
+        launch_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True)
+        finally:
+            if launch_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,launch_mask)
         returncode=child.wait()
     except BaseException:
-        if child is not None:
-            if child.poll() is None:
-                try:child.kill()
-                except ProcessLookupError:pass
-            try:child.wait()
-            except (OSError,ChildProcessError):pass
+        if child is not None:stop_cli(child)
         raise
+    if not stop_cli(child):raise OSError
     return 128-returncode if returncode<0 else returncode
 try:
     try:

@@ -14,6 +14,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -695,6 +696,8 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     runtime, modules = tmp_path / "runtime", tmp_path / "modules"; runtime.mkdir(mode=0o700); (home / ".netrc").write_bytes(b"hostile"); (modules / "azure" / "cli").mkdir(parents=True)
     (modules / "azure" / "__init__.py").write_bytes(b""); (modules / "azure" / "cli" / "__init__.py").write_bytes(b"")  # noqa: E702
     (modules / "azure" / "cli" / "__main__.py").write_text('import json,os,subprocess,sys,time\nfrom pathlib import Path\np=Path(os.environ["AZURE_CONFIG_DIR"])\nif "break-cleanup" in sys.argv:\n old=p.with_name(p.name+"-moved");p.rename(old);p.mkdir()\nif "rename-cleanup" in sys.argv:\n p.rename(p.with_name(p.name+"-moved"));raise SystemExit(0)\nif "rename-file-cleanup" in sys.argv:(p/"msal_token_cache.json").rename(p.parent/"escaped-token")\nif "replace-rename-file-cleanup" in sys.argv:\n victim=p/"msal_token_cache.json";replacement=p/"replacement-token";replacement.write_bytes(victim.read_bytes());replacement.replace(victim);victim.rename(p.parent/"escaped-token")\nif "patch-cleanup-primitives" in sys.argv:\n marker=Path(sys.argv[-1]);original_unlink=os.unlink\n def hostile_unlink(*args,**kwargs):\n  marker.touch();return original_unlink(*args,**kwargs)\n os.unlink=hostile_unlink\nif "tighten-cleanup" in sys.argv:p.chmod(0o500)\nif "acl-cleanup" in sys.argv:subprocess.run(["/bin/chmod","+a","everyone allow read",str(p)],check=True)\nif "mutate-home-during" in sys.argv:os.environ["HOME"]=sys.argv[-1]\nif "mutate-home-exit" in sys.argv:os.environ["HOME"]=sys.argv[-1];raise SystemExit(0)\nif "hardlink-cleanup" in sys.argv:os.link(p/"msal_token_cache.json",sys.argv[-1])\nif "symlink-cleanup" in sys.argv:\n victim=p/"msal_token_cache.json";victim.unlink();victim.symlink_to(sys.argv[-1])\nif "wait-signal" in sys.argv:\n print("ready",flush=True);time.sleep(30)\nprint(json.dumps({"path":str(p),"files":sorted(x.name for x in p.iterdir()),"home":os.environ["HOME"],"netrc":(Path.home()/".netrc").exists()}),flush=True)\n')
+    azure_main = modules / "azure" / "cli" / "__main__.py"
+    azure_main.write_text(azure_main.read_text() + 'if "leave-helper" in sys.argv:\n pid=os.fork()\n if pid == 0:\n  descriptor=os.open(p/"msal_token_cache.json",os.O_RDONLY);Path(sys.argv[-2]).touch();time.sleep(0.5);Path(sys.argv[-1]).touch();time.sleep(30);os._exit(0)\n for _ in range(100):\n  if Path(sys.argv[-2]).exists():break\n  time.sleep(0.01)\n else:raise RuntimeError("helper did not start")\n')
     python = runtime / "homebrew" / "Cellar" / "python@3.14" / recovery.EXPECTED_AZURE_CLI_FORMULAE["python@3.14"] / "Frameworks" / "Python.framework" / "Versions" / "3.14" / "bin" / "python3.14"
     python.parent.mkdir(parents=True); python.symlink_to(sys.executable)
     assert recovery._azure_cli_environment(runtime)["HOME"] == os.devnull; monkeypatch.setattr(recovery, "_azure_cli_environment", lambda _: {"HOME": os.devnull, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(modules), "PYTHONNOUSERSITE": "1", "PYTHONSAFEPATH": "1"})
@@ -707,6 +710,9 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     cleanup_patch_marker = tmp_path / "child-cleanup-hook-fired"; environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
     isolated = subprocess.run([wrapper, "patch-cleanup-primitives", str(cleanup_patch_marker)], env=environment, capture_output=True, check=False)
     assert isolated.returncode == 0 and not cleanup_patch_marker.exists() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())
+    helper_ready, helper_survived = tmp_path / "helper-ready", tmp_path / "helper-survived"; environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
+    helper = subprocess.run([wrapper, "leave-helper", str(helper_ready), str(helper_survived)], env=environment, capture_output=True, check=False)
+    time.sleep(0.75); assert helper.returncode == 0 and helper_ready.is_file() and not helper_survived.exists() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir())  # noqa: E702
     hardlink_external = tmp_path / "hardlink-external"; environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]  # noqa: E702
     hardlink = subprocess.run([wrapper, "hardlink-cleanup", str(hardlink_external)], env=environment, capture_output=True, check=False)
     retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
@@ -786,6 +792,10 @@ def test_azure_cli_wrapper_uses_private_bound_config_and_refuses_late_replacemen
     retained = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-")]
     assert refused.returncode == 2 and refused.stdout == b"" and refused.stderr == b"azure_cli_guard_refused\n" * 2 and device_marker.is_file() and not any(path.name in values for path in runtime.rglob("*"))
     for path in retained: path.rmdir()
+    startup_signal_marker = tmp_path / "startup-signal-hook-fired"
+    sitecustomize.write_text(f'import os,signal,subprocess\nfrom pathlib import Path\noriginal_popen=subprocess.Popen\ndef popen(*args,**kwargs):\n result=original_popen(*args,**kwargs);Path({str(startup_signal_marker)!r}).touch();os.kill(os.getpid(),signal.SIGTERM);return result\nsubprocess.Popen=popen\n')
+    environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; startup_signal = subprocess.run([wrapper, "wait-signal"], env=environment, capture_output=True, check=False)  # noqa: E702
+    assert startup_signal.returncode == 128 + signal.SIGTERM and startup_signal_marker.is_file() and not any(path.name.startswith(".azure-config-") for path in runtime.iterdir()) and not any(path.name in values for path in runtime.rglob("*"))
     sitecustomize.unlink(); environment[recovery.AZURE_CONFIG_BINDING_ENV] = recovery._validated_azure_config(home)[1]; renamed_current = subprocess.run([wrapper, "rename-cleanup"], env=environment, capture_output=True, check=False)  # noqa: E702
     renamed_snapshots = [path for path in runtime.iterdir() if path.name.startswith(".azure-config-") and path.name.endswith("-moved")]
     assert renamed_current.returncode == 2 and renamed_current.stderr == b"azure_cli_guard_refused\n" and len(renamed_snapshots) == 1 and not any(renamed_snapshots[0].iterdir()) and not any(path.name in values for path in runtime.rglob("*"))
