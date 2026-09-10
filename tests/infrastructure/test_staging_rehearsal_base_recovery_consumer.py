@@ -51,10 +51,14 @@ def _base() -> dict[str, Any]:
         'launcher_execution_authenticated': True,
         'python_runtime_manifest_source_path': consumer.recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
         'python_runtime_manifest_sha256': consumer.recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_runtime_snapshot_policy': consumer.recovery.PYTHON_RUNTIME_SNAPSHOT_POLICY,
+        'python_runtime_snapshotted': True,
         'python_executable_source_path': str(consumer.recovery.EXPECTED_PYTHON_PATH),
         'python_executable_sha256': consumer.recovery.EXPECTED_PYTHON_SHA256,
         'python_framework_source_path': str(consumer.recovery.EXPECTED_PYTHON_FRAMEWORK_PATH),
         'python_framework_sha256': consumer.recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_tree_acl_entry_count': consumer.recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
+        'python_tree_acl_sha256': consumer.recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
         'python_tree_content_sha256': consumer.recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
         'python_tree_metadata_sha256': consumer.recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         'python_version_sha256': consumer.recovery.EXPECTED_PYTHON_VERSION_SHA256,
@@ -168,9 +172,9 @@ def test_final_consumer_independently_executes_pinned_launcher_descriptor(
         return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
     monkeypatch.setattr(consumer.recovery, '_run_process', run)
     result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
-    assert observed[:2] == ['/bin/sh', '-c']
-    assert observed[2].startswith('. /dev/fd/')
-    assert observed[3:6] == [str(consumer.recovery.LAUNCHER_PATH), '--mode', 'verify-existing']
+    assert observed[0] == '/bin/sh'
+    assert observed[1].startswith('/dev/fd/')
+    assert observed[2:6] == ['--authenticated-launcher-sha256', consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256, '--mode', 'verify-existing']
     assert result == {**raw, 'python_launcher_source_path': consumer.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256, 'launcher_execution_authenticated': True}
 
 
@@ -190,7 +194,7 @@ def test_final_consumer_executes_opened_launcher_bytes_across_path_swap(tmp_path
         replacement.chmod(0o755)
         os.replace(replacement, launcher)
         assert Path(f'/dev/fd/{descriptor}').read_bytes() == reviewed
-        assert arguments[2] == f'. /dev/fd/{descriptor}'
+        assert arguments[1] == f'/dev/fd/{descriptor}'
         return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
     monkeypatch.setattr(consumer.recovery, '_run_process', run)
     result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
@@ -363,6 +367,8 @@ def test_receipt_shape_hashes_and_expiry_fail_closed(mutation: str) -> None:
     ('open_tofu_sha256', 'f' * 64), ('azure_cli_sha256', 'f' * 64),
     ('python_launcher_sha256', 'f' * 64), ('python_executable_sha256', 'f' * 64),
     ('python_runtime_manifest_sha256', 'f' * 64), ('python_framework_sha256', 'f' * 64),
+    ('python_tree_acl_entry_count', 1), ('python_tree_acl_sha256', 'f' * 64),
+    ('python_runtime_snapshot_policy', 'unverified'), ('python_runtime_snapshotted', False),
     ('python_tree_content_sha256', 'f' * 64), ('python_tree_metadata_sha256', 'f' * 64),
     ('python_version_sha256', 'f' * 64), ('python_runtime_sha256', 'f' * 64),
     ('azure_cli_version_sha256', 'f' * 64), ('trusted_runtime_snapshotted', False),

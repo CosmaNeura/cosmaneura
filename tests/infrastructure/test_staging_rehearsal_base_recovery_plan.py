@@ -34,6 +34,13 @@ AZURE_CLI = Path("/trusted/az")
 DATA_DIR = Path("/protected/tofu-data")
 
 
+def _launcher_command(launcher: Path, *arguments: str, expected_digest: str | None = None) -> list[str]:
+    document = (ROOT / "docs/flight-plans/2026-09-04-staging-rehearsal-base-recovery.md").read_text()
+    bootstrap = document.split("/usr/bin/env -i /bin/sh -c '\n", 1)[1].split("\n' recovery-bootstrap", 1)[0]
+    reviewed = expected_digest or hashlib.sha256(launcher.read_bytes()).hexdigest()
+    return ["/usr/bin/env", "-i", "/bin/sh", "-c", bootstrap, "recovery-bootstrap", str(launcher), reviewed, *arguments]
+
+
 def _relocated_launcher(tmp_path: Path) -> tuple[Path, Path, Path]:
     root = tmp_path / "canonical-recovery"
     scripts = root / "scripts"
@@ -73,46 +80,6 @@ def _require_pinned_python_runtime() -> None:
     )
     if sys.platform != "darwin" or not all(path.exists() for path in required):
         pytest.skip("requires the pinned Apple Command Line Tools Python runtime")
-
-
-def _runtime_tree_shell_binding(root: Path) -> tuple[str, str, str]:
-    environment = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
-    count = len(
-        subprocess.run(
-            ["/usr/bin/find", "-s", str(root), "-xdev", "-print"],
-            check=True,
-            capture_output=True,
-            env=environment,
-        ).stdout.splitlines()
-    )
-    metadata = subprocess.run(
-        [
-            "/bin/sh",
-            "-c",
-            "/usr/bin/find -s \"$1\" -xdev -exec /usr/bin/stat -f "
-            "'%N|%HT|%u|%g|%Mp%Lp|%z|%Y' {} + | "
-            "/usr/bin/shasum -a 256",
-            "runtime-tree-metadata",
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-        env=environment,
-    ).stdout.decode().split()[0]
-    content = subprocess.run(
-        [
-            "/bin/sh",
-            "-c",
-            "/usr/bin/find -s \"$1\" -xdev -type f "
-            "-exec /usr/bin/shasum -a 256 {} + | /usr/bin/shasum -a 256",
-            "runtime-tree-content",
-            str(root),
-        ],
-        check=True,
-        capture_output=True,
-        env=environment,
-    ).stdout.decode().split()[0]
-    return str(count), metadata, content
 
 
 def _load_module() -> ModuleType:
@@ -210,7 +177,7 @@ def _source_snapshot() -> Any:
 
 
 def _runtime_snapshot() -> Any: return recovery.RuntimeSnapshot(tofu=TOFU, azure_cli=AZURE_CLI, tofu_sha256=recovery.EXPECTED_TOFU_SHA256, azure_cli_sha256=recovery.EXPECTED_AZURE_CLI_SHA256, azure_cli_version_sha256=recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, azure_cli_closure_sha256="f" * 64, runtime_snapshot_sha256="1" * 64)  # fmt: skip
-def _python_binding() -> dict[str, str]: return {'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256, 'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256}  # fmt: skip
+def _python_binding() -> dict[str, Any]: return {'python_launcher_sha256': hashlib.sha256(recovery.LAUNCHER_PATH.read_bytes()).hexdigest(), 'python_runtime_snapshot_policy': recovery.PYTHON_RUNTIME_SNAPSHOT_POLICY, 'python_runtime_snapshotted': True, 'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256, 'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_tree_acl_entry_count': recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT, 'python_tree_acl_sha256': recovery.EXPECTED_PYTHON_TREE_ACL_SHA256, 'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256}  # fmt: skip
 def _saved_plan_bytes(
     *, state: dict[str, Any] | None = None, source: Any | None = None
 ) -> bytes:
@@ -299,7 +266,7 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
     expected_facts = {"schema_version": 3, "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v3", "state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "launcher_execution_authenticated": False, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
     assert {name: receipt[name] for name in expected_facts} == expected_facts
     digest = recovery._sha256_bytes
-    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "python_launcher_sha256": digest(recovery.LAUNCHER_PATH.read_bytes()), "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256, "python_framework_sha256": recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, "python_runtime_manifest_sha256": recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, "python_version_sha256": recovery.EXPECTED_PYTHON_VERSION_SHA256, "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
+    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "python_launcher_sha256": digest(recovery.LAUNCHER_PATH.read_bytes()), "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256, "python_framework_sha256": recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, "python_runtime_manifest_sha256": recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, "python_tree_acl_entry_count": recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT, "python_tree_acl_sha256": recovery.EXPECTED_PYTHON_TREE_ACL_SHA256, "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, "python_version_sha256": recovery.EXPECTED_PYTHON_VERSION_SHA256, "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
     assert {name: receipt[name] for name in expected_hashes} == expected_hashes
     with pytest.raises(recovery.RecoveryPlanError, match="digest"):
         _validate(monkeypatch, expected_digest="0" * 64)
@@ -311,10 +278,10 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
     launcher_source = launcher.read_text(encoding="utf-8")
     assert recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256 in launcher_source
+    assert recovery.EXPECTED_PYTHON_TREE_ACL_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 in launcher_source
-    assert '/bin/cp' not in launcher_source
     assert 'exec 3<' not in launcher_source
-    assert 'source = b"".join(chunks)' in launcher_source
+    assert 'value = b"".join(chunks)' in launcher_source
     assert 'exec(compile(source, source_name' in launcher_source
     manifest = dict(
         line.split("=", 1)
@@ -323,7 +290,7 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         ).splitlines()
     )
     assert manifest == {
-        "schema_version": "1",
+        "schema_version": "3",
         "python_root": str(recovery.EXPECTED_PYTHON_ROOT),
         "python_executable": str(recovery.EXPECTED_PYTHON_PATH),
         "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256,
@@ -333,6 +300,9 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         "python_tree_entry_count": str(recovery.EXPECTED_PYTHON_TREE_ENTRY_COUNT),
         "python_tree_metadata_sha256": recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        "python_tree_acl_entry_count": str(recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT),
+        "python_tree_acl_sha256": recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
+        "python_runtime_snapshot_policy": recovery.PYTHON_RUNTIME_SNAPSHOT_POLICY,
         "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
     }
     _require_pinned_python_runtime()
@@ -363,7 +333,7 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
     )
 
     launched = subprocess.run(
-        [str(launcher), "--help"],
+        _launcher_command(launcher, "--help"),
         check=False,
         capture_output=True,
         env={"PYTHONPATH": "/tmp/untrusted-python-path"},
@@ -435,107 +405,138 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         )
 
 
-def test_python_launcher_rejects_relocation_validator_mutation_and_unsafe_paths(
-    tmp_path: Path,
-) -> None:
-    canonical_launcher = ROOT / "scripts/run_staging_rehearsal_base_recovery_plan.sh"
-    copied_launcher = tmp_path / "copied-launcher.sh"
-    shutil.copy2(canonical_launcher, copied_launcher)
-    copied_launcher.chmod(0o755)
-    copied = subprocess.run(
-        [str(copied_launcher), "--help"], check=False, capture_output=True, env={}
-    )
-    assert copied.returncode == 2
-    assert copied.stdout == b""
-    assert copied.stderr == b"recovery_plan_launcher_refused\n"
+@pytest.mark.parametrize("caller_name", ["prepare_staging_rehearsal_base_recovery_handoff", "consume_staging_rehearsal_base_recovery_handoff"])
+def test_python_launcher_closed_writer_pipe_executes_real_runtime(caller_name: str) -> None:
     _require_pinned_python_runtime()
+    caller = importlib.import_module(f"scripts.{caller_name}")
+    descriptor = caller._open_verified_recovery_launcher()
+    try:
+        result = subprocess.run(["/bin/sh", f"/dev/fd/{descriptor}", "--authenticated-launcher-sha256", caller.EXPECTED_RECOVERY_LAUNCHER_SHA256, "--help"], pass_fds=(descriptor,), capture_output=True, env={}, timeout=30, check=False)
+    finally:
+        os.close(descriptor)
+    assert result.returncode == 0, result.stderr
+    assert b"--expected-source-commit" in result.stdout and result.stderr == b""
 
-    launcher, validator, scripts = _relocated_launcher(tmp_path)
-    baseline = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
+
+def test_python_launcher_binds_actual_snapshot_runtime(tmp_path: Path) -> None:
+    _require_pinned_python_runtime()
+    launcher, validator, _ = _relocated_launcher(tmp_path)
+    source = validator.read_text().replace("    raise SystemExit(main())", "    print(json.dumps(_python_runtime_binding()))", 1)
+    validator.write_text(source)
+    launcher.write_text(_replace_launcher_assignment(launcher.read_text(), "validator_sha256", hashlib.sha256(validator.read_bytes()).hexdigest()))
+    result = subprocess.run(_launcher_command(launcher), capture_output=True, env={}, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    expected = _python_binding()
+    expected["python_launcher_sha256"] = hashlib.sha256(launcher.read_bytes()).hexdigest()
+    assert json.loads(result.stdout) == expected
+    assert result.stderr == b""
+
+
+def test_python_launcher_authenticates_before_execution_and_snapshots_validator(tmp_path: Path) -> None:
+    canonical = ROOT / "scripts/run_staging_rehearsal_base_recovery_plan.sh"
+    direct = subprocess.run([str(canonical), "--help"], check=False, capture_output=True, env={})
+    assert direct.returncode == 2 and not direct.stdout
+    _require_pinned_python_runtime()
+    launcher, validator, _ = _relocated_launcher(tmp_path)
+    baseline = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
     assert baseline.returncode == 0, baseline.stderr
 
+    subprocess.run(["/bin/chmod", "+a", "everyone allow write", str(validator)], check=True)
+    try:
+        copied = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
+        assert copied.returncode == 0, copied.stderr
+    finally:
+        subprocess.run(["/bin/chmod", "-N", str(validator)], check=True)
     validator.write_bytes(validator.read_bytes() + b"\n# unauthorized mutation\n")
-    modified = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
-    assert modified.returncode == 2
-    assert modified.stdout == b""
+    modified = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
+    assert modified.returncode == 2 and not modified.stdout
     assert modified.stderr == b"recovery_plan_launcher_refused\n"
-    validator.write_bytes(SCRIPT.read_bytes())
-    validator.chmod(0o644)
 
-    root = scripts.parent
-    root.chmod(0o722)
-    writable_parent = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
-    assert writable_parent.returncode == 2
-    assert writable_parent.stdout == b""
-    assert writable_parent.stderr == b"recovery_plan_launcher_refused\n"
-    root.chmod(0o700)
-
-    real_scripts = root / "real-scripts"
-    scripts.rename(real_scripts)
-    scripts.symlink_to(real_scripts, target_is_directory=True)
-    symlink_component = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
-    assert symlink_component.returncode == 2
-    assert symlink_component.stdout == b""
-    assert symlink_component.stderr == b"recovery_plan_launcher_refused\n"
+    reviewed_digest = hashlib.sha256(launcher.read_bytes()).hexdigest()
+    marker = tmp_path / "unreviewed-launcher-ran"
+    launcher.write_text(f'#!/bin/sh\n/bin/echo untrusted > "{marker}"\n')
+    refused = subprocess.run(_launcher_command(launcher, "--help", expected_digest=reviewed_digest), check=False, capture_output=True, env={})
+    assert refused.returncode == 2 and not marker.exists() and not refused.stdout
+    assert refused.stderr == b"recovery_bootstrap_refused\n"
 
 
-def test_python_launcher_rejects_extension_dependency_mutation(
-    tmp_path: Path,
-) -> None:
+def _copied_runtime_launcher(tmp_path: Path) -> tuple[Path, Path]:
     _require_pinned_python_runtime()
-    runtime_root = tmp_path / "runtime"
-    extension = runtime_root / "lib/python3.9/lib-dynload/_hashlib.test.so"
-    extension.parent.mkdir(parents=True, mode=0o755)
-    extension.write_bytes(b"reviewed-extension-bytes")
-    extension.chmod(0o755)
-    (runtime_root / "lib/python3.9/hashlib.py").write_bytes(b"reviewed-wrapper")
-    count, metadata, content = _runtime_tree_shell_binding(runtime_root)
-
     launcher, _, _ = _relocated_launcher(tmp_path)
-    launcher_source = launcher.read_text(encoding="utf-8")
-    launcher_source = _replace_launcher_assignment(
-        launcher_source, "python_root", str(runtime_root)
-    )
-    launcher_source = launcher_source.replace(
-        'python_path="$python_root/bin/python3.9"',
-        f"python_path='{recovery.EXPECTED_PYTHON_PATH}'",
-    )
-    launcher_source = launcher_source.replace(
-        'root:0|operator:0|operator:"$operator_uid"',
-        'root:0|root:"$operator_uid"|operator:0|operator:"$operator_uid"',
-    )
-    launcher_source = _replace_launcher_assignment(
-        launcher_source, "python_tree_entry_count", count
-    )
-    launcher_source = _replace_launcher_assignment(
-        launcher_source, "python_tree_metadata_sha256", metadata
-    )
-    launcher_source = _replace_launcher_assignment(
-        launcher_source, "python_tree_content_sha256", content
-    )
-    launcher.write_text(launcher_source, encoding="utf-8")
-    launcher.chmod(0o755)
+    runtime = tmp_path / "source-runtime"
+    shutil.copytree(recovery.EXPECTED_PYTHON_ROOT, runtime, symlinks=True)
+    source = _replace_launcher_assignment(launcher.read_text(), "python_source_root", str(runtime))
+    source = source.replace('  "$python_source_root" /usr /usr/bin /bin', '  /usr /usr/bin /bin', 1)
+    launcher.write_text(source)
+    return launcher, runtime
 
-    baseline = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
+
+def test_python_runtime_snapshot_rejects_modified_extension(tmp_path: Path) -> None:
+    launcher, runtime = _copied_runtime_launcher(tmp_path)
+    baseline = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
     assert baseline.returncode == 0, baseline.stderr
-
+    extension = next((runtime / "lib/python3.9/lib-dynload").glob("_hashlib*.so"))
     extension.write_bytes(extension.read_bytes() + b"unauthorized mutation")
-    mutated = subprocess.run(
-        [str(launcher), "--help"], check=False, capture_output=True, env={}
-    )
-    assert mutated.returncode == 2
-    assert mutated.stdout == b""
-    assert mutated.stderr == b"recovery_plan_launcher_refused\n"
+    refused = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
+    assert refused.returncode == 2 and not refused.stdout
+    assert refused.stderr == b"recovery_plan_launcher_refused\n"
+
+
+@pytest.mark.parametrize("failure", ["single-ls", "tree-ls", "tree-find", "empty-listing", "readsecurity-denied"])
+def test_python_snapshot_acl_enumeration_errors_fail_closed(tmp_path: Path, failure: str) -> None:
+    _require_pinned_python_runtime()
+    launcher, _, _ = _relocated_launcher(tmp_path)
+    source = launcher.read_text()
+    if failure == "single-ls":
+        source = source.replace('/bin/ls -ldne "$1"', '/usr/bin/false', 1)
+    elif failure == "tree-ls":
+        source = source.replace('-exec /bin/ls -ldne {} +', '-exec /bin/sh -c "exit 7" sh {} +', 1)
+    elif failure == "tree-find":
+        source = source.replace('/usr/bin/find -s . -xdev', '/usr/bin/false', 1)
+    elif failure == "empty-listing":
+        source = source.replace('-exec /bin/ls -ldne {} +', '-exec /usr/bin/true {} +', 1)
+    else:
+        source = source.replace('/bin/chmod -R go-rwx,u-w "$python_snapshot" || refuse', '/bin/chmod -R go-rwx,u-w "$python_snapshot" || refuse\n/bin/chmod +a "everyone allow write,writesecurity" "$python_snapshot/lib/python3.9/hashlib.py" || refuse\n/bin/chmod +a "everyone deny readsecurity" "$python_snapshot/lib/python3.9/hashlib.py" || refuse', 1)
+    launcher.write_text(source)
+    refused = subprocess.run(_launcher_command(launcher, "--help"), check=False, capture_output=True, env={})
+    assert refused.returncode == 2 and not refused.stdout
+    assert b"recovery_plan_launcher_refused" in refused.stderr
+
+
+@pytest.mark.parametrize("module_kind", ["python", "extension"])
+def test_python_snapshot_ignores_source_writer_retained_across_acl_removal(tmp_path: Path, module_kind: str) -> None:
+    launcher, runtime = _copied_runtime_launcher(tmp_path)
+    module = runtime / "lib/python3.9/hashlib.py" if module_kind == "python" else next((runtime / "lib/python3.9/lib-dynload").glob("_hashlib*.so"))
+    marker = tmp_path / "snapshot-validated"
+    release = tmp_path / "allow-execution"
+    source = launcher.read_text()
+    wait = f'/bin/chmod 0500 "$bootstrap_root" || refuse\n: > "{marker}"\nfor attempt in 1 2 3 4 5; do\n  [ -f "{release}" ] && break\n  /bin/sleep 1\ndone\n[ -f "{release}" ] || refuse'
+    source = source.replace('/bin/chmod 0500 "$bootstrap_root" || refuse', wait, 1)
+    launcher.write_text(source)
+    subprocess.run(["/bin/chmod", "+a", "everyone allow write,writesecurity", str(module)], check=True)
+    writer = os.open(module, os.O_WRONLY)
+    process = None
+    try:
+        subprocess.run(["/bin/chmod", "-N", str(module)], check=True)
+        original_inode = module.stat().st_ino
+        process = subprocess.Popen(_launcher_command(launcher, "--help"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={})
+        deadline = time.monotonic() + 30
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists(), process.communicate(timeout=5)
+        os.ftruncate(writer, 0)
+        os.write(writer, b'raise RuntimeError("untrusted source runtime executed")\n')
+        os.fsync(writer)
+        assert module.stat().st_ino == original_inode
+        release.touch()
+        stdout, stderr = process.communicate(timeout=30)
+        assert process.returncode == 0, stderr
+        assert b"--expected-source-commit" in stdout and stderr == b""
+    finally:
+        os.close(writer)
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_python_launcher_executes_in_memory_validator_after_source_inode_mutation(
@@ -568,9 +569,9 @@ def test_python_launcher_executes_in_memory_validator_after_source_inode_mutatio
     writer = os.open(validator, os.O_WRONLY)
     try:
         process = subprocess.Popen(
-            [str(launcher)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={}
+            _launcher_command(launcher), stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={}
         )
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 30
         while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
             time.sleep(0.01)
         assert marker.exists()
@@ -962,6 +963,7 @@ def test_file_permissions_and_ownership(
 ) -> None:
     exposed_directory = tmp_path / "exposed"
     exposed_directory.mkdir(mode=0o755)
+    exposed_directory.chmod(0o755)
     exposed = _protected_file(exposed_directory / "artifact", b"value")
     with pytest.raises(recovery.RecoveryPlanError, match="directory must have mode"):
         recovery._read_protected_file(exposed, label="artifact")

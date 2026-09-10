@@ -117,40 +117,68 @@ The later isolated synthetic-only rehearsal remains mandatory.
    After a successful human apply, record post-apply state and ARM readback, then
    stop before any later rung.
 
-Create and revalidate the base-recovery plan only through the reviewed launcher.
-The launcher starts from an empty environment and authenticates the exact
-root-owned Apple Command Line Tools Python 3.9.6 runtime before Python starts.
-Its compact manifest binds the complete 2,006-entry runtime tree—including the
-interpreter, framework binary, pure-Python modules, extension modules, links,
-owners, modes, and absence of extra entries. Its fixed isolated Python bootstrap
-then no-follow opens the validator, bounded-reads and hashes it under pre/post
-identity checks, and compiles those same immutable in-memory bytes. The
-version-3 receipt binds the
-launcher, manifest, Python executable and framework, Python version, and full
-runtime tree in addition to OpenTofu and Azure CLI. A validator receipt remains
-a non-authoritative candidate (`launcher_execution_authenticated=false`). The
-preparer and final consumer each independently pin, no-follow open, hash, and
-copy the exact launcher bytes into a pathless, closed-writer pipe snapshot.
-They execute only that immutable read descriptor before promoting the fact to
-`true`; they never trust or execute mutable launcher bytes after the source
-metadata and digest checks. Direct, imported, `runpy`, virtual-environment,
-`uv run`, and non-isolated Python invocations cannot confer plan authority:
+Create and revalidate the base-recovery plan through the inline bootstrap below.
+Take `REVIEWED_LAUNCHER_SHA256` from the independent review of the exact merged
+source; do not derive an expected digest from the mutable checkout at execution
+time. The system shell copies the launcher into a fresh private directory and
+verifies that copy before executing any repository code. Direct invocation of
+the repository launcher is unsupported and refuses.
+
+The authenticated launcher separately copies the validator, manifest, and
+complete Apple Command Line Tools Python 3.9.6 runtime into new private inodes.
+It removes ACLs and write permissions, then verifies all 2,006 entries, relative
+paths, file contents, link targets, link counts, modes, owners, and zero ACLs.
+Each enumeration command must succeed before its output is parsed. Python,
+its framework, and all imports execute from that verified copy. A previously
+opened writable descriptor to a source file cannot alter the copied inode.
+The validator is then read into memory, digest checked, and compiled from those
+same bytes. The receipt binds the snapshot policy and normalized tree hashes;
+the private runtime is removed when the invocation ends.
+
+The version-3 candidate receipt remains non-authoritative
+(`launcher_execution_authenticated=false`). The preparer and final consumer
+each independently authenticate the launcher and execute its exact bytes from
+a closed-writer anonymous pipe before promoting that fact to `true`.
 
 ```sh
-/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+/usr/bin/env -i /bin/sh -c '
+set -eu
+umask 077
+recovery_source_path=$1
+recovery_launcher_digest=$2
+shift 2
+case "$recovery_launcher_digest" in
+  ""|*[!0-9a-f]*) exit 2 ;;
+esac
+[ "${#recovery_launcher_digest}" -eq 64 ] || exit 2
+recovery_bootstrap_dir=$(/usr/bin/mktemp -d /private/tmp/cosmaneura-launcher.XXXXXXXX)
+cleanup() { /bin/rm -rf -- "$recovery_bootstrap_dir"; }
+trap cleanup EXIT
+trap "exit 130" HUP INT TERM
+/bin/chmod -N "$recovery_bootstrap_dir"
+/bin/chmod 0700 "$recovery_bootstrap_dir"
+/bin/cp -X "$recovery_source_path" "$recovery_bootstrap_dir/launcher.sh"
+/bin/chmod -N "$recovery_bootstrap_dir/launcher.sh"
+/bin/chmod 0500 "$recovery_bootstrap_dir/launcher.sh"
+recovery_observed=$(/usr/bin/shasum -a 256 "$recovery_bootstrap_dir/launcher.sh")
+if [ "$recovery_observed" != "$recovery_launcher_digest  $recovery_bootstrap_dir/launcher.sh" ]; then
+  echo recovery_bootstrap_refused >&2
+  exit 2
+fi
+/bin/sh "$recovery_bootstrap_dir/launcher.sh" \
+  --authenticated-launcher-sha256 "$recovery_launcher_digest" "$@"
+' recovery-bootstrap \
+  /ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+  REVIEWED_LAUNCHER_SHA256 \
   --mode create \
   --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
   --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
   --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX
-
-/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
-  --mode verify \
-  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
-  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
-  --execution-dir /ABSOLUTE/OWNER_ONLY/NEW_EXECUTION_DIRECTORY \
-  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX \
-  --expected-saved-plan-sha256 REVIEWED_SAVED_PLAN_SHA256
 ```
+
+For digest-bound revalidation, use the same bootstrap with `--mode verify` and
+add `--execution-dir /ABSOLUTE/OWNER_ONLY/NEW_EXECUTION_DIRECTORY` and
+`--expected-saved-plan-sha256 REVIEWED_SAVED_PLAN_SHA256`.
 
 The approved human runs the consumer directly from the exact protected-master
 checkout with an empty ambient environment. Replace the placeholders below with
