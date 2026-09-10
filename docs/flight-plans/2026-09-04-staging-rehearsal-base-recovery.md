@@ -244,6 +244,14 @@ posture mismatch. No production or PHI promotion is part of this plan.
   principal digest and independent review remain required.
 - Observation window: read back all 39 expected state instances and exact live
   controls before any private-executor or irreversible-retention plan.
+- Remote-state comparison uses the receipt-bound policy
+  `canonical-json-check-results-permutation-v1`: sort only complete top-level
+  OpenTofu `check_results` records, whose emission order varies between state
+  pulls. Reject malformed or duplicate record identities. Preserve every
+  record value, status, nested-list order, and every other state field exactly.
+  The raw captured-state digest remains unchanged and separately bound. The
+  consumer requires the exact comparison-policy field; older receipts without
+  it cannot be consumed. A changed value still stops recovery.
 
 ## Completion
 

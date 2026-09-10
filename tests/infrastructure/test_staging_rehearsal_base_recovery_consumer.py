@@ -100,6 +100,7 @@ def _receipt(base: Mapping[str, Any] | None=None) -> dict[str, Any]:
         'state_json_sha256': base['state_json_sha256'],
         'state_projection_sha256': base['state_projection_sha256'],
         'remote_state_sha256': 'd' * 64,
+        'remote_state_comparison_policy': consumer.handoff.REMOTE_STATE_COMPARISON_POLICY,
         'saved_plan_sha256': PLAN_DIGEST,
         'derived_plan_json_sha256': base['derived_plan_json_sha256'],
         'backend_metadata_sha256': base['backend_metadata_sha256'],
@@ -261,7 +262,7 @@ def test_contract_and_cli_expose_no_bypass_or_extra_apply_argument() -> None:
         'expected_source_commit', 'expected_saved_plan_sha256',
         'expected_receipt_sha256', 'expected_azure_principal_sha256',
     }
-    assert len(consumer.RECEIPT_FIELDS) == 37
+    assert len(consumer.RECEIPT_FIELDS) == 38
     assert Path(consumer.__file__).read_text().splitlines()[0] == '#!/opt/homebrew/bin/python3 -IS'
     tree = ast.parse(Path(consumer.__file__).read_text())
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) and node.func.value.id == 'os' and node.func.attr == 'execve']
@@ -328,6 +329,7 @@ def test_local_validation_rejects_oversized_receipt_before_generic_or_custom_rea
     ('target_resource_count', 1), ('live_readback_bound', 1),
     ('apply_authorized', True), ('pass', 1), ('python_runtime_sha256', 'x' * 64), ('state_projection_sha256', '0' * 64), ('runtime_snapshot_sha256', '0' * 64),
     ('base_validation_receipt_sha256', '0' * 64),
+    ('remote_state_comparison_policy', 'raw-json-v1'), ('remote_state_comparison_policy', None),
 ])
 def test_receipt_schema_and_every_authorizing_fact_fail_closed(field: str, value: Any) -> None:
     receipt = _receipt()
@@ -336,12 +338,14 @@ def test_receipt_schema_and_every_authorizing_fact_fail_closed(field: str, value
         _validate_receipt(receipt)
 
 
-@pytest.mark.parametrize('mutation', ['missing', 'extra', 'bad_hash', 'bad_observed', 'bad_window', 'expired', 'future'])
+@pytest.mark.parametrize('mutation', ['missing', 'missing_policy', 'extra', 'bad_hash', 'bad_observed', 'bad_window', 'expired', 'future'])
 def test_receipt_shape_hashes_and_expiry_fail_closed(mutation: str) -> None:
     receipt = _receipt()
     now = NOW
     if mutation == 'missing':
         receipt.pop('remote_state_sha256')
+    elif mutation == 'missing_policy':
+        receipt.pop('remote_state_comparison_policy')
     elif mutation == 'extra':
         receipt['extra'] = True
     elif mutation == 'bad_hash':
