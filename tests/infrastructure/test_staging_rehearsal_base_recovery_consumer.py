@@ -794,6 +794,8 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     assert path == '/trusted/tofu'
     assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
     assert environment == consumer._execution_environment(azure_cli=binding.tofu.with_name('az'), azure_config=Path('/operator/.azure'), azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution) and environment['HOME'] == os.devnull and environment['NETRC'] == os.devnull and environment['TF_CLI_CONFIG_FILE'] == os.devnull
+    assert environment['ARM_SUBSCRIPTION_ID'] == consumer.recovery.EXPECTED_SUBSCRIPTION_ID
+    assert 'ARM_TENANT_ID' not in environment
     with pytest.raises(OSError):
         os.fstat(plan_descriptor)
     marker = execution / consumer.CLAIM_NAME

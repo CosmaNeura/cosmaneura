@@ -249,6 +249,43 @@ def test_plan_json_comes_from_exact_binary(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+def test_state_json_uses_reopenable_protected_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = b'exact-state-bytes'
+    state_json = json.dumps(_valid_state_projection()).encode()
+    data_dir = tmp_path / "tofu-data"
+    data_dir.mkdir(mode=0o700)
+    observed_path: Path | None = None
+
+    def fake_run(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal observed_path
+        assert kwargs.get("pass_fds", ()) == ()
+        assert kwargs["data_dir"] == data_dir
+        assert arguments[-2] == "-json"
+        observed_path = Path(arguments[-1])
+        assert observed_path.is_absolute()
+        assert observed_path.parent == data_dir
+        metadata = os.lstat(observed_path)
+        assert stat.S_ISREG(metadata.st_mode)
+        assert metadata.st_uid == os.geteuid()
+        assert metadata.st_nlink == 1
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+        with observed_path.open("rb") as first:
+            assert first.read() == captured
+        with observed_path.open("rb") as second:
+            assert second.read() == captured
+        return subprocess.CompletedProcess(arguments, 0, state_json, b"")
+
+    monkeypatch.setattr(recovery, "_run_process", fake_run)
+
+    assert recovery._show_state(captured, tofu=TOFU, data_dir=data_dir) == state_json
+    assert observed_path is not None
+    assert not observed_path.exists()
+
+
 def test_real_opentofu_plan_decodes_from_captured_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -686,7 +723,7 @@ def test_cli_cloud_environment_is_pinned(tmp_path: Path, monkeypatch: pytest.Mon
         monkeypatch.setenv(name, "hostile")
     monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
     runtime_directory = DATA_DIR / recovery.TRUSTED_RUNTIME_DIRECTORY_NAME
-    environment = recovery._normalized_environment(data_dir=DATA_DIR); expected = {"ARM_ENVIRONMENT": "public", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_TENANT_ID": recovery.EXPECTED_TENANT_ID, "ARM_USE_AZUREAD": "true", "ARM_USE_CLI": "true", "AZURE_CONFIG_DIR": str(home / ".azure"), recovery.AZURE_CONFIG_BINDING_ENV: recovery._validated_azure_config(home)[1], "AZURE_CORE_COLLECT_TELEMETRY": "false", "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true", "AZURE_CORE_ONLY_SHOW_ERRORS": "true", "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_LOGGING_ENABLE_LOG_FILE": "false", "CHECKPOINT_DISABLE": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": os.devnull, "LANG": "C", "LC_ALL": "C", "NETRC": os.devnull, "PATH": f"{runtime_directory}:/usr/bin:/bin", "TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
+    environment = recovery._normalized_environment(data_dir=DATA_DIR); expected = {"ARM_ENVIRONMENT": "public", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_USE_AZUREAD": "true", "ARM_USE_CLI": "true", "AZURE_CONFIG_DIR": str(home / ".azure"), recovery.AZURE_CONFIG_BINDING_ENV: recovery._validated_azure_config(home)[1], "AZURE_CORE_COLLECT_TELEMETRY": "false", "AZURE_CORE_DISABLE_CONFIRM_PROMPT": "true", "AZURE_CORE_ONLY_SHOW_ERRORS": "true", "AZURE_EXTENSION_USE_DYNAMIC_INSTALL": "no", "AZURE_LOGGING_ENABLE_LOG_FILE": "false", "CHECKPOINT_DISABLE": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0", "HOME": os.devnull, "LANG": "C", "LC_ALL": "C", "NETRC": os.devnull, "PATH": f"{runtime_directory}:/usr/bin:/bin", "TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "TF_INPUT": "0"}
     expected.update(recovery._azure_cli_environment(runtime_directory))
     assert environment == expected
 
