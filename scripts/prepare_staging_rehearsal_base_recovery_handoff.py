@@ -15,6 +15,7 @@ if __name__ == '__main__' and (_bootstrap_sys.flags.isolated != 1 or _bootstrap_
     raise SystemExit(2)
 import argparse
 import email.utils
+import fcntl
 import hashlib
 import json
 import os
@@ -66,6 +67,8 @@ UUID_RE = re.compile('^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 BASE_TAGS = {'data-classification': 'non-phi-control-metadata', 'environment': 'staging', 'managed-by': 'opentofu', 'purpose': 'staging-restore-rehearsal-control'}
 AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az'), Path('/usr/bin/az'))
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '21bca04a407423324c55b0e12ed4670fa2c3f6190b74a22b3b2867b63da9b65b'
+MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 
 class HandoffError(ValueError):
     """A bounded refusal that never includes an Azure response."""
@@ -776,6 +779,102 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> str:
         _fail('handoff_source.changed')
     return _digest(source)
 
+def _open_verified_recovery_launcher() -> int:
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    source: int | None = None
+    snapshot_reader: int | None = None
+    snapshot_writer: int | None = None
+    descriptor: int | None = None
+    try:
+        source = os.open(recovery.LAUNCHER_PATH, flags)
+        before = os.fstat(source)
+        linked = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
+        def identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_size, value.st_mtime_ns, value.st_ctime_ns
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o755 or not 0 < before.st_size <= MAX_RECOVERY_LAUNCHER_BYTES or identity(before) != identity(linked):
+            _fail('plan_launcher.invalid')
+        digest = hashlib.sha256()
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(source, min(64 * 1024, remaining))
+            if not chunk:
+                _fail('plan_launcher.invalid')
+            chunks.append(chunk)
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if os.read(source, 1):
+            _fail('plan_launcher.invalid')
+        after = os.fstat(source)
+        linked_after = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
+        if identity(before) != identity(after) or identity(after) != identity(linked_after) or digest.hexdigest() != EXPECTED_RECOVERY_LAUNCHER_SHA256:
+            _fail('plan_launcher.invalid')
+        snapshot = b''.join(chunks)
+        if len(snapshot) != before.st_size or hashlib.sha256(snapshot).hexdigest() != EXPECTED_RECOVERY_LAUNCHER_SHA256:
+            _fail('plan_launcher.invalid')
+        snapshot_reader, snapshot_writer = os.pipe()
+        writer_flags = fcntl.fcntl(snapshot_writer, fcntl.F_GETFL)
+        fcntl.fcntl(snapshot_writer, fcntl.F_SETFL, writer_flags | os.O_NONBLOCK)
+        offset = 0
+        while offset < len(snapshot):
+            written = os.write(snapshot_writer, snapshot[offset:])
+            if written <= 0:
+                _fail('plan_launcher.invalid')
+            offset += written
+        os.close(snapshot_writer)
+        snapshot_writer = None
+        descriptor = fcntl.fcntl(snapshot_reader, getattr(fcntl, 'F_DUPFD_CLOEXEC', fcntl.F_DUPFD), 10)
+        os.close(snapshot_reader)
+        snapshot_reader = None
+        anonymous = os.fstat(descriptor)
+        if not stat.S_ISFIFO(anonymous.st_mode) or anonymous.st_uid != os.geteuid() or (fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE) != os.O_RDONLY:
+            _fail('plan_launcher.invalid')
+        result = descriptor
+        descriptor = None
+        return result
+    except (OSError, HandoffError):
+        _fail('plan_launcher.invalid')
+    finally:
+        for open_descriptor in (source, snapshot_reader, snapshot_writer, descriptor):
+            if open_descriptor is not None:
+                os.close(open_descriptor)
+
+def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str, existing_execution_dir: bool=False) -> Mapping[str, Any]:
+    descriptor = _open_verified_recovery_launcher()
+    try:
+        result = recovery._run_process(
+            [
+                '/bin/sh', '-c', f'. /dev/fd/{descriptor}', str(recovery.LAUNCHER_PATH),
+                '--mode', 'verify-existing' if existing_execution_dir else 'verify',
+                '--saved-plan', str(saved_plan), '--state-json', str(state_json),
+                '--execution-dir', str(execution_dir),
+                '--expected-source-commit', expected_source_commit,
+                '--expected-saved-plan-sha256', expected_saved_plan_sha256,
+            ],
+            cwd=recovery.REPOSITORY_ROOT,
+            timeout_seconds=900,
+            pass_fds=(descriptor,),
+            max_output_bytes=64 * 1024,
+        )
+    finally:
+        os.close(descriptor)
+    if result.returncode != 0 or result.stderr or not result.stdout:
+        _fail('plan_validation.refused')
+    try:
+        receipt = recovery._load_json_bytes(result.stdout, label='base validation receipt')
+    except recovery.RecoveryPlanError:
+        _fail('plan_validation.invalid')
+    if _canonical(receipt) + b'\n' != result.stdout:
+        _fail('plan_validation.invalid')
+    if receipt.get('launcher_execution_authenticated') is not False:
+        _fail('plan_validation.invalid')
+    authenticated = dict(receipt)
+    authenticated.update(
+        python_launcher_source_path=recovery.LAUNCHER_REPOSITORY_PATH,
+        python_launcher_sha256=EXPECTED_RECOVERY_LAUNCHER_SHA256,
+        launcher_execution_authenticated=True,
+    )
+    return authenticated
+
 def _trusted_reader(reader_factory: Callable[[], ReadOnlyArm], *, data_dir: Path, base: Mapping[str, Any]) -> ReadOnlyArm:
     if reader_factory is not AzureManagementReader: return reader_factory()
     runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
@@ -796,8 +895,17 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
         _fail('receipt_path.invalid')
     if expected_saved_plan_sha256 in recovery.REJECTED_SAVED_PLAN_SHA256S:
         _fail('saved_plan.rejected')
-    base = dict(recovery.revalidate_recovery_plan(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
-    if base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
+    base = dict(_revalidate_plan_via_launcher(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
+    recovery_python_binding = {
+        'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
+        'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
+        'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,
+        'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
+    }
+    if base.get('schema_version') != 3 or base.get('policy_id') != 'cosmaneura-staging-rehearsal-base-recovery-plan-v3' or any(base.get(name) != value for name, value in recovery_python_binding.items()) or base.get('python_executable_source_path') != str(recovery.EXPECTED_PYTHON_PATH) or base.get('python_framework_source_path') != str(recovery.EXPECTED_PYTHON_FRAMEWORK_PATH) or base.get('python_runtime_manifest_source_path') != recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH or base.get('python_launcher_source_path') != recovery.LAUNCHER_REPOSITORY_PATH or base.get('python_launcher_sha256') != EXPECTED_RECOVERY_LAUNCHER_SHA256 or base.get('launcher_execution_authenticated') is not True or base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
         _fail('plan_receipt.invalid')
     state_bytes = recovery._read_protected_file(state_json, label='state snapshot', required_mode=384)
     if _digest(state_bytes) != base.get('state_json_sha256'):

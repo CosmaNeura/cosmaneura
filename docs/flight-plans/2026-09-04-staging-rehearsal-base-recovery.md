@@ -117,6 +117,41 @@ The later isolated synthetic-only rehearsal remains mandatory.
    After a successful human apply, record post-apply state and ARM readback, then
    stop before any later rung.
 
+Create and revalidate the base-recovery plan only through the reviewed launcher.
+The launcher starts from an empty environment and authenticates the exact
+root-owned Apple Command Line Tools Python 3.9.6 runtime before Python starts.
+Its compact manifest binds the complete 2,006-entry runtime tree—including the
+interpreter, framework binary, pure-Python modules, extension modules, links,
+owners, modes, and absence of extra entries. Its fixed isolated Python bootstrap
+then no-follow opens the validator, bounded-reads and hashes it under pre/post
+identity checks, and compiles those same immutable in-memory bytes. The
+version-3 receipt binds the
+launcher, manifest, Python executable and framework, Python version, and full
+runtime tree in addition to OpenTofu and Azure CLI. A validator receipt remains
+a non-authoritative candidate (`launcher_execution_authenticated=false`). The
+preparer and final consumer each independently pin, no-follow open, hash, and
+copy the exact launcher bytes into a pathless, closed-writer pipe snapshot.
+They execute only that immutable read descriptor before promoting the fact to
+`true`; they never trust or execute mutable launcher bytes after the source
+metadata and digest checks. Direct, imported, `runpy`, virtual-environment,
+`uv run`, and non-isolated Python invocations cannot confer plan authority:
+
+```sh
+/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+  --mode create \
+  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
+  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX
+
+/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+  --mode verify \
+  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
+  --execution-dir /ABSOLUTE/OWNER_ONLY/NEW_EXECUTION_DIRECTORY \
+  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX \
+  --expected-saved-plan-sha256 REVIEWED_SAVED_PLAN_SHA256
+```
+
 The approved human runs the consumer directly from the exact protected-master
 checkout with an empty ambient environment. Replace the placeholders below with
 absolute owner-only artifact paths and independently recorded lowercase
@@ -169,8 +204,10 @@ posture mismatch. No production or PHI promotion is part of this plan.
   version emits either field, the validator requires it to be true.
 - The handoff preparer uses only bounded, no-proxy, no-redirect HTTPS GETs and
   never emits the Azure token or raw response bodies. It refuses an ambient
-  Python/import/transport environment and revalidates the exact runtime after
-  the live reads.
+  Python/import/transport environment, accepts a base receipt only after it has
+  independently authenticated and executed an immutable, anonymous snapshot
+  of the exact launcher bytes, and revalidates the exact runtime after the live
+  reads.
 - The human-only consumer also refuses ambient Python, dynamic-loader, proxy,
   OpenTofu, Azure, and Git overrides. Its final `execve` environment is a closed
   allowlist, and its immutable claim remains after an execution failure so the
