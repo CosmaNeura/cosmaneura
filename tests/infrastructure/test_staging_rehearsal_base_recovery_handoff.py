@@ -434,8 +434,8 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     reader = handoff.AzureManagementReader(azure_cli=az, runtime_data_dir=tmp_path, source_sha256='1' * 64, closure_sha256='2' * 64, runtime_snapshot_sha256='3' * 64)
     assert reader.azure_tls_ca_bundle_sha256 == 'c' * 64
     assert reader.azure_config_binding_sha256 == 'd' * 64
-    prefix = ['/usr/bin/env', '-i', f'HOME={tmp_path}']
-    assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and any(item.startswith('PYTHONPATH=') for item in command) and f'AZURE_EXTENSION_DIR={tmp_path / "azure-extensions"}' in command for command in commands))
+    prefix = ['/usr/bin/env', '-i']
+    assert all((command[:2] == prefix and f'HOME={os.devnull}' in command and f'HOME={tmp_path}' not in command and 'HTTPS_PROXY' not in ' '.join(command) and any(item.startswith('PYTHONPATH=') for item in command) and f'AZURE_EXTENSION_DIR={tmp_path / "azure-extensions"}' in command for command in commands))
     assert all(f'AZURE_CONFIG_DIR={tmp_path / ".azure"}' in command for command in commands)
     assert all(f"{handoff.recovery.AZURE_CONFIG_BINDING_ENV}={'d' * 64}" in command for command in commands)
     assert commands[0][-8:] == [str(az), 'account', 'show', '--subscription', handoff.SUBSCRIPTION, '--only-show-errors', '--output', 'json']
@@ -551,7 +551,7 @@ def test_cli_and_operator_home_ignore_ambient_path_and_home(monkeypatch: pytest.
         (home / '.azure').mkdir(mode=448)
         values = {'config': b'config', 'clouds.config': b'cloud', 'azureProfile.json': b'profile', 'msal_token_cache.json': b'token'}
         for name, value in values.items():
-            (home / '.azure' / name).write_bytes(value)
+            path = home / '.azure' / name; path.write_bytes(value); path.chmod(384)  # noqa: E702
         monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CONFIG_SHA256S', {name: hashlib.sha256(values[name]).hexdigest() for name in ('config', 'clouds.config')})
         monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
         monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())

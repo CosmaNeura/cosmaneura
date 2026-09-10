@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
+import fcntl
 import hashlib
 import io
 import json
@@ -48,6 +51,7 @@ EXPECTED_AZURE_CLI_VERSION_SHA256 = (
 EXPECTED_AZURE_CONFIG_SHA256S = {"config": "b8258f4205b85a305ac3811432073f56fddf4a63b4472485778bfde0f5a69553", "clouds.config": "2189f3b4fe7357a59f5fcdf8f6e35382784aa2862b5262e5dc89d8e615bfc3ed"}  # fmt: skip
 AZURE_CONFIG_FILES = ("config", "clouds.config", "azureProfile.json", "msal_token_cache.json")  # fmt: skip
 AZURE_CONFIG_BINDING_ENV = "COSMANEURA_AZURE_CONFIG_BINDING_SHA256"
+AZURE_CONFIG_LOCK_NAME = ".azure-config.lock"
 EXPECTED_AZURE_CLOUD_SHA256 = "1f30818094483f03f402801991b418f9065244acc8c871047ca46e5ce58b872f"  # fmt: skip
 EXPECTED_HOMEBREW_ROOT = Path("/opt/homebrew")
 EXPECTED_AZURE_CLI_FORMULAE: Mapping[str, str] = {
@@ -464,6 +468,83 @@ def _canonical_file_set_sha256(files: Mapping[str, bytes]) -> str:
     return digest.hexdigest()
 
 
+def _descriptor_acl_state(descriptor: int, *, label: str) -> tuple[bool, bool]:
+    if sys.platform == "darwin":
+        try:
+            library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+            get_acl = library.acl_get_fd_np
+            get_entry = library.acl_get_entry
+            get_tag = library.acl_get_tag_type
+            free_acl = library.acl_free
+            get_acl.argtypes = (ctypes.c_int, ctypes.c_int)
+            get_acl.restype = ctypes.c_void_p
+            get_entry.argtypes = (
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.c_void_p),
+            )
+            get_entry.restype = ctypes.c_int
+            get_tag.argtypes = (
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_int),
+            )
+            get_tag.restype = ctypes.c_int
+            free_acl.argtypes = (ctypes.c_void_p,)
+            free_acl.restype = ctypes.c_int
+        except (AttributeError, OSError) as exc:
+            raise RecoveryPlanError(f"{label} ACL could not be inspected") from exc
+        ctypes.set_errno(0)
+        acl = get_acl(descriptor, 0x00000100)
+        if not acl:
+            if ctypes.get_errno() == errno.ENOENT:
+                return False, False
+            raise RecoveryPlanError(f"{label} ACL could not be inspected")
+        has_allow = False
+        try:
+            entry = ctypes.c_void_p()
+            entry_id = 0
+            while True:
+                ctypes.set_errno(0)
+                result = get_entry(acl, entry_id, ctypes.byref(entry))
+                if result == -1 and ctypes.get_errno() == errno.EINVAL:
+                    break
+                if result != 0 or not entry:
+                    raise RecoveryPlanError(f"{label} ACL could not be inspected")
+                tag = ctypes.c_int()
+                if get_tag(entry, ctypes.byref(tag)) != 0 or tag.value not in {1, 2}:
+                    raise RecoveryPlanError(f"{label} ACL could not be inspected")
+                has_allow = has_allow or tag.value == 1
+                entry_id = -1
+        finally:
+            if free_acl(acl) != 0:
+                raise RecoveryPlanError(f"{label} ACL could not be released")
+        return True, has_allow
+    listxattr = getattr(os, "listxattr", None)
+    if listxattr is None:
+        raise RecoveryPlanError(f"{label} ACL could not be inspected")
+    try:
+        attributes = {os.fsdecode(value) for value in listxattr(descriptor)}
+    except (OSError, TypeError) as exc:
+        raise RecoveryPlanError(f"{label} ACL could not be inspected") from exc
+    has_acl = bool(
+        attributes
+        & {
+            "system.posix_acl_access",
+            "system.posix_acl_default",
+            "system.nfs4_acl",
+        }
+    )
+    return has_acl, has_acl
+
+
+def _require_safe_acl(
+    descriptor: int, *, label: str, allow_deny_only: bool = False
+) -> None:
+    has_acl, has_allow = _descriptor_acl_state(descriptor, label=label)
+    if has_allow or (has_acl and not allow_deny_only):
+        raise RecoveryPlanError(f"{label} ACL grants or inherits external access")
+
+
 def _reject_symlink_components(
     path: Path, *, label: str, allow_missing_leaf: bool = False
 ) -> None:
@@ -505,6 +586,11 @@ def _open_protected_directory(path: Path, *, label: str) -> int:
     if mode & 0o077 or mode & 0o700 != 0o700:
         os.close(descriptor)
         raise RecoveryPlanError(f"{label} must have mode 0700")
+    try:
+        _require_safe_acl(descriptor, label=label)
+    except RecoveryPlanError:
+        os.close(descriptor)
+        raise
     return descriptor
 
 
@@ -515,11 +601,15 @@ def _require_protected_directory(path: Path, *, label: str) -> None:
 def _create_protected_directory(path: Path, *, label: str) -> None:
     _reject_symlink_components(path, label=label, allow_missing_leaf=True)
     parent = _open_protected_directory(path.parent, label=f"{label} parent")
+    previous_umask: int | None = None
     try:
+        previous_umask = os.umask(0o077)
         os.mkdir(path.name, 0o700, dir_fd=parent)
     except OSError as exc:
         raise RecoveryPlanError(f"{label} must not already exist") from exc
     finally:
+        if previous_umask is not None:
+            os.umask(previous_umask)
         os.close(parent)
     _require_protected_directory(path, label=label)
 
@@ -733,6 +823,7 @@ def _runtime_file_record(
 # fmt: off
 def _azure_directory_identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, stat.S_IMODE(value.st_mode)
 def _azure_file_identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_size, value.st_mtime_ns, value.st_ctime_ns
+def _null_home_binding(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_rdev
 def _validated_azure_config(home: Path) -> tuple[Path, str]:
     if not home.is_absolute() or home != Path(os.path.abspath(home)): raise RecoveryPlanError("Azure CLI home path is invalid")  # noqa: E701
     directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
@@ -740,17 +831,21 @@ def _validated_azure_config(home: Path) -> tuple[Path, str]:
     try:
         home_descriptor = os.open(home, directory_flags); descriptors.append(home_descriptor); home_metadata = os.fstat(home_descriptor)  # noqa: E702
         config_descriptor = os.open(".azure", directory_flags, dir_fd=home_descriptor); descriptors.append(config_descriptor); config_metadata = os.fstat(config_descriptor)  # noqa: E702
-        if any(not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o022 or stat.S_IMODE(metadata.st_mode) & 0o500 != 0o500 for metadata in (home_metadata, config_metadata)): raise RecoveryPlanError("Azure CLI configuration path is unsafe")  # noqa: E701
+        if not stat.S_ISDIR(home_metadata.st_mode) or home_metadata.st_uid != os.geteuid() or stat.S_IMODE(home_metadata.st_mode) & 0o022 or stat.S_IMODE(home_metadata.st_mode) & 0o500 != 0o500 or not stat.S_ISDIR(config_metadata.st_mode) or config_metadata.st_uid != os.geteuid() or stat.S_IMODE(config_metadata.st_mode) != 0o700: raise RecoveryPlanError("Azure CLI configuration path is unsafe")  # noqa: E701
+        _require_safe_acl(home_descriptor, label="Azure CLI home", allow_deny_only=True); _require_safe_acl(config_descriptor, label="Azure CLI configuration directory")  # noqa: E702
         bindings: list[tuple[Any, ...]] = [("home", *_azure_directory_identity(home_metadata)), ("config", *_azure_directory_identity(config_metadata))]
         for name in AZURE_CONFIG_FILES:
             descriptor = os.open(name, file_flags, dir_fd=config_descriptor); descriptors.append(descriptor); before = os.fstat(descriptor); mode = stat.S_IMODE(before.st_mode)  # noqa: E702
-            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or mode & 0o7133 or not 0 < before.st_size <= MAXIMUM_AZURE_CONFIG_FILE_BYTES: raise RecoveryPlanError("Azure CLI configuration is not exact")  # noqa: E701
+            if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or mode not in {0o400, 0o600} or not 0 < before.st_size <= MAXIMUM_AZURE_CONFIG_FILE_BYTES: raise RecoveryPlanError("Azure CLI configuration is not exact")  # noqa: E701
+            _require_safe_acl(descriptor, label="Azure CLI configuration file")
             with os.fdopen(os.dup(descriptor), "rb") as stream: value = stream.read(MAXIMUM_AZURE_CONFIG_FILE_BYTES + 1)  # noqa: E701
             after = os.fstat(descriptor); linked = os.stat(name, dir_fd=config_descriptor, follow_symlinks=False)  # noqa: E702
+            _require_safe_acl(descriptor, label="Azure CLI configuration file")
             if len(value) != before.st_size or _azure_file_identity(before) != _azure_file_identity(after) or _azure_file_identity(before) != _azure_file_identity(linked): raise RecoveryPlanError("Azure CLI configuration changed while captured")  # noqa: E701
             digest = _sha256_bytes(value)
             if name in EXPECTED_AZURE_CONFIG_SHA256S and digest != EXPECTED_AZURE_CONFIG_SHA256S[name]: raise RecoveryPlanError("Azure CLI configuration is not exact")  # noqa: E701
             bindings.append((name, *_azure_file_identity(before), digest))
+        _require_safe_acl(home_descriptor, label="Azure CLI home", allow_deny_only=True); _require_safe_acl(config_descriptor, label="Azure CLI configuration directory")  # noqa: E702
         if _azure_directory_identity(home_metadata) != _azure_directory_identity(os.stat(home, follow_symlinks=False)) or _azure_directory_identity(config_metadata) != _azure_directory_identity(os.stat(".azure", dir_fd=home_descriptor, follow_symlinks=False)): raise RecoveryPlanError("Azure CLI configuration path changed")  # noqa: E701
         return home / ".azure", _sha256_bytes(_canonical_json_bytes(bindings))
     except OSError as exc:
@@ -758,6 +853,460 @@ def _validated_azure_config(home: Path) -> tuple[Path, str]:
     finally:
         for descriptor in reversed(descriptors): os.close(descriptor)  # noqa: E701
 # fmt: on
+
+
+def _open_azure_config_lock(parent: int) -> int:
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(AZURE_CONFIG_LOCK_NAME, flags, dir_fd=parent)
+        except FileNotFoundError:
+            previous_umask: int | None = None
+            try:
+                previous_umask = os.umask(0o077)
+                descriptor = os.open(
+                    AZURE_CONFIG_LOCK_NAME,
+                    flags | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent,
+                )
+            except FileExistsError:
+                descriptor = os.open(AZURE_CONFIG_LOCK_NAME, flags, dir_fd=parent)
+            finally:
+                if previous_umask is not None:
+                    os.umask(previous_umask)
+        metadata = os.fstat(descriptor)
+        linked = os.stat(AZURE_CONFIG_LOCK_NAME, dir_fd=parent, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size != 0
+            or _azure_file_identity(metadata) != _azure_file_identity(linked)
+        ):
+            raise RecoveryPlanError("Azure configuration lock is unsafe")
+        _require_safe_acl(descriptor, label="Azure configuration lock")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RecoveryPlanError("Azure configuration runtime is active") from exc
+        current = os.fstat(descriptor)
+        linked = os.stat(AZURE_CONFIG_LOCK_NAME, dir_fd=parent, follow_symlinks=False)
+        if _azure_file_identity(metadata) != _azure_file_identity(
+            current
+        ) or _azure_file_identity(metadata) != _azure_file_identity(linked):
+            raise RecoveryPlanError("Azure configuration lock changed")  # fmt: skip
+        return descriptor
+    except OSError as exc:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise RecoveryPlanError("Azure configuration lock is unavailable") from exc
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+
+
+def _mount_identity(descriptor: int) -> tuple[Any, ...]:
+    if sys.platform == "darwin":
+
+        class FileSystemId(ctypes.Structure):
+            _fields_ = [("values", ctypes.c_int32 * 2)]
+
+        class FileSystemStatistics(ctypes.Structure):
+            _fields_ = [
+                ("block_size", ctypes.c_uint32),
+                ("io_size", ctypes.c_int32),
+                ("blocks", ctypes.c_uint64),
+                ("blocks_free", ctypes.c_uint64),
+                ("blocks_available", ctypes.c_uint64),
+                ("files", ctypes.c_uint64),
+                ("files_free", ctypes.c_uint64),
+                ("filesystem_id", FileSystemId),
+                ("owner", ctypes.c_uint32),
+                ("filesystem_type", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32),
+                ("subtype", ctypes.c_uint32),
+                ("filesystem_type_name", ctypes.c_char * 16),
+                ("mounted_on", ctypes.c_char * 1024),
+                ("mounted_from", ctypes.c_char * 1024),
+                ("extended_flags", ctypes.c_uint32),
+                ("reserved", ctypes.c_uint32 * 7),
+            ]
+
+        library = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        fstatfs = library.fstatfs
+        fstatfs.argtypes = (ctypes.c_int, ctypes.POINTER(FileSystemStatistics))
+        fstatfs.restype = ctypes.c_int
+        filesystem = FileSystemStatistics()
+        ctypes.set_errno(0)
+        if fstatfs(descriptor, ctypes.byref(filesystem)) != 0:
+            raise OSError(ctypes.get_errno(), "fstatfs failed")
+        mounted_on = bytes(filesystem.mounted_on).split(b"\0", 1)[0]
+        mounted_from = bytes(filesystem.mounted_from).split(b"\0", 1)[0]
+        if not mounted_on.startswith(b"/") or not mounted_from:
+            raise OSError("mount identity is unavailable")
+        return (
+            "darwin",
+            *filesystem.filesystem_id.values,
+            mounted_on,
+            mounted_from,
+        )
+    if sys.platform.startswith("linux"):
+        info: int | None = None
+        value = b""
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            info = os.open(f"/proc/self/fdinfo/{descriptor}", flags)
+            value = os.read(info, 16 * 1024)
+            if os.read(info, 1):
+                raise OSError("mount identity is too large")
+        finally:
+            if info is not None:
+                os.close(info)
+        matches = re.findall(rb"^mnt_id:\s*([0-9]+)\s*$", value, re.MULTILINE)
+        if len(matches) != 1:
+            raise OSError("mount identity is unavailable")
+        return ("linux", int(matches[0]))
+    raise OSError("mount identity is unsupported")
+
+
+def _unlink_azure_config_entry(
+    parent: int,
+    name: str,
+    metadata: os.stat_result,
+    *,
+    expected_device: int,
+    expected_mount: tuple[Any, ...],
+) -> bool:
+    safe = True
+    descriptor: int | None = None
+    if stat.S_ISLNK(metadata.st_mode):
+        safe = False
+    elif stat.S_ISREG(metadata.st_mode):
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(name, flags, dir_fd=parent)
+            opened = os.fstat(descriptor)
+            linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != expected_device
+                or _mount_identity(descriptor) != expected_mount
+                or opened.st_uid != os.geteuid()
+                or opened.st_nlink != 1
+                or stat.S_IMODE(opened.st_mode) not in {0o400, 0o600}
+                or _azure_file_identity(metadata) != _azure_file_identity(opened)
+                or _azure_file_identity(metadata) != _azure_file_identity(linked)
+            ):
+                safe = False
+            try:
+                _require_safe_acl(descriptor, label="Azure configuration snapshot file")
+            except RecoveryPlanError:
+                safe = False
+        except OSError:
+            safe = False
+    else:
+        return False
+    try:
+        os.unlink(name, dir_fd=parent)
+    except OSError:
+        safe = False
+    if descriptor is not None:
+        try:
+            if os.fstat(descriptor).st_nlink != 0:
+                safe = False
+        except OSError:
+            safe = False
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                safe = False
+    return safe
+
+
+def _scrub_azure_config_directory(
+    descriptor: int,
+    *,
+    expected_device: int,
+    expected_mount: tuple[Any, ...],
+    remaining_entries: list[int],
+    depth: int,
+) -> bool:
+    try:
+        root = os.fstat(descriptor)
+        current_mount = _mount_identity(descriptor)
+    except OSError:
+        return False
+    if (
+        not stat.S_ISDIR(root.st_mode)
+        or root.st_uid != os.geteuid()
+        or root.st_dev != expected_device
+        or current_mount != expected_mount
+        or depth > 64
+    ):
+        return False
+    scrubbed = True
+    try:
+        os.fchmod(descriptor, 0o700)
+    except OSError:
+        scrubbed = False
+    try:
+        entries = os.listdir(descriptor)
+    except OSError:
+        return False
+    for entry in entries:
+        child: int | None = None
+        try:
+            if remaining_entries[0] <= 0:
+                return False
+            remaining_entries[0] -= 1
+            metadata = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
+            if metadata.st_uid != os.geteuid() or not (
+                stat.S_ISDIR(metadata.st_mode)
+                or stat.S_ISREG(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+            ):
+                scrubbed = False
+                continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if metadata.st_dev != expected_device:
+                    scrubbed = False
+                    continue
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+                child = os.open(entry, flags, dir_fd=descriptor)
+                opened = os.fstat(child)
+                linked = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
+                identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
+                if (
+                    not stat.S_ISDIR(opened.st_mode)
+                    or opened.st_dev != expected_device
+                    or opened.st_uid != os.geteuid()
+                    or identity != (opened.st_dev, opened.st_ino, opened.st_uid)
+                    or identity != (linked.st_dev, linked.st_ino, linked.st_uid)
+                ):
+                    scrubbed = False
+                    continue
+                if not _scrub_azure_config_directory(
+                    child,
+                    expected_device=expected_device,
+                    expected_mount=expected_mount,
+                    remaining_entries=remaining_entries,
+                    depth=depth + 1,
+                ):
+                    scrubbed = False
+                current = os.fstat(child)
+                linked = os.stat(entry, dir_fd=descriptor, follow_symlinks=False)
+                if (
+                    identity != (current.st_dev, current.st_ino, current.st_uid)
+                    or identity != (linked.st_dev, linked.st_ino, linked.st_uid)
+                    or os.listdir(child)
+                ):
+                    scrubbed = False
+                    continue
+                os.rmdir(entry, dir_fd=descriptor)
+            elif not _unlink_azure_config_entry(
+                descriptor,
+                entry,
+                metadata,
+                expected_device=expected_device,
+                expected_mount=expected_mount,
+            ):
+                scrubbed = False
+        except OSError:
+            scrubbed = False
+        finally:
+            if child is not None:
+                try:
+                    os.close(child)
+                except OSError:
+                    scrubbed = False
+    try:
+        if os.listdir(descriptor):
+            scrubbed = False
+    except OSError:
+        scrubbed = False
+    return scrubbed
+
+
+def _scrub_azure_config_snapshot(
+    descriptor: int,
+    *,
+    expected_device: int,
+    expected_mount: tuple[Any, ...],
+) -> bool:
+    return _scrub_azure_config_directory(
+        descriptor,
+        expected_device=expected_device,
+        expected_mount=expected_mount,
+        remaining_entries=[MAXIMUM_RUNTIME_CLOSURE_ENTRIES],
+        depth=0,
+    )
+
+
+def _remove_stale_azure_config_snapshots(runtime_directory: Path) -> None:
+    parent: int | None = None
+    lock: int | None = None
+    unsafe_found = False
+    changed_found = False
+    try:
+        parent = _open_protected_directory(
+            runtime_directory, label="trusted runtime directory"
+        )
+        parent_metadata = os.fstat(parent)
+        parent_identity = _azure_directory_identity(parent_metadata)
+        parent_device = parent_metadata.st_dev
+        parent_mount = _mount_identity(parent)
+        lock = _open_azure_config_lock(parent)
+        for name in sorted(os.listdir(parent)):
+            if re.fullmatch(r"\.azure-config-[A-Za-z0-9_-]{6,96}", name) is None:
+                continue
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_DIRECTORY", 0)
+            try:
+                descriptor = os.open(name, flags, dir_fd=parent)
+            except FileNotFoundError:
+                changed_found = True
+                continue
+            except OSError:
+                unsafe_found = True
+                continue
+            try:
+                metadata = os.fstat(descriptor)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or metadata.st_uid != os.geteuid()
+                ):
+                    unsafe_found = True
+                    continue
+                identity = (metadata.st_dev, metadata.st_ino, metadata.st_uid)
+                metadata_safe = stat.S_IMODE(metadata.st_mode) in {0o500, 0o700}
+                scrubbed = _scrub_azure_config_snapshot(
+                    descriptor,
+                    expected_device=parent_device,
+                    expected_mount=parent_mount,
+                )
+                try:
+                    _require_safe_acl(
+                        descriptor, label="stale Azure configuration snapshot"
+                    )
+                except RecoveryPlanError:
+                    metadata_safe = False
+                try:
+                    current = os.fstat(descriptor)
+                    linked = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                except FileNotFoundError:
+                    identity_safe = False
+                    changed_found = True
+                except OSError:
+                    identity_safe = False
+                    unsafe_found = True
+                else:
+                    identity_safe = identity == (
+                        current.st_dev,
+                        current.st_ino,
+                        current.st_uid,
+                    ) and identity == (linked.st_dev, linked.st_ino, linked.st_uid)
+                    if not identity_safe:
+                        changed_found = True
+                if scrubbed and identity_safe:
+                    try:
+                        os.rmdir(name, dir_fd=parent)
+                    except FileNotFoundError:
+                        changed_found = True
+                    except OSError:
+                        unsafe_found = True
+                    else:
+                        try:
+                            os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        except FileNotFoundError:
+                            pass
+                        except OSError:
+                            unsafe_found = True
+                        else:
+                            unsafe_found = True
+                if not scrubbed or not metadata_safe:
+                    unsafe_found = True
+            except OSError:
+                unsafe_found = True
+            finally:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    unsafe_found = True
+        verification: int | None = None
+        try:
+            verification = _open_protected_directory(
+                runtime_directory, label="trusted runtime directory"
+            )
+            if (
+                parent_identity != _azure_directory_identity(os.fstat(parent))
+                or parent_identity != _azure_directory_identity(os.fstat(verification))
+                or _mount_identity(parent) != parent_mount
+                or _mount_identity(verification) != parent_mount
+            ):
+                changed_found = True
+        except RecoveryPlanError:
+            changed_found = True
+        finally:
+            if verification is not None:
+                os.close(verification)
+        if unsafe_found:
+            raise RecoveryPlanError("stale Azure configuration snapshot is unsafe")
+        if changed_found:
+            raise RecoveryPlanError("stale Azure configuration snapshot changed")
+    except OSError as exc:
+        raise RecoveryPlanError(
+            "stale Azure configuration snapshot could not be removed"
+        ) from exc
+    finally:
+        if lock is not None:
+            os.close(lock)
+        if parent is not None:
+            os.close(parent)
+
+
+def _validated_null_home() -> tuple[int, ...]:
+    path = Path(os.devnull)
+    if path != Path("/dev/null"):
+        raise RecoveryPlanError("null HOME path is not exact")
+    _reject_symlink_components(path, label="null HOME")
+    current = Path(path.anchor)
+    for part in path.parts[1:-1]:
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except OSError as exc:
+            raise RecoveryPlanError("null HOME path is unavailable") from exc
+        if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise RecoveryPlanError("null HOME path is unsafe")
+    descriptor: int | None = None
+    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        linked = os.stat(path, follow_symlinks=False)
+        binding = _null_home_binding(before)
+        if (
+            not stat.S_ISCHR(before.st_mode)
+            or before.st_uid != 0
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o666
+            or binding != _null_home_binding(linked)
+        ):
+            raise RecoveryPlanError("null HOME device is unsafe")
+        return binding
+    except OSError as exc:
+        raise RecoveryPlanError("null HOME device is unavailable") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def _azure_cli_closure_entries(
@@ -907,6 +1456,8 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
         "AZURE_LOGGING_ENABLE_LOG_FILE": "false",
         "AZURE_CORE_USE_MSAL_HTTP_CACHE": "false",
         "DYLD_LIBRARY_PATH": ":".join(map(str, library_directories)),
+        "HOME": os.devnull,
+        "NETRC": os.devnull,
         "OPENSSL_CONF": os.devnull,
         "OPENSSL_MODULES": str(openssl_modules),
         "PYTHONHASHSEED": "0",
@@ -921,58 +1472,322 @@ def _azure_cli_environment(runtime_directory: Path) -> Mapping[str, str]:
 
 # fmt: off
 def _azure_cli_guard_source(runtime_directory: Path) -> str:
-    source = r"""import hashlib,json,os,runpy,shutil,stat,sys,tempfile
-EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__
+    source = r"""import ctypes,errno,fcntl,hashlib,json,os,secrets,signal,stat,subprocess,sys
+EXPECTED=__EXPECTED__;NAMES=__NAMES__;MAXIMUM=__MAXIMUM__;PARENT=__PARENT__;BINDING_ENV=__BINDING_ENV__;LOCK=__LOCK__;DIRECTORY_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);FILE_FLAGS=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);LOCK_FLAGS=os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);TERMINATION_SIGNALS=tuple(value for value in (getattr(signal,"SIGHUP",None),signal.SIGINT,signal.SIGTERM,getattr(signal,"SIGQUIT",None)) if value is not None);CLEANUP_LIMIT=50000;CLEANUP_DEPTH=64
 def directory_identity(value):return value.st_dev,value.st_ino,value.st_uid,stat.S_IMODE(value.st_mode)
 def file_identity(value):return value.st_dev,value.st_ino,value.st_uid,value.st_nlink,stat.S_IMODE(value.st_mode),value.st_size,value.st_mtime_ns,value.st_ctime_ns
+def mount_identity(fd):
+    if sys.platform=="darwin":
+        class FileSystemId(ctypes.Structure):_fields_=[("values",ctypes.c_int32*2)]
+        class FileSystemStatistics(ctypes.Structure):_fields_=[("block_size",ctypes.c_uint32),("io_size",ctypes.c_int32),("blocks",ctypes.c_uint64),("blocks_free",ctypes.c_uint64),("blocks_available",ctypes.c_uint64),("files",ctypes.c_uint64),("files_free",ctypes.c_uint64),("filesystem_id",FileSystemId),("owner",ctypes.c_uint32),("filesystem_type",ctypes.c_uint32),("flags",ctypes.c_uint32),("subtype",ctypes.c_uint32),("filesystem_type_name",ctypes.c_char*16),("mounted_on",ctypes.c_char*1024),("mounted_from",ctypes.c_char*1024),("extended_flags",ctypes.c_uint32),("reserved",ctypes.c_uint32*7)]
+        library=ctypes.CDLL("/usr/lib/libSystem.B.dylib",use_errno=True);fstatfs=library.fstatfs;fstatfs.argtypes=(ctypes.c_int,ctypes.POINTER(FileSystemStatistics));fstatfs.restype=ctypes.c_int;filesystem=FileSystemStatistics();ctypes.set_errno(0)
+        if fstatfs(fd,ctypes.byref(filesystem))!=0:raise OSError(ctypes.get_errno(),"fstatfs failed")
+        mounted_on=bytes(filesystem.mounted_on).split(b"\0",1)[0];mounted_from=bytes(filesystem.mounted_from).split(b"\0",1)[0]
+        if not mounted_on.startswith(b"/") or not mounted_from:raise OSError
+        return ("darwin",*filesystem.filesystem_id.values,mounted_on,mounted_from)
+    if sys.platform.startswith("linux"):
+        info=None
+        try:
+            info=os.open(f"/proc/self/fdinfo/{fd}",os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0));value=os.read(info,16384)
+            if os.read(info,1):raise OSError
+        finally:
+            if info is not None:os.close(info)
+        matches=[line.split(b":",1)[1].strip() for line in value.splitlines() if line.startswith(b"mnt_id:")]
+        if len(matches)!=1 or not matches[0].isdigit():raise OSError
+        return "linux",int(matches[0])
+    raise OSError
+def acl_state(fd):
+    if sys.platform=="darwin":
+        library=ctypes.CDLL("/usr/lib/libSystem.B.dylib",use_errno=True);get_acl=library.acl_get_fd_np;get_entry=library.acl_get_entry;get_tag=library.acl_get_tag_type;free_acl=library.acl_free
+        get_acl.argtypes=(ctypes.c_int,ctypes.c_int);get_acl.restype=ctypes.c_void_p;get_entry.argtypes=(ctypes.c_void_p,ctypes.c_int,ctypes.POINTER(ctypes.c_void_p));get_entry.restype=ctypes.c_int;get_tag.argtypes=(ctypes.c_void_p,ctypes.POINTER(ctypes.c_int));get_tag.restype=ctypes.c_int;free_acl.argtypes=(ctypes.c_void_p,);free_acl.restype=ctypes.c_int
+        ctypes.set_errno(0);acl=get_acl(fd,0x00000100)
+        if not acl:
+            if ctypes.get_errno()==errno.ENOENT:return False,False
+            raise OSError
+        has_allow=False
+        try:
+            entry=ctypes.c_void_p();entry_id=0
+            while True:
+                ctypes.set_errno(0);result=get_entry(acl,entry_id,ctypes.byref(entry))
+                if result==-1 and ctypes.get_errno()==errno.EINVAL:break
+                if result!=0 or not entry:raise OSError
+                tag=ctypes.c_int()
+                if get_tag(entry,ctypes.byref(tag))!=0 or tag.value not in (1,2):raise OSError
+                has_allow=has_allow or tag.value==1;entry_id=-1
+        finally:
+            if free_acl(acl)!=0:raise OSError
+        return True,has_allow
+    listxattr=getattr(os,"listxattr",None)
+    if listxattr is None:raise OSError
+    attributes={os.fsdecode(value) for value in listxattr(fd)};has_acl=bool(attributes&{"system.posix_acl_access","system.posix_acl_default","system.nfs4_acl"});return has_acl,has_acl
+def safe_acl(fd,deny_only=False):
+    has_acl,has_allow=acl_state(fd)
+    if has_allow or (has_acl and not deny_only):raise ValueError
+def validate_null_home():
+    if os.environ.get("HOME")!=os.devnull:raise ValueError
+    fd=None
+    try:
+        fd=os.open(os.devnull,os.O_RDWR|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0));before=os.fstat(fd);linked=os.stat(os.devnull,follow_symlinks=False);binding=(before.st_dev,before.st_ino,before.st_uid,before.st_nlink,stat.S_IMODE(before.st_mode),before.st_rdev)
+        if not stat.S_ISCHR(before.st_mode) or before.st_uid!=0 or before.st_nlink!=1 or stat.S_IMODE(before.st_mode)!=0o666 or binding!=(linked.st_dev,linked.st_ino,linked.st_uid,linked.st_nlink,stat.S_IMODE(linked.st_mode),linked.st_rdev):raise ValueError
+        return binding
+    finally:
+        if fd is not None:os.close(fd)
 def capture(source):
     if not os.path.isabs(source) or os.path.normpath(source)!=source or os.path.basename(source)!=".azure":raise ValueError
-    home=os.path.dirname(source);directory_flags=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0);file_flags=os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0);descriptors=[]
+    home=os.path.dirname(source);descriptors=[]
     try:
-        home_fd=os.open(home,directory_flags);descriptors.append(home_fd);home_metadata=os.fstat(home_fd)
-        config_fd=os.open(".azure",directory_flags,dir_fd=home_fd);descriptors.append(config_fd);config_metadata=os.fstat(config_fd)
-        if any(not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)&0o022 or stat.S_IMODE(metadata.st_mode)&0o500!=0o500 for metadata in (home_metadata,config_metadata)):raise ValueError
-        bindings=[("home",*directory_identity(home_metadata)),("config",*directory_identity(config_metadata))];captures={}
+        home_fd=os.open(home,DIRECTORY_FLAGS);descriptors.append(home_fd);home_metadata=os.fstat(home_fd)
+        config_fd=os.open(".azure",DIRECTORY_FLAGS,dir_fd=home_fd);descriptors.append(config_fd);config_metadata=os.fstat(config_fd)
+        if not stat.S_ISDIR(home_metadata.st_mode) or home_metadata.st_uid!=os.geteuid() or stat.S_IMODE(home_metadata.st_mode)&0o022 or stat.S_IMODE(home_metadata.st_mode)&0o500!=0o500 or not stat.S_ISDIR(config_metadata.st_mode) or config_metadata.st_uid!=os.geteuid() or stat.S_IMODE(config_metadata.st_mode)!=0o700:raise ValueError
+        safe_acl(home_fd,True);safe_acl(config_fd);bindings=[("home",*directory_identity(home_metadata)),("config",*directory_identity(config_metadata))];captures={}
         for name in NAMES:
-            fd=os.open(name,file_flags,dir_fd=config_fd);descriptors.append(fd);before=os.fstat(fd);mode=stat.S_IMODE(before.st_mode)
-            if not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or before.st_nlink!=1 or mode&0o7133 or not 0<before.st_size<=MAXIMUM:raise ValueError
+            fd=os.open(name,FILE_FLAGS,dir_fd=config_fd);descriptors.append(fd);before=os.fstat(fd);mode=stat.S_IMODE(before.st_mode)
+            if not stat.S_ISREG(before.st_mode) or before.st_uid!=os.geteuid() or before.st_nlink!=1 or mode not in (0o400,0o600) or not 0<before.st_size<=MAXIMUM:raise ValueError
+            safe_acl(fd)
             with os.fdopen(os.dup(fd),"rb") as stream:value=stream.read(MAXIMUM+1)
             after=os.fstat(fd);linked=os.stat(name,dir_fd=config_fd,follow_symlinks=False)
+            safe_acl(fd)
             if len(value)!=before.st_size or file_identity(before)!=file_identity(after) or file_identity(before)!=file_identity(linked):raise ValueError
             digest=hashlib.sha256(value).hexdigest()
             if name in EXPECTED and digest!=EXPECTED[name]:raise ValueError
             captures[name]=value;bindings.append((name,*file_identity(before),digest))
+        safe_acl(home_fd,True);safe_acl(config_fd)
         if directory_identity(home_metadata)!=directory_identity(os.stat(home,follow_symlinks=False)) or directory_identity(config_metadata)!=directory_identity(os.stat(".azure",dir_fd=home_fd,follow_symlinks=False)):raise ValueError
-        binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest()
-        return binding,captures
+        binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
-snapshot=None
-try:
-    expected_binding=os.environ.pop(BINDING_ENV)
-    if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
-    binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
-    if binding!=expected_binding:raise ValueError
-    snapshot=tempfile.mkdtemp(prefix=".azure-config-",dir=PARENT);snapshot_fd=os.open(snapshot,os.O_RDONLY|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_DIRECTORY",0))
+snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=cli_group=None;snapshot_created=False;snapshot_files=[]
+def unlink_entry(parent,name,metadata,expected_device,expected_mount,expected_file=None,removed=None):
+    ok=True;entry_fd=None
+    if stat.S_ISLNK(metadata.st_mode):ok=False
+    elif stat.S_ISREG(metadata.st_mode):
+        try:
+            entry_fd=os.open(name,FILE_FLAGS,dir_fd=parent);opened=os.fstat(entry_fd);linked=os.stat(name,dir_fd=parent,follow_symlinks=False)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_dev!=expected_device or mount_identity(entry_fd)!=expected_mount or opened.st_uid!=os.geteuid() or opened.st_nlink!=1 or stat.S_IMODE(opened.st_mode) not in (0o400,0o600) or file_identity(metadata)!=file_identity(opened) or file_identity(metadata)!=file_identity(linked):ok=False
+            if expected_file is not None:
+                retained_fd,identity=expected_file;retained=os.fstat(retained_fd)
+                if not stat.S_ISREG(retained.st_mode) or identity!=(retained.st_dev,retained.st_ino,retained.st_uid) or identity!=(opened.st_dev,opened.st_ino,opened.st_uid):ok=False
+            try:safe_acl(entry_fd)
+            except (OSError,ValueError):ok=False
+        except OSError:ok=False
+    else:return False
+    try:os.unlink(name,dir_fd=parent)
+    except OSError:ok=False
+    if entry_fd is not None:
+        try:
+            if os.fstat(entry_fd).st_nlink!=0:ok=False
+            elif expected_file is not None and ok and removed is not None:removed.add(name)
+        except OSError:ok=False
+        finally:
+            try:os.close(entry_fd)
+            except OSError:ok=False
+    return ok
+def scrub_directory(fd,expected_device,expected_mount,budget,depth,expected_files=None,removed=None):
+    try:root=os.fstat(fd);current_mount=mount_identity(fd)
+    except OSError:return False
+    if not stat.S_ISDIR(root.st_mode) or root.st_uid!=os.geteuid() or root.st_dev!=expected_device or current_mount!=expected_mount or depth>CLEANUP_DEPTH:return False
+    ok=True
+    try:os.fchmod(fd,0o700)
+    except OSError:ok=False
+    try:names=os.listdir(fd)
+    except OSError:return False
+    for name in names:
+        child=None
+        try:
+            if budget[0]<=0:return False
+            budget[0]-=1
+            metadata=os.stat(name,dir_fd=fd,follow_symlinks=False)
+            if metadata.st_uid!=os.geteuid() or not (stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)):ok=False;continue
+            if stat.S_ISDIR(metadata.st_mode):
+                if metadata.st_dev!=expected_device:ok=False;continue
+                child=os.open(name,DIRECTORY_FLAGS,dir_fd=fd);opened=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False);identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid)
+                if not stat.S_ISDIR(opened.st_mode) or opened.st_dev!=expected_device or opened.st_uid!=os.geteuid() or identity!=(opened.st_dev,opened.st_ino,opened.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):ok=False;continue
+                if not scrub_directory(child,expected_device,expected_mount,budget,depth+1,None,removed):ok=False
+                current=os.fstat(child);linked=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid) or os.listdir(child):ok=False;continue
+                os.rmdir(name,dir_fd=fd)
+            elif not unlink_entry(fd,name,metadata,expected_device,expected_mount,expected_files.get(name) if depth==0 and expected_files is not None else None,removed):ok=False
+        except OSError:ok=False
+        finally:
+            if child is not None:
+                try:os.close(child)
+                except OSError:ok=False
+    try:return ok and not os.listdir(fd)
+    except OSError:return False
+def scrub(fd,expected_files=None,removed=None):
+    try:parent_metadata=os.fstat(parent_fd);expected_mount=mount_identity(parent_fd)
+    except OSError:return False
+    return scrub_directory(fd,parent_metadata.st_dev,expected_mount,[CLEANUP_LIMIT],0,expected_files,removed)
+def remove_snapshot(name,fd,identity,expected_files=None):
+    removed=set()
+    if not scrub(fd,expected_files,removed):return False
+    if expected_files is not None and set(expected_files)!=removed:return False
     try:
-        metadata=os.fstat(snapshot_fd)
-        if metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)!=0o700:raise ValueError
+        current=os.fstat(fd);linked=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+        if identity!=(current.st_dev,current.st_ino,current.st_uid) or identity!=(linked.st_dev,linked.st_ino,linked.st_uid):return False
+        os.rmdir(name,dir_fd=parent_fd)
+        try:os.stat(name,dir_fd=parent_fd,follow_symlinks=False);return False
+        except FileNotFoundError:return True
+    except OSError:return False
+def close_snapshot_files():
+    ok=True
+    for _name,fd,identity in snapshot_files:
+        try:
+            metadata=os.fstat(fd)
+            if not stat.S_ISREG(metadata.st_mode) or identity!=(metadata.st_dev,metadata.st_ino,metadata.st_uid) or metadata.st_nlink!=0:ok=False
+        except OSError:ok=False
+        try:os.close(fd)
+        except OSError:ok=False
+    snapshot_files.clear();return ok
+def cleanup():
+    global snapshot_fd,parent_fd,lock_fd
+    ok=True;previous_mask=None
+    try:previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+    except (AttributeError,OSError):ok=False
+    if snapshot_created and snapshot_name is not None and parent_fd is not None:
+        created_fd=snapshot_fd;created_fd_was_established=created_fd is not None
+        try:
+            if created_fd is None:created_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd)
+            created_metadata=os.fstat(created_fd);created_identity=(created_metadata.st_dev,created_metadata.st_ino,created_metadata.st_uid)
+            if created_fd_was_established:
+                metadata_safe=stat.S_ISDIR(created_metadata.st_mode) and created_metadata.st_uid==os.geteuid() and stat.S_IMODE(created_metadata.st_mode)==0o700
+                expected_files={name:(fd,identity) for name,fd,identity in snapshot_files}
+                if not remove_snapshot(snapshot_name,created_fd,snapshot_identity if snapshot_identity is not None else created_identity,expected_files):raise ValueError
+                try:safe_acl(created_fd)
+                except (OSError,ValueError):metadata_safe=False
+                if not metadata_safe:ok=False
+            else:
+                created_linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
+                if not stat.S_ISDIR(created_metadata.st_mode) or created_metadata.st_uid!=os.geteuid() or stat.S_IMODE(created_metadata.st_mode)!=0o700 or created_identity!=(created_linked.st_dev,created_linked.st_ino,created_linked.st_uid) or os.listdir(created_fd) or snapshot_identity is not None:raise ValueError
+                safe_acl(created_fd)
+                if not remove_snapshot(snapshot_name,created_fd,created_identity):raise ValueError
+        except (OSError,ValueError):ok=False
+        finally:
+            if created_fd is not None:os.close(created_fd)
+            snapshot_fd=None
+    if not close_snapshot_files():ok=False
+    if parent_fd is not None:
+        try:os.close(parent_fd)
+        except OSError:ok=False
+        parent_fd=None
+    if lock_fd is not None:
+        try:os.close(lock_fd)
+        except OSError:ok=False
+        lock_fd=None
+    if previous_mask is not None and ok:signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
+    return ok
+def cleanup_until_complete():
+    interrupted=None
+    while True:
+        try:return cleanup(),interrupted
+        except SystemExit as error:
+            if interrupted is None:interrupted=error
+def valid_snapshot_name(name):
+    suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
+def terminate(signum,_frame):
+    if cli_group is not None:
+        try:os.killpg(cli_group,signal.SIGKILL)
+        except (ProcessLookupError,PermissionError):pass
+    raise SystemExit(128+signum)
+def stop_cli(child):
+    global cli_group
+    ok=True;previous_mask=None;returncode=None
+    try:previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+    except OSError:ok=False
+    try:os.killpg(child.pid,signal.SIGKILL)
+    except (ProcessLookupError,PermissionError):pass
+    except OSError:ok=False
+    try:returncode=child.wait()
+    except (OSError,ChildProcessError):ok=False
+    cli_group=None
+    if previous_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
+    return ok,returncode
+def run_cli():
+    global cli_group
+    child=None;launch_mask=None
+    try:
+        launch_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
+        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True,umask=0o077);cli_group=child.pid
+        finally:
+            if launch_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,launch_mask)
+        os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOWAIT);ok,returncode=stop_cli(child)
+    except BaseException:
+        if child is not None and cli_group is not None:stop_cli(child)
+        raise
+    if not ok or returncode is None:raise OSError
+    return 128-returncode if returncode<0 else returncode
+try:
+    try:
+        if not hasattr(signal,"pthread_sigmask"):raise ValueError
+        previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+        if any(value in previous_mask for value in TERMINATION_SIGNALS):raise ValueError
+        for value in TERMINATION_SIGNALS:signal.signal(value,terminate)
+        null_home_binding=validate_null_home();expected_binding=os.environ.pop(BINDING_ENV)
+        if len(expected_binding)!=64 or any(value not in "0123456789abcdef" for value in expected_binding):raise ValueError
+        binding,captures=capture(os.environ["AZURE_CONFIG_DIR"])
+        if binding!=expected_binding:raise ValueError
+        parent_fd=os.open(PARENT,DIRECTORY_FLAGS);parent_metadata=os.fstat(parent_fd);parent_mount_identity=mount_identity(parent_fd);safe_acl(parent_fd)
+        if parent_metadata.st_uid!=os.geteuid() or stat.S_IMODE(parent_metadata.st_mode)!=0o700:raise ValueError
+        lock_fd=os.open(LOCK,LOCK_FLAGS,dir_fd=parent_fd);lock_metadata=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
+        if not stat.S_ISREG(lock_metadata.st_mode) or lock_metadata.st_uid!=os.geteuid() or lock_metadata.st_nlink!=1 or stat.S_IMODE(lock_metadata.st_mode)!=0o600 or lock_metadata.st_size!=0 or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
+        safe_acl(lock_fd);fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB);lock_current=os.fstat(lock_fd);lock_linked=os.stat(LOCK,dir_fd=parent_fd,follow_symlinks=False)
+        if file_identity(lock_metadata)!=file_identity(lock_current) or file_identity(lock_metadata)!=file_identity(lock_linked):raise ValueError
+        stale_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS);stale_failed=False
+        try:
+            for stale_name in sorted(os.listdir(parent_fd)):
+                if not valid_snapshot_name(stale_name):continue
+                stale_fd=None
+                try:
+                    stale_fd=os.open(stale_name,DIRECTORY_FLAGS,dir_fd=parent_fd);stale_metadata=os.fstat(stale_fd)
+                    if not stat.S_ISDIR(stale_metadata.st_mode) or stale_metadata.st_uid!=os.geteuid():raise ValueError
+                    stale_metadata_safe=stat.S_IMODE(stale_metadata.st_mode) in (0o500,0o700);stale_identity=(stale_metadata.st_dev,stale_metadata.st_ino,stale_metadata.st_uid)
+                    if not remove_snapshot(stale_name,stale_fd,stale_identity):raise ValueError
+                    try:safe_acl(stale_fd)
+                    except (OSError,ValueError):stale_metadata_safe=False
+                    if not stale_metadata_safe:raise ValueError
+                except (OSError,ValueError):stale_failed=True
+                finally:
+                    if stale_fd is not None:
+                        try:os.close(stale_fd)
+                        except OSError:stale_failed=True
+            if stale_failed:raise ValueError
+        finally:signal.pthread_sigmask(signal.SIG_SETMASK,stale_mask)
+        creation_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS);previous_umask=os.umask(0o077)
+        try:
+            for _ in range(16):
+                snapshot_name=".azure-config-"+secrets.token_hex(16)
+                try:os.mkdir(snapshot_name,0o700,dir_fd=parent_fd);snapshot_created=True;break
+                except FileExistsError:continue
+            else:raise ValueError
+            snapshot=os.path.join(PARENT,snapshot_name);snapshot_fd=os.open(snapshot_name,DIRECTORY_FLAGS,dir_fd=parent_fd);metadata=os.fstat(snapshot_fd);snapshot_identity=(metadata.st_dev,metadata.st_ino,metadata.st_uid);linked=os.stat(snapshot_name,dir_fd=parent_fd,follow_symlinks=False)
+            if metadata.st_uid!=os.geteuid() or metadata.st_dev!=parent_metadata.st_dev or mount_identity(snapshot_fd)!=parent_mount_identity or stat.S_IMODE(metadata.st_mode)!=0o700 or directory_identity(metadata)!=directory_identity(linked):raise ValueError
+            safe_acl(snapshot_fd)
+        finally:os.umask(previous_umask);signal.pthread_sigmask(signal.SIG_SETMASK,creation_mask)
         for name,value in captures.items():
             fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_CLOEXEC",0)|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=snapshot_fd)
             try:
-                offset=0
+                safe_acl(fd);offset=0
                 while offset<len(value):offset+=os.write(fd,value[offset:])
-                os.fchmod(fd,0o600);os.fsync(fd)
-            finally:os.close(fd)
-        os.fsync(snapshot_fd)
-    finally:os.close(snapshot_fd)
-except BaseException:
-    if snapshot is not None:shutil.rmtree(snapshot,ignore_errors=True)
-    print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
-os.environ["AZURE_CONFIG_DIR"]=snapshot;sys.argv=["az",*sys.argv[1:]]
-try:runpy.run_module("azure.cli",run_name="__main__")
-finally:shutil.rmtree(snapshot,ignore_errors=True)
+                os.fchmod(fd,0o600);os.fsync(fd);written=os.fstat(fd)
+                if stat.S_IMODE(written.st_mode)!=0o600 or written.st_uid!=os.geteuid() or written.st_nlink!=1:raise ValueError
+                safe_acl(fd);snapshot_files.append((name,fd,(written.st_dev,written.st_ino,written.st_uid)));fd=None
+            finally:
+                if fd is not None:os.close(fd)
+        os.fsync(snapshot_fd);os.environ["AZURE_CONFIG_DIR"]=snapshot;sys.argv=["az",*sys.argv[1:]]
+    except BaseException:
+        print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    try:
+        if validate_null_home()!=null_home_binding:raise ValueError
+        try:returncode=run_cli()
+        finally:
+            if validate_null_home()!=null_home_binding:raise ValueError
+    except (OSError,ValueError):print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    raise SystemExit(returncode)
+finally:
+    cleanup_ok,cleanup_interrupted=cleanup_until_complete()
+    if not cleanup_ok:print("azure_cli_guard_refused",file=sys.stderr);raise SystemExit(2)
+    if cleanup_interrupted is not None:raise cleanup_interrupted
 """
-    return source.replace("__EXPECTED__", repr(dict(EXPECTED_AZURE_CONFIG_SHA256S))).replace("__NAMES__", repr(AZURE_CONFIG_FILES)).replace("__MAXIMUM__", str(MAXIMUM_AZURE_CONFIG_FILE_BYTES)).replace("__PARENT__", repr(str(runtime_directory))).replace("__BINDING_ENV__", repr(AZURE_CONFIG_BINDING_ENV))
+    return source.replace("__EXPECTED__", repr(dict(EXPECTED_AZURE_CONFIG_SHA256S))).replace("__NAMES__", repr(AZURE_CONFIG_FILES)).replace("__MAXIMUM__", str(MAXIMUM_AZURE_CONFIG_FILE_BYTES)).replace("__PARENT__", repr(str(runtime_directory))).replace("__BINDING_ENV__", repr(AZURE_CONFIG_BINDING_ENV)).replace("__LOCK__", repr(AZURE_CONFIG_LOCK_NAME))
 def _azure_cli_wrapper(runtime_directory: Path) -> bytes:
     homebrew = runtime_directory / "homebrew"
     python_version = EXPECTED_AZURE_CLI_FORMULAE["python@3.14"]
@@ -1314,7 +2129,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
     )
     azure_cli_directory = (
         runtime_directory
-        if runtime_directory is not None and runtime_directory.is_dir()
+        if runtime_directory is not None
         else EXPECTED_AZURE_CLI_PATH.parent
     )
     environment = {
@@ -1333,9 +2148,10 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_TERMINAL_PROMPT": "0",
-        "HOME": str(home),
+        "HOME": os.devnull,
         "LANG": "C",
         "LC_ALL": "C",
+        "NETRC": os.devnull,
         "PATH": f"{azure_cli_directory}:/usr/bin:/bin",
         "TF_CLI_CONFIG_FILE": os.devnull,
         "TF_IN_AUTOMATION": "1",
@@ -1345,7 +2161,7 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         azure_config_directory, azure_config_binding = _validated_azure_config(home)
         environment.update({"AZURE_CONFIG_DIR": str(azure_config_directory), AZURE_CONFIG_BINDING_ENV: azure_config_binding})  # noqa: E702  # fmt: skip
         environment["TF_DATA_DIR"] = str(data_dir)
-        if runtime_directory is not None and runtime_directory.is_dir():
+        if runtime_directory is not None:
             environment.update(_azure_cli_environment(runtime_directory))
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
     if ssh_auth_sock:
@@ -1369,11 +2185,21 @@ def _run_process(
     max_output_bytes: int = 8 * 1024 * 1024,
     data_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
+    null_home_binding = _validated_null_home()
+    if data_dir is not None:
+        _require_protected_directory(
+            data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME,
+            label="trusted runtime directory",
+        )
+    environment = _normalized_environment(data_dir=data_dir)
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed before execution")
+    process: subprocess.Popen[bytes] | None = None
     try:
         process = subprocess.Popen(
             list(arguments),
             cwd=cwd,
-            env=_normalized_environment(data_dir=data_dir),
+            env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1384,6 +2210,8 @@ def _run_process(
         )
     except OSError as exc:
         raise RecoveryPlanError("required local command did not complete") from exc
+    if process is None:
+        raise RecoveryPlanError("required local command did not complete")
     assert process.stdout is not None
     assert process.stderr is not None
     stdout_fd = process.stdout.fileno()
@@ -1428,6 +2256,8 @@ def _run_process(
     stderr = b"".join(streams[stderr_fd])
     process.stdout.close()
     process.stderr.close()
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed during execution")
     return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
 
 
@@ -1456,6 +2286,16 @@ def _resolve_and_verify_tofu() -> Path:
 
 
 def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
+    previous_umask = os.umask(0o077)
+    try:
+        return _snapshot_and_verify_runtime_with_protected_umask(data_dir=data_dir)
+    finally:
+        os.umask(previous_umask)
+
+
+def _snapshot_and_verify_runtime_with_protected_umask(
+    *, data_dir: Path
+) -> RuntimeSnapshot:
     _require_protected_directory(data_dir, label="OpenTofu data directory")
     runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
     if runtime_directory.exists():
@@ -1466,6 +2306,7 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         _create_protected_directory(
             runtime_directory, label="trusted runtime directory"
         )
+    _remove_stale_azure_config_snapshots(runtime_directory)
     for name in ("azure-extensions",):
         directory = runtime_directory / name
         if directory.exists():
@@ -1474,6 +2315,7 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
             _create_protected_directory(directory, label=f"trusted {name}")
         if any(directory.iterdir()):
             raise RecoveryPlanError(f"trusted {name} directory is not empty")
+    null_home_binding = _validated_null_home()
     tofu = _snapshot_executable(
         EXPECTED_TOFU_PATH,
         runtime_directory / "tofu",
@@ -1490,7 +2332,13 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         runtime_names = {entry.name for entry in runtime_directory.iterdir()}
     except OSError as exc:
         raise RecoveryPlanError("trusted runtime directory is unavailable") from exc
-    if runtime_names != {"az", "azure-extensions", "homebrew", "tofu"}:
+    if runtime_names != {
+        AZURE_CONFIG_LOCK_NAME,
+        "az",
+        "azure-extensions",
+        "homebrew",
+        "tofu",
+    }:
         raise RecoveryPlanError("trusted runtime executable set is not exact")
     _verify_tofu_version(tofu, data_dir=data_dir)
     azure_version = _run_process(
@@ -1517,6 +2365,8 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
     )
     if azure_cloud.returncode != 0 or _sha256_bytes(_canonical_json_bytes(_load_json_bytes(azure_cloud.stdout, label="Azure cloud output"))) != EXPECTED_AZURE_CLOUD_SHA256:  # fmt: skip
         raise RecoveryPlanError("the Azure cloud manifest is not pinned")
+    if _validated_null_home() != null_home_binding:
+        raise RecoveryPlanError("null HOME changed during runtime validation")
     _validate_runtime_snapshot(
         tofu, label="OpenTofu", expected_sha256=EXPECTED_TOFU_SHA256
     )
@@ -1528,7 +2378,8 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
         _canonical_json_bytes(
             {
                 "azure_cli_closure_sha256": azure_cli_closure_sha256,
-                "azure_cli_config_policy": "exact-config-empty-extensions-v1",
+                "azure_cli_config_policy": "private-config-null-home-v4",
+                "null_home_binding": null_home_binding,
                 "azure_cloud_sha256": EXPECTED_AZURE_CLOUD_SHA256,
                 "azure_cli_wrapper_sha256": wrapper_sha256,
                 "open_tofu_sha256": EXPECTED_TOFU_SHA256,

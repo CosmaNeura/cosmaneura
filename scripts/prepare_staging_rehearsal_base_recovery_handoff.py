@@ -335,7 +335,7 @@ class AzureManagementReader:
         home, azure_config, binding = _operator_paths()
         if home != self._home or azure_config != self._azure_config or binding != self.azure_config_binding_sha256: _fail('azure_runtime.changed')
         path = ':'.join(dict.fromkeys((str(self._az.parent), '/usr/bin', '/bin')))
-        command = ['/usr/bin/env', '-i', f'HOME={home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={azure_config}', f'{recovery.AZURE_CONFIG_BINDING_ENV}={binding}', *(f'{name}={value}' for name, value in recovery._azure_cli_environment(self._az.parent).items()), str(self._az), *arguments, '--only-show-errors', '--output', 'json']
+        command = ['/usr/bin/env', '-i', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={azure_config}', f'{recovery.AZURE_CONFIG_BINDING_ENV}={binding}', *(f'{name}={value}' for name, value in recovery._azure_cli_environment(self._az.parent).items()), str(self._az), *arguments, '--only-show-errors', '--output', 'json']
         timeout = 60.0
         if self._action_window_started:
             remaining = self._deadline - time.monotonic()
