@@ -67,7 +67,7 @@ UUID_RE = re.compile('^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 BASE_TAGS = {'data-classification': 'non-phi-control-metadata', 'environment': 'staging', 'managed-by': 'opentofu', 'purpose': 'staging-restore-rehearsal-control'}
 AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az'), Path('/usr/bin/az'))
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '88de309f7083f8ffac3c8705ad5bb575d5429033915c3cfc696615fa32e3e355'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '21bca04a407423324c55b0e12ed4670fa2c3f6190b74a22b3b2867b63da9b65b'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 
 class HandoffError(ValueError):

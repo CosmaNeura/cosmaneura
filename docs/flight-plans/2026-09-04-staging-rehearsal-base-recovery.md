@@ -122,9 +122,10 @@ The launcher starts from an empty environment and authenticates the exact
 root-owned Apple Command Line Tools Python 3.9.6 runtime before Python starts.
 Its compact manifest binds the complete 2,006-entry runtime tree—including the
 interpreter, framework binary, pure-Python modules, extension modules, links,
-owners, modes, and absence of extra entries. It then executes an unlinked,
-digest-verified snapshot of the validator from the same open file object with
-isolated imports and site loading disabled. The version-3 receipt binds the
+owners, modes, and absence of extra entries. Its fixed isolated Python bootstrap
+then no-follow opens the validator, bounded-reads and hashes it under pre/post
+identity checks, and compiles those same immutable in-memory bytes. The
+version-3 receipt binds the
 launcher, manifest, Python executable and framework, Python version, and full
 runtime tree in addition to OpenTofu and Azure CLI. A validator receipt remains
 a non-authoritative candidate (`launcher_execution_authenticated=false`). The

@@ -10,6 +10,9 @@ _CANONICAL_VALIDATOR_PATH = (
     "/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910/"
     "scripts/validate_staging_rehearsal_base_recovery_plan.py"
 )
+_AUTHENTICATED_SOURCE_NAME = (
+    "/authenticated-memory/staging-rehearsal-base-recovery-validator.py"
+)
 if __name__ == "__main__" and (
     _bootstrap_sys.flags.isolated != 1
     or _bootstrap_sys.flags.ignore_environment != 1
@@ -21,9 +24,9 @@ if __name__ == "__main__" and (
     )
     or _bootstrap_sys.hexversion != 50_923_248
     or _bootstrap_sys._xoptions
-    or __file__ != "/dev/fd/3"
+    or __file__ != _AUTHENTICATED_SOURCE_NAME
     or not _bootstrap_sys.argv
-    or _bootstrap_sys.argv[0] != "/dev/fd/3"
+    or _bootstrap_sys.argv[0] != _AUTHENTICATED_SOURCE_NAME
 ):
     _bootstrap_sys.stderr.write(
         "recovery_plan_refused: python bootstrap is not isolated\n"
@@ -916,9 +919,9 @@ def _require_root_owned_runtime_path(
 def _require_launcher_bootstrap() -> None:
     if (
         __name__ != "__main__"
-        or __file__ != "/dev/fd/3"
+        or __file__ != _AUTHENTICATED_SOURCE_NAME
         or not sys.argv
-        or sys.argv[0] != "/dev/fd/3"
+        or sys.argv[0] != _AUTHENTICATED_SOURCE_NAME
         or sys.flags.isolated != 1
         or sys.flags.ignore_environment != 1
         or sys.flags.no_site != 1

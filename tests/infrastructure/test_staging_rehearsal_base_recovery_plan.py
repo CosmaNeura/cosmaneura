@@ -302,6 +302,10 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
     assert recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256 in launcher_source
     assert recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 in launcher_source
+    assert '/bin/cp' not in launcher_source
+    assert 'exec 3<' not in launcher_source
+    assert 'source = b"".join(chunks)' in launcher_source
+    assert 'exec(compile(source, source_name' in launcher_source
     manifest = dict(
         line.split("=", 1)
         for line in recovery.PYTHON_RUNTIME_MANIFEST_PATH.read_text(
@@ -381,6 +385,28 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
     assert imported.returncode != 0
     assert imported.stdout == b""
     assert b"authenticated Python launcher was bypassed" in imported.stderr
+
+    descriptor = os.open(SCRIPT, os.O_RDONLY)
+    try:
+        old_fd_bootstrap = (
+            'import sys;sys.argv[0]="/dev/fd/3";'
+            f'source=open({descriptor},"rb",closefd=False).read();'
+            'namespace={"__name__":"__main__","__file__":"/dev/fd/3",'
+            '"__builtins__":__builtins__};'
+            'exec(compile(source,"/dev/fd/3","exec",dont_inherit=True),namespace)'
+        )
+        reproduced = subprocess.run(
+            [str(recovery.EXPECTED_PYTHON_PATH), "-IS", "-c", old_fd_bootstrap],
+            check=False,
+            capture_output=True,
+            env={},
+            pass_fds=(descriptor,),
+        )
+    finally:
+        os.close(descriptor)
+    assert reproduced.returncode == 2
+    assert reproduced.stdout == b""
+    assert b"python bootstrap is not isolated" in reproduced.stderr
 
     with pytest.raises(recovery.RecoveryPlanError, match="launcher was bypassed"):
         recovery.create_and_validate_recovery_plan(
@@ -497,6 +523,53 @@ def test_python_launcher_rejects_extension_dependency_mutation(
     assert mutated.returncode == 2
     assert mutated.stdout == b""
     assert mutated.stderr == b"recovery_plan_launcher_refused\n"
+
+
+def test_python_launcher_executes_in_memory_validator_after_source_inode_mutation(
+    tmp_path: Path,
+) -> None:
+    launcher, validator, _ = _relocated_launcher(tmp_path)
+    marker = tmp_path / "validator-read"
+    reviewed = b'print("authenticated-validator")\n'
+    validator.write_bytes(reviewed)
+    validator.chmod(0o644)
+    original_inode = validator.stat().st_ino
+    launcher_source = launcher.read_text(encoding="utf-8")
+    launcher_source = _replace_launcher_assignment(
+        launcher_source, "validator_sha256", hashlib.sha256(reviewed).hexdigest()
+    )
+    launcher_source = launcher_source.replace(
+        "import sys\n\ndef refuse():",
+        "import sys\nimport time\n\ndef refuse():",
+        1,
+    )
+    launcher_source = launcher_source.replace(
+        'source_name = "/authenticated-memory/staging-rehearsal-base-recovery-validator.py"',
+        f'open({json.dumps(str(marker))}, "wb").close()\ntime.sleep(0.5)\n\nsource_name = "/authenticated-memory/staging-rehearsal-base-recovery-validator.py"',
+        1,
+    )
+    launcher.write_text(launcher_source, encoding="utf-8")
+    launcher.chmod(0o755)
+
+    writer = os.open(validator, os.O_WRONLY)
+    try:
+        process = subprocess.Popen(
+            [str(launcher)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env={}
+        )
+        deadline = time.monotonic() + 5
+        while not marker.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert marker.exists()
+        os.ftruncate(writer, 0)
+        assert os.write(writer, b'raise SystemExit(99)\n') == 21
+        os.fsync(writer)
+        assert validator.stat().st_ino == original_inode
+        stdout, stderr = process.communicate(timeout=5)
+    finally:
+        os.close(writer)
+    assert process.returncode == 0
+    assert stdout == b"authenticated-validator\n"
+    assert stderr == b""
 
 
 def test_plan_json_comes_from_exact_binary(monkeypatch: pytest.MonkeyPatch) -> None:
