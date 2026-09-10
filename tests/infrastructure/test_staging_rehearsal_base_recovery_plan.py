@@ -249,6 +249,43 @@ def test_plan_json_comes_from_exact_binary(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+def test_state_json_uses_reopenable_protected_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = b'exact-state-bytes'
+    state_json = json.dumps(_valid_state_projection()).encode()
+    data_dir = tmp_path / "tofu-data"
+    data_dir.mkdir(mode=0o700)
+    observed_path: Path | None = None
+
+    def fake_run(
+        arguments: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[bytes]:
+        nonlocal observed_path
+        assert kwargs.get("pass_fds", ()) == ()
+        assert kwargs["data_dir"] == data_dir
+        assert arguments[-2] == "-json"
+        observed_path = Path(arguments[-1])
+        assert observed_path.is_absolute()
+        assert observed_path.parent == data_dir
+        metadata = os.lstat(observed_path)
+        assert stat.S_ISREG(metadata.st_mode)
+        assert metadata.st_uid == os.geteuid()
+        assert metadata.st_nlink == 1
+        assert stat.S_IMODE(metadata.st_mode) == 0o600
+        with observed_path.open("rb") as first:
+            assert first.read() == captured
+        with observed_path.open("rb") as second:
+            assert second.read() == captured
+        return subprocess.CompletedProcess(arguments, 0, state_json, b"")
+
+    monkeypatch.setattr(recovery, "_run_process", fake_run)
+
+    assert recovery._show_state(captured, tofu=TOFU, data_dir=data_dir) == state_json
+    assert observed_path is not None
+    assert not observed_path.exists()
+
+
 def test_real_opentofu_plan_decodes_from_captured_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

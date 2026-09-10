@@ -2427,25 +2427,125 @@ def _show_saved_plan(plan_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
 
 
 def _show_state(state_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
-    with tempfile.TemporaryFile(prefix="cosmaneura-recovery-state-") as state_file:
-        state_file.write(state_bytes)
-        state_file.flush()
-        state_file.seek(0)
-        descriptor = state_file.fileno()
-        result = _run_process(
-            [
-                str(tofu),
-                f"-chdir={REHEARSAL_ROOT}",
-                "show",
-                "-json",
-                f"/dev/fd/{descriptor}",
-            ],
-            cwd=REPOSITORY_ROOT,
-            timeout_seconds=120,
-            pass_fds=(descriptor,),
-            max_output_bytes=MAXIMUM_PLAN_JSON_BYTES,
-            data_dir=data_dir,
-        )
+    _require_protected_directory(data_dir, label="OpenTofu data directory")
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w+b",
+            prefix=".cosmaneura-recovery-state-",
+            dir=data_dir,
+        ) as state_file:
+            descriptor = state_file.fileno()
+            os.fchmod(descriptor, 0o600)
+            state_file.write(state_bytes)
+            state_file.flush()
+            os.fsync(descriptor)
+            state_file.seek(0)
+            state_path = Path(state_file.name)
+            before = os.fstat(descriptor)
+            linked_before = os.lstat(state_path)
+            identity = (
+                before.st_dev,
+                before.st_ino,
+                before.st_uid,
+                before.st_nlink,
+                stat.S_IMODE(before.st_mode),
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ctime_ns,
+            )
+            linked_identity = (
+                linked_before.st_dev,
+                linked_before.st_ino,
+                linked_before.st_uid,
+                linked_before.st_nlink,
+                stat.S_IMODE(linked_before.st_mode),
+                linked_before.st_size,
+                linked_before.st_mtime_ns,
+                linked_before.st_ctime_ns,
+            )
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid != os.geteuid()
+                or before.st_nlink != 1
+                or stat.S_IMODE(before.st_mode) != 0o600
+                or before.st_size != len(state_bytes)
+                or identity != linked_identity
+            ):
+                raise RecoveryPlanError("temporary recovery state is not protected")
+            _require_safe_acl(descriptor, label="temporary recovery state")
+            result = _run_process(
+                [
+                    str(tofu),
+                    f"-chdir={REHEARSAL_ROOT}",
+                    "show",
+                    "-json",
+                    str(state_path),
+                ],
+                cwd=REPOSITORY_ROOT,
+                timeout_seconds=120,
+                max_output_bytes=MAXIMUM_PLAN_JSON_BYTES,
+                data_dir=data_dir,
+            )
+            after = os.fstat(descriptor)
+            linked_after = os.lstat(state_path)
+            after_identity = (
+                after.st_dev,
+                after.st_ino,
+                after.st_uid,
+                after.st_nlink,
+                stat.S_IMODE(after.st_mode),
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+            )
+            linked_after_identity = (
+                linked_after.st_dev,
+                linked_after.st_ino,
+                linked_after.st_uid,
+                linked_after.st_nlink,
+                stat.S_IMODE(linked_after.st_mode),
+                linked_after.st_size,
+                linked_after.st_mtime_ns,
+                linked_after.st_ctime_ns,
+            )
+            state_file.seek(0)
+            retained_state = state_file.read(len(state_bytes) + 1)
+            final = os.fstat(descriptor)
+            linked_final = os.lstat(state_path)
+            final_identity = (
+                final.st_dev,
+                final.st_ino,
+                final.st_uid,
+                final.st_nlink,
+                stat.S_IMODE(final.st_mode),
+                final.st_size,
+                final.st_mtime_ns,
+                final.st_ctime_ns,
+            )
+            linked_final_identity = (
+                linked_final.st_dev,
+                linked_final.st_ino,
+                linked_final.st_uid,
+                linked_final.st_nlink,
+                stat.S_IMODE(linked_final.st_mode),
+                linked_final.st_size,
+                linked_final.st_mtime_ns,
+                linked_final.st_ctime_ns,
+            )
+            if (
+                identity != after_identity
+                or identity != linked_after_identity
+                or identity != final_identity
+                or identity != linked_final_identity
+                or retained_state != state_bytes
+            ):
+                raise RecoveryPlanError(
+                    "temporary recovery state changed while decoded"
+                )
+    except OSError as exc:
+        raise RecoveryPlanError(
+            "temporary recovery state could not be protected"
+        ) from exc
     if result.returncode != 0:
         raise RecoveryPlanError("the state projection could not be decoded by OpenTofu")
     if not result.stdout or len(result.stdout) > MAXIMUM_PLAN_JSON_BYTES:
