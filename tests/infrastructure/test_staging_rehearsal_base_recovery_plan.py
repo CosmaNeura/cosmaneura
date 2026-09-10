@@ -65,6 +65,16 @@ def _replace_launcher_assignment(source: str, name: str, value: str) -> str:
     return f"{before}{prefix}{value}'\n{after}"
 
 
+def _require_pinned_python_runtime() -> None:
+    required = (
+        recovery.EXPECTED_PYTHON_ROOT,
+        recovery.EXPECTED_PYTHON_PATH,
+        recovery.EXPECTED_PYTHON_FRAMEWORK_PATH,
+    )
+    if sys.platform != "darwin" or not all(path.exists() for path in required):
+        pytest.skip("requires the pinned Apple Command Line Tools Python runtime")
+
+
 def _runtime_tree_shell_binding(root: Path) -> tuple[str, str, str]:
     environment = {"LC_ALL": "C", "PATH": "/usr/bin:/bin"}
     count = len(
@@ -325,6 +335,7 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         "python_tree_content_sha256": recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
         "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
     }
+    _require_pinned_python_runtime()
 
     for pinned_path in (
         recovery.EXPECTED_PYTHON_ROOT,
@@ -437,6 +448,7 @@ def test_python_launcher_rejects_relocation_validator_mutation_and_unsafe_paths(
     assert copied.returncode == 2
     assert copied.stdout == b""
     assert copied.stderr == b"recovery_plan_launcher_refused\n"
+    _require_pinned_python_runtime()
 
     launcher, validator, scripts = _relocated_launcher(tmp_path)
     baseline = subprocess.run(
@@ -478,6 +490,7 @@ def test_python_launcher_rejects_relocation_validator_mutation_and_unsafe_paths(
 def test_python_launcher_rejects_extension_dependency_mutation(
     tmp_path: Path,
 ) -> None:
+    _require_pinned_python_runtime()
     runtime_root = tmp_path / "runtime"
     extension = runtime_root / "lib/python3.9/lib-dynload/_hashlib.test.so"
     extension.parent.mkdir(parents=True, mode=0o755)
@@ -528,6 +541,7 @@ def test_python_launcher_rejects_extension_dependency_mutation(
 def test_python_launcher_executes_in_memory_validator_after_source_inode_mutation(
     tmp_path: Path,
 ) -> None:
+    _require_pinned_python_runtime()
     launcher, validator, _ = _relocated_launcher(tmp_path)
     marker = tmp_path / "validator-read"
     reviewed = b'print("authenticated-validator")\n'
