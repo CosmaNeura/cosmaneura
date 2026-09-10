@@ -161,7 +161,7 @@ def _attributes(state: dict[str, Any] | None=None) -> dict[str, Mapping[str, Any
     return handoff._state_attributes(json.dumps(state or _valid_state()).encode())
 
 def _base_receipt(state_bytes: bytes) -> dict[str, Any]:
-    return {'schema_version': 3, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v3', 'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'state_projection_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'python_launcher_source_path': handoff.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': hashlib.sha256(handoff.recovery.LAUNCHER_PATH.read_bytes()).hexdigest(), 'python_runtime_manifest_source_path': handoff.recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH, 'python_runtime_manifest_sha256': handoff.recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_executable_source_path': str(handoff.recovery.EXPECTED_PYTHON_PATH), 'python_executable_sha256': handoff.recovery.EXPECTED_PYTHON_SHA256, 'python_framework_source_path': str(handoff.recovery.EXPECTED_PYTHON_FRAMEWORK_PATH), 'python_framework_sha256': handoff.recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_tree_content_sha256': handoff.recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': handoff.recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': handoff.recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': handoff.recovery.EXPECTED_PYTHON_RUNTIME_SHA256, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': handoff.recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, 'azure_cli_closure_sha256': 'e' * 64, 'runtime_snapshot_sha256': 'f' * 64, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
+    return {'schema_version': 3, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v3', 'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'state_projection_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'python_launcher_source_path': handoff.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': handoff.EXPECTED_RECOVERY_LAUNCHER_SHA256, 'launcher_execution_authenticated': True, 'python_runtime_manifest_source_path': handoff.recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH, 'python_runtime_manifest_sha256': handoff.recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256, 'python_executable_source_path': str(handoff.recovery.EXPECTED_PYTHON_PATH), 'python_executable_sha256': handoff.recovery.EXPECTED_PYTHON_SHA256, 'python_framework_source_path': str(handoff.recovery.EXPECTED_PYTHON_FRAMEWORK_PATH), 'python_framework_sha256': handoff.recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256, 'python_tree_content_sha256': handoff.recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256, 'python_tree_metadata_sha256': handoff.recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256, 'python_version_sha256': handoff.recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': handoff.recovery.EXPECTED_PYTHON_RUNTIME_SHA256, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': handoff.recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, 'azure_cli_closure_sha256': 'e' * 64, 'runtime_snapshot_sha256': 'f' * 64, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
 
 def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[str]]:
     queue = list(states)
@@ -181,22 +181,63 @@ def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[
     return calls
 
 def test_plan_revalidation_uses_only_authenticated_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
-    receipt = {'pass': True}
+    receipt = {'pass': True, 'launcher_execution_authenticated': False}
     observed: list[list[str]] = []
     def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         observed.append(arguments)
-        assert kwargs == {'cwd': handoff.recovery.REPOSITORY_ROOT, 'timeout_seconds': 900, 'max_output_bytes': 64 * 1024}
+        descriptor = kwargs['pass_fds'][0]
+        assert kwargs == {'cwd': handoff.recovery.REPOSITORY_ROOT, 'timeout_seconds': 900, 'pass_fds': (descriptor,), 'max_output_bytes': 64 * 1024}
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        assert hashlib.sha256(os.read(descriptor, 64 * 1024)).hexdigest() == handoff.EXPECTED_RECOVERY_LAUNCHER_SHA256
+        os.lseek(descriptor, 0, os.SEEK_SET)
         return subprocess.CompletedProcess(arguments, 0, handoff._canonical(receipt) + b'\n', b'')
     monkeypatch.setattr(handoff.recovery, '_run_process', run)
     result = handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64)
-    assert result == receipt
-    assert observed[0][0] == str(handoff.recovery.LAUNCHER_PATH)
-    assert observed[0][1:3] == ['--mode', 'verify']
+    assert result == {**receipt, 'python_launcher_source_path': handoff.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': handoff.EXPECTED_RECOVERY_LAUNCHER_SHA256, 'launcher_execution_authenticated': True}
+    assert observed[0][:2] == ['/bin/sh', '-c']
+    assert observed[0][2].startswith('. /dev/fd/')
+    assert observed[0][3] == str(handoff.recovery.LAUNCHER_PATH)
+    assert observed[0][4:6] == ['--mode', 'verify']
     handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64, existing_execution_dir=True)
-    assert observed[1][1:3] == ['--mode', 'verify-existing']
+    assert observed[1][4:6] == ['--mode', 'verify-existing']
 
     monkeypatch.setattr(handoff.recovery, '_run_process', lambda *_, **__: subprocess.CompletedProcess([], 0, b'{"pass": true}\n', b''))
     with pytest.raises(handoff.HandoffError, match='plan_validation.invalid'):
+        handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64)
+    forged_authority = handoff._canonical({'pass': True, 'launcher_execution_authenticated': True}) + b'\n'
+    monkeypatch.setattr(handoff.recovery, '_run_process', lambda *_, **__: subprocess.CompletedProcess([], 0, forged_authority, b''))
+    with pytest.raises(handoff.HandoffError, match='plan_validation.invalid'):
+        handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64)
+
+def test_plan_revalidation_executes_opened_launcher_bytes_across_path_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = tmp_path / 'launcher.sh'
+    reviewed = b'#!/bin/sh\nexit 0\n'
+    launcher.write_bytes(reviewed)
+    launcher.chmod(0o755)
+    expected = hashlib.sha256(reviewed).hexdigest()
+    monkeypatch.setattr(handoff.recovery, 'LAUNCHER_PATH', launcher)
+    monkeypatch.setattr(handoff, 'EXPECTED_RECOVERY_LAUNCHER_SHA256', expected)
+    receipt = {'pass': True, 'launcher_execution_authenticated': False}
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        descriptor = kwargs['pass_fds'][0]
+        replacement = tmp_path / 'replacement.sh'
+        replacement.write_bytes(b'#!/bin/sh\necho forged\n')
+        replacement.chmod(0o755)
+        os.replace(replacement, launcher)
+        assert Path(f'/dev/fd/{descriptor}').read_bytes() == reviewed
+        assert arguments[2] == f'. /dev/fd/{descriptor}'
+        return subprocess.CompletedProcess(arguments, 0, handoff._canonical(receipt) + b'\n', b'')
+    monkeypatch.setattr(handoff.recovery, '_run_process', run)
+    result = handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64)
+    assert result['python_launcher_sha256'] == expected
+    assert result['launcher_execution_authenticated'] is True
+
+def test_plan_revalidation_rejects_unpinned_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = tmp_path / 'launcher.sh'
+    launcher.write_bytes(b'#!/bin/sh\necho forged\n')
+    launcher.chmod(0o755)
+    monkeypatch.setattr(handoff.recovery, 'LAUNCHER_PATH', launcher)
+    with pytest.raises(handoff.HandoffError, match='plan_launcher.invalid'):
         handoff._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit='a' * 40, expected_saved_plan_sha256='b' * 64)
 
 def test_exact_contract_has_26_existing_and_11_planned_absent() -> None:

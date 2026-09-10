@@ -47,7 +47,8 @@ def _base() -> dict[str, Any]:
         'open_tofu_source_path': str(consumer.recovery.EXPECTED_TOFU_PATH),
         'open_tofu_sha256': consumer.recovery.EXPECTED_TOFU_SHA256,
         'python_launcher_source_path': consumer.recovery.LAUNCHER_REPOSITORY_PATH,
-        'python_launcher_sha256': consumer._digest(consumer.recovery.LAUNCHER_PATH.read_bytes()),
+        'python_launcher_sha256': consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256,
+        'launcher_execution_authenticated': True,
         'python_runtime_manifest_source_path': consumer.recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
         'python_runtime_manifest_sha256': consumer.recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
         'python_executable_source_path': str(consumer.recovery.EXPECTED_PYTHON_PATH),
@@ -142,10 +143,70 @@ def test_base_receipt_revalidates_via_launcher_existing_mode(monkeypatch: pytest
     def verify(**kwargs: Any) -> Mapping[str, Any]:
         observed.update(kwargs)
         return base
-    monkeypatch.setattr(consumer.handoff, '_revalidate_plan_via_launcher', verify)
+    monkeypatch.setattr(consumer, '_revalidate_plan_via_launcher', verify)
     result, tofu = consumer._base_receipt(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, now=NOW)
     assert result == base and tofu == Path('/trusted/tofu')
-    assert observed['existing_execution_dir'] is True
+    assert observed == {
+        'saved_plan': Path('/protected/plan'),
+        'state_json': Path('/protected/state'),
+        'execution_dir': Path('/protected/execution'),
+        'expected_source_commit': SOURCE,
+        'expected_saved_plan_sha256': PLAN_DIGEST,
+    }
+
+
+def test_final_consumer_independently_executes_pinned_launcher_descriptor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = {'pass': True, 'launcher_execution_authenticated': False}
+    observed: list[str] = []
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        descriptor = kwargs['pass_fds'][0]
+        assert kwargs == {'cwd': consumer.recovery.REPOSITORY_ROOT, 'timeout_seconds': 900, 'pass_fds': (descriptor,), 'max_output_bytes': 64 * 1024}
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        assert hashlib.sha256(os.read(descriptor, 64 * 1024)).hexdigest() == consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        observed.extend(arguments)
+        return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
+    monkeypatch.setattr(consumer.recovery, '_run_process', run)
+    result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
+    assert observed[:2] == ['/bin/sh', '-c']
+    assert observed[2].startswith('. /dev/fd/')
+    assert observed[3:6] == [str(consumer.recovery.LAUNCHER_PATH), '--mode', 'verify-existing']
+    assert result == {**raw, 'python_launcher_source_path': consumer.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256, 'launcher_execution_authenticated': True}
+
+
+def test_final_consumer_executes_opened_launcher_bytes_across_path_swap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = tmp_path / 'launcher.sh'
+    reviewed = b'#!/bin/sh\nexit 0\n'
+    launcher.write_bytes(reviewed)
+    launcher.chmod(0o755)
+    expected = hashlib.sha256(reviewed).hexdigest()
+    monkeypatch.setattr(consumer.recovery, 'LAUNCHER_PATH', launcher)
+    monkeypatch.setattr(consumer, 'EXPECTED_RECOVERY_LAUNCHER_SHA256', expected)
+    raw = {'pass': True, 'launcher_execution_authenticated': False}
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        descriptor = kwargs['pass_fds'][0]
+        replacement = tmp_path / 'replacement.sh'
+        replacement.write_bytes(b'#!/bin/sh\necho forged\n')
+        replacement.chmod(0o755)
+        os.replace(replacement, launcher)
+        assert Path(f'/dev/fd/{descriptor}').read_bytes() == reviewed
+        assert arguments[2] == f'. /dev/fd/{descriptor}'
+        return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
+    monkeypatch.setattr(consumer.recovery, '_run_process', run)
+    result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
+    assert result['python_launcher_sha256'] == expected
+    assert result['launcher_execution_authenticated'] is True
+
+
+def test_final_consumer_rejects_unpinned_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = tmp_path / 'launcher.sh'
+    launcher.write_bytes(b'#!/bin/sh\necho forged\n')
+    launcher.chmod(0o755)
+    monkeypatch.setattr(consumer.recovery, 'LAUNCHER_PATH', launcher)
+    with pytest.raises(consumer.ConsumerError, match='plan_launcher.invalid'):
+        consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
 
 
 def _artifacts(tmp_path: Path) -> tuple[Path, Path, Path, Path]:

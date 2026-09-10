@@ -48,6 +48,8 @@ CONFIRMATION_SECONDS = handoff.MAX_ACTION_READBACK_SECONDS
 CLAIM_NAME = '.base-recovery-apply-claimed-v1'
 NONCE_NAME = '.base-recovery-handoff-nonce'
 POLICY_ID = 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '88de309f7083f8ffac3c8705ad5bb575d5429033915c3cfc696615fa32e3e355'
+MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 HASH_RE = re.compile(r'^[0-9a-f]{64}$')
 COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
 TIMESTAMP_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$')
@@ -223,14 +225,75 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> tuple[An
         _fail('source.changed')
     return snapshot, preparer_digest
 
+def _open_verified_recovery_launcher() -> int:
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor: int | None = None
+    try:
+        initial = os.open(recovery.LAUNCHER_PATH, flags)
+        try:
+            descriptor = fcntl.fcntl(initial, getattr(fcntl, 'F_DUPFD_CLOEXEC', fcntl.F_DUPFD), 10)
+        finally:
+            os.close(initial)
+        before = os.fstat(descriptor)
+        linked = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
+        def identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_size, value.st_mtime_ns, value.st_ctime_ns
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o755 or not 0 < before.st_size <= MAX_RECOVERY_LAUNCHER_BYTES or identity(before) != identity(linked):
+            _fail('plan_launcher.invalid')
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 64 * 1024):
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        linked_after = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
+        if identity(before) != identity(after) or identity(after) != identity(linked_after) or digest.hexdigest() != EXPECTED_RECOVERY_LAUNCHER_SHA256:
+            _fail('plan_launcher.invalid')
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor
+    except (OSError, ConsumerError):
+        if descriptor is not None:
+            os.close(descriptor)
+        _fail('plan_launcher.invalid')
+
+def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str) -> Mapping[str, Any]:
+    descriptor = _open_verified_recovery_launcher()
+    try:
+        result = recovery._run_process(
+            [
+                '/bin/sh', '-c', f'. /dev/fd/{descriptor}', str(recovery.LAUNCHER_PATH),
+                '--mode', 'verify-existing', '--saved-plan', str(saved_plan),
+                '--state-json', str(state_json), '--execution-dir', str(execution_dir),
+                '--expected-source-commit', expected_source_commit,
+                '--expected-saved-plan-sha256', expected_saved_plan_sha256,
+            ],
+            cwd=recovery.REPOSITORY_ROOT,
+            timeout_seconds=900,
+            pass_fds=(descriptor,),
+            max_output_bytes=64 * 1024,
+        )
+    finally:
+        os.close(descriptor)
+    if result.returncode != 0 or result.stderr or not result.stdout:
+        _fail('plan_validation.refused')
+    try:
+        receipt = recovery._load_json_bytes(result.stdout, label='base validation receipt')
+    except recovery.RecoveryPlanError:
+        _fail('plan_validation.invalid')
+    if _canonical(receipt) + b'\n' != result.stdout or receipt.get('launcher_execution_authenticated') is not False:
+        _fail('plan_validation.invalid')
+    authenticated = dict(receipt)
+    authenticated.update(
+        python_launcher_source_path=recovery.LAUNCHER_REPOSITORY_PATH,
+        python_launcher_sha256=EXPECTED_RECOVERY_LAUNCHER_SHA256,
+        launcher_execution_authenticated=True,
+    )
+    return authenticated
+
 
 def _base_receipt(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str, now: datetime) -> tuple[Mapping[str, Any], Path]:
     del now
-    result = dict(handoff._revalidate_plan_via_launcher(
+    result = dict(_revalidate_plan_via_launcher(
         saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir,
         expected_source_commit=expected_source_commit,
         expected_saved_plan_sha256=expected_saved_plan_sha256,
-        existing_execution_dir=True,
     ))
     tofu = Path(str(result.get('open_tofu_path', '')))
     if not tofu.is_absolute():
@@ -293,7 +356,8 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'open_tofu_source_path': str(recovery.EXPECTED_TOFU_PATH),
         'open_tofu_sha256': recovery.EXPECTED_TOFU_SHA256,
         'python_launcher_source_path': recovery.LAUNCHER_REPOSITORY_PATH,
-        'python_launcher_sha256': str(recovery._runtime_file_record(recovery.LAUNCHER_PATH, label='recovery launcher')[3]),
+        'python_launcher_sha256': EXPECTED_RECOVERY_LAUNCHER_SHA256,
+        'launcher_execution_authenticated': True,
         'python_runtime_manifest_source_path': recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
         'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
         'python_executable_source_path': str(recovery.EXPECTED_PYTHON_PATH),

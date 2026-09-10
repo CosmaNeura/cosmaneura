@@ -3830,6 +3830,9 @@ def _validate_captured_artifacts(
         "python_launcher_sha256": str(
             _runtime_file_record(LAUNCHER_PATH, label="recovery launcher")[3]
         ),
+        # Only a caller that independently authenticates and executes the
+        # launcher's opened bytes may promote this candidate fact to true.
+        "launcher_execution_authenticated": False,
         "python_runtime_manifest_source_path": (
             PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH
         ),
