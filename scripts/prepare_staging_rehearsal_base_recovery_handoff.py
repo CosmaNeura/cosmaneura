@@ -69,6 +69,7 @@ AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az')
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
 EXPECTED_RECOVERY_LAUNCHER_SHA256 = '19e4c6e7873380036c99d86db0f62507884df0e685b6b2d06dab552830ea8767'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
+REMOTE_STATE_COMPARISON_POLICY = 'canonical-json-check-results-permutation-v1'
 
 class HandoffError(ValueError):
     """A bounded refusal that never includes an Azure response."""
@@ -533,6 +534,25 @@ def _state_attributes(state_bytes: bytes) -> dict[str, Mapping[str, Any]]:
                 _fail('state_role_definition.mismatch')
     return output
 
+def _remote_state_digest(state: Mapping[str, Any]) -> str:
+    # OpenTofu emits these top-level records in map-iteration order. Preserve
+    # each complete record and every other list; normalize only this ordering.
+    normalized = dict(state)
+    checks = state.get('check_results')
+    if checks is not None:
+        if not isinstance(checks, list):
+            _fail('remote_state.check_results_invalid')
+        seen: set[tuple[str, str]] = set()
+        for check in checks:
+            if not isinstance(check, Mapping):
+                _fail('remote_state.check_results_invalid')
+            kind, address = check.get('object_kind'), check.get('config_addr')
+            if not isinstance(kind, str) or not kind or not isinstance(address, str) or not address or (kind, address) in seen:
+                _fail('remote_state.check_results_invalid')
+            seen.add((kind, address))
+        normalized['check_results'] = sorted(checks, key=_canonical)
+    return _digest(_canonical(normalized))
+
 def _pull_remote_state(*, tofu: Path, data_dir: Path, expected_state: Mapping[str, Any], expected_backend_sha256: str, expected_tofu_sha256: str) -> str:
     if not tofu.is_absolute() or tofu != Path(os.path.abspath(tofu)) or recovery._executable_sha256(tofu, label='OpenTofu executable') != expected_tofu_sha256:
         _fail('runtime.changed')
@@ -543,9 +563,10 @@ def _pull_remote_state(*, tofu: Path, data_dir: Path, expected_state: Mapping[st
         _fail('remote_state.unavailable')
     remote = recovery._load_json_bytes(result.stdout, label='remote state')
     recovery._validate_state(remote, label='remote state')
-    if _canonical(remote) != _canonical(expected_state):
+    remote_digest = _remote_state_digest(remote)
+    if remote_digest != _remote_state_digest(expected_state):
         _fail('remote_state.changed')
-    return _digest(_canonical(remote))
+    return remote_digest
 
 def _properties(value: Mapping[str, Any], expected_id: str) -> Mapping[str, Any]:
     if _lower_id(value.get('id')) != _lower_id(expected_id) or not isinstance(value.get('properties', {}), Mapping):
@@ -955,6 +976,7 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
         _fail('python_runtime.changed')
     machine = _digest(_canonical({'boot': _digest(boot_session()), 'euid': os.geteuid(), 'execution_device': directory.st_dev, 'execution_inode': directory.st_ino, 'nonce_sha256': _digest(nonce)}))
     receipt = {'schema_version': 1, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1', 'source_commit': base['source_commit'], 'source_tree_sha256': base['source_tree_sha256'], 'handoff_source_sha256': handoff_source_sha256, 'provider_lock_sha256': base['provider_lock_sha256'], 'state_lineage': base['state_lineage'], 'state_serial': base['state_serial'], 'state_json_sha256': base['state_json_sha256'], 'state_projection_sha256': base['state_projection_sha256'], 'remote_state_sha256': remote_state_sha256, 'saved_plan_sha256': base['saved_plan_sha256'], 'derived_plan_json_sha256': base['derived_plan_json_sha256'], 'backend_metadata_sha256': base['backend_metadata_sha256'], 'open_tofu_sha256': base['open_tofu_sha256'], 'execution_provider_tree_sha256': base['execution_provider_tree_sha256'], **python_binding, 'azure_cli_sha256': reader.azure_cli_sha256, 'azure_cli_version_sha256': reader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': base['azure_cli_source_closure_sha256'], 'azure_cli_closure_sha256': base['azure_cli_closure_sha256'], 'runtime_snapshot_sha256': base['runtime_snapshot_sha256'], 'azure_tls_ca_bundle_sha256': reader.azure_tls_ca_bundle_sha256, 'azure_config_binding_sha256': reader.azure_config_binding_sha256, 'base_validation_receipt_sha256': _digest(_canonical(base)), 'machine_binding_sha256': machine, 'nonce_sha256': _digest(nonce), 'live_snapshot_sha256': _digest(_canonical(first)), 'observed_at': newest.isoformat().replace('+00:00', 'Z'), 'expires_at': (newest + RECEIPT_LIFETIME).isoformat().replace('+00:00', 'Z'), 'existing_azure_resource_count': 26, 'planned_absent_resource_count': 11, 'target_resource_count': 0, 'live_readback_bound': True, 'apply_authorized': False, 'pass': True}
+    receipt['remote_state_comparison_policy'] = REMOTE_STATE_COMPARISON_POLICY
     payload = _canonical(receipt) + b'\n'
     recovery._write_protected_file(receipt_path, payload, label='handoff receipt')
     if recovery._read_protected_file(receipt_path, label='handoff receipt', required_mode=256) != payload:

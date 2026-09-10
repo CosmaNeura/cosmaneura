@@ -180,6 +180,75 @@ def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[
     monkeypatch.setattr(handoff.recovery, '_run_process', run)
     return calls
 
+def _state_with_checks() -> dict[str, Any]:
+    state = _valid_state()
+    state['check_results'] = [
+        {'object_kind': 'var', 'config_addr': 'var.synthetic_z', 'status': 'pass', 'objects': [{'object_addr': 'var.synthetic_z[0]', 'status': 'pass'}, {'object_addr': 'var.synthetic_z[1]', 'status': 'pass'}]},
+        {'object_kind': 'resource', 'config_addr': 'terraform_data.synthetic_a', 'status': 'pass', 'objects': [{'object_addr': 'terraform_data.synthetic_a', 'status': 'pass'}]},
+    ]
+    return state
+
+def _pull_test_state(state: Mapping[str, Any]) -> str:
+    return handoff._pull_remote_state(tofu=Path('/trusted/tofu'), data_dir=Path('/protected/execution'), expected_state=state, expected_backend_sha256='5' * 64, expected_tofu_sha256='6' * 64)
+
+def test_remote_state_check_record_order_is_stable_without_mutating_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    expected = _state_with_checks()
+    original = deepcopy(expected)
+    reordered = deepcopy(expected)
+    reordered['check_results'].reverse()
+    assert handoff._canonical(expected) != handoff._canonical(reordered)
+    calls = _mock_runtime(monkeypatch, handoff._canonical(reordered), handoff._canonical(expected))
+    first, second = _pull_test_state(expected), _pull_test_state(expected)
+    assert first == second == handoff._remote_state_digest(expected)
+    assert expected == original and len(calls) == 2
+
+@pytest.mark.parametrize('mutation', ['status', 'object_status', 'drop', 'add', 'extra_field', 'nested_order', 'resource_value', 'output_value'])
+def test_remote_state_order_normalization_preserves_every_value(monkeypatch: pytest.MonkeyPatch, mutation: str) -> None:
+    expected = _state_with_checks()
+    remote = deepcopy(expected)
+    if mutation == 'status':
+        remote['check_results'][0]['status'] = 'fail'
+    elif mutation == 'object_status':
+        remote['check_results'][0]['objects'][0]['status'] = 'fail'
+    elif mutation == 'drop':
+        remote['check_results'].pop()
+    elif mutation == 'add':
+        remote['check_results'].append({'object_kind': 'var', 'config_addr': 'var.extra', 'status': 'pass', 'objects': []})
+    elif mutation == 'extra_field':
+        remote['check_results'][0]['unexpected'] = 'changed'
+    elif mutation == 'nested_order':
+        remote['check_results'][0]['objects'].reverse()
+    elif mutation == 'resource_value':
+        remote['resources'][0]['instances'][0]['attributes']['unexpected'] = 'changed'
+    else:
+        remote['outputs']['unexpected'] = {'value': 'changed'}
+    _mock_runtime(monkeypatch, handoff._canonical(remote))
+    with pytest.raises(handoff.HandoffError, match='remote_state.changed'):
+        _pull_test_state(expected)
+
+@pytest.mark.parametrize('malformation', ['not_list', 'not_record', 'missing_kind', 'empty_address', 'duplicate', 'duplicate_changed'])
+def test_remote_state_check_record_ambiguity_is_rejected(malformation: str) -> None:
+    state = _state_with_checks()
+    if malformation == 'not_list':
+        state['check_results'] = {}
+    elif malformation == 'not_record':
+        state['check_results'] = [None]
+    elif malformation == 'missing_kind':
+        state['check_results'][0].pop('object_kind')
+    elif malformation == 'empty_address':
+        state['check_results'][0]['config_addr'] = ''
+    else:
+        duplicate = deepcopy(state['check_results'][0])
+        if malformation == 'duplicate_changed':
+            duplicate['status'] = 'fail'
+        state['check_results'].append(duplicate)
+    with pytest.raises(handoff.HandoffError, match='remote_state.check_results_invalid'):
+        handoff._remote_state_digest(state)
+
+def test_remote_state_missing_null_and_empty_checks_remain_distinct() -> None:
+    state = _valid_state()
+    assert len({handoff._remote_state_digest(state), handoff._remote_state_digest({**state, 'check_results': None}), handoff._remote_state_digest({**state, 'check_results': []})}) == 3
+
 def test_plan_revalidation_uses_only_authenticated_launcher(monkeypatch: pytest.MonkeyPatch) -> None:
     receipt = {'pass': True, 'launcher_execution_authenticated': False}
     observed: list[list[str]] = []
@@ -379,6 +448,7 @@ def test_prepare_reruns_validator_and_writes_owner_only_bound_receipt(tmp_path: 
     receipt = handoff.prepare_handoff(saved_plan=plan_path, state_json=state_path, execution_dir=execution, receipt_path=receipt_path, expected_source_commit='a' * 40, expected_saved_plan_sha256=base['saved_plan_sha256'], reader_factory=FakeReader, clock=lambda: NOW, nonce_source=lambda size: b'n' * size, boot_session=lambda: b'boot-session', source_binding=lambda commit, tree: '8' * 64)
     assert seen == {'saved_plan': plan_path, 'state_json': state_path, 'execution_dir': execution, 'expected_source_commit': 'a' * 40, 'expected_saved_plan_sha256': base['saved_plan_sha256']}
     assert receipt['live_readback_bound'] is True
+    assert receipt['remote_state_comparison_policy'] == handoff.REMOTE_STATE_COMPARISON_POLICY
     assert receipt['apply_authorized'] is False
     assert receipt['base_validation_receipt_sha256'] == handoff._digest(handoff._canonical(base)) and receipt['handoff_source_sha256'] == '8' * 64
     assert receipt['remote_state_sha256'] == handoff._digest(handoff._canonical(json.loads(state_bytes))) and receipt['azure_tls_ca_bundle_sha256'] == 'c' * 64 and len(pulls) == 2
