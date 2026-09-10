@@ -1,7 +1,27 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -IS
+# ruff: noqa: E402, I001
 """Create or revalidate the one-time non-mutating staging recovery plan."""
 
 from __future__ import annotations
+
+import sys as _bootstrap_sys
+
+if __name__ == "__main__" and (
+    _bootstrap_sys.flags.isolated != 1
+    or _bootstrap_sys.flags.no_site != 1
+    or not _bootstrap_sys.flags.safe_path
+    or _bootstrap_sys.executable
+    != (
+        "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/"
+        "Python.framework/Versions/3.14/bin/python3.14"
+    )
+    or _bootstrap_sys.hexversion != 51_251_184
+    or _bootstrap_sys._xoptions
+):
+    _bootstrap_sys.stderr.write(
+        "recovery_plan_refused: python bootstrap is not isolated\n"
+    )
+    raise SystemExit(2)
 
 import argparse
 import ctypes
@@ -32,6 +52,8 @@ from typing import Any
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 REHEARSAL_ROOT = REPOSITORY_ROOT / "infra-staging-rehearsal"
 VALIDATOR_PATH = Path(__file__).resolve()
+LAUNCHER_REPOSITORY_PATH = "scripts/run_staging_rehearsal_base_recovery_plan.sh"
+LAUNCHER_PATH = REPOSITORY_ROOT / LAUNCHER_REPOSITORY_PATH
 
 EXPECTED_LINEAGE = "76b6712e-5781-adbd-9fb1-cf66db4f4e28"
 EXPECTED_RECOVERY_SERIAL = 9
@@ -40,6 +62,19 @@ EXPECTED_TOFU_VERSION = "1.12.5"
 EXPECTED_TOFU_PATH = Path("/opt/homebrew/Cellar/opentofu/1.12.5/bin/tofu")
 EXPECTED_TOFU_SHA256 = (
     "1334ccf2360fe38460c47fd0924555f411cf714813e541d17d744283c973aa99"
+)
+EXPECTED_PYTHON_PATH = Path(
+    "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/"
+    "Python.framework/Versions/3.14/bin/python3.14"
+)
+EXPECTED_PYTHON_SHA256 = (
+    "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634"
+)
+EXPECTED_PYTHON_VERSION_SHA256 = (
+    "858e66d30adb67a08689c59d4a5b1cf90a3f2d9867f6eb9fe6652b47682cc4d6"
+)
+EXPECTED_PYTHON_RUNTIME_SHA256 = (
+    "f75b5595c280b91e4b44fd504356fe4d489b8afb7542ffcd3691e01e5e74fa96"
 )
 EXPECTED_AZURE_CLI_PATH = Path("/opt/homebrew/Cellar/azure-cli/2.89.1/bin/az")
 EXPECTED_AZURE_CLI_SHA256 = (
@@ -95,6 +130,9 @@ REJECTED_SAVED_PLAN_SHA256S: frozenset[str] = frozenset(
         # the complete runtime, state-projection, and exact no-op bindings and
         # must never regain authorization merely because later code can parse it.
         "2f16bcb6fdeddeca55987084511361f030c7bd5648435d7487461eb540f7ab36",
+        # Rejected by independent review on 2026-09-10 because the process that
+        # created it did not bind an isolated, exact Python bootstrap/runtime.
+        "1adfc2b7926381e01bd6bced4f50fdab5407d737ee617baef9649c8903405a34",
     }
 )
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -441,6 +479,9 @@ class SourceSnapshot:
 class RuntimeSnapshot:
     tofu: Path
     azure_cli: Path
+    python_executable_sha256: str
+    python_version_sha256: str
+    python_runtime_sha256: str
     tofu_sha256: str
     azure_cli_sha256: str
     azure_cli_version_sha256: str
@@ -818,6 +859,143 @@ def _runtime_file_record(
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def _python_runtime_binding() -> Mapping[str, str]:
+    unsafe_environment = {
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_ROOT_PATH",
+    }
+    if any(
+        name.startswith("PYTHON") or name in unsafe_environment for name in os.environ
+    ):
+        raise RecoveryPlanError("the Python runtime environment is unsafe")
+    if (
+        sys.flags.isolated != 1
+        or sys.flags.ignore_environment != 1
+        or sys.flags.no_site != 1
+        or sys.flags.no_user_site != 1
+        or not sys.flags.safe_path
+        or sys.gettrace() is not None
+        or sys.getprofile() is not None
+        or sys.prefix != sys.base_prefix
+        or sys._xoptions
+    ):
+        raise RecoveryPlanError("the Python runtime is not isolated")
+    try:
+        executable = Path(sys.executable).resolve(strict=True)
+        base = Path(sys.base_prefix).resolve(strict=True)
+    except OSError as exc:
+        raise RecoveryPlanError("the Python runtime path is unavailable") from exc
+    if executable != EXPECTED_PYTHON_PATH or base != EXPECTED_PYTHON_PATH.parent.parent:
+        raise RecoveryPlanError("the Python runtime path is not pinned")
+    _trusted_executable_source(
+        EXPECTED_PYTHON_PATH,
+        label="pinned Python",
+        expected_sha256=EXPECTED_PYTHON_SHA256,
+    )
+
+    version_document = {
+        "cache_tag": sys.implementation.cache_tag,
+        "hexversion": sys.hexversion,
+        "version_info": list(sys.version_info),
+    }
+    version_sha256 = _sha256_bytes(_canonical_json_bytes(version_document))
+    if version_sha256 != EXPECTED_PYTHON_VERSION_SHA256:
+        raise RecoveryPlanError("the Python version is not pinned")
+
+    runtime_paths: list[str] = []
+    for item in sys.path:
+        path = Path(item)
+        if (
+            not item
+            or not path.is_absolute()
+            or "site-packages" in path.parts
+            or "dist-packages" in path.parts
+        ):
+            raise RecoveryPlanError("the Python runtime import path is unsafe")
+        resolved = path.resolve(strict=False)
+        if not resolved.is_relative_to(base):
+            raise RecoveryPlanError("the Python runtime import path is unsafe")
+        runtime_paths.append(str(resolved))
+
+    module_sha256s: dict[str, str] = {}
+    module_names = (
+        "argparse",
+        "collections",
+        "collections.abc",
+        "ctypes",
+        "dataclasses",
+        "datetime",
+        "errno",
+        "fcntl",
+        "hashlib",
+        "io",
+        "json",
+        "os",
+        "pathlib",
+        "pwd",
+        "re",
+        "selectors",
+        "shlex",
+        "shutil",
+        "signal",
+        "stat",
+        "subprocess",
+        "tempfile",
+        "time",
+        "typing",
+        "zipfile",
+    )
+    for name in module_names:
+        module = sys.modules.get(name)
+        if module is None:
+            raise RecoveryPlanError("the Python runtime module set is incomplete")
+        raw_path = getattr(module, "__file__", None)
+        if raw_path is None:
+            module_sha256s[name] = "built-in"
+            continue
+        try:
+            path = Path(raw_path).resolve(strict=True)
+        except OSError as exc:
+            raise RecoveryPlanError("a Python runtime module is unavailable") from exc
+        if not path.is_relative_to(base):
+            raise RecoveryPlanError(
+                "a Python runtime module is outside the pinned base"
+            )
+        record = _runtime_file_record(path, label=f"Python module {name}")
+        if not 0 < record[2] <= 16 * 1024 * 1024:
+            raise RecoveryPlanError("a Python runtime module is not bounded")
+        module_sha256s[name] = str(record[3])
+
+    runtime_sha256 = _sha256_bytes(
+        _canonical_json_bytes(
+            {
+                "executable_sha256": EXPECTED_PYTHON_SHA256,
+                "flags": {
+                    "ignore_environment": sys.flags.ignore_environment,
+                    "isolated": sys.flags.isolated,
+                    "no_site": sys.flags.no_site,
+                    "no_user_site": sys.flags.no_user_site,
+                    "safe_path": sys.flags.safe_path,
+                },
+                "modules": module_sha256s,
+                "paths": runtime_paths,
+                "version_sha256": version_sha256,
+            }
+        )
+    )
+    if runtime_sha256 != EXPECTED_PYTHON_RUNTIME_SHA256:
+        raise RecoveryPlanError("the Python standard-library runtime is not pinned")
+    return {
+        "python_executable_sha256": EXPECTED_PYTHON_SHA256,
+        "python_version_sha256": version_sha256,
+        "python_runtime_sha256": runtime_sha256,
+    }
 
 
 # fmt: off
@@ -2298,6 +2476,7 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
 def _snapshot_and_verify_runtime_with_protected_umask(
     *, data_dir: Path
 ) -> RuntimeSnapshot:
+    python_binding = _python_runtime_binding()
     _require_protected_directory(data_dir, label="OpenTofu data directory")
     runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
     if runtime_directory.exists():
@@ -2385,12 +2564,16 @@ def _snapshot_and_verify_runtime_with_protected_umask(
                 "azure_cloud_sha256": EXPECTED_AZURE_CLOUD_SHA256,
                 "azure_cli_wrapper_sha256": wrapper_sha256,
                 "open_tofu_sha256": EXPECTED_TOFU_SHA256,
+                **python_binding,
             }
         )
     )
     return RuntimeSnapshot(
         tofu=tofu,
         azure_cli=azure_cli,
+        python_executable_sha256=python_binding["python_executable_sha256"],
+        python_version_sha256=python_binding["python_version_sha256"],
+        python_runtime_sha256=python_binding["python_runtime_sha256"],
         tofu_sha256=EXPECTED_TOFU_SHA256,
         azure_cli_sha256=EXPECTED_AZURE_CLI_SHA256,
         azure_cli_version_sha256=azure_version_sha256,
@@ -2650,6 +2833,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
             "--",
             str(REHEARSAL_ROOT.relative_to(REPOSITORY_ROOT)),
             str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
+            str(LAUNCHER_PATH.relative_to(REPOSITORY_ROOT)),
         ]
     )
     if status:
@@ -2689,11 +2873,37 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
             raise RecoveryPlanError(
                 "recovery source bytes differ from the expected commit"
             )
-    validator_name = str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT))
-    validator_bytes = VALIDATOR_PATH.read_bytes()
-    if _run_git(["show", f"{expected_commit}:{validator_name}"]) != validator_bytes:
-        raise RecoveryPlanError("recovery validator differs from the expected commit")
-    tree_files[validator_name] = validator_bytes
+    for source_path, label in (
+        (VALIDATOR_PATH, "recovery validator"),
+        (LAUNCHER_PATH, "recovery launcher"),
+    ):
+        try:
+            metadata = source_path.lstat()
+            source_bytes = source_path.read_bytes()
+        except OSError as exc:
+            raise RecoveryPlanError(f"{label} is unavailable") from exc
+        source_name = str(source_path.relative_to(REPOSITORY_ROOT))
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) & 0o022
+            or not source_bytes
+            or _run_git(["show", f"{expected_commit}:{source_name}"]) != source_bytes
+        ):
+            raise RecoveryPlanError(f"{label} differs from the expected commit")
+        tree_files[source_name] = source_bytes
+    launcher_tree_entry = _run_git(
+        [
+            "ls-tree",
+            expected_commit,
+            "--",
+            str(LAUNCHER_PATH.relative_to(REPOSITORY_ROOT)),
+        ]
+    )
+    if stat.S_IMODE(
+        LAUNCHER_PATH.stat(follow_symlinks=False).st_mode
+    ) != 0o755 or not launcher_tree_entry.startswith(b"100755 blob "):
+        raise RecoveryPlanError("recovery launcher is not executable")
     return SourceSnapshot(
         commit=head,
         terraform_files=terraform_files,
@@ -3570,8 +3780,8 @@ def _validate_captured_artifacts(
     plan = _load_json_bytes(plan_json_bytes, label="derived plan JSON")
     plan_timestamp = _validate_plan(plan, now=now, state_projection=state_projection)
     return {
-        "schema_version": 2,
-        "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v2",
+        "schema_version": 3,
+        "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v3",
         "generation_mode": generation_mode,
         "source_commit": source.commit,
         "source_tree_sha256": source.tree_sha256,
@@ -3590,6 +3800,14 @@ def _validate_captured_artifacts(
         "open_tofu_version": EXPECTED_TOFU_VERSION,
         "open_tofu_source_path": str(EXPECTED_TOFU_PATH),
         "open_tofu_sha256": runtime.tofu_sha256,
+        "python_launcher_source_path": LAUNCHER_REPOSITORY_PATH,
+        "python_launcher_sha256": str(
+            _runtime_file_record(LAUNCHER_PATH, label="recovery launcher")[3]
+        ),
+        "python_executable_source_path": str(EXPECTED_PYTHON_PATH),
+        "python_executable_sha256": runtime.python_executable_sha256,
+        "python_version_sha256": runtime.python_version_sha256,
+        "python_runtime_sha256": runtime.python_runtime_sha256,
         "azure_cli_source_path": str(EXPECTED_AZURE_CLI_PATH),
         "azure_cli_sha256": runtime.azure_cli_sha256,
         "azure_cli_version_sha256": runtime.azure_cli_version_sha256,

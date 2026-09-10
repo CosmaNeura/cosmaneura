@@ -26,8 +26,8 @@ PRINCIPAL_DIGEST = hashlib.sha256(b'operator@example.invalid').hexdigest()
 
 def _base() -> dict[str, Any]:
     return {
-        'schema_version': 2,
-        'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v2',
+        'schema_version': 3,
+        'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v3',
         'generation_mode': 'digest_bound_revalidation',
         'source_commit': SOURCE,
         'source_tree_sha256': '4' * 64,
@@ -46,6 +46,12 @@ def _base() -> dict[str, Any]:
         'open_tofu_version': '1.12.5',
         'open_tofu_source_path': str(consumer.recovery.EXPECTED_TOFU_PATH),
         'open_tofu_sha256': consumer.recovery.EXPECTED_TOFU_SHA256,
+        'python_launcher_source_path': consumer.recovery.LAUNCHER_REPOSITORY_PATH,
+        'python_launcher_sha256': consumer._digest(consumer.recovery.LAUNCHER_PATH.read_bytes()),
+        'python_executable_source_path': str(consumer.recovery.EXPECTED_PYTHON_PATH),
+        'python_executable_sha256': consumer.recovery.EXPECTED_PYTHON_SHA256,
+        'python_version_sha256': consumer.recovery.EXPECTED_PYTHON_VERSION_SHA256,
+        'python_runtime_sha256': consumer.recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
         'azure_cli_source_path': str(consumer.recovery.EXPECTED_AZURE_CLI_PATH),
         'azure_cli_sha256': consumer.recovery.EXPECTED_AZURE_CLI_SHA256,
         'azure_cli_version_sha256': consumer.recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
@@ -256,6 +262,8 @@ def test_receipt_shape_hashes_and_expiry_fail_closed(mutation: str) -> None:
     ('state_lineage', 'wrong'), ('backend_workspace', 'other'),
     ('open_tofu_version', '1.13.0'), ('generation_mode', 'validator_full_refresh'),
     ('open_tofu_sha256', 'f' * 64), ('azure_cli_sha256', 'f' * 64),
+    ('python_launcher_sha256', 'f' * 64), ('python_executable_sha256', 'f' * 64),
+    ('python_version_sha256', 'f' * 64), ('python_runtime_sha256', 'f' * 64),
     ('azure_cli_version_sha256', 'f' * 64), ('trusted_runtime_snapshotted', False),
     ('open_tofu_source_path', '/untrusted/tofu'),
     ('state_semantic_sha256', 'not-a-digest'), ('state_projection_sha256', 'not-a-digest'), ('azure_cli_source_closure_sha256', '0' * 64), ('azure_cli_closure_sha256', 'not-a-digest'), ('runtime_snapshot_sha256', 'not-a-digest'),

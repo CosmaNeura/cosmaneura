@@ -117,6 +117,30 @@ The later isolated synthetic-only rehearsal remains mandatory.
    After a successful human apply, record post-apply state and ARM readback, then
    stop before any later rung.
 
+Create and revalidate the base-recovery plan only through the reviewed launcher.
+The launcher starts from an empty environment, verifies the exact Python 3.14.7
+executable digest, and invokes the validator with isolated imports and site
+loading disabled. The version-3 receipt binds the launcher, Python executable,
+Python version, and selected standard-library runtime in addition to OpenTofu
+and Azure CLI. Direct, virtual-environment, `uv run`, or non-isolated Python
+invocations are not authorized:
+
+```sh
+/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+  --mode create \
+  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
+  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX
+
+/ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
+  --mode verify \
+  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-9.tfstate \
+  --execution-dir /ABSOLUTE/OWNER_ONLY/NEW_EXECUTION_DIRECTORY \
+  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX \
+  --expected-saved-plan-sha256 REVIEWED_SAVED_PLAN_SHA256
+```
+
 The approved human runs the consumer directly from the exact protected-master
 checkout with an empty ambient environment. Replace the placeholders below with
 absolute owner-only artifact paths and independently recorded lowercase

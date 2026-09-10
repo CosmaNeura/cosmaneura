@@ -70,6 +70,7 @@ HASH_FIELDS = frozenset(name for name in RECEIPT_FIELDS if name.endswith('_sha25
 SOURCE_PATHS = (
     recovery.REHEARSAL_ROOT,
     recovery.VALIDATOR_PATH,
+    recovery.LAUNCHER_PATH,
     _HANDOFF_FILE,
     Path(__file__).resolve(),
 )
@@ -289,8 +290,8 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
     if not (_exact_int(base.get('existing_resource_count'), 28) and _exact_int(base.get('create_count'), 11) and _exact_int(base.get('update_count'), 0) and _exact_int(base.get('destroy_or_replace_count'), 0)):
         _fail('plan.change_set_mismatch')
     base_exact = {
-        'schema_version': 2,
-        'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v2',
+        'schema_version': 3,
+        'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v3',
         'generation_mode': 'digest_bound_revalidation',
         'source_commit': expected_source_commit,
         'backend_workspace': 'default',
@@ -300,6 +301,12 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'open_tofu_version': recovery.EXPECTED_TOFU_VERSION,
         'open_tofu_source_path': str(recovery.EXPECTED_TOFU_PATH),
         'open_tofu_sha256': recovery.EXPECTED_TOFU_SHA256,
+        'python_launcher_source_path': recovery.LAUNCHER_REPOSITORY_PATH,
+        'python_launcher_sha256': _digest(recovery.LAUNCHER_PATH.read_bytes()),
+        'python_executable_source_path': str(recovery.EXPECTED_PYTHON_PATH),
+        'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
+        'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,
+        'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
         'azure_cli_source_path': str(recovery.EXPECTED_AZURE_CLI_PATH),
         'azure_cli_sha256': recovery.EXPECTED_AZURE_CLI_SHA256,
         'azure_cli_version_sha256': recovery.EXPECTED_AZURE_CLI_VERSION_SHA256,
@@ -314,7 +321,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
     }
     if any(base.get(name) != value or type(base.get(name)) is not type(value) for name, value in base_exact.items()):
         _fail('plan.authorization_mismatch')
-    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
+    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'python_launcher_sha256', 'python_runtime_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
         _fail('plan.authorization_mismatch')
     if expires - observed != handoff.RECEIPT_LIFETIME or now < observed - handoff.MAX_CLOCK_SKEW or now >= expires:
         _fail('receipt.expired')

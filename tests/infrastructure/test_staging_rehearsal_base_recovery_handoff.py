@@ -161,7 +161,7 @@ def _attributes(state: dict[str, Any] | None=None) -> dict[str, Mapping[str, Any
     return handoff._state_attributes(json.dumps(state or _valid_state()).encode())
 
 def _base_receipt(state_bytes: bytes) -> dict[str, Any]:
-    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'state_projection_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': handoff.recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, 'azure_cli_closure_sha256': 'e' * 64, 'runtime_snapshot_sha256': 'f' * 64, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
+    return {'schema_version': 3, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-plan-v3', 'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'state_projection_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'python_launcher_source_path': handoff.recovery.LAUNCHER_REPOSITORY_PATH, 'python_launcher_sha256': 'a' * 64, 'python_executable_source_path': str(handoff.recovery.EXPECTED_PYTHON_PATH), 'python_executable_sha256': handoff.recovery.EXPECTED_PYTHON_SHA256, 'python_version_sha256': handoff.recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': 'b' * 64, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': handoff.recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, 'azure_cli_closure_sha256': 'e' * 64, 'runtime_snapshot_sha256': 'f' * 64, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
 
 def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[str]]:
     queue = list(states)
@@ -169,6 +169,7 @@ def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[
     monkeypatch.setattr(handoff.recovery, '_executable_sha256', lambda *_, **__: '6' * 64)
     monkeypatch.setattr(handoff.recovery, '_backend_snapshot', lambda **_: '5' * 64)
     monkeypatch.setattr(handoff.recovery, '_provider_tree_sha256', lambda _: '7' * 64)
+    monkeypatch.setattr(handoff.recovery, '_python_runtime_binding', lambda: {'python_executable_sha256': handoff.recovery.EXPECTED_PYTHON_SHA256, 'python_version_sha256': handoff.recovery.EXPECTED_PYTHON_VERSION_SHA256, 'python_runtime_sha256': 'b' * 64})
     monkeypatch.setattr(handoff, '_python_runtime_binding', lambda: {'python_executable_sha256': '8' * 64, 'python_runtime_sha256': '9' * 64})
     monkeypatch.setattr(handoff, '_resolve_azure_cli', lambda: Path('/trusted/az'))
     monkeypatch.setattr(handoff, '_operator_paths', lambda: (Path('/trusted/home'), Path('/trusted/home/.azure'), 'd' * 64))
@@ -313,7 +314,7 @@ def test_prepare_reruns_validator_and_writes_owner_only_bound_receipt(tmp_path: 
     serialized = receipt_path.read_text()
     assert 'operator@example' not in serialized and (not any((value in serialized for value in PRINCIPALS.values())))
 
-@pytest.mark.parametrize('failure', ['base', 'plan_runtime', 'nonce', 'remote', 'stale', 'torn'])
+@pytest.mark.parametrize('failure', ['base', 'plan_runtime', 'plan_python', 'nonce', 'remote', 'stale', 'torn'])
 def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     tmp_path.chmod(448)
     state_bytes = json.dumps(_valid_state()).encode()
@@ -328,6 +329,8 @@ def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         base['apply_authorized'] = True
     elif failure == 'plan_runtime':
         base['azure_cli_sha256'] = 'f' * 64
+    elif failure == 'plan_python':
+        base['python_runtime_sha256'] = '0' * 64
 
     def verify(**_: Any) -> Mapping[str, Any]:
         execution.mkdir(mode=448)
@@ -426,7 +429,7 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CLOUD_SHA256', handoff._digest(handoff._canonical(cloud)))
     monkeypatch.setattr(handoff, '_operator_paths', lambda: (tmp_path, tmp_path / '.azure', 'd' * 64))
     monkeypatch.setattr(handoff.recovery, '_executable_sha256', lambda *_, **__: 'a' * 64)
-    runtime = handoff.recovery.RuntimeSnapshot(Path('/trusted/tofu'), az, '0' * 64, '1' * 64, handoff._digest(handoff._canonical(version)), '2' * 64, '3' * 64)
+    runtime = handoff.recovery.RuntimeSnapshot(tofu=Path('/trusted/tofu'), azure_cli=az, python_executable_sha256=handoff.recovery.EXPECTED_PYTHON_SHA256, python_version_sha256=handoff.recovery.EXPECTED_PYTHON_VERSION_SHA256, python_runtime_sha256='9' * 64, tofu_sha256='0' * 64, azure_cli_sha256='1' * 64, azure_cli_version_sha256=handoff._digest(handoff._canonical(version)), azure_cli_closure_sha256='2' * 64, runtime_snapshot_sha256='3' * 64)
     monkeypatch.setattr(handoff.recovery, '_snapshot_and_verify_runtime', lambda **_: runtime)
     monkeypatch.setattr(handoff.recovery, '_run_process', run)
     monkeypatch.setattr(handoff, '_hardened_tls_context', lambda: (ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT), 'c' * 64))

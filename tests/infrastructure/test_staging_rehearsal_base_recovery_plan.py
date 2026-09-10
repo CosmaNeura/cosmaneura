@@ -128,7 +128,7 @@ def _source_snapshot() -> Any:
     )
 
 
-def _runtime_snapshot() -> Any: return recovery.RuntimeSnapshot(TOFU, AZURE_CLI, recovery.EXPECTED_TOFU_SHA256, recovery.EXPECTED_AZURE_CLI_SHA256, recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "f" * 64, "1" * 64)  # fmt: skip
+def _runtime_snapshot() -> Any: return recovery.RuntimeSnapshot(tofu=TOFU, azure_cli=AZURE_CLI, python_executable_sha256=recovery.EXPECTED_PYTHON_SHA256, python_version_sha256=recovery.EXPECTED_PYTHON_VERSION_SHA256, python_runtime_sha256=recovery.EXPECTED_PYTHON_RUNTIME_SHA256, tofu_sha256=recovery.EXPECTED_TOFU_SHA256, azure_cli_sha256=recovery.EXPECTED_AZURE_CLI_SHA256, azure_cli_version_sha256=recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, azure_cli_closure_sha256="f" * 64, runtime_snapshot_sha256="1" * 64)  # fmt: skip
 def _saved_plan_bytes(
     *, state: dict[str, Any] | None = None, source: Any | None = None
 ) -> bytes:
@@ -213,13 +213,61 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
     plan_json_bytes = json.dumps(_valid_plan()).encode()
     receipt = _validate(monkeypatch, source=source, saved_plan_bytes=plan_bytes)
 
-    expected_facts = {"state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
+    expected_facts = {"schema_version": 3, "policy_id": "cosmaneura-staging-rehearsal-base-recovery-plan-v3", "state_lineage": recovery.EXPECTED_LINEAGE, "state_serial": recovery.EXPECTED_RECOVERY_SERIAL, "generation_mode": "validator_full_refresh", "full_refresh_generated_here": True, "validated_nonempty_change_set": True, "artifact_policy_complete": True, "live_readback_bound": False, "apply_authorized": False, "existing_resource_count": 28, "create_count": 11, "update_count": 0, "destroy_or_replace_count": 0, "pass": True}  # fmt: skip
     assert {name: receipt[name] for name in expected_facts} == expected_facts
     digest = recovery._sha256_bytes
-    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
+    expected_hashes = {"state_json_sha256": digest(state_bytes), "state_semantic_sha256": digest(recovery._canonical_json_bytes(_valid_state())), "state_projection_sha256": digest(state_projection_bytes), "embedded_state_sha256": digest(state_bytes), "saved_plan_sha256": digest(plan_bytes), "derived_plan_json_sha256": digest(plan_json_bytes), "source_tree_sha256": source.tree_sha256, "provider_lock_sha256": digest(source.lockfile), "backend_metadata_sha256": BACKEND_SHA256, "open_tofu_sha256": recovery.EXPECTED_TOFU_SHA256, "python_launcher_sha256": digest(recovery.LAUNCHER_PATH.read_bytes()), "python_executable_sha256": recovery.EXPECTED_PYTHON_SHA256, "python_version_sha256": recovery.EXPECTED_PYTHON_VERSION_SHA256, "python_runtime_sha256": recovery.EXPECTED_PYTHON_RUNTIME_SHA256, "azure_cli_sha256": recovery.EXPECTED_AZURE_CLI_SHA256, "azure_cli_version_sha256": recovery.EXPECTED_AZURE_CLI_VERSION_SHA256, "azure_cli_source_closure_sha256": recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, "azure_cli_closure_sha256": "f" * 64, "runtime_snapshot_sha256": "1" * 64}  # fmt: skip
     assert {name: receipt[name] for name in expected_hashes} == expected_hashes
     with pytest.raises(recovery.RecoveryPlanError, match="digest"):
         _validate(monkeypatch, expected_digest="0" * 64)
+
+
+def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
+    launcher = ROOT / "scripts/run_staging_rehearsal_base_recovery_plan.sh"
+    assert launcher.stat().st_mode & 0o777 == 0o755
+    assert recovery.EXPECTED_PYTHON_SHA256 in launcher.read_text(encoding="utf-8")
+
+    direct = subprocess.run(
+        [sys.executable, str(SCRIPT), "--help"],
+        check=False,
+        capture_output=True,
+        env={},
+    )
+    assert direct.returncode == 2
+    assert direct.stdout == b""
+    assert direct.stderr == (
+        b"recovery_plan_refused: python bootstrap is not isolated\n"
+    )
+
+    launched = subprocess.run(
+        [str(launcher), "--help"],
+        check=False,
+        capture_output=True,
+        env={"PYTHONPATH": "/tmp/untrusted-python-path"},
+    )
+    assert launched.returncode == 0
+    assert b"--expected-source-commit" in launched.stdout
+    assert launched.stderr == b""
+
+    command = (
+        "import json,runpy; "
+        f"module=runpy.run_path({str(SCRIPT)!r}); "
+        "print(json.dumps(module['_python_runtime_binding'](),sort_keys=True))"
+    )
+    bound = subprocess.run(
+        [str(recovery.EXPECTED_PYTHON_PATH), "-IS", "-c", command],
+        check=False,
+        capture_output=True,
+        env={},
+    )
+    assert bound.returncode == 0, bound.stderr
+    binding = json.loads(bound.stdout)
+    assert binding["python_executable_sha256"] == recovery.EXPECTED_PYTHON_SHA256
+    assert binding["python_version_sha256"] == recovery.EXPECTED_PYTHON_VERSION_SHA256
+    assert (
+        binding["python_runtime_sha256"]
+        == recovery.EXPECTED_PYTHON_RUNTIME_SHA256
+    )
 
 
 def test_plan_json_comes_from_exact_binary(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -485,6 +533,7 @@ def test_noop_values_sensitivity_identity_and_prior_state_are_exact(monkeypatch:
 
 
 def test_rejected_plan_digest_cannot_be_reauthorized(monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    assert "1adfc2b7926381e01bd6bced4f50fdab5407d737ee617baef9649c8903405a34" in recovery.REJECTED_SAVED_PLAN_SHA256S
     plan = _saved_plan_bytes(); monkeypatch.setattr(recovery, "REJECTED_SAVED_PLAN_SHA256S", frozenset({recovery._sha256_bytes(plan)}))  # fmt: skip
     with pytest.raises(recovery.RecoveryPlanError, match="permanently rejected"): _validate(monkeypatch, saved_plan_bytes=plan)
 
@@ -538,11 +587,13 @@ def test_source_snapshot_rejects_clean_worktree_bytes_not_at_head(
 ) -> None:
     root, commit = tmp_path, "a" * 40
     rehearsal, validator = root / "infra", root / "scripts" / "validator.py"
-    artifacts = ((rehearsal / "main.tf", b"mutated"), (rehearsal / ".terraform.lock.hcl", b"lock"), (validator, b"validator"))  # fmt: skip
+    launcher = root / "scripts" / "launcher.sh"
+    artifacts = ((rehearsal / "main.tf", b"mutated"), (rehearsal / ".terraform.lock.hcl", b"lock"), (validator, b"validator"), (launcher, b"launcher"))  # fmt: skip
     for path, value in artifacts:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(value)
-    globals_ = (("REPOSITORY_ROOT", root), ("REHEARSAL_ROOT", rehearsal), ("VALIDATOR_PATH", validator))  # fmt: skip
+    launcher.chmod(0o755)
+    globals_ = (("REPOSITORY_ROOT", root), ("REHEARSAL_ROOT", rehearsal), ("VALIDATOR_PATH", validator), ("LAUNCHER_PATH", launcher))  # fmt: skip
     for name, value in globals_:
         monkeypatch.setattr(recovery, name, value)
     responses = {"rev-parse": f"{commit}\n".encode(), "remote": f"{recovery.EXPECTED_ORIGIN_URL}\n".encode(), "ls-remote": f"{commit}\trefs/heads/master\n".encode(), "status": b"", "ls-tree": b"infra/main.tf\ninfra/.terraform.lock.hcl\n", "show": b"reviewed"}  # fmt: skip
@@ -669,6 +720,8 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
     azure_version = {"azure-cli": "2.89.1", "extensions": {}}
     pins = {"EXPECTED_TOFU_PATH": tofu, "EXPECTED_AZURE_CLI_PATH": azure_cli, "EXPECTED_TOFU_SHA256": hashlib.sha256(tofu.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_SHA256": hashlib.sha256(azure_cli.read_bytes()).hexdigest(), "EXPECTED_AZURE_CLI_VERSION_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest(), "EXPECTED_AZURE_CLOUD_SHA256": hashlib.sha256(recovery._canonical_json_bytes(azure_version)).hexdigest()}
     for name, value in pins.items(): monkeypatch.setattr(recovery, name, value)  # noqa: E701
+    python_binding = {"python_executable_sha256": "8" * 64, "python_version_sha256": "9" * 64, "python_runtime_sha256": "a" * 64}
+    monkeypatch.setattr(recovery, "_python_runtime_binding", lambda: python_binding)
     monkeypatch.setattr(recovery, "_trusted_executable_source", lambda path, **_: path)
     closure_sha256 = "c" * 64
 
@@ -697,6 +750,7 @@ def test_runtime_executables_and_versions_are_snapshotted_and_pinned(tmp_path: P
         os.umask(previous_umask)
     assert runtime.tofu.read_bytes() == tofu.read_bytes() and runtime.azure_cli.read_bytes() == recovery._azure_cli_wrapper(runtime.azure_cli.parent) and not stale.exists() and not (runtime.azure_cli.parent / "azure-home").exists()
     assert runtime.azure_cli_closure_sha256 == closure_sha256 and runtime.tofu.stat().st_mode & 0o777 == runtime.azure_cli.stat().st_mode & 0o777 == 0o500
+    assert {name: getattr(runtime, name) for name in python_binding} == python_binding
     null_home_binding = recovery._validated_null_home()
     with open(os.devnull, "wb") as sink:
         sink.write(b"probe")

@@ -797,7 +797,11 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
     if expected_saved_plan_sha256 in recovery.REJECTED_SAVED_PLAN_SHA256S:
         _fail('saved_plan.rejected')
     base = dict(recovery.revalidate_recovery_plan(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
-    if base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
+    try:
+        recovery_python_binding = recovery._python_runtime_binding()
+    except recovery.RecoveryPlanError:
+        _fail('plan_python_runtime.invalid')
+    if base.get('schema_version') != 3 or base.get('policy_id') != 'cosmaneura-staging-rehearsal-base-recovery-plan-v3' or any(base.get(name) != value for name, value in recovery_python_binding.items()) or base.get('python_executable_source_path') != str(recovery.EXPECTED_PYTHON_PATH) or base.get('python_launcher_source_path') != recovery.LAUNCHER_REPOSITORY_PATH or base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
         _fail('plan_receipt.invalid')
     state_bytes = recovery._read_protected_file(state_json, label='state snapshot', required_mode=384)
     if _digest(state_bytes) != base.get('state_json_sha256'):
