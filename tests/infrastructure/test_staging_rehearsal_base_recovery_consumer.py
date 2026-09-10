@@ -163,9 +163,7 @@ def test_final_consumer_independently_executes_pinned_launcher_descriptor(
     def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         descriptor = kwargs['pass_fds'][0]
         assert kwargs == {'cwd': consumer.recovery.REPOSITORY_ROOT, 'timeout_seconds': 900, 'pass_fds': (descriptor,), 'max_output_bytes': 64 * 1024}
-        os.lseek(descriptor, 0, os.SEEK_SET)
         assert hashlib.sha256(os.read(descriptor, 64 * 1024)).hexdigest() == consumer.EXPECTED_RECOVERY_LAUNCHER_SHA256
-        os.lseek(descriptor, 0, os.SEEK_SET)
         observed.extend(arguments)
         return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
     monkeypatch.setattr(consumer.recovery, '_run_process', run)
@@ -193,6 +191,28 @@ def test_final_consumer_executes_opened_launcher_bytes_across_path_swap(tmp_path
         os.replace(replacement, launcher)
         assert Path(f'/dev/fd/{descriptor}').read_bytes() == reviewed
         assert arguments[2] == f'. /dev/fd/{descriptor}'
+        return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
+    monkeypatch.setattr(consumer.recovery, '_run_process', run)
+    result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)
+    assert result['python_launcher_sha256'] == expected
+    assert result['launcher_execution_authenticated'] is True
+
+
+def test_final_consumer_executes_immutable_snapshot_across_in_place_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    launcher = tmp_path / 'launcher.sh'
+    reviewed = b'#!/bin/sh\nexit 0\n'
+    launcher.write_bytes(reviewed)
+    launcher.chmod(0o755)
+    expected = hashlib.sha256(reviewed).hexdigest()
+    original_inode = launcher.stat().st_ino
+    monkeypatch.setattr(consumer.recovery, 'LAUNCHER_PATH', launcher)
+    monkeypatch.setattr(consumer, 'EXPECTED_RECOVERY_LAUNCHER_SHA256', expected)
+    raw = {'pass': True, 'launcher_execution_authenticated': False}
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        descriptor = kwargs['pass_fds'][0]
+        launcher.write_bytes(b'#!/bin/sh\necho forged\n')
+        assert launcher.stat().st_ino == original_inode
+        assert Path(f'/dev/fd/{descriptor}').read_bytes() == reviewed
         return subprocess.CompletedProcess(arguments, 0, consumer._canonical(raw) + b'\n', b'')
     monkeypatch.setattr(consumer.recovery, '_run_process', run)
     result = consumer._revalidate_plan_via_launcher(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST)

@@ -129,10 +129,11 @@ launcher, manifest, Python executable and framework, Python version, and full
 runtime tree in addition to OpenTofu and Azure CLI. A validator receipt remains
 a non-authoritative candidate (`launcher_execution_authenticated=false`). The
 preparer and final consumer each independently pin, no-follow open, hash, and
-execute the exact launcher descriptor before promoting that fact to `true`;
-they never trust or execute a launcher reopened by pathname. Direct, imported,
-`runpy`, virtual-environment, `uv run`, and non-isolated Python invocations
-cannot confer plan authority:
+copy the exact launcher bytes into a pathless, closed-writer pipe snapshot.
+They execute only that immutable read descriptor before promoting the fact to
+`true`; they never trust or execute mutable launcher bytes after the source
+metadata and digest checks. Direct, imported, `runpy`, virtual-environment,
+`uv run`, and non-isolated Python invocations cannot confer plan authority:
 
 ```sh
 /ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
@@ -203,8 +204,9 @@ posture mismatch. No production or PHI promotion is part of this plan.
 - The handoff preparer uses only bounded, no-proxy, no-redirect HTTPS GETs and
   never emits the Azure token or raw response bodies. It refuses an ambient
   Python/import/transport environment, accepts a base receipt only after it has
-  independently authenticated and executed the exact opened launcher bytes,
-  and revalidates the exact runtime after the live reads.
+  independently authenticated and executed an immutable, anonymous snapshot
+  of the exact launcher bytes, and revalidates the exact runtime after the live
+  reads.
 - The human-only consumer also refuses ambient Python, dynamic-loader, proxy,
   OpenTofu, Azure, and Git overrides. Its final `execve` environment is a closed
   allowlist, and its immutable claim remains after an execution failure so the

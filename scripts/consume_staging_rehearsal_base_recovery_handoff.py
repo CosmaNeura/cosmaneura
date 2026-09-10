@@ -227,31 +227,62 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> tuple[An
 
 def _open_verified_recovery_launcher() -> int:
     flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    source: int | None = None
+    snapshot_reader: int | None = None
+    snapshot_writer: int | None = None
     descriptor: int | None = None
     try:
-        initial = os.open(recovery.LAUNCHER_PATH, flags)
-        try:
-            descriptor = fcntl.fcntl(initial, getattr(fcntl, 'F_DUPFD_CLOEXEC', fcntl.F_DUPFD), 10)
-        finally:
-            os.close(initial)
-        before = os.fstat(descriptor)
+        source = os.open(recovery.LAUNCHER_PATH, flags)
+        before = os.fstat(source)
         linked = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
         def identity(value: os.stat_result) -> tuple[int, ...]: return value.st_dev, value.st_ino, value.st_uid, value.st_nlink, stat.S_IMODE(value.st_mode), value.st_size, value.st_mtime_ns, value.st_ctime_ns
         if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o755 or not 0 < before.st_size <= MAX_RECOVERY_LAUNCHER_BYTES or identity(before) != identity(linked):
             _fail('plan_launcher.invalid')
         digest = hashlib.sha256()
-        while chunk := os.read(descriptor, 64 * 1024):
+        chunks: list[bytes] = []
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(source, min(64 * 1024, remaining))
+            if not chunk:
+                _fail('plan_launcher.invalid')
+            chunks.append(chunk)
             digest.update(chunk)
-        after = os.fstat(descriptor)
+            remaining -= len(chunk)
+        if os.read(source, 1):
+            _fail('plan_launcher.invalid')
+        after = os.fstat(source)
         linked_after = os.stat(recovery.LAUNCHER_PATH, follow_symlinks=False)
         if identity(before) != identity(after) or identity(after) != identity(linked_after) or digest.hexdigest() != EXPECTED_RECOVERY_LAUNCHER_SHA256:
             _fail('plan_launcher.invalid')
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        return descriptor
+        snapshot = b''.join(chunks)
+        if len(snapshot) != before.st_size or hashlib.sha256(snapshot).hexdigest() != EXPECTED_RECOVERY_LAUNCHER_SHA256:
+            _fail('plan_launcher.invalid')
+        snapshot_reader, snapshot_writer = os.pipe()
+        writer_flags = fcntl.fcntl(snapshot_writer, fcntl.F_GETFL)
+        fcntl.fcntl(snapshot_writer, fcntl.F_SETFL, writer_flags | os.O_NONBLOCK)
+        offset = 0
+        while offset < len(snapshot):
+            written = os.write(snapshot_writer, snapshot[offset:])
+            if written <= 0:
+                _fail('plan_launcher.invalid')
+            offset += written
+        os.close(snapshot_writer)
+        snapshot_writer = None
+        descriptor = fcntl.fcntl(snapshot_reader, getattr(fcntl, 'F_DUPFD_CLOEXEC', fcntl.F_DUPFD), 10)
+        os.close(snapshot_reader)
+        snapshot_reader = None
+        anonymous = os.fstat(descriptor)
+        if not stat.S_ISFIFO(anonymous.st_mode) or anonymous.st_uid != os.geteuid() or (fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE) != os.O_RDONLY:
+            _fail('plan_launcher.invalid')
+        result = descriptor
+        descriptor = None
+        return result
     except (OSError, ConsumerError):
-        if descriptor is not None:
-            os.close(descriptor)
         _fail('plan_launcher.invalid')
+    finally:
+        for open_descriptor in (source, snapshot_reader, snapshot_writer, descriptor):
+            if open_descriptor is not None:
+                os.close(open_descriptor)
 
 def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str) -> Mapping[str, Any]:
     descriptor = _open_verified_recovery_launcher()
