@@ -118,12 +118,18 @@ The later isolated synthetic-only rehearsal remains mandatory.
    stop before any later rung.
 
 Create and revalidate the base-recovery plan only through the reviewed launcher.
-The launcher starts from an empty environment, verifies the exact Python 3.14.7
-executable digest, and invokes the validator with isolated imports and site
-loading disabled. The version-3 receipt binds the launcher, Python executable,
-Python version, and selected standard-library runtime in addition to OpenTofu
-and Azure CLI. Direct, virtual-environment, `uv run`, or non-isolated Python
-invocations are not authorized:
+The launcher starts from an empty environment and authenticates the exact
+root-owned Apple Command Line Tools Python 3.9.6 runtime before Python starts.
+Its compact manifest binds the complete 2,006-entry runtime tree—including the
+interpreter, framework binary, pure-Python modules, extension modules, links,
+owners, modes, and absence of extra entries. It then executes an unlinked,
+digest-verified snapshot of the validator from the same open file object with
+isolated imports and site loading disabled. The version-3 receipt binds the
+launcher, manifest, Python executable and framework, Python version, and full
+runtime tree in addition to OpenTofu and Azure CLI. The preparer and consumer
+invoke base-plan authority only through this launcher; direct, imported,
+`runpy`, virtual-environment, `uv run`, and non-isolated Python invocations are
+not authorized:
 
 ```sh
 /ABSOLUTE/PROTECTED_MASTER/scripts/run_staging_rehearsal_base_recovery_plan.sh \
@@ -193,8 +199,9 @@ posture mismatch. No production or PHI promotion is part of this plan.
   version emits either field, the validator requires it to be true.
 - The handoff preparer uses only bounded, no-proxy, no-redirect HTTPS GETs and
   never emits the Azure token or raw response bodies. It refuses an ambient
-  Python/import/transport environment and revalidates the exact runtime after
-  the live reads.
+  Python/import/transport environment, accepts a base receipt only from the
+  authenticated launcher with the exact launcher digest, and revalidates the
+  exact runtime after the live reads.
 - The human-only consumer also refuses ambient Python, dynamic-loader, proxy,
   OpenTofu, Azure, and Git overrides. Its final `execve` environment is a closed
   allowlist, and its immutable claim remains after an execution failure so the

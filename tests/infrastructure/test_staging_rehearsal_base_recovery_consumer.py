@@ -48,8 +48,14 @@ def _base() -> dict[str, Any]:
         'open_tofu_sha256': consumer.recovery.EXPECTED_TOFU_SHA256,
         'python_launcher_source_path': consumer.recovery.LAUNCHER_REPOSITORY_PATH,
         'python_launcher_sha256': consumer._digest(consumer.recovery.LAUNCHER_PATH.read_bytes()),
+        'python_runtime_manifest_source_path': consumer.recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
+        'python_runtime_manifest_sha256': consumer.recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
         'python_executable_source_path': str(consumer.recovery.EXPECTED_PYTHON_PATH),
         'python_executable_sha256': consumer.recovery.EXPECTED_PYTHON_SHA256,
+        'python_framework_source_path': str(consumer.recovery.EXPECTED_PYTHON_FRAMEWORK_PATH),
+        'python_framework_sha256': consumer.recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_tree_content_sha256': consumer.recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        'python_tree_metadata_sha256': consumer.recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         'python_version_sha256': consumer.recovery.EXPECTED_PYTHON_VERSION_SHA256,
         'python_runtime_sha256': consumer.recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
         'azure_cli_source_path': str(consumer.recovery.EXPECTED_AZURE_CLI_PATH),
@@ -128,6 +134,18 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any] | None
         expected_saved_plan_sha256=PLAN_DIGEST, handoff_source_sha256='c' * 64,
         python_binding=_python_binding(), now=now,
     )
+
+
+def test_base_receipt_revalidates_via_launcher_existing_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = _base()
+    observed: dict[str, Any] = {}
+    def verify(**kwargs: Any) -> Mapping[str, Any]:
+        observed.update(kwargs)
+        return base
+    monkeypatch.setattr(consumer.handoff, '_revalidate_plan_via_launcher', verify)
+    result, tofu = consumer._base_receipt(saved_plan=Path('/protected/plan'), state_json=Path('/protected/state'), execution_dir=Path('/protected/execution'), expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, now=NOW)
+    assert result == base and tofu == Path('/trusted/tofu')
+    assert observed['existing_execution_dir'] is True
 
 
 def _artifacts(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -263,6 +281,8 @@ def test_receipt_shape_hashes_and_expiry_fail_closed(mutation: str) -> None:
     ('open_tofu_version', '1.13.0'), ('generation_mode', 'validator_full_refresh'),
     ('open_tofu_sha256', 'f' * 64), ('azure_cli_sha256', 'f' * 64),
     ('python_launcher_sha256', 'f' * 64), ('python_executable_sha256', 'f' * 64),
+    ('python_runtime_manifest_sha256', 'f' * 64), ('python_framework_sha256', 'f' * 64),
+    ('python_tree_content_sha256', 'f' * 64), ('python_tree_metadata_sha256', 'f' * 64),
     ('python_version_sha256', 'f' * 64), ('python_runtime_sha256', 'f' * 64),
     ('azure_cli_version_sha256', 'f' * 64), ('trusted_runtime_snapshotted', False),
     ('open_tofu_source_path', '/untrusted/tofu'),

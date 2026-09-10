@@ -1,4 +1,4 @@
-#!/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/bin/python3.14 -IS
+#!/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9 -IS
 # ruff: noqa: E402, I001
 """Create or revalidate the one-time non-mutating staging recovery plan."""
 
@@ -6,17 +6,24 @@ from __future__ import annotations
 
 import sys as _bootstrap_sys
 
+_CANONICAL_VALIDATOR_PATH = (
+    "/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910/"
+    "scripts/validate_staging_rehearsal_base_recovery_plan.py"
+)
 if __name__ == "__main__" and (
     _bootstrap_sys.flags.isolated != 1
+    or _bootstrap_sys.flags.ignore_environment != 1
     or _bootstrap_sys.flags.no_site != 1
-    or not _bootstrap_sys.flags.safe_path
     or _bootstrap_sys.executable
     != (
-        "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/"
-        "Python.framework/Versions/3.14/bin/python3.14"
+        "/Library/Developer/CommandLineTools/Library/Frameworks/"
+        "Python3.framework/Versions/3.9/bin/python3.9"
     )
-    or _bootstrap_sys.hexversion != 51_251_184
+    or _bootstrap_sys.hexversion != 50_923_248
     or _bootstrap_sys._xoptions
+    or __file__ != "/dev/fd/3"
+    or not _bootstrap_sys.argv
+    or _bootstrap_sys.argv[0] != "/dev/fd/3"
 ):
     _bootstrap_sys.stderr.write(
         "recovery_plan_refused: python bootstrap is not isolated\n"
@@ -45,15 +52,23 @@ import time
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+UTC = timezone.utc
+if __name__ == "__main__":
+    VALIDATOR_PATH = Path(_CANONICAL_VALIDATOR_PATH)
+else:
+    VALIDATOR_PATH = Path(__file__).resolve()
+REPOSITORY_ROOT = VALIDATOR_PATH.parents[1]
 REHEARSAL_ROOT = REPOSITORY_ROOT / "infra-staging-rehearsal"
-VALIDATOR_PATH = Path(__file__).resolve()
 LAUNCHER_REPOSITORY_PATH = "scripts/run_staging_rehearsal_base_recovery_plan.sh"
 LAUNCHER_PATH = REPOSITORY_ROOT / LAUNCHER_REPOSITORY_PATH
+PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH = (
+    "scripts/staging_rehearsal_base_recovery_python_runtime.manifest"
+)
+PYTHON_RUNTIME_MANIFEST_PATH = REPOSITORY_ROOT / PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH
 
 EXPECTED_LINEAGE = "76b6712e-5781-adbd-9fb1-cf66db4f4e28"
 EXPECTED_RECOVERY_SERIAL = 9
@@ -63,18 +78,33 @@ EXPECTED_TOFU_PATH = Path("/opt/homebrew/Cellar/opentofu/1.12.5/bin/tofu")
 EXPECTED_TOFU_SHA256 = (
     "1334ccf2360fe38460c47fd0924555f411cf714813e541d17d744283c973aa99"
 )
-EXPECTED_PYTHON_PATH = Path(
-    "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/"
-    "Python.framework/Versions/3.14/bin/python3.14"
+EXPECTED_PYTHON_ROOT = Path(
+    "/Library/Developer/CommandLineTools/Library/Frameworks/"
+    "Python3.framework/Versions/3.9"
 )
+EXPECTED_PYTHON_PATH = EXPECTED_PYTHON_ROOT / "bin/python3.9"
+EXPECTED_PYTHON_FRAMEWORK_PATH = EXPECTED_PYTHON_ROOT / "Python3"
 EXPECTED_PYTHON_SHA256 = (
-    "87d4df53fd91304be5bac391fb204643c36b7df2023c04a0953bcbc7d4fdf634"
+    "bdea59019a38eb6600cc9e71e984a97fedadc406448431281e7657030f54987e"
+)
+EXPECTED_PYTHON_FRAMEWORK_SHA256 = (
+    "26422f0b21cb1e07236384afa4043c7401d39d09358c91df8bf3f5496f14712f"
 )
 EXPECTED_PYTHON_VERSION_SHA256 = (
-    "858e66d30adb67a08689c59d4a5b1cf90a3f2d9867f6eb9fe6652b47682cc4d6"
+    "2898c33a584249b0b41e7a4527519a08dce7d77c6a825c0e35a6cf6d6471a4a2"
+)
+EXPECTED_PYTHON_TREE_ENTRY_COUNT = 2006
+EXPECTED_PYTHON_TREE_METADATA_SHA256 = (
+    "102e14547e442dd8be9f2d9585982a1819147d3f08cdcab5db9b12b0036100fb"
+)
+EXPECTED_PYTHON_TREE_CONTENT_SHA256 = (
+    "63c163925c96a4f5d09c1209556bbfb2dbe9c2b9727dc1ebca1d4f53f010631b"
 )
 EXPECTED_PYTHON_RUNTIME_SHA256 = (
-    "f75b5595c280b91e4b44fd504356fe4d489b8afb7542ffcd3691e01e5e74fa96"
+    "d7cac5b4a8a201db4cdea94343b49049c789c369b62136ee60d2673249750914"
+)
+EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 = (
+    "4f0f0e22c89afc4a373f40deda9b504ae51082504643fde0767079ea238b41dd"
 )
 EXPECTED_AZURE_CLI_PATH = Path("/opt/homebrew/Cellar/azure-cli/2.89.1/bin/az")
 EXPECTED_AZURE_CLI_SHA256 = (
@@ -479,9 +509,6 @@ class SourceSnapshot:
 class RuntimeSnapshot:
     tofu: Path
     azure_cli: Path
-    python_executable_sha256: str
-    python_version_sha256: str
-    python_runtime_sha256: str
     tofu_sha256: str
     azure_cli_sha256: str
     azure_cli_version_sha256: str
@@ -861,7 +888,48 @@ def _runtime_file_record(
             os.close(descriptor)
 
 
+def _require_root_owned_runtime_path(
+    path: Path, *, label: str, executable: bool
+) -> None:
+    _reject_symlink_components(path, label=label)
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current /= part
+        try:
+            metadata = os.lstat(current)
+        except OSError as exc:
+            raise RecoveryPlanError(f"{label} is unavailable") from exc
+        if metadata.st_uid != 0 or stat.S_IMODE(metadata.st_mode) & 0o022:
+            raise RecoveryPlanError(f"{label} has a writable path component")
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RecoveryPlanError(f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or not 0 < metadata.st_size <= MAXIMUM_EXECUTABLE_BYTES
+        or (executable and not metadata.st_mode & 0o111)
+    ):
+        raise RecoveryPlanError(f"{label} is not an exact regular file")
+
+
+def _require_launcher_bootstrap() -> None:
+    if (
+        __name__ != "__main__"
+        or __file__ != "/dev/fd/3"
+        or not sys.argv
+        or sys.argv[0] != "/dev/fd/3"
+        or sys.flags.isolated != 1
+        or sys.flags.ignore_environment != 1
+        or sys.flags.no_site != 1
+        or sys.flags.no_user_site != 1
+        or sys._xoptions
+    ):
+        raise RecoveryPlanError("the authenticated Python launcher was bypassed")
+
+
 def _python_runtime_binding() -> Mapping[str, str]:
+    _require_launcher_bootstrap()
     unsafe_environment = {
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
@@ -879,7 +947,6 @@ def _python_runtime_binding() -> Mapping[str, str]:
         or sys.flags.ignore_environment != 1
         or sys.flags.no_site != 1
         or sys.flags.no_user_site != 1
-        or not sys.flags.safe_path
         or sys.gettrace() is not None
         or sys.getprofile() is not None
         or sys.prefix != sys.base_prefix
@@ -891,13 +958,32 @@ def _python_runtime_binding() -> Mapping[str, str]:
         base = Path(sys.base_prefix).resolve(strict=True)
     except OSError as exc:
         raise RecoveryPlanError("the Python runtime path is unavailable") from exc
-    if executable != EXPECTED_PYTHON_PATH or base != EXPECTED_PYTHON_PATH.parent.parent:
+    if executable != EXPECTED_PYTHON_PATH or base != EXPECTED_PYTHON_ROOT:
         raise RecoveryPlanError("the Python runtime path is not pinned")
-    _trusted_executable_source(
-        EXPECTED_PYTHON_PATH,
-        label="pinned Python",
-        expected_sha256=EXPECTED_PYTHON_SHA256,
+    _require_root_owned_runtime_path(
+        EXPECTED_PYTHON_PATH, label="pinned Python", executable=True
     )
+    _require_root_owned_runtime_path(
+        EXPECTED_PYTHON_FRAMEWORK_PATH,
+        label="pinned Python framework",
+        executable=True,
+    )
+    if (
+        _executable_sha256(EXPECTED_PYTHON_PATH, label="pinned Python")
+        != EXPECTED_PYTHON_SHA256
+        or _executable_sha256(
+            EXPECTED_PYTHON_FRAMEWORK_PATH, label="pinned Python framework"
+        )
+        != EXPECTED_PYTHON_FRAMEWORK_SHA256
+    ):
+        raise RecoveryPlanError("the Python runtime executable is not pinned")
+    manifest_sha256 = str(
+        _runtime_file_record(
+            PYTHON_RUNTIME_MANIFEST_PATH, label="Python runtime manifest"
+        )[3]
+    )
+    if manifest_sha256 != EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256:
+        raise RecoveryPlanError("the Python runtime manifest is not pinned")
 
     version_document = {
         "cache_tag": sys.implementation.cache_tag,
@@ -908,83 +994,21 @@ def _python_runtime_binding() -> Mapping[str, str]:
     if version_sha256 != EXPECTED_PYTHON_VERSION_SHA256:
         raise RecoveryPlanError("the Python version is not pinned")
 
-    runtime_paths: list[str] = []
-    for item in sys.path:
-        path = Path(item)
-        if (
-            not item
-            or not path.is_absolute()
-            or "site-packages" in path.parts
-            or "dist-packages" in path.parts
-        ):
-            raise RecoveryPlanError("the Python runtime import path is unsafe")
-        resolved = path.resolve(strict=False)
-        if not resolved.is_relative_to(base):
-            raise RecoveryPlanError("the Python runtime import path is unsafe")
-        runtime_paths.append(str(resolved))
-
-    module_sha256s: dict[str, str] = {}
-    module_names = (
-        "argparse",
-        "collections",
-        "collections.abc",
-        "ctypes",
-        "dataclasses",
-        "datetime",
-        "errno",
-        "fcntl",
-        "hashlib",
-        "io",
-        "json",
-        "os",
-        "pathlib",
-        "pwd",
-        "re",
-        "selectors",
-        "shlex",
-        "shutil",
-        "signal",
-        "stat",
-        "subprocess",
-        "tempfile",
-        "time",
-        "typing",
-        "zipfile",
+    expected_paths = (
+        str(EXPECTED_PYTHON_ROOT / "lib/python39.zip"),
+        str(EXPECTED_PYTHON_ROOT / "lib/python3.9"),
+        str(EXPECTED_PYTHON_ROOT / "lib/python3.9/lib-dynload"),
     )
-    for name in module_names:
-        module = sys.modules.get(name)
-        if module is None:
-            raise RecoveryPlanError("the Python runtime module set is incomplete")
-        raw_path = getattr(module, "__file__", None)
-        if raw_path is None:
-            module_sha256s[name] = "built-in"
-            continue
-        try:
-            path = Path(raw_path).resolve(strict=True)
-        except OSError as exc:
-            raise RecoveryPlanError("a Python runtime module is unavailable") from exc
-        if not path.is_relative_to(base):
-            raise RecoveryPlanError(
-                "a Python runtime module is outside the pinned base"
-            )
-        record = _runtime_file_record(path, label=f"Python module {name}")
-        if not 0 < record[2] <= 16 * 1024 * 1024:
-            raise RecoveryPlanError("a Python runtime module is not bounded")
-        module_sha256s[name] = str(record[3])
-
+    if tuple(sys.path) != expected_paths:
+        raise RecoveryPlanError("the Python runtime import path is not exact")
     runtime_sha256 = _sha256_bytes(
         _canonical_json_bytes(
             {
                 "executable_sha256": EXPECTED_PYTHON_SHA256,
-                "flags": {
-                    "ignore_environment": sys.flags.ignore_environment,
-                    "isolated": sys.flags.isolated,
-                    "no_site": sys.flags.no_site,
-                    "no_user_site": sys.flags.no_user_site,
-                    "safe_path": sys.flags.safe_path,
-                },
-                "modules": module_sha256s,
-                "paths": runtime_paths,
+                "framework_sha256": EXPECTED_PYTHON_FRAMEWORK_SHA256,
+                "tree_content_sha256": EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+                "tree_entry_count": EXPECTED_PYTHON_TREE_ENTRY_COUNT,
+                "tree_metadata_sha256": EXPECTED_PYTHON_TREE_METADATA_SHA256,
                 "version_sha256": version_sha256,
             }
         )
@@ -993,6 +1017,10 @@ def _python_runtime_binding() -> Mapping[str, str]:
         raise RecoveryPlanError("the Python standard-library runtime is not pinned")
     return {
         "python_executable_sha256": EXPECTED_PYTHON_SHA256,
+        "python_framework_sha256": EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        "python_runtime_manifest_sha256": manifest_sha256,
+        "python_tree_content_sha256": EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        "python_tree_metadata_sha256": EXPECTED_PYTHON_TREE_METADATA_SHA256,
         "python_version_sha256": version_sha256,
         "python_runtime_sha256": runtime_sha256,
     }
@@ -2476,7 +2504,6 @@ def _snapshot_and_verify_runtime(*, data_dir: Path) -> RuntimeSnapshot:
 def _snapshot_and_verify_runtime_with_protected_umask(
     *, data_dir: Path
 ) -> RuntimeSnapshot:
-    python_binding = _python_runtime_binding()
     _require_protected_directory(data_dir, label="OpenTofu data directory")
     runtime_directory = data_dir / TRUSTED_RUNTIME_DIRECTORY_NAME
     if runtime_directory.exists():
@@ -2564,16 +2591,12 @@ def _snapshot_and_verify_runtime_with_protected_umask(
                 "azure_cloud_sha256": EXPECTED_AZURE_CLOUD_SHA256,
                 "azure_cli_wrapper_sha256": wrapper_sha256,
                 "open_tofu_sha256": EXPECTED_TOFU_SHA256,
-                **python_binding,
             }
         )
     )
     return RuntimeSnapshot(
         tofu=tofu,
         azure_cli=azure_cli,
-        python_executable_sha256=python_binding["python_executable_sha256"],
-        python_version_sha256=python_binding["python_version_sha256"],
-        python_runtime_sha256=python_binding["python_runtime_sha256"],
         tofu_sha256=EXPECTED_TOFU_SHA256,
         azure_cli_sha256=EXPECTED_AZURE_CLI_SHA256,
         azure_cli_version_sha256=azure_version_sha256,
@@ -2834,6 +2857,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
             str(REHEARSAL_ROOT.relative_to(REPOSITORY_ROOT)),
             str(VALIDATOR_PATH.relative_to(REPOSITORY_ROOT)),
             str(LAUNCHER_PATH.relative_to(REPOSITORY_ROOT)),
+            str(PYTHON_RUNTIME_MANIFEST_PATH.relative_to(REPOSITORY_ROOT)),
         ]
     )
     if status:
@@ -2876,6 +2900,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     for source_path, label in (
         (VALIDATOR_PATH, "recovery validator"),
         (LAUNCHER_PATH, "recovery launcher"),
+        (PYTHON_RUNTIME_MANIFEST_PATH, "Python runtime manifest"),
     ):
         try:
             metadata = source_path.lstat()
@@ -2901,7 +2926,7 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
         ]
     )
     if stat.S_IMODE(
-        LAUNCHER_PATH.stat(follow_symlinks=False).st_mode
+        os.stat(LAUNCHER_PATH, follow_symlinks=False).st_mode
     ) != 0o755 or not launcher_tree_entry.startswith(b"100755 blob "):
         raise RecoveryPlanError("recovery launcher is not executable")
     return SourceSnapshot(
@@ -3723,6 +3748,7 @@ def _validate_captured_artifacts(
     source: SourceSnapshot,
     backend_metadata_sha256: str,
     runtime: RuntimeSnapshot,
+    python_binding: Mapping[str, str],
     data_dir: Path,
     generation_mode: str,
     now: datetime,
@@ -3804,10 +3830,20 @@ def _validate_captured_artifacts(
         "python_launcher_sha256": str(
             _runtime_file_record(LAUNCHER_PATH, label="recovery launcher")[3]
         ),
+        "python_runtime_manifest_source_path": (
+            PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH
+        ),
+        "python_runtime_manifest_sha256": python_binding[
+            "python_runtime_manifest_sha256"
+        ],
         "python_executable_source_path": str(EXPECTED_PYTHON_PATH),
-        "python_executable_sha256": runtime.python_executable_sha256,
-        "python_version_sha256": runtime.python_version_sha256,
-        "python_runtime_sha256": runtime.python_runtime_sha256,
+        "python_executable_sha256": python_binding["python_executable_sha256"],
+        "python_framework_source_path": str(EXPECTED_PYTHON_FRAMEWORK_PATH),
+        "python_framework_sha256": python_binding["python_framework_sha256"],
+        "python_tree_content_sha256": python_binding["python_tree_content_sha256"],
+        "python_tree_metadata_sha256": python_binding["python_tree_metadata_sha256"],
+        "python_version_sha256": python_binding["python_version_sha256"],
+        "python_runtime_sha256": python_binding["python_runtime_sha256"],
         "azure_cli_source_path": str(EXPECTED_AZURE_CLI_PATH),
         "azure_cli_sha256": runtime.azure_cli_sha256,
         "azure_cli_version_sha256": runtime.azure_cli_version_sha256,
@@ -3831,6 +3867,8 @@ def _validate_captured_artifacts(
 def create_and_validate_recovery_plan(
     *, saved_plan: Path, state_json: Path, expected_source_commit: str
 ) -> Mapping[str, Any]:
+    _require_launcher_bootstrap()
+    python_binding = _python_runtime_binding()
     _reject_symlink_components(saved_plan, label="saved plan", allow_missing_leaf=True)
     if saved_plan.exists():
         raise RecoveryPlanError("saved plan output already exists")
@@ -3855,6 +3893,7 @@ def create_and_validate_recovery_plan(
             source=source_before,
             backend_metadata_sha256=backend_before,
             runtime=runtime,
+            python_binding=python_binding,
             data_dir=data_dir,
             generation_mode="validator_full_refresh",
             now=datetime.now(UTC),
@@ -3876,14 +3915,17 @@ def create_and_validate_recovery_plan(
     return receipt
 
 
-def revalidate_recovery_plan(
+def _revalidate_recovery_plan(
     *,
     saved_plan: Path,
     state_json: Path,
     execution_dir: Path,
     expected_source_commit: str,
     expected_saved_plan_sha256: str,
+    python_binding: Mapping[str, str],
+    create_execution_dir: bool,
 ) -> Mapping[str, Any]:
+    _require_launcher_bootstrap()
     if re.fullmatch(r"[0-9a-f]{64}", expected_saved_plan_sha256) is None:
         raise RecoveryPlanError("expected saved-plan digest is invalid")
     if expected_saved_plan_sha256 in REJECTED_SAVED_PLAN_SHA256S:
@@ -3896,10 +3938,14 @@ def revalidate_recovery_plan(
     )
     if execution_dir.parent != saved_plan.parent:
         raise RecoveryPlanError("execution directory must share the saved-plan parent")
-    _create_protected_directory(execution_dir, label="execution directory")
+    if create_execution_dir:
+        _create_protected_directory(execution_dir, label="execution directory")
+    else:
+        _require_protected_directory(execution_dir, label="execution directory")
     source_before = _source_snapshot(expected_source_commit)
     runtime = _snapshot_and_verify_runtime(data_dir=execution_dir)
-    _initialize_tofu(tofu=runtime.tofu, data_dir=execution_dir)
+    if create_execution_dir:
+        _initialize_tofu(tofu=runtime.tofu, data_dir=execution_dir)
     backend_before = _backend_snapshot(tofu=runtime.tofu, data_dir=execution_dir)
     receipt = dict(
         _validate_captured_artifacts(
@@ -3908,6 +3954,7 @@ def revalidate_recovery_plan(
             source=source_before,
             backend_metadata_sha256=backend_before,
             runtime=runtime,
+            python_binding=python_binding,
             data_dir=execution_dir,
             generation_mode="digest_bound_revalidation",
             now=datetime.now(UTC),
@@ -3926,9 +3973,51 @@ def revalidate_recovery_plan(
     return receipt
 
 
+def revalidate_recovery_plan(
+    *,
+    saved_plan: Path,
+    state_json: Path,
+    execution_dir: Path,
+    expected_source_commit: str,
+    expected_saved_plan_sha256: str,
+) -> Mapping[str, Any]:
+    _require_launcher_bootstrap()
+    return _revalidate_recovery_plan(
+        saved_plan=saved_plan,
+        state_json=state_json,
+        execution_dir=execution_dir,
+        expected_source_commit=expected_source_commit,
+        expected_saved_plan_sha256=expected_saved_plan_sha256,
+        python_binding=_python_runtime_binding(),
+        create_execution_dir=True,
+    )
+
+
+def revalidate_existing_recovery_plan(
+    *,
+    saved_plan: Path,
+    state_json: Path,
+    execution_dir: Path,
+    expected_source_commit: str,
+    expected_saved_plan_sha256: str,
+) -> Mapping[str, Any]:
+    _require_launcher_bootstrap()
+    return _revalidate_recovery_plan(
+        saved_plan=saved_plan,
+        state_json=state_json,
+        execution_dir=execution_dir,
+        expected_source_commit=expected_source_commit,
+        expected_saved_plan_sha256=expected_saved_plan_sha256,
+        python_binding=_python_runtime_binding(),
+        create_execution_dir=False,
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", required=True, choices=("create", "verify"))
+    parser.add_argument(
+        "--mode", required=True, choices=("create", "verify", "verify-existing")
+    )
     parser.add_argument("--saved-plan", required=True, type=Path)
     parser.add_argument("--state-json", required=True, type=Path)
     parser.add_argument("--execution-dir", type=Path)
@@ -3953,9 +4042,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             if args.expected_saved_plan_sha256 is None or args.execution_dir is None:
                 raise RecoveryPlanError(
-                    "verify mode requires the reviewed plan digest and new execution directory"
+                    "verify mode requires the reviewed plan digest and execution directory"
                 )
-            receipt = revalidate_recovery_plan(
+            revalidator = (
+                revalidate_recovery_plan
+                if args.mode == "verify"
+                else revalidate_existing_recovery_plan
+            )
+            receipt = revalidator(
                 saved_plan=args.saved_plan,
                 state_json=args.state_json,
                 execution_dir=args.execution_dir,

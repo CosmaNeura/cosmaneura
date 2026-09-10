@@ -29,7 +29,7 @@ _RECOVERY_VALIDATOR = (
     .with_name("validate_staging_rehearsal_base_recovery_plan.py")
 )
 _RECOVERY_VALIDATOR_SHA256 = (
-    "a5243e0b7959a361eb965cfc442f0f532bc33e18a900e56f196a4841e082f215"
+    "636ca3669e676a66e3c5559599a211b9ac4f3e0e8c63716120864757df08f18c"
 )
 _MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
 

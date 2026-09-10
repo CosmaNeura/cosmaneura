@@ -71,6 +71,7 @@ SOURCE_PATHS = (
     recovery.REHEARSAL_ROOT,
     recovery.VALIDATOR_PATH,
     recovery.LAUNCHER_PATH,
+    recovery.PYTHON_RUNTIME_MANIFEST_PATH,
     _HANDOFF_FILE,
     Path(__file__).resolve(),
 )
@@ -224,26 +225,16 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> tuple[An
 
 
 def _base_receipt(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str, now: datetime) -> tuple[Mapping[str, Any], Path]:
-    plan = recovery._read_protected_file(saved_plan, label='saved plan', required_mode=0o400)
-    state = recovery._read_protected_file(state_json, label='state snapshot', required_mode=0o600)
-    source_before = recovery._source_snapshot(expected_source_commit)
-    runtime = recovery._snapshot_and_verify_runtime(data_dir=execution_dir)
-    tofu = runtime.tofu
-    backend_before = recovery._backend_snapshot(tofu=tofu, data_dir=execution_dir)
-    result = dict(recovery._validate_captured_artifacts(
-        saved_plan_bytes=plan, state_bytes=state, source=source_before,
-        backend_metadata_sha256=backend_before, runtime=runtime, data_dir=execution_dir,
-        generation_mode='digest_bound_revalidation', now=now,
+    del now
+    result = dict(handoff._revalidate_plan_via_launcher(
+        saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir,
+        expected_source_commit=expected_source_commit,
         expected_saved_plan_sha256=expected_saved_plan_sha256,
+        existing_execution_dir=True,
     ))
-    if recovery._backend_snapshot(tofu=tofu, data_dir=execution_dir) != backend_before or recovery._source_snapshot(expected_source_commit) != source_before:
-        _fail('runtime.changed')
-    result.update(
-        execution_data_dir=str(execution_dir),
-        execution_provider_tree_sha256=recovery._provider_tree_sha256(execution_dir),
-        open_tofu_path=str(tofu),
-        open_tofu_sha256=recovery._executable_sha256(tofu, label='OpenTofu executable'),
-    )
+    tofu = Path(str(result.get('open_tofu_path', '')))
+    if not tofu.is_absolute():
+        _fail('plan_validation.invalid')
     return result, tofu
 
 
@@ -302,9 +293,15 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'open_tofu_source_path': str(recovery.EXPECTED_TOFU_PATH),
         'open_tofu_sha256': recovery.EXPECTED_TOFU_SHA256,
         'python_launcher_source_path': recovery.LAUNCHER_REPOSITORY_PATH,
-        'python_launcher_sha256': _digest(recovery.LAUNCHER_PATH.read_bytes()),
+        'python_launcher_sha256': str(recovery._runtime_file_record(recovery.LAUNCHER_PATH, label='recovery launcher')[3]),
+        'python_runtime_manifest_source_path': recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
+        'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
         'python_executable_source_path': str(recovery.EXPECTED_PYTHON_PATH),
         'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
+        'python_framework_source_path': str(recovery.EXPECTED_PYTHON_FRAMEWORK_PATH),
+        'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
         'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,
         'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
         'azure_cli_source_path': str(recovery.EXPECTED_AZURE_CLI_PATH),
@@ -321,7 +318,7 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
     }
     if any(base.get(name) != value or type(base.get(name)) is not type(value) for name, value in base_exact.items()):
         _fail('plan.authorization_mismatch')
-    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'python_launcher_sha256', 'python_runtime_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
+    if any(not isinstance(base.get(name), str) or HASH_RE.fullmatch(str(base[name])) is None for name in ('state_semantic_sha256', 'state_projection_sha256', 'python_launcher_sha256', 'python_runtime_manifest_sha256', 'python_framework_sha256', 'python_tree_content_sha256', 'python_tree_metadata_sha256', 'python_runtime_sha256', 'azure_cli_closure_sha256', 'runtime_snapshot_sha256')):
         _fail('plan.authorization_mismatch')
     if expires - observed != handoff.RECEIPT_LIFETIME or now < observed - handoff.MAX_CLOCK_SKEW or now >= expires:
         _fail('receipt.expired')

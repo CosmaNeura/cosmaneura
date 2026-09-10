@@ -776,6 +776,30 @@ def _source_binding(expected_commit: str, expected_tree_sha256: str) -> str:
         _fail('handoff_source.changed')
     return _digest(source)
 
+def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, execution_dir: Path, expected_source_commit: str, expected_saved_plan_sha256: str, existing_execution_dir: bool=False) -> Mapping[str, Any]:
+    result = recovery._run_process(
+        [
+            str(recovery.LAUNCHER_PATH), '--mode',
+            'verify-existing' if existing_execution_dir else 'verify',
+            '--saved-plan', str(saved_plan), '--state-json', str(state_json),
+            '--execution-dir', str(execution_dir),
+            '--expected-source-commit', expected_source_commit,
+            '--expected-saved-plan-sha256', expected_saved_plan_sha256,
+        ],
+        cwd=recovery.REPOSITORY_ROOT,
+        timeout_seconds=900,
+        max_output_bytes=64 * 1024,
+    )
+    if result.returncode != 0 or result.stderr or not result.stdout:
+        _fail('plan_validation.refused')
+    try:
+        receipt = recovery._load_json_bytes(result.stdout, label='base validation receipt')
+    except recovery.RecoveryPlanError:
+        _fail('plan_validation.invalid')
+    if _canonical(receipt) + b'\n' != result.stdout:
+        _fail('plan_validation.invalid')
+    return receipt
+
 def _trusted_reader(reader_factory: Callable[[], ReadOnlyArm], *, data_dir: Path, base: Mapping[str, Any]) -> ReadOnlyArm:
     if reader_factory is not AzureManagementReader: return reader_factory()
     runtime = recovery._snapshot_and_verify_runtime(data_dir=data_dir)
@@ -796,12 +820,18 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
         _fail('receipt_path.invalid')
     if expected_saved_plan_sha256 in recovery.REJECTED_SAVED_PLAN_SHA256S:
         _fail('saved_plan.rejected')
-    base = dict(recovery.revalidate_recovery_plan(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
-    try:
-        recovery_python_binding = recovery._python_runtime_binding()
-    except recovery.RecoveryPlanError:
-        _fail('plan_python_runtime.invalid')
-    if base.get('schema_version') != 3 or base.get('policy_id') != 'cosmaneura-staging-rehearsal-base-recovery-plan-v3' or any(base.get(name) != value for name, value in recovery_python_binding.items()) or base.get('python_executable_source_path') != str(recovery.EXPECTED_PYTHON_PATH) or base.get('python_launcher_source_path') != recovery.LAUNCHER_REPOSITORY_PATH or base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
+    base = dict(_revalidate_plan_via_launcher(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256))
+    recovery_python_binding = {
+        'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
+        'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
+        'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
+        'python_tree_metadata_sha256': recovery.EXPECTED_PYTHON_TREE_METADATA_SHA256,
+        'python_version_sha256': recovery.EXPECTED_PYTHON_VERSION_SHA256,
+        'python_runtime_sha256': recovery.EXPECTED_PYTHON_RUNTIME_SHA256,
+    }
+    launcher_sha256 = str(recovery._runtime_file_record(recovery.LAUNCHER_PATH, label='recovery launcher')[3])
+    if base.get('schema_version') != 3 or base.get('policy_id') != 'cosmaneura-staging-rehearsal-base-recovery-plan-v3' or any(base.get(name) != value for name, value in recovery_python_binding.items()) or base.get('python_executable_source_path') != str(recovery.EXPECTED_PYTHON_PATH) or base.get('python_framework_source_path') != str(recovery.EXPECTED_PYTHON_FRAMEWORK_PATH) or base.get('python_runtime_manifest_source_path') != recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH or base.get('python_launcher_source_path') != recovery.LAUNCHER_REPOSITORY_PATH or base.get('python_launcher_sha256') != launcher_sha256 or base.get('live_readback_bound') is not False or base.get('apply_authorized') is not False or base.get('state_serial') != recovery.EXPECTED_RECOVERY_SERIAL or (base.get('existing_resource_count') != 28) or (base.get('create_count') != 11) or (base.get('pass') is not True):
         _fail('plan_receipt.invalid')
     state_bytes = recovery._read_protected_file(state_json, label='state snapshot', required_mode=384)
     if _digest(state_bytes) != base.get('state_json_sha256'):
