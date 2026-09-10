@@ -48,7 +48,7 @@ CONFIRMATION_SECONDS = handoff.MAX_ACTION_READBACK_SECONDS
 CLAIM_NAME = '.base-recovery-apply-claimed-v1'
 NONCE_NAME = '.base-recovery-handoff-nonce'
 POLICY_ID = 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1'
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '8dcca1a837478030cda97c175eb5e2a957011fae877505e64f4eaa343a3ac043'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '19e4c6e7873380036c99d86db0f62507884df0e685b6b2d06dab552830ea8767'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 HASH_RE = re.compile(r'^[0-9a-f]{64}$')
 COMMIT_RE = re.compile(r'^[0-9a-f]{40}$')
@@ -289,7 +289,8 @@ def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, executi
     try:
         result = recovery._run_process(
             [
-                '/bin/sh', '-c', f'. /dev/fd/{descriptor}', str(recovery.LAUNCHER_PATH),
+                '/bin/sh', f'/dev/fd/{descriptor}',
+                '--authenticated-launcher-sha256', EXPECTED_RECOVERY_LAUNCHER_SHA256,
                 '--mode', 'verify-existing', '--saved-plan', str(saved_plan),
                 '--state-json', str(state_json), '--execution-dir', str(execution_dir),
                 '--expected-source-commit', expected_source_commit,
@@ -391,6 +392,8 @@ def _validate_receipt(receipt: Mapping[str, Any], base: Mapping[str, Any], *, ex
         'launcher_execution_authenticated': True,
         'python_runtime_manifest_source_path': recovery.PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH,
         'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_runtime_snapshot_policy': recovery.PYTHON_RUNTIME_SNAPSHOT_POLICY,
+        'python_runtime_snapshotted': True,
         'python_executable_source_path': str(recovery.EXPECTED_PYTHON_PATH),
         'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
         'python_framework_source_path': str(recovery.EXPECTED_PYTHON_FRAMEWORK_PATH),

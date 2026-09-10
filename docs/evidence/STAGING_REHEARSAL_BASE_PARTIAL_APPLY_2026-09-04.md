@@ -147,3 +147,11 @@ is permanently rejected. Independent review found that its pre-Python launcher
 validated ownership and mode bits but did not reject extended ACL grants on
 trusted source, utility, and runtime paths. No apply or live handoff used that
 plan.
+
+The initial ACL-only revision of PR #376 was also rejected in exact-head
+independent review: launcher self-checks ran too late, shell pipelines could
+mask ACL-read failures, and an already-open source write handle survived ACL
+removal. The replacement authenticates a private launcher copy before execution
+and validates a separate, non-writable copy of the complete Python runtime.
+All three original saved-plan rejections remain permanent; the replacement
+requires a new plan from its reviewed, merged protected-master checkpoint.

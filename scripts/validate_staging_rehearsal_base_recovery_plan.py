@@ -13,15 +13,26 @@ _CANONICAL_VALIDATOR_PATH = (
 _AUTHENTICATED_SOURCE_NAME = (
     "/authenticated-memory/staging-rehearsal-base-recovery-validator.py"
 )
+_BOOTSTRAP_LAUNCHER_SHA256 = globals().get("_AUTHENTICATED_LAUNCHER_SHA256")
+_BOOTSTRAP_PYTHON_ROOT = globals().get("_AUTHENTICATED_PYTHON_ROOT")
+_BOOTSTRAP_RUNTIME_MANIFEST_PATH = globals().get("_AUTHENTICATED_RUNTIME_MANIFEST_PATH")
 if __name__ == "__main__" and (
-    _bootstrap_sys.flags.isolated != 1
+    not isinstance(_BOOTSTRAP_LAUNCHER_SHA256, str)
+    or len(_BOOTSTRAP_LAUNCHER_SHA256) != 64
+    or any(value not in "0123456789abcdef" for value in _BOOTSTRAP_LAUNCHER_SHA256)
+    or not isinstance(_BOOTSTRAP_PYTHON_ROOT, str)
+    or not _BOOTSTRAP_PYTHON_ROOT.startswith(
+        "/private/tmp/cosmaneura-recovery-bootstrap."
+    )
+    or not _BOOTSTRAP_PYTHON_ROOT.endswith("/python")
+    or not isinstance(_BOOTSTRAP_RUNTIME_MANIFEST_PATH, str)
+    or _BOOTSTRAP_RUNTIME_MANIFEST_PATH
+    != f"{_BOOTSTRAP_PYTHON_ROOT.rsplit('/', 1)[0]}/source/runtime.manifest"
+    or _bootstrap_sys.flags.isolated != 1
     or _bootstrap_sys.flags.ignore_environment != 1
     or _bootstrap_sys.flags.no_site != 1
-    or _bootstrap_sys.executable
-    != (
-        "/Library/Developer/CommandLineTools/Library/Frameworks/"
-        "Python3.framework/Versions/3.9/bin/python3.9"
-    )
+    or _bootstrap_sys.flags.dont_write_bytecode != 1
+    or _bootstrap_sys.executable != f"{_BOOTSTRAP_PYTHON_ROOT}/bin/python3.9"
     or _bootstrap_sys.hexversion != 50_923_248
     or _bootstrap_sys._xoptions
     or __file__ != _AUTHENTICATED_SOURCE_NAME
@@ -72,6 +83,17 @@ PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH = (
     "scripts/staging_rehearsal_base_recovery_python_runtime.manifest"
 )
 PYTHON_RUNTIME_MANIFEST_PATH = REPOSITORY_ROOT / PYTHON_RUNTIME_MANIFEST_REPOSITORY_PATH
+AUTHENTICATED_LAUNCHER_SHA256 = (
+    _BOOTSTRAP_LAUNCHER_SHA256 if isinstance(_BOOTSTRAP_LAUNCHER_SHA256, str) else None
+)
+AUTHENTICATED_PYTHON_ROOT = (
+    Path(_BOOTSTRAP_PYTHON_ROOT) if isinstance(_BOOTSTRAP_PYTHON_ROOT, str) else None
+)
+AUTHENTICATED_RUNTIME_MANIFEST_PATH = (
+    Path(_BOOTSTRAP_RUNTIME_MANIFEST_PATH)
+    if isinstance(_BOOTSTRAP_RUNTIME_MANIFEST_PATH, str)
+    else None
+)
 
 EXPECTED_LINEAGE = "76b6712e-5781-adbd-9fb1-cf66db4f4e28"
 EXPECTED_RECOVERY_SERIAL = 9
@@ -98,21 +120,22 @@ EXPECTED_PYTHON_VERSION_SHA256 = (
 )
 EXPECTED_PYTHON_TREE_ENTRY_COUNT = 2006
 EXPECTED_PYTHON_TREE_METADATA_SHA256 = (
-    "102e14547e442dd8be9f2d9585982a1819147d3f08cdcab5db9b12b0036100fb"
+    "b662c5523b9e8b6c3b923640d5bd72bc08c166dd6d7293bbb21d67bda289ecda"
 )
 EXPECTED_PYTHON_TREE_CONTENT_SHA256 = (
-    "63c163925c96a4f5d09c1209556bbfb2dbe9c2b9727dc1ebca1d4f53f010631b"
+    "a4f26975947b867b232a79e5b1be0c0c7c230fa4fde9723f558f75a67e3b4e92"
 )
 EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT = 0
 EXPECTED_PYTHON_TREE_ACL_SHA256 = (
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 )
 EXPECTED_PYTHON_RUNTIME_SHA256 = (
-    "03393a80d7f4e206a4652ab74e4df0b3c0170a0d0ef2b7ccc22227bb290be03b"
+    "20dd4e571775f5f43b6d13ed6a0e9a16e251777c614fe463a7442a3bcb82b926"
 )
 EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256 = (
-    "52356ec1f7f1b50603a99dfd0d2967ebfb73bd8ffc51b289facf5c1bd99518c9"
+    "31ce8586794b020186db0dd05c8e33ca462084a31d27a38270fe3a9f9e344c86"
 )
+PYTHON_RUNTIME_SNAPSHOT_POLICY = "owner-only-readonly-copy-v1"
 EXPECTED_AZURE_CLI_PATH = Path("/opt/homebrew/Cellar/azure-cli/2.89.1/bin/az")
 EXPECTED_AZURE_CLI_SHA256 = (
     "e62d2f82b3c4d2a98202154e2a01638b656059e25c25605c56732516527dc6df"
@@ -923,6 +946,62 @@ def _require_root_owned_runtime_path(
         raise RecoveryPlanError(f"{label} is not an exact regular file")
 
 
+def _require_authenticated_snapshot_path(
+    path: Path, *, label: str, executable: bool
+) -> None:
+    if AUTHENTICATED_PYTHON_ROOT is None:
+        raise RecoveryPlanError("the authenticated Python snapshot is unavailable")
+    bootstrap_root = AUTHENTICATED_PYTHON_ROOT.parent
+    try:
+        relative = path.relative_to(bootstrap_root)
+    except ValueError as exc:
+        raise RecoveryPlanError(
+            f"{label} is outside the authenticated snapshot"
+        ) from exc
+    current = bootstrap_root
+    components = (Path("."), *reversed(relative.parents), relative)
+    seen: set[Path] = set()
+    for component in components:
+        candidate = current if component == Path(".") else bootstrap_root / component
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        descriptor: int | None = None
+        try:
+            flags = (
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            )
+            if candidate.is_dir():
+                flags |= getattr(os, "O_DIRECTORY", 0)
+            descriptor = os.open(candidate, flags)
+            metadata = os.fstat(descriptor)
+            linked = os.stat(candidate, follow_symlinks=False)
+            if (
+                metadata.st_uid != os.geteuid()
+                or metadata.st_dev != linked.st_dev
+                or metadata.st_ino != linked.st_ino
+                or stat.S_IMODE(metadata.st_mode) & 0o277
+            ):
+                raise RecoveryPlanError(f"{label} snapshot path is writable")
+            _require_safe_acl(descriptor, label=f"{label} snapshot path")
+        except OSError as exc:
+            raise RecoveryPlanError(f"{label} snapshot path is unavailable") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+    try:
+        metadata = os.stat(path, follow_symlinks=False)
+    except OSError as exc:
+        raise RecoveryPlanError(f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not 0 < metadata.st_size <= MAXIMUM_EXECUTABLE_BYTES
+        or (executable and not metadata.st_mode & 0o111)
+    ):
+        raise RecoveryPlanError(f"{label} is not an exact snapshot file")
+
+
 def _require_launcher_bootstrap() -> None:
     if (
         __name__ != "__main__"
@@ -933,13 +1012,19 @@ def _require_launcher_bootstrap() -> None:
         or sys.flags.ignore_environment != 1
         or sys.flags.no_site != 1
         or sys.flags.no_user_site != 1
+        or sys.flags.dont_write_bytecode != 1
         or sys._xoptions
+        or AUTHENTICATED_LAUNCHER_SHA256 is None
+        or AUTHENTICATED_PYTHON_ROOT is None
+        or AUTHENTICATED_RUNTIME_MANIFEST_PATH is None
     ):
         raise RecoveryPlanError("the authenticated Python launcher was bypassed")
 
 
 def _python_runtime_binding() -> Mapping[str, Any]:
     _require_launcher_bootstrap()
+    assert AUTHENTICATED_PYTHON_ROOT is not None
+    assert AUTHENTICATED_RUNTIME_MANIFEST_PATH is not None
     unsafe_environment = {
         "LD_LIBRARY_PATH",
         "LD_PRELOAD",
@@ -968,28 +1053,33 @@ def _python_runtime_binding() -> Mapping[str, Any]:
         base = Path(sys.base_prefix).resolve(strict=True)
     except OSError as exc:
         raise RecoveryPlanError("the Python runtime path is unavailable") from exc
-    if executable != EXPECTED_PYTHON_PATH or base != EXPECTED_PYTHON_ROOT:
+    snapshot_python = AUTHENTICATED_PYTHON_ROOT / "bin/python3.9"
+    snapshot_framework = AUTHENTICATED_PYTHON_ROOT / "Python3"
+    if executable != snapshot_python or base != AUTHENTICATED_PYTHON_ROOT:
         raise RecoveryPlanError("the Python runtime path is not pinned")
-    _require_root_owned_runtime_path(
-        EXPECTED_PYTHON_PATH, label="pinned Python", executable=True
+    _require_authenticated_snapshot_path(
+        snapshot_python, label="pinned Python", executable=True
     )
-    _require_root_owned_runtime_path(
-        EXPECTED_PYTHON_FRAMEWORK_PATH,
+    _require_authenticated_snapshot_path(
+        snapshot_framework,
         label="pinned Python framework",
         executable=True,
     )
+    _require_authenticated_snapshot_path(
+        AUTHENTICATED_RUNTIME_MANIFEST_PATH,
+        label="Python runtime manifest",
+        executable=False,
+    )
     if (
-        _executable_sha256(EXPECTED_PYTHON_PATH, label="pinned Python")
+        _executable_sha256(snapshot_python, label="pinned Python")
         != EXPECTED_PYTHON_SHA256
-        or _executable_sha256(
-            EXPECTED_PYTHON_FRAMEWORK_PATH, label="pinned Python framework"
-        )
+        or _executable_sha256(snapshot_framework, label="pinned Python framework")
         != EXPECTED_PYTHON_FRAMEWORK_SHA256
     ):
         raise RecoveryPlanError("the Python runtime executable is not pinned")
     manifest_sha256 = str(
         _runtime_file_record(
-            PYTHON_RUNTIME_MANIFEST_PATH, label="Python runtime manifest"
+            AUTHENTICATED_RUNTIME_MANIFEST_PATH, label="Python runtime manifest"
         )[3]
     )
     if manifest_sha256 != EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256:
@@ -1005,9 +1095,9 @@ def _python_runtime_binding() -> Mapping[str, Any]:
         raise RecoveryPlanError("the Python version is not pinned")
 
     expected_paths = (
-        str(EXPECTED_PYTHON_ROOT / "lib/python39.zip"),
-        str(EXPECTED_PYTHON_ROOT / "lib/python3.9"),
-        str(EXPECTED_PYTHON_ROOT / "lib/python3.9/lib-dynload"),
+        str(AUTHENTICATED_PYTHON_ROOT / "lib/python39.zip"),
+        str(AUTHENTICATED_PYTHON_ROOT / "lib/python3.9"),
+        str(AUTHENTICATED_PYTHON_ROOT / "lib/python3.9/lib-dynload"),
     )
     if tuple(sys.path) != expected_paths:
         raise RecoveryPlanError("the Python runtime import path is not exact")
@@ -1022,6 +1112,7 @@ def _python_runtime_binding() -> Mapping[str, Any]:
                 "tree_entry_count": EXPECTED_PYTHON_TREE_ENTRY_COUNT,
                 "tree_metadata_sha256": EXPECTED_PYTHON_TREE_METADATA_SHA256,
                 "version_sha256": version_sha256,
+                "snapshot_policy": PYTHON_RUNTIME_SNAPSHOT_POLICY,
             }
         )
     )
@@ -1029,8 +1120,11 @@ def _python_runtime_binding() -> Mapping[str, Any]:
         raise RecoveryPlanError("the Python standard-library runtime is not pinned")
     return {
         "python_executable_sha256": EXPECTED_PYTHON_SHA256,
+        "python_launcher_sha256": AUTHENTICATED_LAUNCHER_SHA256,
         "python_framework_sha256": EXPECTED_PYTHON_FRAMEWORK_SHA256,
         "python_runtime_manifest_sha256": manifest_sha256,
+        "python_runtime_snapshot_policy": PYTHON_RUNTIME_SNAPSHOT_POLICY,
+        "python_runtime_snapshotted": True,
         "python_tree_acl_entry_count": EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
         "python_tree_acl_sha256": EXPECTED_PYTHON_TREE_ACL_SHA256,
         "python_tree_content_sha256": EXPECTED_PYTHON_TREE_CONTENT_SHA256,
@@ -3841,9 +3935,7 @@ def _validate_captured_artifacts(
         "open_tofu_source_path": str(EXPECTED_TOFU_PATH),
         "open_tofu_sha256": runtime.tofu_sha256,
         "python_launcher_source_path": LAUNCHER_REPOSITORY_PATH,
-        "python_launcher_sha256": str(
-            _runtime_file_record(LAUNCHER_PATH, label="recovery launcher")[3]
-        ),
+        "python_launcher_sha256": python_binding["python_launcher_sha256"],
         # Only a caller that independently authenticates and executes the
         # launcher's opened bytes may promote this candidate fact to true.
         "launcher_execution_authenticated": False,
@@ -3853,6 +3945,10 @@ def _validate_captured_artifacts(
         "python_runtime_manifest_sha256": python_binding[
             "python_runtime_manifest_sha256"
         ],
+        "python_runtime_snapshot_policy": python_binding[
+            "python_runtime_snapshot_policy"
+        ],
+        "python_runtime_snapshotted": python_binding["python_runtime_snapshotted"],
         "python_tree_acl_entry_count": python_binding["python_tree_acl_entry_count"],
         "python_tree_acl_sha256": python_binding["python_tree_acl_sha256"],
         "python_executable_source_path": str(EXPECTED_PYTHON_PATH),
@@ -3941,7 +4037,7 @@ def _revalidate_recovery_plan(
     execution_dir: Path,
     expected_source_commit: str,
     expected_saved_plan_sha256: str,
-    python_binding: Mapping[str, str],
+    python_binding: Mapping[str, Any],
     create_execution_dir: bool,
 ) -> Mapping[str, Any]:
     _require_launcher_bootstrap()

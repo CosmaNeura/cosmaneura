@@ -67,7 +67,7 @@ UUID_RE = re.compile('^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 BASE_TAGS = {'data-classification': 'non-phi-control-metadata', 'environment': 'staging', 'managed-by': 'opentofu', 'purpose': 'staging-restore-rehearsal-control'}
 AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az'), Path('/usr/bin/az'))
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '8dcca1a837478030cda97c175eb5e2a957011fae877505e64f4eaa343a3ac043'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '19e4c6e7873380036c99d86db0f62507884df0e685b6b2d06dab552830ea8767'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 
 class HandoffError(ValueError):
@@ -843,7 +843,8 @@ def _revalidate_plan_via_launcher(*, saved_plan: Path, state_json: Path, executi
     try:
         result = recovery._run_process(
             [
-                '/bin/sh', '-c', f'. /dev/fd/{descriptor}', str(recovery.LAUNCHER_PATH),
+                '/bin/sh', f'/dev/fd/{descriptor}',
+                '--authenticated-launcher-sha256', EXPECTED_RECOVERY_LAUNCHER_SHA256,
                 '--mode', 'verify-existing' if existing_execution_dir else 'verify',
                 '--saved-plan', str(saved_plan), '--state-json', str(state_json),
                 '--execution-dir', str(execution_dir),
@@ -900,6 +901,8 @@ def _prepare_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path,
         'python_executable_sha256': recovery.EXPECTED_PYTHON_SHA256,
         'python_framework_sha256': recovery.EXPECTED_PYTHON_FRAMEWORK_SHA256,
         'python_runtime_manifest_sha256': recovery.EXPECTED_PYTHON_RUNTIME_MANIFEST_SHA256,
+        'python_runtime_snapshot_policy': recovery.PYTHON_RUNTIME_SNAPSHOT_POLICY,
+        'python_runtime_snapshotted': True,
         'python_tree_acl_entry_count': recovery.EXPECTED_PYTHON_TREE_ACL_ENTRY_COUNT,
         'python_tree_acl_sha256': recovery.EXPECTED_PYTHON_TREE_ACL_SHA256,
         'python_tree_content_sha256': recovery.EXPECTED_PYTHON_TREE_CONTENT_SHA256,
