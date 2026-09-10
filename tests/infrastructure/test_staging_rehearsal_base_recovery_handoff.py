@@ -31,10 +31,12 @@ def _resource(resource_id: str, properties: Mapping[str, Any] | None=None, **out
 def _state_resource(address: str, attributes: Mapping[str, Any]) -> dict[str, Any]:
     base, separator, raw_key = address.partition('[')
     resource_type, name = base.split('.', 1)
-    instance: dict[str, Any] = {'schema_version': 0, 'attributes': dict(attributes)}
+    provider, schema_version, resource_id = handoff.recovery.EXPECTED_STATE_IDENTITIES[address]
+    exact_attributes = dict(attributes)
+    exact_attributes['id'] = resource_id
+    instance: dict[str, Any] = {'schema_version': schema_version, 'attributes': exact_attributes}
     if separator:
         instance['index_key'] = json.loads(raw_key[:-1])
-    provider = 'provider["terraform.io/builtin/terraform"]' if resource_type == 'terraform_data' else 'provider["registry.opentofu.org/hashicorp/azurerm"]'
     return {'mode': 'managed', 'type': resource_type, 'name': name, 'provider': provider, 'instances': [instance]}
 
 def _valid_state() -> dict[str, Any]:
@@ -159,7 +161,7 @@ def _attributes(state: dict[str, Any] | None=None) -> dict[str, Mapping[str, Any
     return handoff._state_attributes(json.dumps(state or _valid_state()).encode())
 
 def _base_receipt(state_bytes: bytes) -> dict[str, Any]:
-    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_sha256': '6' * 64, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
+    return {'source_commit': 'a' * 40, 'source_tree_sha256': '1' * 64, 'provider_lock_sha256': '2' * 64, 'state_lineage': handoff.recovery.EXPECTED_LINEAGE, 'state_serial': handoff.recovery.EXPECTED_RECOVERY_SERIAL, 'state_json_sha256': hashlib.sha256(state_bytes).hexdigest(), 'state_semantic_sha256': '3' * 64, 'state_projection_sha256': '3' * 64, 'saved_plan_sha256': hashlib.sha256(b'plan').hexdigest(), 'derived_plan_json_sha256': '4' * 64, 'backend_metadata_sha256': '5' * 64, 'open_tofu_path': '/trusted/tofu', 'open_tofu_source_path': str(handoff.recovery.EXPECTED_TOFU_PATH), 'open_tofu_sha256': '6' * 64, 'azure_cli_source_path': str(handoff.recovery.EXPECTED_AZURE_CLI_PATH), 'azure_cli_sha256': FakeReader.azure_cli_sha256, 'azure_cli_version_sha256': FakeReader.azure_cli_version_sha256, 'azure_cli_source_closure_sha256': handoff.recovery.EXPECTED_AZURE_CLI_CLOSURE_SHA256, 'azure_cli_closure_sha256': 'e' * 64, 'runtime_snapshot_sha256': 'f' * 64, 'trusted_runtime_snapshotted': True, 'execution_provider_tree_sha256': '7' * 64, 'live_readback_bound': False, 'apply_authorized': False, 'existing_resource_count': 28, 'create_count': 11, 'pass': True}
 
 def _mock_runtime(monkeypatch: pytest.MonkeyPatch, *states: bytes) -> list[list[str]]:
     queue = list(states)
@@ -311,7 +313,7 @@ def test_prepare_reruns_validator_and_writes_owner_only_bound_receipt(tmp_path: 
     serialized = receipt_path.read_text()
     assert 'operator@example' not in serialized and (not any((value in serialized for value in PRINCIPALS.values())))
 
-@pytest.mark.parametrize('failure', ['base', 'nonce', 'remote', 'stale', 'torn'])
+@pytest.mark.parametrize('failure', ['base', 'plan_runtime', 'nonce', 'remote', 'stale', 'torn'])
 def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     tmp_path.chmod(448)
     state_bytes = json.dumps(_valid_state()).encode()
@@ -324,6 +326,8 @@ def test_prepare_fail_closed_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     base = _base_receipt(state_bytes)
     if failure == 'base':
         base['apply_authorized'] = True
+    elif failure == 'plan_runtime':
+        base['azure_cli_sha256'] = 'f' * 64
 
     def verify(**_: Any) -> Mapping[str, Any]:
         execution.mkdir(mode=448)
@@ -408,7 +412,9 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     az.write_text('#!/bin/sh\n')
     az.chmod(448)
     commands: list[list[str]] = []
-    outputs = [{'id': handoff.SUBSCRIPTION, 'tenantId': handoff.TENANT, 'environmentName': 'AzureCloud', 'state': 'Enabled', 'user': {'type': 'user', 'name': 'operator'}}, {'azure-cli': '2.77.0'}, {'accessToken': 's' * 200, 'tokenType': 'Bearer', 'subscription': handoff.SUBSCRIPTION, 'tenant': handoff.TENANT}]
+    version = {'azure-cli': '2.77.0'}
+    cloud = {'name': 'AzureCloud'}
+    outputs = [{'id': handoff.SUBSCRIPTION, 'tenantId': handoff.TENANT, 'environmentName': 'AzureCloud', 'state': 'Enabled', 'user': {'type': 'user', 'name': 'operator'}}, version, cloud, {'accessToken': 's' * 200, 'tokenType': 'Bearer', 'subscription': handoff.SUBSCRIPTION, 'tenant': handoff.TENANT}, version, cloud]
 
     def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         commands.append(arguments)
@@ -417,20 +423,26 @@ def test_real_transport_pins_cli_get_tls_and_no_proxy(tmp_path: Path, monkeypatc
     opener = _Opener()
     handlers: list[Any] = []
     monkeypatch.setattr(handoff, '_resolve_azure_cli', lambda: az)
+    monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CLOUD_SHA256', handoff._digest(handoff._canonical(cloud)))
     monkeypatch.setattr(handoff, '_operator_paths', lambda: (tmp_path, tmp_path / '.azure', 'd' * 64))
     monkeypatch.setattr(handoff.recovery, '_executable_sha256', lambda *_, **__: 'a' * 64)
+    runtime = handoff.recovery.RuntimeSnapshot(Path('/trusted/tofu'), az, '0' * 64, '1' * 64, handoff._digest(handoff._canonical(version)), '2' * 64, '3' * 64)
+    monkeypatch.setattr(handoff.recovery, '_snapshot_and_verify_runtime', lambda **_: runtime)
     monkeypatch.setattr(handoff.recovery, '_run_process', run)
     monkeypatch.setattr(handoff, '_hardened_tls_context', lambda: (ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT), 'c' * 64))
     monkeypatch.setattr(handoff.urllib.request, 'build_opener', lambda *values: handlers.extend(values) or opener)
-    reader = handoff.AzureManagementReader()
+    reader = handoff.AzureManagementReader(azure_cli=az, runtime_data_dir=tmp_path, source_sha256='1' * 64, closure_sha256='2' * 64, runtime_snapshot_sha256='3' * 64)
     assert reader.azure_tls_ca_bundle_sha256 == 'c' * 64
     assert reader.azure_config_binding_sha256 == 'd' * 64
     prefix = ['/usr/bin/env', '-i', f'HOME={tmp_path}']
-    assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and ('PYTHONPATH' not in ' '.join(command)) for command in commands))
+    assert all((command[:3] == prefix and 'HTTPS_PROXY' not in ' '.join(command) and any(item.startswith('PYTHONPATH=') for item in command) and f'AZURE_EXTENSION_DIR={tmp_path / "azure-extensions"}' in command for command in commands))
     assert all(f'AZURE_CONFIG_DIR={tmp_path / ".azure"}' in command for command in commands)
+    assert all(f"{handoff.recovery.AZURE_CONFIG_BINDING_ENV}={'d' * 64}" in command for command in commands)
     assert commands[0][-8:] == [str(az), 'account', 'show', '--subscription', handoff.SUBSCRIPTION, '--only-show-errors', '--output', 'json']
     assert commands[1][-4:] == ['version', '--only-show-errors', '--output', 'json']
-    assert commands[2][-10:] == [str(az), 'account', 'get-access-token', '--subscription', handoff.SUBSCRIPTION, '--resource', 'https://management.azure.com/', '--only-show-errors', '--output', 'json']
+    assert commands[2][-8:] == [str(az), 'cloud', 'show', '--name', 'AzureCloud', '--only-show-errors', '--output', 'json']
+    assert commands[3][-10:] == [str(az), 'account', 'get-access-token', '--subscription', handoff.SUBSCRIPTION, '--resource', 'https://management.azure.com/', '--only-show-errors', '--output', 'json']
+    reader.revalidate_runtime()
     assert any((isinstance(value, urllib.request.ProxyHandler) and getattr(value, 'proxies') == {} for value in handlers))
     assert any((isinstance(value, handoff._NoRedirect) for value in handlers))
     url = reader._url(handoff.STORAGE_ID, handoff.API['storage'])
@@ -506,8 +518,10 @@ def test_action_window_caps_account_cli_timeout(monkeypatch: pytest.MonkeyPatch)
     reader._az = Path('/trusted/az')
     reader._home = Path('/trusted/home')
     reader._azure_config = Path('/trusted/home/.azure')
+    reader.azure_config_binding_sha256 = 'd' * 64
     observed: list[float] = []
     monkeypatch.setattr(handoff.time, 'monotonic', lambda: now)
+    monkeypatch.setattr(handoff, '_operator_paths', lambda: (reader._home, reader._azure_config, reader.azure_config_binding_sha256))
     monkeypatch.setattr(handoff.recovery, '_run_process', lambda *_args, **kwargs: observed.append(kwargs['timeout_seconds']) or subprocess.CompletedProcess([], 0, b'{}', b''))
     reader.refresh_account()
     assert observed == [7.5] and reader.account == {}
@@ -535,12 +549,19 @@ def test_cli_and_operator_home_ignore_ambient_path_and_home(monkeypatch: pytest.
         home = tmp_path / 'home'
         home.mkdir(mode=448)
         (home / '.azure').mkdir(mode=448)
+        values = {'config': b'config', 'clouds.config': b'cloud', 'azureProfile.json': b'profile', 'msal_token_cache.json': b'token'}
+        for name, value in values.items():
+            (home / '.azure' / name).write_bytes(value)
+        monkeypatch.setattr(handoff.recovery, 'EXPECTED_AZURE_CONFIG_SHA256S', {name: hashlib.sha256(values[name]).hexdigest() for name in ('config', 'clouds.config')})
         monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
         monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())
         monkeypatch.setenv('PATH', str(tmp_path / 'evil'))
         monkeypatch.setenv('HOME', str(tmp_path / 'evil-home'))
         assert handoff._resolve_azure_cli() == az
         assert handoff._operator_paths()[:2] == (home, home / '.azure')
+        (home / '.azure' / 'config').write_bytes(b'mutated')
+        with pytest.raises(handoff.HandoffError, match='environment_invalid'):
+            handoff._operator_paths()
 
 def test_python_import_and_transport_environment_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert handoff.recovery.__file__ is not None

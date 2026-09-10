@@ -29,7 +29,7 @@ _RECOVERY_VALIDATOR = (
     .with_name("validate_staging_rehearsal_base_recovery_plan.py")
 )
 _RECOVERY_VALIDATOR_SHA256 = (
-    "0eaf0693016a52c8ab48b16fa7870aaefce8fb784c6732d1a9258456e1a4cb9e"
+    "72d7ef2c336beb5818b26fbfef9df529d1b178a05a82edd3f7a3901feea99a4d"
 )
 _MAX_BOOTSTRAP_SOURCE_BYTES = 1024 * 1024
 
@@ -1249,11 +1249,11 @@ def create_and_validate_state_refresh_plan(
     )
     _validate_pre_refresh_state_digest(state_bytes)
     source_before = _source_snapshot(expected_source_commit)
-    tofu = recovery._resolve_and_verify_tofu()
     with tempfile.TemporaryDirectory(
         prefix=".cosmaneura-refresh-tfdata-", dir=saved_plan.parent
     ) as temporary:
         data_dir = Path(temporary)
+        tofu = recovery._snapshot_and_verify_runtime(data_dir=data_dir).tofu
         recovery._initialize_tofu(tofu=tofu, data_dir=data_dir)
         backend_before = recovery._backend_snapshot(tofu=tofu, data_dir=data_dir)
         remote_before = _pull_remote_state(tofu=tofu, data_dir=data_dir)
@@ -1310,7 +1310,7 @@ def revalidate_state_refresh_plan(
         raise RefreshPlanError("execution directory must share the saved-plan parent")
     recovery._create_protected_directory(execution_dir, label="execution directory")
     source_before = _source_snapshot(expected_source_commit)
-    tofu = recovery._resolve_and_verify_tofu()
+    tofu = recovery._snapshot_and_verify_runtime(data_dir=execution_dir).tofu
     recovery._initialize_tofu(tofu=tofu, data_dir=execution_dir)
     backend_before = recovery._backend_snapshot(tofu=tofu, data_dir=execution_dir)
     remote_state = _pull_remote_state(tofu=tofu, data_dir=execution_dir)

@@ -454,7 +454,7 @@ def test_digest_mismatch_precedes_provider_access(
     monkeypatch.setattr(recovery, "_require_protected_directory", lambda *_, **__: None)
     monkeypatch.setattr(recovery, "_read_protected_file", lambda *_, **__: b"wrong")
     monkeypatch.setattr(
-        recovery, "_resolve_and_verify_tofu", lambda: called.append(True)
+        recovery, "_snapshot_and_verify_runtime", lambda **_: called.append(True)
     )
     operations = (
         lambda: refresh.create_and_validate_state_refresh_plan(
