@@ -2135,7 +2135,9 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
     environment = {
         "ARM_ENVIRONMENT": "public",
         "ARM_SUBSCRIPTION_ID": EXPECTED_SUBSCRIPTION_ID,
-        "ARM_TENANT_ID": EXPECTED_TENANT_ID,
+        # AzureCLICredential rejects simultaneous --subscription and --tenant.
+        # The exact tenant remains pinned in both provider configurations and
+        # is validated against the selected subscription by live readback.
         "ARM_USE_AZUREAD": "true",
         "ARM_USE_CLI": "true",
         "AZURE_CORE_COLLECT_TELEMETRY": "false",

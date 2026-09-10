@@ -620,7 +620,9 @@ def _execution_environment(*, azure_cli: Path, azure_config: Path, azure_config_
         'GIT_TERMINAL_PROMPT': '0', 'TF_CLI_CONFIG_FILE': os.devnull,
         'TF_DATA_DIR': str(execution_dir), 'TF_IN_AUTOMATION': '1', 'TF_INPUT': '0',
         'ARM_SUBSCRIPTION_ID': recovery.EXPECTED_SUBSCRIPTION_ID,
-        'ARM_TENANT_ID': recovery.EXPECTED_TENANT_ID, 'ARM_ENVIRONMENT': 'public',
+        # AzureCLICredential rejects simultaneous --subscription and --tenant.
+        # Provider configuration and live readback still pin the exact tenant.
+        'ARM_ENVIRONMENT': 'public',
         'ARM_USE_CLI': 'true', 'ARM_USE_AZUREAD': 'true',
     }
     environment.update(recovery._azure_cli_environment(azure_cli.parent))
