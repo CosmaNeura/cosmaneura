@@ -979,6 +979,12 @@ def test_subprocess_is_bounded_and_kills_its_group(
             cwd=tmp_path,
             timeout_seconds=0.01,
         )
+    descendant_ready, descendant_survived = tmp_path / "descendant-ready", tmp_path / "descendant-survived"
+    source = f'import os,time\npid=os.fork()\nif pid == 0:\n open({str(descendant_ready)!r},"w").close();time.sleep(0.5);open({str(descendant_survived)!r},"w").close();time.sleep(30);os._exit(0)\nwhile not os.path.exists({str(descendant_ready)!r}):time.sleep(0.01)\nos._exit(0)'
+    with pytest.raises(recovery.RecoveryPlanError, match="timed out"):
+        recovery._run_process([sys.executable, "-c", source], cwd=tmp_path, timeout_seconds=0.05)
+    time.sleep(0.75)
+    assert descendant_ready.is_file() and not descendant_survived.exists()
     assert seen == {"new_session": True, "killpg": recovery.signal.SIGKILL}
 
 

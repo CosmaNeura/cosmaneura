@@ -1555,7 +1555,7 @@ def capture(source):
         if directory_identity(home_metadata)!=directory_identity(os.stat(home,follow_symlinks=False)) or directory_identity(config_metadata)!=directory_identity(os.stat(".azure",dir_fd=home_fd,follow_symlinks=False)):raise ValueError
         binding=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(",",":")).encode()).hexdigest();return binding,captures
     finally:[os.close(fd) for fd in reversed(descriptors)]
-snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=None;snapshot_created=False;snapshot_files=[]
+snapshot=snapshot_name=snapshot_identity=None;snapshot_fd=parent_fd=lock_fd=cli_group=None;snapshot_created=False;snapshot_files=[]
 def unlink_entry(parent,name,metadata,expected_device,expected_mount,expected_file=None,removed=None):
     ok=True;entry_fd=None
     if stat.S_ISLNK(metadata.st_mode):ok=False
@@ -1683,27 +1683,37 @@ def cleanup_until_complete():
             if interrupted is None:interrupted=error
 def valid_snapshot_name(name):
     suffix=name.removeprefix(".azure-config-");return name.startswith(".azure-config-") and 6<=len(suffix)<=96 and all(value.isascii() and (value.isalnum() or value in "_-") for value in suffix)
-def terminate(signum,_frame):raise SystemExit(128+signum)
+def terminate(signum,_frame):
+    if cli_group is not None:
+        try:os.killpg(cli_group,signal.SIGKILL)
+        except (ProcessLookupError,PermissionError):pass
+    raise SystemExit(128+signum)
 def stop_cli(child):
-    ok=True
-    try:os.killpg(child.pid,signal.SIGKILL)
-    except ProcessLookupError:pass
+    global cli_group
+    ok=True;previous_mask=None;returncode=None
+    try:previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
     except OSError:ok=False
-    try:child.wait()
+    try:os.killpg(child.pid,signal.SIGKILL)
+    except (ProcessLookupError,PermissionError):pass
+    except OSError:ok=False
+    try:returncode=child.wait()
     except (OSError,ChildProcessError):ok=False
-    return ok
+    cli_group=None
+    if previous_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
+    return ok,returncode
 def run_cli():
+    global cli_group
     child=None;launch_mask=None
     try:
         launch_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
-        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True)
+        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True);cli_group=child.pid
         finally:
             if launch_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,launch_mask)
-        returncode=child.wait()
+        os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOWAIT);ok,returncode=stop_cli(child)
     except BaseException:
-        if child is not None:stop_cli(child)
+        if child is not None and cli_group is not None:stop_cli(child)
         raise
-    if not stop_cli(child):raise OSError
+    if not ok or returncode is None:raise OSError
     return 128-returncode if returncode<0 else returncode
 try:
     try:
@@ -2230,11 +2240,10 @@ def _run_process(
                 streams[key.data].append(chunk)
         returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
     except (OSError, subprocess.TimeoutExpired, RecoveryPlanError) as exc:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         process.stdout.close()
         process.stderr.close()
         process.wait()
