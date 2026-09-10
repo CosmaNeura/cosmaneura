@@ -1706,7 +1706,7 @@ def run_cli():
     child=None;launch_mask=None
     try:
         launch_mask=signal.pthread_sigmask(signal.SIG_BLOCK,TERMINATION_SIGNALS)
-        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True);cli_group=child.pid
+        try:child=subprocess.Popen([sys.executable,"-sP","-c","import runpy,signal,sys;signal.pthread_sigmask(signal.SIG_UNBLOCK,tuple(value for value in (getattr(signal,'SIGHUP',None),signal.SIGINT,signal.SIGTERM,getattr(signal,'SIGQUIT',None)) if value is not None));sys.argv=['az',*sys.argv[1:]];runpy.run_module('azure.cli',run_name='__main__')",*sys.argv[1:]],close_fds=True,start_new_session=True,umask=0o077);cli_group=child.pid
         finally:
             if launch_mask is not None:signal.pthread_sigmask(signal.SIG_SETMASK,launch_mask)
         os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOWAIT);ok,returncode=stop_cli(child)
