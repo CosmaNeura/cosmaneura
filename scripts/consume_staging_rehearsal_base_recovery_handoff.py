@@ -46,6 +46,7 @@ MAX_RECEIPT_BYTES = 16 * 1024
 MAX_PROMPT_BYTES = 256
 CONFIRMATION_SECONDS = handoff.MAX_ACTION_READBACK_SECONDS
 CLAIM_NAME = '.base-recovery-apply-claimed-v1'
+APPLY_LOG_NAME = 'state-refresh-apply.log'
 NONCE_NAME = '.base-recovery-handoff-nonce'
 POLICY_ID = 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1'
 EXPECTED_RECOVERY_LAUNCHER_SHA256 = '19e4c6e7873380036c99d86db0f62507884df0e685b6b2d06dab552830ea8767'
@@ -759,6 +760,61 @@ def _claim(execution_dir: Path, facts: Mapping[str, Any]) -> None:
         os.close(parent)
 
 
+def _apply_log_identity(path: Path, descriptor: int) -> Mapping[str, int | str]:
+    try:
+        metadata = os.fstat(descriptor)
+        path_metadata = path.lstat()
+        flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+    except (OSError, ValueError):
+        _fail('apply_log.changed')
+    if path.name != APPLY_LOG_NAME or not stat.S_ISREG(metadata.st_mode) or not stat.S_ISREG(path_metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) != 0o600 or flags & os.O_ACCMODE != os.O_WRONLY or not flags & os.O_APPEND or _metadata_identity(metadata) != _metadata_identity(path_metadata):
+        _fail('apply_log.changed')
+    return {'name': APPLY_LOG_NAME, 'device': metadata.st_dev, 'inode': metadata.st_ino, 'mode': stat.S_IMODE(metadata.st_mode), 'uid': metadata.st_uid}
+
+
+def _open_apply_log(execution_dir: Path) -> tuple[Path, int, Mapping[str, int | str]]:
+    path = execution_dir / APPLY_LOG_NAME
+    parent = recovery._open_protected_directory(execution_dir, label='execution directory')
+    descriptor: int | None = None
+    try:
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(APPLY_LOG_NAME, flags, 0o600, dir_fd=parent)
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        os.fsync(parent)
+        identity = _apply_log_identity(path, descriptor)
+        result = descriptor
+        descriptor = None
+        return path, result, identity
+    except OSError:
+        _fail('apply_log.unavailable')
+    finally:
+        # Preserve even an empty failed-attempt log; never overwrite evidence.
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def _redirect_standard_streams(apply_log_descriptor: int) -> None:
+    descriptor: int | None = None
+    try:
+        metadata = os.fstat(apply_log_descriptor)
+        flags = fcntl.fcntl(apply_log_descriptor, fcntl.F_GETFL)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) != 0o600 or flags & os.O_ACCMODE != os.O_WRONLY or not flags & os.O_APPEND:
+            _fail('apply_log.changed')
+        descriptor = os.open(os.devnull, os.O_RDWR | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0))
+        if not stat.S_ISCHR(os.fstat(descriptor).st_mode):
+            _fail('runtime.changed')
+        os.dup2(descriptor, 0, inheritable=True)
+        for target in (1, 2):
+            os.dup2(apply_log_descriptor, target, inheritable=True)
+    except OSError:
+        _fail('runtime.changed')
+    finally:
+        if descriptor is not None and descriptor > 2:
+            os.close(descriptor)
+
+
 def _reject_ambient_environment() -> None:
     handoff._reject_ambient_transport_environment()
     forbidden_exact = {'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'}
@@ -790,8 +846,10 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
             _fail('runtime.changed')
         environment = _execution_environment(azure_cli=final.tofu.with_name('az'), azure_config=azure_config, azure_config_binding=reader.azure_config_binding_sha256, execution_dir=execution_dir)
         plan_descriptor: int | None = None
+        apply_log_descriptor: int | None = None
         try:
             plan_descriptor = _open_pinned_plan(saved_plan, expected_sha256=expected_saved_plan_sha256, expected_identity=final.identities[0])
+            apply_log_path, apply_log_descriptor, apply_log_identity = _open_apply_log(execution_dir)
             _require_deadline(deadline)
             _revalidate_operator_tty()
             claim_time = _validate_action_time(final, newest_arm_date=newest_arm_date, clock=clock)
@@ -803,6 +861,7 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
                 'nonce_sha256': final.receipt['nonce_sha256'],
                 'machine_binding_sha256': final.receipt['machine_binding_sha256'],
                 'argv_sha256': _digest(_canonical(argv)), 'environment_sha256': _digest(_canonical(environment)),
+                'apply_log_identity': apply_log_identity,
                 'claimed_at': claim_time.isoformat().replace('+00:00', 'Z'),
                 'apply_outcome': 'unknown',
             }
@@ -813,9 +872,20 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
             _require_deadline(deadline)
             if _null_home_binding() != null_home_binding:
                 _fail('runtime.changed')
+            if _apply_log_identity(apply_log_path, apply_log_descriptor) != apply_log_identity:
+                _fail('apply_log.changed')
+            _redirect_standard_streams(apply_log_descriptor)
+            os.close(apply_log_descriptor)
+            apply_log_descriptor = None
+            _require_deadline(deadline)
             os.execve(str(final.tofu), argv, environment)
             _fail('execve.returned')
         except BaseException:
+            if apply_log_descriptor is not None:
+                try:
+                    os.close(apply_log_descriptor)
+                except OSError:
+                    pass
             if plan_descriptor is not None:
                 try:
                     os.close(plan_descriptor)

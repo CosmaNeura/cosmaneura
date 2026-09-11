@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -877,11 +878,14 @@ def test_final_plan_refuses_in_place_mutation_after_validation(tmp_path: Path) -
         consumer._open_pinned_plan(plan, expected_sha256=digest, expected_identity=identity)
 
 
-def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize('log_failure', [None, 'mode', 'replace', 'redirect', 'deadline'])
+def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, log_failure: str | None) -> None:
     plan, state, execution, receipt = _artifacts(tmp_path)
     binding = _binding(execution, plan=plan)
     calls: list[tuple[str, list[str], dict[str, str]]] = []
     order: list[str] = []
+    ticks = [0.0]
+    monkeypatch.setattr(consumer.time, 'monotonic', lambda: ticks[0])
     monkeypatch.setattr(consumer, '_reject_ambient_environment', lambda: None)
     monkeypatch.setattr(consumer.handoff, '_python_runtime_binding', _python_binding)
     monkeypatch.setattr(consumer.handoff, '_resolve_azure_cli', lambda: Path('/trusted/bin/az'))
@@ -900,15 +904,43 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     os.set_inheritable(plan_descriptor, True)
     monkeypatch.setattr(consumer, '_open_pinned_plan', lambda *_args, **_kwargs: order.append('pin-plan') or plan_descriptor)
     original_claim = consumer._claim
-    monkeypatch.setattr(consumer, '_claim', lambda *args: order.append('claim') or original_claim(*args))
+    def claim_and_maybe_mutate(*args: Any) -> None:
+        order.append('claim')
+        original_claim(*args)
+        log = execution / consumer.APPLY_LOG_NAME
+        if log_failure == 'mode':
+            log.chmod(0o640)
+        elif log_failure == 'replace':
+            log.rename(execution / 'retained-original.log')
+            log.write_bytes(b'')
+            log.chmod(0o600)
+    monkeypatch.setattr(consumer, '_claim', claim_and_maybe_mutate)
+    def redirect(descriptor: int) -> None:
+        order.append('redirect')
+        assert os.fstat(descriptor).st_ino == json.loads((execution / consumer.CLAIM_NAME).read_bytes())['apply_log_identity']['inode']
+        if log_failure == 'redirect':
+            consumer._fail('runtime.changed')
+        if log_failure == 'deadline':
+            ticks[0] = 121.0
+    monkeypatch.setattr(consumer, '_redirect_standard_streams', redirect)
     def execve(path: str, argv: list[str], environment: dict[str, str]) -> None:
         order.append('execve')
         calls.append((path, argv, environment))
         raise OSError('simulated exec failure')
     monkeypatch.setattr(consumer.os, 'execve', execve)
-    with pytest.raises(OSError, match='simulated'):
+    with pytest.raises(OSError if log_failure is None else consumer.ConsumerError):
         consumer.consume_handoff(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=RECEIPT_DIGEST, expected_azure_principal_sha256=PRINCIPAL_DIGEST, clock=lambda: NOW)
-    assert order == ['local', 'live', 'local', 'null-home', 'confirm', 'preclaim', 'null-home', 'pin-plan', 'tty', 'action-time', 'null-home', 'claim', 'null-home', 'execve']
+    marker = execution / consumer.CLAIM_NAME
+    claim = json.loads(marker.read_bytes())
+    assert marker.stat().st_mode & 0o777 == 0o400 and claim['apply_outcome'] == 'unknown'
+    assert claim['apply_log_identity']['name'] == consumer.APPLY_LOG_NAME
+    assert claim['apply_log_identity']['mode'] == 0o600
+    with pytest.raises(OSError):
+        os.fstat(plan_descriptor)
+    if log_failure is not None:
+        assert not calls and marker.exists() and (execution / consumer.APPLY_LOG_NAME).exists()
+        return
+    assert order == ['local', 'live', 'local', 'null-home', 'confirm', 'preclaim', 'null-home', 'pin-plan', 'tty', 'action-time', 'null-home', 'claim', 'null-home', 'redirect', 'execve']
     path, argv, environment = calls[0]
     assert path == '/trusted/tofu'
     assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
@@ -924,6 +956,87 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
     with pytest.raises(consumer.ConsumerError, match='exists'):
         consumer._claim(execution, claim)
     assert marker.exists()
+
+
+def test_apply_log_is_exclusive_append_only_owner_bound_and_retained(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    path, descriptor, identity = consumer._open_apply_log(tmp_path)
+    try:
+        assert identity['inode'] == os.fstat(descriptor).st_ino
+        assert identity['mode'] == 0o600
+        os.write(descriptor, b'synthetic-private-evidence')
+        assert consumer._apply_log_identity(path, descriptor) == identity
+        with pytest.raises(consumer.ConsumerError, match='apply_log.unavailable'):
+            consumer._open_apply_log(tmp_path)
+        assert path.read_bytes() == b'synthetic-private-evidence'
+        path.chmod(0o640)
+        with pytest.raises(consumer.ConsumerError, match='apply_log.changed'):
+            consumer._apply_log_identity(path, descriptor)
+    finally:
+        os.close(descriptor)
+    assert path.exists()
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'hardlink', 'replacement'])
+def test_apply_log_identity_rejects_links_and_replacement(tmp_path: Path, kind: str) -> None:
+    tmp_path.chmod(0o700)
+    path, descriptor, _ = consumer._open_apply_log(tmp_path)
+    try:
+        retained = tmp_path / 'retained.log'
+        if kind == 'hardlink':
+            os.link(path, retained)
+        else:
+            path.rename(retained)
+            if kind == 'symlink':
+                path.symlink_to(retained)
+            else:
+                path.write_bytes(b'')
+                path.chmod(0o600)
+        with pytest.raises(consumer.ConsumerError, match='apply_log.changed'):
+            consumer._apply_log_identity(path, descriptor)
+        with pytest.raises(consumer.ConsumerError, match='apply_log.unavailable'):
+            consumer._open_apply_log(tmp_path)
+    finally:
+        os.close(descriptor)
+
+
+@pytest.mark.parametrize('flags', [os.O_RDONLY, os.O_WRONLY, os.O_RDWR | os.O_APPEND])
+def test_apply_log_refuses_wrong_descriptor_flags_before_redirect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flags: int) -> None:
+    tmp_path.chmod(0o700)
+    path = tmp_path / consumer.APPLY_LOG_NAME
+    path.write_bytes(b'')
+    path.chmod(0o600)
+    descriptor = os.open(path, flags)
+    monkeypatch.setattr(consumer.os, 'dup2', lambda *_args, **_kwargs: pytest.fail('unsafe log must not redirect'))
+    try:
+        with pytest.raises(consumer.ConsumerError, match='apply_log.changed'):
+            consumer._apply_log_identity(path, descriptor)
+        with pytest.raises(consumer.ConsumerError, match='apply_log.changed'):
+            consumer._redirect_standard_streams(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def test_real_redirected_exec_keeps_both_streams_private_and_stdin_closed(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    emitter = tmp_path / 'synthetic-emitter'
+    emitter.write_text("#!/bin/sh\nif read -r ignored; then exit 23; fi\nprintf 'private-stdout'\nprintf 'private-stderr' >&2\n", encoding='ascii')
+    emitter.chmod(0o500)
+    code = (
+        'import importlib.util,sys;'
+        f'path={str(Path(consumer.__file__).resolve())!r};'
+        'spec=importlib.util.spec_from_file_location("consumer_child",path);'
+        'module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);'
+        f'log=module._open_apply_log(module.Path({str(tmp_path)!r}))[1];'
+        'module._redirect_standard_streams(log);module.os.close(log);'
+        f'module.os.execve({str(emitter)!r},["synthetic-emitter"],{{"PATH":"/usr/bin:/bin"}})'
+    )
+    result = subprocess.run([sys.executable, '-IS', '-c', code], input=b'must-not-reach-child\n', capture_output=True, timeout=30, check=False)
+    assert result.returncode == 0
+    assert result.stdout == b'' and result.stderr == b''
+    log = tmp_path / consumer.APPLY_LOG_NAME
+    assert log.stat().st_mode & 0o777 == 0o600
+    assert log.read_bytes() == b'private-stdoutprivate-stderr'
 
 
 @pytest.mark.parametrize('mutation_stage', ['preclaim', 'postclaim'])
