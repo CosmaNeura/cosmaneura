@@ -50,6 +50,29 @@ variable "private_executor_network_plan_approved" {
   default     = false
 }
 
+variable "enable_private_executor_registry" {
+  description = "Create the private Premium registry, its exact private endpoint/DNS path, and job-only AcrPull assignments after separate plan approval."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_registry_plan_approved" {
+  description = "Action-time approval of the exact saved registry plan, global name availability, Premium cost, private topology and job-only pull grants; not runtime activation."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_registry_name" {
+  description = "Globally unique lowercase registry name; revalidate availability before the human-approved apply."
+  type        = string
+  default     = "cosmaneurarehearsalexec"
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{4,49}$", var.private_executor_registry_name))
+    error_message = "private_executor_registry_name must be 5-50 lowercase alphanumeric characters starting with a letter"
+  }
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

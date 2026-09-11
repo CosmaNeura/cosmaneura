@@ -7,6 +7,14 @@ mock_provider "azapi" {
 }
 
 mock_provider "azurerm" {
+  mock_resource "azurerm_container_registry" {
+    defaults = {
+      id                       = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.ContainerRegistry/registries/cosmaneurarehearsalexec"
+      login_server             = "cosmaneurarehearsalexec.azurecr.io"
+      data_endpoint_host_names = ["cosmaneurarehearsalexec.eastus.data.azurecr.io"]
+    }
+  }
+
   mock_resource "azurerm_resource_group" {
     defaults = {
       id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock"
@@ -80,6 +88,31 @@ override_resource {
   }
 }
 
+# Separate synthetic job/dispatcher, endpoint-subnet and DNS-zone IDs make
+# cross-boundary mix-ups fail. OpenTofu overrides are resource-wide: both job
+# instances share this fixture principal, so live readback must prove each OID.
+override_resource {
+  target = azurerm_user_assigned_identity.job
+  values = {
+    id           = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.ManagedIdentity/userAssignedIdentities/job"
+    principal_id = "44444444-4444-4444-8444-444444444444"
+  }
+}
+
+override_resource {
+  target = azurerm_subnet.private_executor_service_endpoints
+  values = {
+    id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.Network/virtualNetworks/mock/subnets/private-executor-service-endpoints"
+  }
+}
+
+override_resource {
+  target = azurerm_private_dns_zone.private_executor_registry
+  values = {
+    id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io"
+  }
+}
+
 run "default_is_dormant" {
   command = plan
 
@@ -137,6 +170,19 @@ run "default_is_dormant" {
     condition     = !output.private_executor_network_contract.enabled && output.private_executor_network_contract.vnet_resource_id == null && output.private_executor_network_contract.subnets.private_service_endpoints.resource_id == null
     error_message = "The default outputs must not imply an enabled or deployed private-executor network"
   }
+
+  assert {
+    condition = (
+      length(azurerm_container_registry.private_executor) == 0 &&
+      length(azurerm_private_endpoint.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_registry) == 0 &&
+      length(azurerm_role_assignment.private_executor_acrpull) == 0 &&
+      !output.private_executor_registry_contract.enabled &&
+      output.private_executor_registry_contract.registry == null
+    )
+    error_message = "The default plan must create no registry, private path or pull grants"
+  }
 }
 
 run "reversible_control_plane" {
@@ -146,6 +192,18 @@ run "reversible_control_plane" {
     deploy_staging_restore_control_plane = true
     target_cidr_inventory_revalidated    = true
     control_cidr_inventory_revalidated   = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_registry.private_executor) == 0 &&
+      length(azurerm_private_endpoint.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_registry) == 0 &&
+      length(azurerm_role_assignment.private_executor_acrpull) == 0 &&
+      output.private_executor_registry_contract.registry == null
+    )
+    error_message = "The approved base alone must not create any registry resources"
   }
 
   assert {
@@ -234,6 +292,18 @@ run "approved_private_executor_network_foundation" {
   }
 
   assert {
+    condition = (
+      length(azurerm_container_registry.private_executor) == 0 &&
+      length(azurerm_private_endpoint.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone.private_executor_registry) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_registry) == 0 &&
+      length(azurerm_role_assignment.private_executor_acrpull) == 0 &&
+      output.private_executor_registry_contract.registry == null
+    )
+    error_message = "The independently approved network rung must not implicitly create registry resources"
+  }
+
+  assert {
     condition     = azurerm_virtual_network.control[0].location == "eastus" && azurerm_virtual_network.control[0].address_space == toset(["10.76.0.0/24"])
     error_message = "The executor foundation must remain in the exact East US control VNet"
   }
@@ -282,6 +352,254 @@ run "approved_private_executor_network_foundation" {
       output.private_executor_blocker.implemented == false
     )
     error_message = "The network foundation must not claim compute, endpoints, routing, ingress, peering, or executor binding"
+  }
+}
+
+run "registry_requires_exact_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_executor_registry           = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_rejects_approval_without_enable" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    private_executor_registry_plan_approved    = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_requires_base" {
+  command = plan
+
+  variables {
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_executor_registry           = true
+    private_executor_registry_plan_approved    = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_approval_alone_requires_base" {
+  command = plan
+
+  variables {
+    private_executor_registry_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_requires_network_foundation" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane    = true
+    target_cidr_inventory_revalidated       = true
+    control_cidr_inventory_revalidated      = true
+    enable_private_executor_registry        = true
+    private_executor_registry_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_requires_network_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = false
+    enable_private_executor_registry           = true
+    private_executor_registry_plan_approved    = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_requires_control_cidr_inventory" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = false
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_executor_registry           = true
+    private_executor_registry_plan_approved    = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_requires_target_cidr_inventory" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = false
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_executor_registry           = true
+    private_executor_registry_plan_approved    = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "registry_name_is_lowercase_alphanumeric" {
+  command = plan
+
+  variables {
+    private_executor_registry_name = "invalid-registry"
+  }
+
+  expect_failures = [var.private_executor_registry_name]
+}
+
+run "approved_private_registry_is_private_and_job_only" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_executor_registry           = true
+    private_executor_registry_plan_approved    = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_container_registry.private_executor) == 1 &&
+      azurerm_container_registry.private_executor[0].name == "cosmaneurarehearsalexec" &&
+      azurerm_container_registry.private_executor[0].sku == "Premium" &&
+      azurerm_container_registry.private_executor[0].location == "eastus" &&
+      azurerm_container_registry.private_executor[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      !azurerm_container_registry.private_executor[0].admin_enabled &&
+      !azurerm_container_registry.private_executor[0].anonymous_pull_enabled &&
+      !azurerm_container_registry.private_executor[0].public_network_access_enabled &&
+      azurerm_container_registry.private_executor[0].network_rule_bypass_option == "None" &&
+      azurerm_container_registry.private_executor[0].data_endpoint_enabled &&
+      !azurerm_container_registry.private_executor[0].export_policy_enabled &&
+      length(azurerm_container_registry.private_executor[0].network_rule_set) == 1 &&
+      azurerm_container_registry.private_executor[0].network_rule_set[0].default_action == "Deny" &&
+      length(azurerm_container_registry.private_executor[0].network_rule_set[0].ip_rule) == 0 &&
+      length(azurerm_container_registry.private_executor[0].identity) == 0 &&
+      length(azurerm_container_registry.private_executor[0].georeplications) == 0
+    )
+    error_message = "Only the dedicated East US private Premium registry, without credentials, bypasses, export, replicas or public access, may be modeled"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.private_executor_registry) == 1 &&
+      azurerm_private_endpoint.private_executor_registry[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      azurerm_private_endpoint.private_executor_registry[0].subnet_id == azurerm_subnet.private_executor_service_endpoints[0].id &&
+      azurerm_private_endpoint.private_executor_registry[0].subnet_id != azurerm_subnet.marker_private_endpoint[0].id &&
+      length(azurerm_private_endpoint.private_executor_registry[0].private_service_connection) == 1 &&
+      azurerm_private_endpoint.private_executor_registry[0].private_service_connection[0].private_connection_resource_id == azurerm_container_registry.private_executor[0].id &&
+      !azurerm_private_endpoint.private_executor_registry[0].private_service_connection[0].is_manual_connection &&
+      azurerm_private_endpoint.private_executor_registry[0].private_service_connection[0].subresource_names == tolist(["registry"]) &&
+      length(azurerm_private_endpoint.private_executor_registry[0].private_dns_zone_group) == 1 &&
+      azurerm_private_endpoint.private_executor_registry[0].private_dns_zone_group[0].name == "registry" &&
+      toset(azurerm_private_endpoint.private_executor_registry[0].private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.private_executor_registry[0].id])
+    )
+    error_message = "The only registry connection and zone group must bind the exact registry and service-endpoint subnet"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone.private_executor_registry) == 1 &&
+      azurerm_private_dns_zone.private_executor_registry[0].name == "privatelink.azurecr.io" &&
+      azurerm_private_dns_zone.private_executor_registry[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_registry) == 1 &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_registry[0].private_dns_zone_name == "privatelink.azurecr.io" &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_registry[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_registry[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+      !azurerm_private_dns_zone_virtual_network_link.private_executor_registry[0].registration_enabled
+    )
+    error_message = "Private ACR DNS must link only the control VNet without registration"
+  }
+
+  assert {
+    condition = (
+      toset(keys(azurerm_role_assignment.private_executor_acrpull)) == toset(["provision", "cleanup"]) &&
+      alltrue([
+        for key, assignment in azurerm_role_assignment.private_executor_acrpull :
+        assignment.scope == azurerm_container_registry.private_executor[0].id &&
+        assignment.role_definition_id == "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/providers/Microsoft.Authorization/roleDefinitions/7f951dda-4ed3-4680-a7ca-43fe172d538d" &&
+        assignment.principal_id == azurerm_user_assigned_identity.job[key].principal_id &&
+        assignment.principal_type == "ServicePrincipal" &&
+        alltrue([for dispatcher in azurerm_user_assigned_identity.dispatcher : assignment.principal_id != dispatcher.principal_id])
+      ])
+    )
+    error_message = "Exactly the two unfederated job principals, never dispatchers, may receive registry-scoped built-in AcrPull"
+  }
+
+  assert {
+    condition = (
+      output.private_executor_registry_contract.enabled &&
+      output.private_executor_registry_contract.registry.resource_id == azurerm_container_registry.private_executor[0].id &&
+      output.private_executor_registry_contract.registry.host == "cosmaneurarehearsalexec.azurecr.io" &&
+      toset(output.private_executor_registry_contract.registry.data_hosts) == toset(["cosmaneurarehearsalexec.eastus.data.azurecr.io"]) &&
+      !output.private_executor_registry_contract.runtime_binding_complete &&
+      !output.private_executor_registry_contract.private_pull_proven &&
+      !output.private_executor_registry_contract.image_publication_proven &&
+      !output.private_executor_registry_contract.role_assignment_mode_verified &&
+      output.private_executor_registry_contract.role_assignment_mode_requirement == "LegacyRegistryPermissions" &&
+      !output.private_executor_blocker.implemented &&
+      output.private_executor_blocker.trusted_evidence_binding == "not-implemented" &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding &&
+      !output.target_topology_contract.owned_by_this_root &&
+      output.private_executor_network_contract.private_endpoints &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_network_contract.vnet_peering &&
+      !output.private_executor_network_contract.public_ingress
+    )
+    error_message = "Registry source identifiers must not claim verified permissions, private pull, image, runtime or target connectivity"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_user_assigned_identity.job) == 2 &&
+      length(azurerm_user_assigned_identity.dispatcher) == 2 &&
+      length(azurerm_federated_identity_credential.dispatcher) == 2 &&
+      length(azapi_resource.marker_container) == 7 &&
+      length(azurerm_role_assignment.marker_create) == 0 &&
+      length(azurerm_role_definition.marker_create_and_read) == 0 &&
+      length(azapi_resource_action.marker_legal_hold) == 0 &&
+      length(azurerm_storage_container_immutability_policy.marker) == 0 &&
+      length(azurerm_management_lock.marker) == 0
+    )
+    error_message = "Existing identities and retained containers must remain; marker-write and retention controls must stay absent"
   }
 }
 

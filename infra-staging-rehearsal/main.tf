@@ -66,6 +66,8 @@ locals {
     var.deploy_staging_restore_control_plane ||
     var.enable_private_executor_network_foundation ||
     var.private_executor_network_plan_approved ||
+    var.enable_private_executor_registry ||
+    var.private_executor_registry_plan_approved ||
     var.enable_marker_create_assignments ||
     local.irreversible_controls_requested
   )
@@ -80,6 +82,8 @@ resource "terraform_data" "activation_guard" {
     control_cidr_inventory_revalidated  = var.control_cidr_inventory_revalidated
     private_executor_network_foundation = var.enable_private_executor_network_foundation
     private_executor_network_approved   = var.private_executor_network_plan_approved
+    private_executor_registry           = var.enable_private_executor_registry
+    private_executor_registry_approved  = var.private_executor_registry_plan_approved
     marker_create_assignments           = var.enable_marker_create_assignments
     marker_create_authorization_proven  = var.marker_create_authorization_proven
     private_marker_network_posture      = var.private_marker_network_posture_proven
@@ -109,6 +113,22 @@ resource "terraform_data" "activation_guard" {
         var.private_executor_network_plan_approved
       )
       error_message = "The private executor network foundation and its exact saved-plan approval must be enabled or disabled together"
+    }
+
+    precondition {
+      condition = (
+        var.enable_private_executor_registry ==
+        var.private_executor_registry_plan_approved
+      )
+      error_message = "The private registry and its exact saved-plan approval must be enabled or disabled together"
+    }
+
+    precondition {
+      condition = (
+        !var.enable_private_executor_registry ||
+        (var.enable_private_executor_network_foundation && var.private_executor_network_plan_approved)
+      )
+      error_message = "The private registry requires the separately approved private-executor network foundation"
     }
 
     precondition {
