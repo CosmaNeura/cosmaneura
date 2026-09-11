@@ -117,6 +117,11 @@ run "default_is_dormant" {
   command = plan
 
   assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
+
+  assert {
     condition = (
       length(azapi_resource.private_launch_mailbox_account) == 0 &&
       length(azapi_update_resource.private_launch_mailbox_blob_versioning) == 0 &&
@@ -223,6 +228,11 @@ run "default_is_dormant" {
 
 run "reversible_control_plane" {
   command = plan
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
 
   assert {
     condition = (
@@ -347,6 +357,11 @@ run "private_executor_network_requires_exact_approval" {
 
 run "approved_private_executor_network_foundation" {
   command = plan
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
 
   assert {
     condition = (
@@ -578,6 +593,11 @@ run "registry_name_is_lowercase_alphanumeric" {
 
 run "approved_private_registry_is_private_and_job_only" {
   command = plan
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
 
   assert {
     condition = (
@@ -908,6 +928,11 @@ run "approved_vault_is_empty_private_and_arm_only" {
   command = plan
 
   assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
+
+  assert {
     condition = (
       length(azapi_resource.private_launch_mailbox_account) == 0 &&
       length(azapi_update_resource.private_launch_mailbox_blob_versioning) == 0 &&
@@ -1219,6 +1244,11 @@ run "evidence_rejects_invalid_account_name" {
 
 run "approved_evidence_is_empty_private_versioned_and_separate" {
   command = plan
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
 
   assert {
     condition = (
@@ -1579,6 +1609,11 @@ run "mailbox_rejects_invalid_account_name" {
 run "approved_mailbox_is_empty_private_versioned_and_separate" {
   command = plan
 
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
+
   variables {
     deploy_staging_restore_control_plane         = true
     target_cidr_inventory_revalidated            = true
@@ -1738,6 +1773,11 @@ run "approved_mailbox_is_empty_private_versioned_and_separate" {
 run "approved_private_stores_coexist_without_activation" {
   command = plan
 
+  assert {
+    condition     = length(azurerm_user_assigned_identity.private_broker) == 0 && !output.private_broker_identity_contract.enabled && length(output.private_broker_identity_contract.identities) == 0
+    error_message = "Broker identities must remain absent without their independent exact-plan approval"
+  }
+
   variables {
     deploy_staging_restore_control_plane         = true
     target_cidr_inventory_revalidated            = true
@@ -1814,6 +1854,175 @@ run "approved_private_stores_coexist_without_activation" {
   }
 }
 
+# Resource-wide fixture IDs differ from caller/job fixtures, but do not prove
+# per-instance live separation. The output deliberately keeps that proof false.
+override_resource {
+  target = azurerm_user_assigned_identity.private_broker
+  values = {
+    id           = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.ManagedIdentity/userAssignedIdentities/broker"
+    client_id    = "55555555-5555-4555-8555-555555555555"
+    principal_id = "66666666-6666-4666-8666-666666666666"
+    tenant_id    = "d51754d0-bba5-4810-820e-afac542844d6"
+  }
+}
+
+run "brokers_require_exact_plan_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = true
+    target_cidr_inventory_revalidated             = true
+    control_cidr_inventory_revalidated            = true
+    enable_private_restore_broker_identities      = true
+    private_restore_broker_identity_plan_approved = false
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "brokers_reject_approval_without_enable" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = true
+    target_cidr_inventory_revalidated             = true
+    control_cidr_inventory_revalidated            = true
+    enable_private_restore_broker_identities      = false
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "brokers_require_base" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = false
+    target_cidr_inventory_revalidated             = true
+    control_cidr_inventory_revalidated            = true
+    enable_private_restore_broker_identities      = true
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "brokers_require_control_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = true
+    target_cidr_inventory_revalidated             = true
+    control_cidr_inventory_revalidated            = false
+    enable_private_restore_broker_identities      = true
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "brokers_require_target_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = true
+    target_cidr_inventory_revalidated             = false
+    control_cidr_inventory_revalidated            = true
+    enable_private_restore_broker_identities      = true
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "broker_enable_alone_requires_base" {
+  command = plan
+
+  variables {
+    enable_private_restore_broker_identities = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "broker_approval_alone_requires_base" {
+  command = plan
+
+  variables {
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "approved_broker_identities_have_no_authority_or_attachment" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane          = true
+    target_cidr_inventory_revalidated             = true
+    control_cidr_inventory_revalidated            = true
+    enable_private_restore_broker_identities      = true
+    private_restore_broker_identity_plan_approved = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_user_assigned_identity.private_broker) == 2 &&
+      { for action, identity in azurerm_user_assigned_identity.private_broker : action => identity.name } == {
+        provision = "cosmaneura-staging-restore-provision-broker"
+        cleanup   = "cosmaneura-staging-restore-cleanup-broker"
+      } &&
+      alltrue([for action, identity in azurerm_user_assigned_identity.private_broker : (
+        identity.resource_group_name == azurerm_resource_group.control[0].name &&
+        identity.location == "eastus" &&
+        identity.name != azurerm_user_assigned_identity.dispatcher[action].name &&
+        identity.name != azurerm_user_assigned_identity.job[action].name &&
+        identity.id != azurerm_user_assigned_identity.dispatcher[action].id &&
+        identity.id != azurerm_user_assigned_identity.job[action].id
+      )]) &&
+      length(azurerm_user_assigned_identity.dispatcher) == 2 &&
+      length(azurerm_user_assigned_identity.job) == 2 &&
+      length(azurerm_federated_identity_credential.dispatcher) == 2
+    )
+    error_message = "Only two distinct-named action-keyed control-group brokers may be added; existing callers/jobs/federation remain unchanged"
+  }
+
+  assert {
+    condition = (
+      output.private_broker_identity_contract.enabled &&
+      toset(keys(output.private_broker_identity_contract.identities)) == toset(["provision", "cleanup"]) &&
+      alltrue([for action, identity in azurerm_user_assigned_identity.private_broker : (
+        output.private_broker_identity_contract.identities[action].name == identity.name &&
+        output.private_broker_identity_contract.identities[action].resource_id == identity.id &&
+        output.private_broker_identity_contract.identities[action].client_id == identity.client_id &&
+        output.private_broker_identity_contract.identities[action].principal_id == identity.principal_id &&
+        output.private_broker_identity_contract.identities[action].tenant_id == identity.tenant_id
+      )]) &&
+      alltrue([for key in [
+        "identity_separation_proven", "role_assignments_managed", "federation_managed",
+        "compute_attachments_managed", "oidc_authentication_bound", "job_read_start_bound",
+        "receipt_signing_bound", "broker_runtime_bound",
+      ] : output.private_broker_identity_contract[key] == false]) &&
+      !output.private_executor_blocker.implemented &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding &&
+      !output.private_executor_network_contract.enabled &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_registry_contract.enabled &&
+      !output.private_executor_vault_contract.enabled &&
+      !output.private_evidence_storage_contract.enabled &&
+      !output.private_launch_mailbox_storage_contract.enabled &&
+      !output.target_topology_contract.owned_by_this_root &&
+      length(azurerm_role_assignment.marker_create) == 0 &&
+      length(azapi_resource_action.marker_legal_hold) == 0 &&
+      length(azurerm_storage_container_immutability_policy.marker) == 0
+    )
+    error_message = "Identity output wiring cannot claim live separation, federation, permissions, attachments, OIDC, signing, job control or activate any private service/runtime"
+  }
+}
+
 run "cidr_revalidation_is_required" {
   command = plan
 
@@ -1822,6 +2031,56 @@ run "cidr_revalidation_is_required" {
   }
 
   expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "brokers_coexist_with_private_services_without_inheriting_job_grants" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_registry                 = true
+    private_executor_registry_plan_approved          = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+    enable_private_evidence_storage                  = true
+    private_evidence_storage_plan_approved           = true
+    enable_private_launch_mailbox_storage            = true
+    private_launch_mailbox_storage_plan_approved     = true
+    enable_private_restore_broker_identities         = true
+    private_restore_broker_identity_plan_approved    = true
+  }
+
+  assert {
+    condition = (
+      length(azurerm_user_assigned_identity.private_broker) == 2 &&
+      length(azurerm_user_assigned_identity.dispatcher) == 2 &&
+      length(azurerm_user_assigned_identity.job) == 2 &&
+      length(azurerm_federated_identity_credential.dispatcher) == 2 &&
+      length(azurerm_role_assignment.private_executor_acrpull) == 2 &&
+      alltrue([for action, grant in azurerm_role_assignment.private_executor_acrpull : (
+        grant.principal_id == azurerm_user_assigned_identity.job[action].principal_id &&
+        grant.principal_id != azurerm_user_assigned_identity.private_broker[action].principal_id
+      )]) &&
+      output.private_executor_registry_contract.enabled &&
+      output.private_executor_vault_contract.enabled &&
+      output.private_evidence_storage_contract.enabled &&
+      output.private_launch_mailbox_storage_contract.enabled &&
+      alltrue([for key in [
+        "identity_separation_proven", "role_assignments_managed", "federation_managed",
+        "compute_attachments_managed", "oidc_authentication_bound", "job_read_start_bound",
+        "receipt_signing_bound", "broker_runtime_bound",
+      ] : output.private_broker_identity_contract[key] == false]) &&
+      !output.private_executor_blocker.implemented &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding
+    )
+    error_message = "Coexisting private services must retain registry pulls on jobs, keep brokers authority-free and leave all runtime gates false"
+  }
 }
 
 run "marker_create_permissions_are_exact" {
