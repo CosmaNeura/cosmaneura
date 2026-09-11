@@ -78,6 +78,9 @@ user-visible feature flag or cross-repo rollout.
 
 ## Recorded local validation
 
+This slice and the evidence-storage foundation are submitted in one coherent
+private-storage PR within the 2,000-line limit, with independent creation gates.
+
 OpenTofu 1.12.5 format/validate and all **59 provider-mocked runs passed** using
 the locked providers without backend or Azure credentials. Thirteen mailbox
 runs cover twelve refusals and exact positive body/account/versioning/action/
