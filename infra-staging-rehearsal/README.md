@@ -34,8 +34,8 @@ persistent, non-PHI prerequisites for the isolated restore controller:
   subnet and an inert `10.76.0.32/27` executor reservation; and
 - an independently default-off private-executor network foundation that
   delegates `10.76.0.32/27` only to `Microsoft.App/environments` and reserves
-  `10.76.0.64/27` only for later ACR, Key Vault, and per-rehearsal PostgreSQL
-  private endpoints.
+  `10.76.0.64/27` for ACR, Key Vault, private evidence/runtime-record Blob,
+  private launch-mailbox Blob, and per-rehearsal PostgreSQL private endpoints.
 
 The target restore network remains controller-owned and ephemeral. Its contract
 is `10.75.0.0/24` with `10.75.0.0/27` for the PostgreSQL private endpoint. This
@@ -60,9 +60,10 @@ When enabled, the plan changes the existing empty `10.76.0.32/27` reservation
 only by adding the exact Container Apps environment delegation. It adds one
 empty `10.76.0.64/27` subnet with private-endpoint network policies disabled.
 Default outbound access is disabled on all three control subnets. The third
-subnet is reserved for a future digest-pinned ACR, private Key Vault, and one
-second PostgreSQL private endpoint per rehearsal so an executor never needs a
-VNet peer or public route to the ephemeral `10.75.0.0/24` target.
+subnet serves digest-pinned ACR, private Key Vault, evidence/runtime-record and
+launch-mailbox Blob, plus one second PostgreSQL endpoint per rehearsal so an
+executor never needs a VNet peer or public route to the ephemeral `10.75.0.0/24`
+target.
 
 This rung deliberately creates no Container Apps environment or job, ACR, Key
 Vault, PostgreSQL endpoint, DNS zone beyond the existing marker Blob zone, NAT

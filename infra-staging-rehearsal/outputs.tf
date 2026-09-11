@@ -72,7 +72,10 @@ output "private_executor_network_contract" {
       }
       private_service_endpoints = {
         address_prefix = local.private_executor_service_endpoint_subnet
-        purposes       = ["acr", "key-vault", "per-rehearsal-postgresql"]
+        purposes = [
+          "acr", "key-vault", "private-evidence-runtime-record-blob",
+          "private-launch-mailbox-blob", "per-rehearsal-postgresql",
+        ]
         resource_id = (
           var.deploy_staging_restore_control_plane &&
           var.enable_private_executor_network_foundation

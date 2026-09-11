@@ -70,8 +70,13 @@ history and future immutable artifacts must not be deleted as cleanup.
 
 The evidence-only checkpoint below preceded the separately gated mailbox slice.
 Their combined private-storage PR remains under 2,000 changed lines; final local
-validation passed all **59 mocked plans and 34 focused source tests**. No source
+validation passed all **60 mocked plans and 34 focused source tests**. No source
 activation or live evidence claim is inferred from combining the review.
+
+Review follow-up corrected the shared subnet-purpose metadata and added one
+jointly enabled plan proving ten instances, distinct accounts, exact containers,
+shared private DNS/subnet and false authority/runtime flags. Resource and role
+declarations did not change; the full 60-run suite passed after this correction.
 
 OpenTofu 1.12.5 format/validate and all **46 provider-mocked runs passed** with
 the locked AzureRM 4.73.0/AzAPI 2.1.0 providers, no backend and no credentials.

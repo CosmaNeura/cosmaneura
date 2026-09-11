@@ -81,11 +81,14 @@ user-visible feature flag or cross-repo rollout.
 This slice and the evidence-storage foundation are submitted in one coherent
 private-storage PR within the 2,000-line limit, with independent creation gates.
 
-OpenTofu 1.12.5 format/validate and all **59 provider-mocked runs passed** using
+OpenTofu 1.12.5 format/validate and all **60 provider-mocked runs passed** using
 the locked providers without backend or Azure credentials. Thirteen mailbox
 runs cover twelve refusals and exact positive body/account/versioning/action/
 private-path semantics. Six existing default/base/network/registry/vault/
 evidence runs additionally assert mailbox dormancy.
+The added jointly enabled run proves both separately approved foundations can
+coexist with ten instances, distinct accounts, shared private path and no
+authority/runtime activation. Shared subnet-purpose metadata is corrected.
 
 All **34 focused source tests** pass, including five mailbox-specific checks;
 Ruff lint/format pass. The first local source-test run caught an incorrect

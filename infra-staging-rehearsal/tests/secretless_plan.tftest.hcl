@@ -1735,6 +1735,85 @@ run "approved_mailbox_is_empty_private_versioned_and_separate" {
   }
 }
 
+run "approved_private_stores_coexist_without_activation" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane         = true
+    target_cidr_inventory_revalidated            = true
+    control_cidr_inventory_revalidated           = true
+    enable_private_executor_network_foundation   = true
+    private_executor_network_plan_approved       = true
+    enable_private_evidence_storage              = true
+    private_evidence_storage_plan_approved       = true
+    enable_private_launch_mailbox_storage        = true
+    private_launch_mailbox_storage_plan_approved = true
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 1 &&
+      length(azapi_resource.private_launch_mailbox_account) == 1 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 1 &&
+      length(azapi_update_resource.private_launch_mailbox_blob_versioning) == 1 &&
+      length(azapi_resource.private_evidence_container) == 2 &&
+      length(azapi_resource.private_launch_mailbox_container) == 2 &&
+      length(azurerm_private_endpoint.private_evidence) == 1 &&
+      length(azurerm_private_endpoint.private_launch_mailbox) == 1 &&
+      azapi_resource.private_evidence_account[0].name != azapi_resource.private_launch_mailbox_account[0].name &&
+      azapi_resource.private_evidence_account[0].id != azapi_resource.private_launch_mailbox_account[0].id &&
+      toset(keys(azapi_resource.private_evidence_container)) == toset(["restore-evidence-v1", "restore-runtime-bindings-v1"]) &&
+      { for action, container in azapi_resource.private_launch_mailbox_container : action => container.name } == { provision = "restore-provision-launches-v1", cleanup = "restore-cleanup-launches-v1" } &&
+      alltrue([for container in azapi_resource.private_evidence_container : container.parent_id == "${azapi_resource.private_evidence_account[0].id}/blobServices/default"]) &&
+      alltrue([for container in azapi_resource.private_launch_mailbox_container : container.parent_id == "${azapi_resource.private_launch_mailbox_account[0].id}/blobServices/default"])
+    )
+    error_message = "Both independent approvals must create exactly ten storage instances with distinct accounts and exact account-local/action-keyed containers"
+  }
+
+  assert {
+    condition = (
+      alltrue([for endpoint in [azurerm_private_endpoint.private_evidence[0], azurerm_private_endpoint.private_launch_mailbox[0]] : (
+        endpoint.subnet_id == azurerm_subnet.private_executor_service_endpoints[0].id &&
+        toset(endpoint.private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.marker_blob[0].id])
+      )]) &&
+      azurerm_private_dns_zone_virtual_network_link.marker_blob[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+      !azurerm_private_dns_zone_virtual_network_link.marker_blob[0].registration_enabled &&
+      toset(output.private_executor_network_contract.subnets.private_service_endpoints.purposes) == toset([
+        "acr", "key-vault", "private-evidence-runtime-record-blob", "private-launch-mailbox-blob", "per-rehearsal-postgresql",
+      ])
+    )
+    error_message = "Both private stores must reuse only the existing control-VNet Blob DNS and service subnet, whose declared purposes must include both Blob paths"
+  }
+
+  assert {
+    condition = (
+      output.private_evidence_storage_contract.enabled &&
+      output.private_launch_mailbox_storage_contract.enabled &&
+      alltrue([for key in [
+        "versioning_verified", "private_blob_get_proven", "job_read_grants_managed",
+        "publisher_write_authority_managed", "versioned_evidence_binding_complete", "locked_runtime_record_binding_complete",
+      ] : output.private_evidence_storage_contract[key] == false]) &&
+      alltrue([for key in [
+        "blob_versioning_verified", "private_mailbox_read_proven", "broker_create_grants_managed",
+        "job_read_grants_managed", "locked_mailbox_binding_complete", "execution_receipt_handoff_bound",
+      ] : output.private_launch_mailbox_storage_contract[key] == false]) &&
+      !output.private_executor_blocker.implemented &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_network_contract.vnet_peering &&
+      !output.private_executor_network_contract.public_ingress &&
+      !output.target_topology_contract.owned_by_this_root &&
+      length(azapi_resource.marker_container) == 7 &&
+      length(azurerm_role_assignment.marker_create) == 0 &&
+      length(azapi_resource_action.marker_legal_hold) == 0 &&
+      length(azurerm_storage_container_immutability_policy.marker) == 0 &&
+      length(azurerm_management_lock.marker) == 0
+    )
+    error_message = "Simultaneous empty storage must not claim live authorization, versioning, private reads, immutable retention, handoff or runtime activation"
+  }
+}
+
 run "cidr_revalidation_is_required" {
   command = plan
 
