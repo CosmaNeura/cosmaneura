@@ -36,7 +36,7 @@ output "private_executor_blocker" {
     service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability        = "not-implemented"
     container_apps_environment           = "not-implemented"
-    private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled ? "partial; service contracts do not prove remaining bindings" : "not-implemented"
+    private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled ? "partial; service contracts do not prove remaining bindings" : "not-implemented"
     workflow_binding                     = "not-implemented"
     job_identity_binding                 = "not-implemented"
     trusted_evidence_binding             = "not-implemented"
@@ -84,7 +84,7 @@ output "private_executor_network_contract" {
     route_table                = false
     nat_gateway                = false
     container_apps_environment = false
-    private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled
+    private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled
   }
 }
 
@@ -159,6 +159,32 @@ output "private_evidence_storage_contract" {
       endpoint_subnet          = azurerm_subnet.private_executor_service_endpoints[0].id
       containers = {
         for name, container in azapi_resource.private_evidence_container : name => container.id
+      }
+    } : null
+  }
+}
+
+output "private_launch_mailbox_storage_contract" {
+  description = "Planned empty action-partitioned storage only; no private receipt read, create-only broker grant, immutable retention, signed handoff or runtime is proven."
+  value = {
+    enabled                         = local.private_launch_mailbox_storage_enabled
+    blob_versioning_verified        = false
+    private_mailbox_read_proven     = false
+    broker_create_grants_managed    = false
+    job_read_grants_managed         = false
+    locked_mailbox_binding_complete = false
+    execution_receipt_handoff_bound = false
+    account = local.private_launch_mailbox_storage_enabled ? {
+      resource_id              = azapi_resource.private_launch_mailbox_account[0].id
+      blob_service_resource_id = azapi_update_resource.private_launch_mailbox_blob_versioning[0].resource_id
+      blob_service_uri         = try(azapi_resource.private_launch_mailbox_account[0].output.properties.primaryEndpoints.blob, null)
+      private_endpoint         = azurerm_private_endpoint.private_launch_mailbox[0].id
+      private_dns_zone         = azurerm_private_dns_zone.marker_blob[0].id
+      private_dns_link         = azurerm_private_dns_zone_virtual_network_link.marker_blob[0].id
+      linked_vnet              = azurerm_virtual_network.control[0].id
+      endpoint_subnet          = azurerm_subnet.private_executor_service_endpoints[0].id
+      containers = {
+        for action, container in azapi_resource.private_launch_mailbox_container : action => container.id
       }
     } : null
   }

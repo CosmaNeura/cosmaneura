@@ -128,6 +128,29 @@ variable "private_evidence_storage_account_name" {
   }
 }
 
+variable "enable_private_launch_mailbox_storage" {
+  description = "Create a distinct private versioned mailbox account and two empty action-partitioned containers; no grant, broker, job, retention or runtime is activated."
+  type        = bool
+  default     = false
+}
+
+variable "private_launch_mailbox_storage_plan_approved" {
+  description = "Action-time approval of the exact saved mailbox plan, account-ID absence/global availability and private topology."
+  type        = bool
+  default     = false
+}
+
+variable "private_launch_mailbox_storage_account_name" {
+  description = "Globally unique mailbox account, distinct from markers and evidence/runtime records; verify availability and exact-ID absence before planning/apply."
+  type        = string
+  default     = "cosmaneurarehearsalmbx"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{3,24}$", var.private_launch_mailbox_storage_account_name))
+    error_message = "private_launch_mailbox_storage_account_name must be 3-24 lowercase alphanumeric characters"
+  }
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

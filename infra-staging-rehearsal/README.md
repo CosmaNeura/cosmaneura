@@ -193,6 +193,44 @@ and containers with `prevent_destroy` and use reviewed roll-forward. Removing
 the Blob-service update does not reverse its settings. No existing versions or
 future immutable artifacts may be deleted as an immediate rollback.
 
+## Empty private launch-mailbox storage foundation
+
+The launch mailbox requires a third account, distinct from **both** markers and
+evidence/runtime records. The runtime validator explicitly rejects sharing any
+of those accounts. Require the separately approved base/network, both fresh
+CIDR confirmations and independent default-false switches:
+
+```hcl
+enable_private_launch_mailbox_storage       = true
+private_launch_mailbox_storage_plan_approved = true
+```
+
+This creates only an empty private Standard_ZRS account, exact default Blob
+service versioning update, `restore-provision-launches-v1` and
+`restore-cleanup-launches-v1`, and one Blob endpoint in the existing private
+service subnet using the existing control-VNet Blob DNS. The action-keyed
+container map preserves provision/cleanup partitioning. No grant, broker, job,
+signing key, receipt object, immutable policy or runtime is activated. Versioning
+alone is not a locked, create-only, authenticated launch mailbox.
+
+Management stays ARM-only on the pinned AzAPI provider: HTTPS/TLS 1.2, OAuth
+default, shared key/public/cross-tenant access off, no network bypass/exception,
+infrastructure encryption and no HNS/NFS/SFTP/local-user paths. Account and
+containers have destruction guards. A mailbox approval never activates evidence
+storage, and the converse is also false.
+
+Before planning AND human apply require exact-ID absence/global availability,
+fresh identity/state/source/network and independent exact saved-plan review.
+After apply require exact private account/versioning/container/endpoint/NIC/DNS,
+empty private object counts, effective inherited RBAC, unchanged other stores
+and empty target. No broad job grants may be introduced to make verification
+possible. Locked/create-only retention, scoped broker/job authority, signed
+receipts and execution-name handoff remain later gates.
+
+Before creation hold/revert with flags false; afterwards retain stores and use
+reviewed roll-forward. Removing the Blob-service update does not undo versioning
+or authorize deleting versions. See the [mailbox flight plan](../docs/flight-plans/2026-09-11-staging-private-mailbox-foundation.md).
+
 ## Dormant restore runtime binding v1
 
 `restore-runtime-binding-policy.json` and
