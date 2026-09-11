@@ -36,7 +36,7 @@ output "private_executor_blocker" {
     service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability        = "not-implemented"
     container_apps_environment           = "not-implemented"
-    private_service_endpoints            = local.private_executor_registry_enabled ? "registry-only; remaining bindings not implemented" : "not-implemented"
+    private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled ? "partial; registry/vault contracts do not prove remaining bindings" : "not-implemented"
     workflow_binding                     = "not-implemented"
     job_identity_binding                 = "not-implemented"
     trusted_evidence_binding             = "not-implemented"
@@ -84,7 +84,7 @@ output "private_executor_network_contract" {
     route_table                = false
     nat_gateway                = false
     container_apps_environment = false
-    private_endpoints          = local.private_executor_registry_enabled
+    private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled
   }
 }
 
@@ -114,6 +114,26 @@ output "private_executor_registry_contract" {
           identity_id  = azurerm_user_assigned_identity.job[key].id
         }
       }
+    } : null
+  }
+}
+
+output "private_executor_vault_contract" {
+  description = "Planned empty-vault identifiers only; no secret material, exact-version binding, private GET or job read authorization is proven."
+  value = {
+    enabled                         = local.private_executor_vault_enabled
+    private_secret_binding_complete = false
+    secret_material_managed         = false
+    secret_read_grants_managed      = false
+    private_get_proven              = false
+    vault = local.private_executor_vault_enabled ? {
+      resource_id      = azapi_resource.private_executor_vault[0].id
+      uri              = azapi_resource.private_executor_vault[0].output.properties.vaultUri
+      private_endpoint = azurerm_private_endpoint.private_executor_vault[0].id
+      private_dns_zone = azurerm_private_dns_zone.private_executor_vault[0].id
+      private_dns_link = azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].id
+      linked_vnet      = azurerm_virtual_network.control[0].id
+      endpoint_subnet  = azurerm_subnet.private_executor_service_endpoints[0].id
     } : null
   }
 }

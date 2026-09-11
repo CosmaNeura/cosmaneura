@@ -117,6 +117,18 @@ run "default_is_dormant" {
   command = plan
 
   assert {
+    condition = (
+      length(azapi_resource.private_executor_vault) == 0 &&
+      length(azurerm_private_endpoint.private_executor_vault) == 0 &&
+      length(azurerm_private_dns_zone.private_executor_vault) == 0 &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_vault) == 0 &&
+      !output.private_executor_vault_contract.enabled &&
+      output.private_executor_vault_contract.vault == null
+    )
+    error_message = "No vault or private vault path may exist in the default plan"
+  }
+
+  assert {
     condition     = length(terraform_data.activation_guard) == 0 && length(terraform_data.private_executor_topology_blocker) == 0
     error_message = "The default plan must not create Terraform activation resources"
   }
@@ -187,6 +199,11 @@ run "default_is_dormant" {
 
 run "reversible_control_plane" {
   command = plan
+
+  assert {
+    condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
+    error_message = "The base alone must not create a vault"
+  }
 
   variables {
     deploy_staging_restore_control_plane = true
@@ -282,6 +299,11 @@ run "private_executor_network_requires_exact_approval" {
 
 run "approved_private_executor_network_foundation" {
   command = plan
+
+  assert {
+    condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
+    error_message = "Network approval alone must not create a vault"
+  }
 
   variables {
     deploy_staging_restore_control_plane       = true
@@ -485,6 +507,11 @@ run "registry_name_is_lowercase_alphanumeric" {
 run "approved_private_registry_is_private_and_job_only" {
   command = plan
 
+  assert {
+    condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
+    error_message = "Registry approval must not imply vault or irreversible purge-protection approval"
+  }
+
   variables {
     deploy_staging_restore_control_plane       = true
     target_cidr_inventory_revalidated          = true
@@ -600,6 +627,300 @@ run "approved_private_registry_is_private_and_job_only" {
       length(azurerm_management_lock.marker) == 0
     )
     error_message = "Existing identities and retained containers must remain; marker-write and retention controls must stay absent"
+  }
+}
+
+override_resource {
+  target = azapi_resource.private_executor_vault
+  values = {
+    id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.KeyVault/vaults/cosmaneura-rehearsal-kv"
+    output = {
+      properties = {
+        vaultUri = "https://cosmaneura-rehearsal-kv.vault.azure.net/"
+      }
+    }
+  }
+}
+
+override_resource {
+  target = azurerm_private_dns_zone.private_executor_vault
+  values = {
+    id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
+  }
+}
+
+run "vault_requires_plan_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = false
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_irreversible_purge_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = false
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_base" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = false
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_network" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = false
+    private_executor_network_plan_approved           = false
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_network_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = false
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_target_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = false
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_requires_control_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = false
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_plan_approval_alone_is_rejected" {
+  command = plan
+
+  variables {
+    private_executor_vault_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_purge_approval_alone_is_rejected" {
+  command = plan
+
+  variables {
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_enable_alone_is_rejected" {
+  command = plan
+
+  variables {
+    enable_private_executor_vault = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "vault_name_rejects_consecutive_hyphens" {
+  command = plan
+
+  variables {
+    private_executor_vault_name = "invalid--vault"
+  }
+
+  expect_failures = [var.private_executor_vault_name]
+}
+
+run "approved_vault_is_empty_private_and_arm_only" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane             = true
+    target_cidr_inventory_revalidated                = true
+    control_cidr_inventory_revalidated               = true
+    enable_private_executor_network_foundation       = true
+    private_executor_network_plan_approved           = true
+    enable_private_executor_vault                    = true
+    private_executor_vault_plan_approved             = true
+    private_executor_vault_purge_protection_approved = true
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.private_executor_vault) == 1 &&
+      azapi_resource.private_executor_vault[0].type == "Microsoft.KeyVault/vaults@2023-07-01" &&
+      azapi_resource.private_executor_vault[0].name == "cosmaneura-rehearsal-kv" &&
+      azapi_resource.private_executor_vault[0].parent_id == azurerm_resource_group.control[0].id &&
+      azapi_resource.private_executor_vault[0].location == "eastus" &&
+      azapi_resource.private_executor_vault[0].schema_validation_enabled &&
+      toset(azapi_resource.private_executor_vault[0].response_export_values) == toset(["properties.vaultUri"]) &&
+      toset(keys(azapi_resource.private_executor_vault[0].body)) == toset(["properties"]) &&
+      toset(keys(azapi_resource.private_executor_vault[0].body.properties)) == toset([
+        "tenantId", "sku", "createMode", "accessPolicies", "enableRbacAuthorization",
+        "enabledForDeployment", "enabledForDiskEncryption", "enabledForTemplateDeployment",
+        "publicNetworkAccess", "enableSoftDelete", "softDeleteRetentionInDays",
+        "enablePurgeProtection", "networkAcls"
+      ])
+    )
+    error_message = "Only the exact ARM-only control-group vault body and non-secret URI export are allowed"
+  }
+
+  assert {
+    condition = (
+      azapi_resource.private_executor_vault[0].body.properties.tenantId == "d51754d0-bba5-4810-820e-afac542844d6" &&
+      azapi_resource.private_executor_vault[0].body.properties.sku.family == "A" &&
+      azapi_resource.private_executor_vault[0].body.properties.sku.name == "standard" &&
+      azapi_resource.private_executor_vault[0].body.properties.createMode == "default" &&
+      length(azapi_resource.private_executor_vault[0].body.properties.accessPolicies) == 0 &&
+      azapi_resource.private_executor_vault[0].body.properties.enableRbacAuthorization &&
+      !azapi_resource.private_executor_vault[0].body.properties.enabledForDeployment &&
+      !azapi_resource.private_executor_vault[0].body.properties.enabledForDiskEncryption &&
+      !azapi_resource.private_executor_vault[0].body.properties.enabledForTemplateDeployment &&
+      azapi_resource.private_executor_vault[0].body.properties.publicNetworkAccess == "Disabled" &&
+      azapi_resource.private_executor_vault[0].body.properties.enableSoftDelete &&
+      azapi_resource.private_executor_vault[0].body.properties.softDeleteRetentionInDays == 90 &&
+      azapi_resource.private_executor_vault[0].body.properties.enablePurgeProtection &&
+      azapi_resource.private_executor_vault[0].body.properties.networkAcls.bypass == "None" &&
+      azapi_resource.private_executor_vault[0].body.properties.networkAcls.defaultAction == "Deny" &&
+      length(azapi_resource.private_executor_vault[0].body.properties.networkAcls.ipRules) == 0 &&
+      length(azapi_resource.private_executor_vault[0].body.properties.networkAcls.virtualNetworkRules) == 0
+    )
+    error_message = "The vault must have exact tenant/RBAC, no access policies or bypasses, and explicitly approved 90-day irreversible purge protection"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_endpoint.private_executor_vault) == 1 &&
+      azurerm_private_endpoint.private_executor_vault[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      azurerm_private_endpoint.private_executor_vault[0].subnet_id == azurerm_subnet.private_executor_service_endpoints[0].id &&
+      azurerm_private_endpoint.private_executor_vault[0].subnet_id != azurerm_subnet.marker_private_endpoint[0].id &&
+      length(azurerm_private_endpoint.private_executor_vault[0].private_service_connection) == 1 &&
+      azurerm_private_endpoint.private_executor_vault[0].private_service_connection[0].private_connection_resource_id == azapi_resource.private_executor_vault[0].id &&
+      azurerm_private_endpoint.private_executor_vault[0].private_service_connection[0].subresource_names == tolist(["vault"]) &&
+      !azurerm_private_endpoint.private_executor_vault[0].private_service_connection[0].is_manual_connection &&
+      length(azurerm_private_endpoint.private_executor_vault[0].private_dns_zone_group) == 1 &&
+      azurerm_private_endpoint.private_executor_vault[0].private_dns_zone_group[0].name == "vault" &&
+      toset(azurerm_private_endpoint.private_executor_vault[0].private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.private_executor_vault[0].id])
+    )
+    error_message = "The vault endpoint must bind only this vault, its dedicated zone and the control private-service subnet"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_private_dns_zone.private_executor_vault) == 1 &&
+      azurerm_private_dns_zone.private_executor_vault[0].name == "privatelink.vaultcore.azure.net" &&
+      azurerm_private_dns_zone.private_executor_vault[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      length(azurerm_private_dns_zone_virtual_network_link.private_executor_vault) == 1 &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].private_dns_zone_name == "privatelink.vaultcore.azure.net" &&
+      azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+      !azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].registration_enabled
+    )
+    error_message = "The private vault zone must link only the control VNet without registration"
+  }
+
+  assert {
+    condition = (
+      output.private_executor_vault_contract.enabled &&
+      output.private_executor_vault_contract.vault.resource_id == azapi_resource.private_executor_vault[0].id &&
+      output.private_executor_vault_contract.vault.uri == "https://cosmaneura-rehearsal-kv.vault.azure.net/" &&
+      !output.private_executor_vault_contract.private_secret_binding_complete &&
+      !output.private_executor_vault_contract.secret_material_managed &&
+      !output.private_executor_vault_contract.secret_read_grants_managed &&
+      !output.private_executor_vault_contract.private_get_proven &&
+      !output.private_executor_blocker.implemented &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding &&
+      output.private_executor_network_contract.private_endpoints &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_network_contract.vnet_peering &&
+      !output.private_executor_network_contract.public_ingress &&
+      !output.private_executor_registry_contract.enabled &&
+      !output.target_topology_contract.owned_by_this_root &&
+      length(azapi_resource.marker_container) == 7 &&
+      length(azurerm_role_assignment.marker_create) == 0 &&
+      length(azapi_resource_action.marker_legal_hold) == 0 &&
+      length(azurerm_storage_container_immutability_policy.marker) == 0 &&
+      length(azurerm_management_lock.marker) == 0
+    )
+    error_message = "Vault source cannot claim live secrets, read grants, connectivity or runtime, and must not activate registry/marker retention or target resources"
   }
 }
 
