@@ -112,6 +112,13 @@ The later isolated synthetic-only rehearsal remains mandatory.
    identity-bound owner-only `state-refresh-apply.log` in the execution
    directory; treat it as sensitive local evidence and never publish or submit
    it for review. Never run the consumer from CI or an agent. If anything fails
+   while opening or validating the log, preserve the log even if it is empty;
+   do not overwrite it or redirect the consumer from the shell. The claim binds
+   the log inode/owner/mode; the consumer rechecks that identity after claiming,
+   then closes stdin and redirects both output streams before exec. A silent
+   terminal after confirmation is not evidence of success; inspect protected
+   local output and post-apply state/live readback.
+   If anything fails
    after the claim is created—including `execve` or OpenTofu itself—do not delete
    or overwrite the claim; create and review a new plan, directory, and handoff.
    After a successful human apply, record post-apply state and ARM readback, then
