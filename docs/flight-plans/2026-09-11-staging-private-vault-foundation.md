@@ -1,6 +1,6 @@
 # Staging restore private-vault foundation
 
-Status: source implemented; 34 provider-mocked runs and 20 focused source
+Status: source implemented; 34 provider-mocked runs and 24 focused source
 tests pass; CI/independent review pending. No Azure apply, secret or read grant.
 Risk: **Tier 2**, private security boundary and irreversible purge protection.
 Dependency: the approved control/network foundation; independent of registry
@@ -83,16 +83,22 @@ OpenTofu 1.12.5, locked AzureRM 4.73.0/AzAPI 2.1.0: configuration validation
 and all 34 provider-mocked runs pass with no backend or Azure credentials.
 Twelve new vault runs cover default-off approval/prerequisite failures, name
 validation and the exact empty private ARM body/endpoint/DNS contract; prior
-base/network/registry/retention tests remain green. All 20 focused network,
+base/network/registry/retention tests remain green. All 24 focused network,
 registry and vault source tests plus Ruff lint/format checks pass. These checks
 do not establish live provider acceptance, secret material or authorization.
 
 Initial independent review found no P0/P1 and two P2 hardening items. The
 follow-up expands the no-auxiliary/no-grant boundary across every root `.tf`
-file, freezes the existing non-vault role inventory, and rejects Key Vault
-resources/data sources/child actions or redirected grants. Eleven negative
-cases cover additions in another file and redirection of an existing grant.
+file, snapshots the full text of all eleven existing role-assignment/AzAPI
+declarations, and rejects changed/extra declarations. Fifteen negative cases
+cover additions, direct/indirect grant redirection, ancestor-role substitution
+and indirect AzAPI actions, including retargeting an existing action.
 The live checklist now requires exact-ID absence, private metadata-only
 vault-object emptiness and effective inherited RBAC, without adding persistent
 vault-wide job grants. HCL and the 34-run mock suite are unchanged; final-push
 independent review and CI remain required.
+
+Declaration snapshots are deliberate-edit detectors, not a general HCL
+expression evaluator or a freeze of transitive local values. Semantic mock
+plans, independent review of every future change and fresh live scope/role/
+principal evidence remain mandatory; these source tests grant no authority.
