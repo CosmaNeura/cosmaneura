@@ -1,13 +1,16 @@
 # Staging restore rehearsal control plane
 
-Status: **partially instantiated reversible base; restore remains disabled**. A
-stopped 2026-09-04 base apply created 28 of the planned 39 instances. The target
-resource group remains empty, and no container, private endpoint, marker write,
-executor, restore, retention control, cutover, or production action occurred.
-See [the partial-apply evidence record](../docs/evidence/STAGING_REHEARSAL_BASE_PARTIAL_APPLY_2026-09-04.md)
-before planning against this state. `deploy_staging_restore_control_plane`
-still defaults to `false`, and the restore workflow does not consume these
-outputs.
+Status: **reversible base recovery verified; restore remains disabled**. The
+2026-09-11 human recovery added the missing 11 instances, with zero changes or
+destructions. Recorded verification found all 39 expected instances at state
+serial 13, all 28 original attribute maps unchanged, and an empty target group.
+See [the closure record and historical evidence limitations](../docs/evidence/STAGING_REHEARSAL_BASE_RECOVERY_CLOSURE_2026-09-11.md)
+before any new plan. No executor, marker-write authority, active retention,
+restore, migration, cutover or deployment was enabled. The consumed recovery
+saved plan and handoff must never be reused. Fresh action-time evidence and a
+separately reviewed human apply are required for subsequent changes.
+`deploy_staging_restore_control_plane` still defaults to `false`, and the
+restore workflow does not consume these outputs.
 
 This root owns a state boundary separate from both `infra/` and
 `infra-staging/`: `staging-rehearsal-control-plane.tfstate`. It models the
@@ -236,6 +239,11 @@ be additive, use the exact subscription and names, preserve an otherwise empty
 target resource inventory, and contain no production resource or assignment.
 
 ## Serial-7 partial-apply recovery
+
+**Historical procedure:** this recovery completed on September 11; see the
+[closure record](../docs/evidence/STAGING_REHEARSAL_BASE_RECOVERY_CLOSURE_2026-09-11.md).
+Do not rerun any consumed/rejected saved plan or handoff below. Future changes
+require a new reviewed plan against current state, not this recovery envelope.
 
 The isolated backend lineage is
 `76b6712e-5781-adbd-9fb1-cf66db4f4e28`. Its post-interruption serial 7 records
