@@ -75,6 +75,8 @@ locals {
     var.private_evidence_storage_plan_approved ||
     var.enable_private_launch_mailbox_storage ||
     var.private_launch_mailbox_storage_plan_approved ||
+    var.enable_private_restore_broker_identities ||
+    var.private_restore_broker_identity_plan_approved ||
     var.enable_marker_create_assignments ||
     local.irreversible_controls_requested
   )
@@ -98,6 +100,8 @@ resource "terraform_data" "activation_guard" {
     private_evidence_storage_approved       = var.private_evidence_storage_plan_approved
     private_launch_mailbox_storage          = var.enable_private_launch_mailbox_storage
     private_launch_mailbox_storage_approved = var.private_launch_mailbox_storage_plan_approved
+    private_broker_identities               = var.enable_private_restore_broker_identities
+    private_broker_identities_approved      = var.private_restore_broker_identity_plan_approved
     marker_create_assignments               = var.enable_marker_create_assignments
     marker_create_authorization_proven      = var.marker_create_authorization_proven
     private_marker_network_posture          = var.private_marker_network_posture_proven
@@ -194,6 +198,11 @@ resource "terraform_data" "activation_guard" {
         )
       )
       error_message = "Private launch-mailbox storage requires the approved network and an account distinct from both markers and evidence/runtime records"
+    }
+
+    precondition {
+      condition     = var.enable_private_restore_broker_identities == var.private_restore_broker_identity_plan_approved
+      error_message = "Private broker identities and their exact saved-plan approval must be enabled or disabled together"
     }
 
     precondition {

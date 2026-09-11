@@ -232,6 +232,27 @@ Before creation hold/revert with flags false; afterwards retain stores and use
 reviewed roll-forward. Removing the Blob-service update does not undo versioning
 or authorize deleting versions. See the [mailbox flight plan](../docs/flight-plans/2026-09-11-staging-private-mailbox-foundation.md).
 
+## Empty broker identity foundation
+
+The existing runtime contract requires distinct caller, broker and job identities
+for each action. The root can independently model only the two missing broker
+UAMIs, with paired default-false `enable_private_restore_broker_identities` and
+`private_restore_broker_identity_plan_approved`. The base and both fresh CIDR
+confirmations remain required; identity creation does not imply a network path.
+
+Action-keyed provision/cleanup names are fixed in the control group. No federation,
+role, signing key, compute attachment, job read/start, mailbox write, OIDC endpoint
+or broker runtime is created. Existing caller/job identities and grants are not
+changed. All live-proof/authority flags stay false; mocks do not prove distinct
+resource/client/principal IDs across the six identities.
+
+Before planning and human apply verify exact-ID absence and fresh identity/state/
+source/network evidence, then independently review the exact plan. Afterwards
+prove six-way live identity separation, no broker federation/role/attachment,
+unchanged old IAM and empty target. Preserve the principals with `prevent_destroy`;
+do not delete/recreate or add broad grants for verification convenience. See the
+[broker identity flight plan](../docs/flight-plans/2026-09-11-staging-private-broker-identities.md).
+
 ## Dormant restore runtime binding v1
 
 `restore-runtime-binding-policy.json` and

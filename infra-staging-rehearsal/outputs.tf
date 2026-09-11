@@ -198,6 +198,30 @@ output "control_resource_group_id" {
   value       = var.deploy_staging_restore_control_plane ? azurerm_resource_group.control[0].id : null
 }
 
+output "private_broker_identity_contract" {
+  description = "Planned unfederated identity identifiers only; no live six-way separation, role, compute, OIDC, job control, signing or broker runtime is proven."
+  value = {
+    enabled                     = local.private_broker_identities_enabled
+    identity_separation_proven  = false
+    role_assignments_managed    = false
+    federation_managed          = false
+    compute_attachments_managed = false
+    oidc_authentication_bound   = false
+    job_read_start_bound        = false
+    receipt_signing_bound       = false
+    broker_runtime_bound        = false
+    identities = {
+      for action, identity in azurerm_user_assigned_identity.private_broker : action => {
+        name         = identity.name
+        resource_id  = identity.id
+        client_id    = identity.client_id
+        principal_id = identity.principal_id
+        tenant_id    = identity.tenant_id
+      }
+    }
+  }
+}
+
 output "target_resource_group_id" {
   description = "Persistent empty target RG ID; ephemeral restore resources remain controller-owned."
   value       = var.deploy_staging_restore_control_plane ? azurerm_resource_group.target[0].id : null

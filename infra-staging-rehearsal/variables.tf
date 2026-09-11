@@ -151,6 +151,18 @@ variable "private_launch_mailbox_storage_account_name" {
   }
 }
 
+variable "enable_private_restore_broker_identities" {
+  description = "Create two unfederated, unattached provision/cleanup broker UAMIs without any role, signing or job-control authority."
+  type        = bool
+  default     = false
+}
+
+variable "private_restore_broker_identity_plan_approved" {
+  description = "Action-time approval of the exact saved two-identity plan and authenticated exact-ID absence; not broker activation or authority."
+  type        = bool
+  default     = false
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool
