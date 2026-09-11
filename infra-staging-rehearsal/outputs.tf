@@ -36,7 +36,7 @@ output "private_executor_blocker" {
     service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability        = "not-implemented"
     container_apps_environment           = "not-implemented"
-    private_service_endpoints            = "not-implemented"
+    private_service_endpoints            = local.private_executor_registry_enabled ? "registry-only; remaining bindings not implemented" : "not-implemented"
     workflow_binding                     = "not-implemented"
     job_identity_binding                 = "not-implemented"
     trusted_evidence_binding             = "not-implemented"
@@ -45,7 +45,7 @@ output "private_executor_blocker" {
 }
 
 output "private_executor_network_contract" {
-  description = "Non-secret exact topology for later live readback; no compute, endpoint, DNS, peering, or ingress is implied."
+  description = "Non-secret planned topology for later live readback; the optional registry endpoint does not imply compute, target connectivity, peering, or ingress."
   value = {
     enabled            = var.enable_private_executor_network_foundation
     location           = local.control_location
@@ -84,7 +84,37 @@ output "private_executor_network_contract" {
     route_table                = false
     nat_gateway                = false
     container_apps_environment = false
-    private_endpoints          = false
+    private_endpoints          = local.private_executor_registry_enabled
+  }
+}
+
+output "private_executor_registry_contract" {
+  description = "Planned registry identifiers only, not provider readback, a published image, a verified pull or authority to activate runtime."
+  value = {
+    enabled                          = local.private_executor_registry_enabled
+    runtime_binding_complete         = false
+    private_pull_proven              = false
+    image_publication_proven         = false
+    role_assignment_mode_requirement = "LegacyRegistryPermissions"
+    role_assignment_mode_verified    = false
+    registry = local.private_executor_registry_enabled ? {
+      resource_id      = azurerm_container_registry.private_executor[0].id
+      host             = azurerm_container_registry.private_executor[0].login_server
+      data_hosts       = azurerm_container_registry.private_executor[0].data_endpoint_host_names
+      private_endpoint = azurerm_private_endpoint.private_executor_registry[0].id
+      private_dns_zone = azurerm_private_dns_zone.private_executor_registry[0].id
+      private_dns_link = azurerm_private_dns_zone_virtual_network_link.private_executor_registry[0].id
+      linked_vnet      = azurerm_virtual_network.control[0].id
+      endpoint_subnet  = azurerm_subnet.private_executor_service_endpoints[0].id
+      pull_role_id     = local.acrpull_role_definition_id
+      pull_assignments = {
+        for key, assignment in azurerm_role_assignment.private_executor_acrpull : key => {
+          resource_id  = assignment.id
+          principal_id = azurerm_user_assigned_identity.job[key].principal_id
+          identity_id  = azurerm_user_assigned_identity.job[key].id
+        }
+      }
+    } : null
   }
 }
 

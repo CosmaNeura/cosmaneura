@@ -68,6 +68,43 @@ binding. Those are separate reviewed slices. A provider-mocked plan proves the
 HCL shape only; live provider validation must still prove that Azure accepts a
 `/27` workload-profile infrastructure subnet and the exact delegation action.
 
+## Private-executor registry foundation
+
+The registry rung defaults off and requires the approved base/network rungs,
+both fresh CIDR inventory confirmations, and its own paired switches:
+
+```hcl
+enable_private_executor_registry       = true
+private_executor_registry_plan_approved = true
+```
+
+It models one dedicated Premium ACR in the control group, one `registry`
+private endpoint in `10.76.0.64/27`, `privatelink.azurecr.io` and its single
+non-registering control-VNet link, and two registry-scoped built-in AcrPull
+assignments to the existing unfederated job UAMIs. Admin credentials,
+anonymous pull, public access, public-IP exceptions, trusted-service network
+bypass and export are disabled; dedicated data endpoints are enabled. No
+publisher, push grant, credential, image, compute, job, secret, target resource,
+marker mutation, retention activation or workflow binding is introduced.
+
+The output is a **planned resource contract, not live evidence**. AzureRM
+4.73.0 does not expose registry role-assignment mode. After a separately
+reviewed human apply, authenticated readback must prove
+`LegacyRegistryPermissions` (classic RBAC), the exact effective job grants,
+registry **and regional data** private DNS records/IPs, disabled public/admin/
+anonymous paths and an empty target. ABAC-enabled mode does not make these
+AcrPull grants effective and must not pass acceptance. Private image pull,
+image publication/provenance and digest-only job attachment remain later gates.
+Both aggregate binding blockers and all runtime-policy activation flags stay
+false. See the [registry flight plan](../docs/flight-plans/2026-09-11-staging-private-registry-foundation.md).
+
+Before apply, revalidate global name availability (default
+`cosmaneurarehearsalexec`), Premium cost, provider registration, subnet capacity,
+current state/network inventory and the exact saved-plan delta. Do not reuse
+a consumed base-recovery plan or consumer for this new resource set. After
+creation, `prevent_destroy` protects the registry; changing a flag is not a
+rollback. Preserve it and reconcile by a reviewed roll-forward.
+
 ## Dormant restore runtime binding v1
 
 `restore-runtime-binding-policy.json` and
