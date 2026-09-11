@@ -105,6 +105,29 @@ variable "private_executor_vault_name" {
   }
 }
 
+variable "enable_private_evidence_storage" {
+  description = "Create the distinct private versioned evidence account and two empty containers; no data, grant, publisher, retention or runtime is configured."
+  type        = bool
+  default     = false
+}
+
+variable "private_evidence_storage_plan_approved" {
+  description = "Action-time approval of the exact saved private-evidence plan, account-ID absence/global name availability and private topology."
+  type        = bool
+  default     = false
+}
+
+variable "private_evidence_storage_account_name" {
+  description = "Globally unique private-evidence account, distinct from markers; verify availability and exact-ID absence before planning/apply."
+  type        = string
+  default     = "cosmaneurarehearsalevd"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]{3,24}$", var.private_evidence_storage_account_name))
+    error_message = "private_evidence_storage_account_name must be 3-24 lowercase alphanumeric characters"
+  }
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

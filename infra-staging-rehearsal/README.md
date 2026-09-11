@@ -153,6 +153,46 @@ grant was introduced. Do not add a persistent vault-wide job grant merely to
 perform these checks. Authenticated live readback, exact saved-plan review
 and a human apply remain necessary. See the [vault flight plan](../docs/flight-plans/2026-09-11-staging-private-vault-foundation.md).
 
+## Empty private-evidence storage foundation
+
+The evidence account is independently default-off and must differ from the
+marker account. The policy's required distinct sink is **not** the retained
+`restore-evidence-v1` container in the marker account. Require the approved
+base/network foundation, both fresh CIDR confirmations and paired switches:
+
+```hcl
+enable_private_evidence_storage       = true
+private_evidence_storage_plan_approved = true
+```
+
+The root models a dedicated East US Standard_ZRS account, a versioning update
+to its auto-created default Blob service, two empty private containers
+(`restore-evidence-v1`, `restore-runtime-bindings-v1`) and one private Blob
+endpoint in `10.76.0.64/27`. It reuses the existing Blob private DNS zone and
+control-VNet link. Pinned AzAPI ARM management requires no data-plane account
+probe or ListKeys call; only non-secret identifiers/endpoints are exported.
+
+HTTPS/TLS 1.2, OAuth default, private/default-deny networking and infrastructure
+encryption are explicit. Shared keys, public Blob/network access, cross-tenant
+replication, bypasses/network exceptions and HNS/NFS/SFTP/local-user paths are
+disabled. There is no evidence/record upload, reader/publisher grant, secret,
+immutability policy, retention lock, runtime or target resource in this rung.
+Versioning does not establish trusted evidence or a locked create-only record.
+
+Before planning and apply, require global name availability **and exact-ID
+absence**, fresh identity/state/source/network evidence and independent plan
+review. Human-only apply remains mandatory. Post-apply checks must prove exact
+account/Blob-versioning/container/endpoint/DNS posture, empty private containers,
+effective inherited RBAC, preserved marker resources and empty target. Private
+verification uses an independently authorized context, not broad job grants.
+All runtime and aggregate binding gates remain false. See the [evidence storage
+flight plan](../docs/flight-plans/2026-09-11-staging-private-evidence-foundation.md).
+
+Before creation, hold/revert with flags false. After creation, preserve account
+and containers with `prevent_destroy` and use reviewed roll-forward. Removing
+the Blob-service update does not reverse its settings. No existing versions or
+future immutable artifacts may be deleted as an immediate rollback.
+
 ## Dormant restore runtime binding v1
 
 `restore-runtime-binding-policy.json` and

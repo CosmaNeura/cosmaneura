@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[2] / "infra-staging-rehearsal"
 # transitive-local evaluator. Deliberate future changes need reviewed snapshots
 # plus semantic provider-mocked plans and fresh live authorization evidence.
 EXPECTED_DECLARATIONS = {
+    "evidence-storage.tf:resource:azapi_resource:private_evidence_account": "78037b662f7f8a70fed9a848115a5945aded533fbc21e4fe9cc79b208ef533b2",
+    "evidence-storage.tf:resource:azapi_update_resource:private_evidence_blob_versioning": "34ac2dc117a1e2d5366ba2b06be53adec5d11a250f02eef73f4a60213f86e0c3",
+    "evidence-storage.tf:resource:azapi_resource:private_evidence_container": "61551c8cf4e112a1ee50807e1704931117b2c8c93bbaff146091cad3def3acdf",
     "authorization.tf:resource:azurerm_role_assignment:control_reader": "83072d5c786a64746c661d6dc4639ae8b02eafb77b1cf0b1cc551c909a6e2c61",
     "authorization.tf:resource:azurerm_role_assignment:marker_create": "10f69986ff22161b50664887e20b10a6f9e93986b04dd6f0d5fc051cb33a9a63",
     "authorization.tf:resource:azurerm_role_assignment:marker_provision_cleanup": "59813de17a7252978f7d1c9a968a8e77a345950aafe43e40742c15ae6d32dab0",

@@ -118,6 +118,18 @@ run "default_is_dormant" {
 
   assert {
     condition = (
+      length(azapi_resource.private_evidence_account) == 0 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 0 &&
+      length(azapi_resource.private_evidence_container) == 0 &&
+      length(azurerm_private_endpoint.private_evidence) == 0 &&
+      !output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account == null
+    )
+    error_message = "No evidence storage or private evidence path may exist without its separate approval"
+  }
+
+  assert {
+    condition = (
       length(azapi_resource.private_executor_vault) == 0 &&
       length(azurerm_private_endpoint.private_executor_vault) == 0 &&
       length(azurerm_private_dns_zone.private_executor_vault) == 0 &&
@@ -199,6 +211,18 @@ run "default_is_dormant" {
 
 run "reversible_control_plane" {
   command = plan
+
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 0 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 0 &&
+      length(azapi_resource.private_evidence_container) == 0 &&
+      length(azurerm_private_endpoint.private_evidence) == 0 &&
+      !output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account == null
+    )
+    error_message = "No evidence storage or private evidence path may exist without its separate approval"
+  }
 
   assert {
     condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
@@ -299,6 +323,18 @@ run "private_executor_network_requires_exact_approval" {
 
 run "approved_private_executor_network_foundation" {
   command = plan
+
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 0 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 0 &&
+      length(azapi_resource.private_evidence_container) == 0 &&
+      length(azurerm_private_endpoint.private_evidence) == 0 &&
+      !output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account == null
+    )
+    error_message = "No evidence storage or private evidence path may exist without its separate approval"
+  }
 
   assert {
     condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
@@ -506,6 +542,18 @@ run "registry_name_is_lowercase_alphanumeric" {
 
 run "approved_private_registry_is_private_and_job_only" {
   command = plan
+
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 0 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 0 &&
+      length(azapi_resource.private_evidence_container) == 0 &&
+      length(azurerm_private_endpoint.private_evidence) == 0 &&
+      !output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account == null
+    )
+    error_message = "No evidence storage or private evidence path may exist without its separate approval"
+  }
 
   assert {
     condition     = length(azapi_resource.private_executor_vault) == 0 && output.private_executor_vault_contract.vault == null
@@ -811,6 +859,18 @@ run "vault_name_rejects_consecutive_hyphens" {
 run "approved_vault_is_empty_private_and_arm_only" {
   command = plan
 
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 0 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 0 &&
+      length(azapi_resource.private_evidence_container) == 0 &&
+      length(azurerm_private_endpoint.private_evidence) == 0 &&
+      !output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account == null
+    )
+    error_message = "No evidence storage or private evidence path may exist without its separate approval"
+  }
+
   variables {
     deploy_staging_restore_control_plane             = true
     target_cidr_inventory_revalidated                = true
@@ -923,6 +983,336 @@ run "approved_vault_is_empty_private_and_arm_only" {
     error_message = "Vault source cannot claim live secrets, read grants, connectivity or runtime, and must not activate registry/marker retention or target resources"
   }
 }
+
+override_resource {
+  target = azapi_resource.private_evidence_account
+  values = {
+    id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/mock/providers/Microsoft.Storage/storageAccounts/cosmaneurarehearsalevd"
+    output = {
+      properties = {
+        primaryEndpoints = {
+          blob = "https://cosmaneurarehearsalevd.blob.core.windows.net/"
+        }
+      }
+    }
+  }
+}
+
+run "evidence_requires_plan_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = false
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_rejects_approval_without_enable" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = false
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_requires_base" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = false
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_requires_network" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = false
+    private_executor_network_plan_approved     = false
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_requires_network_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = false
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_requires_control_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = false
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_requires_target_cidr" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = false
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_enable_alone_requires_base" {
+  command = plan
+
+  variables {
+    enable_private_evidence_storage = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_approval_alone_requires_base" {
+  command = plan
+
+  variables {
+    private_evidence_storage_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_rejects_marker_account_name" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+    private_evidence_storage_account_name      = "cosmaneurarehearsalctl"
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "evidence_rejects_invalid_account_name" {
+  command = plan
+
+  variables {
+    private_evidence_storage_account_name = "invalid-account"
+  }
+
+  expect_failures = [var.private_evidence_storage_account_name]
+}
+
+run "approved_evidence_is_empty_private_versioned_and_separate" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+    enable_private_evidence_storage            = true
+    private_evidence_storage_plan_approved     = true
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.private_evidence_account) == 1 &&
+      length(azapi_update_resource.private_evidence_blob_versioning) == 1 &&
+      length(azapi_resource.private_evidence_container) == 2 &&
+      length(azurerm_private_endpoint.private_evidence) == 1 &&
+      azapi_resource.private_evidence_account[0].type == "Microsoft.Storage/storageAccounts@2023-05-01" &&
+      azapi_resource.private_evidence_account[0].name == "cosmaneurarehearsalevd" &&
+      azapi_resource.private_evidence_account[0].name != azurerm_storage_account.marker[0].name &&
+      azapi_resource.private_evidence_account[0].id != azurerm_storage_account.marker[0].id &&
+      azapi_resource.private_evidence_account[0].parent_id == azurerm_resource_group.control[0].id &&
+      azapi_resource.private_evidence_account[0].location == "eastus" &&
+      azapi_resource.private_evidence_account[0].schema_validation_enabled &&
+      toset(azapi_resource.private_evidence_account[0].response_export_values) == toset(["properties.primaryEndpoints.blob"])
+    )
+    error_message = "Exactly five dedicated control-group managed instances are allowed, with only the non-secret account Blob endpoint exported"
+  }
+
+  assert {
+    condition = jsonencode(azapi_resource.private_evidence_account[0].body) == jsonencode({
+      kind = "StorageV2"
+      sku  = { name = "Standard_ZRS" }
+      properties = {
+        accessTier                   = "Hot"
+        dnsEndpointType              = "Standard"
+        supportsHttpsTrafficOnly     = true
+        minimumTlsVersion            = "TLS1_2"
+        allowBlobPublicAccess        = false
+        allowSharedKeyAccess         = false
+        defaultToOAuthAuthentication = true
+        allowCrossTenantReplication  = false
+        publicNetworkAccess          = "Disabled"
+        isHnsEnabled                 = false
+        isNfsV3Enabled               = false
+        isSftpEnabled                = false
+        isLocalUserEnabled           = false
+        encryption = {
+          keySource                       = "Microsoft.Storage"
+          requireInfrastructureEncryption = true
+          services = {
+            blob = { enabled = true, keyType = "Account" }
+            file = { enabled = true, keyType = "Account" }
+          }
+        }
+        networkAcls = {
+          bypass              = "None"
+          defaultAction       = "Deny"
+          ipRules             = []
+          virtualNetworkRules = []
+          resourceAccessRules = []
+        }
+      }
+    })
+    error_message = "The account body must exactly enforce private OAuth-only TLS, encryption and zero network exceptions or auxiliary access paths"
+  }
+
+  assert {
+    condition = (
+      azapi_update_resource.private_evidence_blob_versioning[0].type == "Microsoft.Storage/storageAccounts/blobServices@2023-05-01" &&
+      azapi_update_resource.private_evidence_blob_versioning[0].resource_id == "${azapi_resource.private_evidence_account[0].id}/blobServices/default" &&
+      jsonencode(azapi_update_resource.private_evidence_blob_versioning[0].body) == jsonencode({ properties = { isVersioningEnabled = true } }) &&
+      length(azapi_update_resource.private_evidence_blob_versioning[0].response_export_values) == 0 &&
+      toset(keys(azapi_resource.private_evidence_container)) == toset(["restore-evidence-v1", "restore-runtime-bindings-v1"]) &&
+      alltrue([for name, container in azapi_resource.private_evidence_container : (
+        container.name == name &&
+        container.type == "Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01" &&
+        container.parent_id == "${azapi_resource.private_evidence_account[0].id}/blobServices/default" &&
+        container.parent_id != "${azurerm_storage_account.marker[0].id}/blobServices/default" &&
+        jsonencode(container.body) == jsonencode({ properties = { publicAccess = "None" } }) &&
+        container.schema_validation_enabled &&
+        length(container.response_export_values) == 0
+      )])
+    )
+    error_message = "Versioning must target only the new account's auto-created default service and both exact private containers must be account-local"
+  }
+
+  assert {
+    condition = (
+      azurerm_private_endpoint.private_evidence[0].resource_group_name == azurerm_resource_group.control[0].name &&
+      azurerm_private_endpoint.private_evidence[0].location == "eastus" &&
+      azurerm_private_endpoint.private_evidence[0].subnet_id == azurerm_subnet.private_executor_service_endpoints[0].id &&
+      azurerm_private_endpoint.private_evidence[0].subnet_id != azurerm_subnet.marker_private_endpoint[0].id &&
+      length(azurerm_private_endpoint.private_evidence[0].private_service_connection) == 1 &&
+      azurerm_private_endpoint.private_evidence[0].private_service_connection[0].private_connection_resource_id == azapi_resource.private_evidence_account[0].id &&
+      azurerm_private_endpoint.private_evidence[0].private_service_connection[0].subresource_names == tolist(["blob"]) &&
+      !azurerm_private_endpoint.private_evidence[0].private_service_connection[0].is_manual_connection &&
+      length(azurerm_private_endpoint.private_evidence[0].private_dns_zone_group) == 1 &&
+      azurerm_private_endpoint.private_evidence[0].private_dns_zone_group[0].name == "blob" &&
+      toset(azurerm_private_endpoint.private_evidence[0].private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.marker_blob[0].id]) &&
+      azurerm_private_dns_zone.marker_blob[0].name == "privatelink.blob.core.windows.net" &&
+      azurerm_private_dns_zone_virtual_network_link.marker_blob[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+      !azurerm_private_dns_zone_virtual_network_link.marker_blob[0].registration_enabled
+    )
+    error_message = "Only the dedicated evidence account Blob endpoint may use the existing control-VNet Blob DNS and service-endpoint subnet"
+  }
+
+  assert {
+    condition = (
+      output.private_evidence_storage_contract.enabled &&
+      output.private_evidence_storage_contract.account.resource_id == azapi_resource.private_evidence_account[0].id &&
+      output.private_evidence_storage_contract.account.blob_service_uri == "https://cosmaneurarehearsalevd.blob.core.windows.net/" &&
+      output.private_evidence_storage_contract.account.blob_service_resource_id == azapi_update_resource.private_evidence_blob_versioning[0].resource_id &&
+      output.private_evidence_storage_contract.account.private_endpoint == azurerm_private_endpoint.private_evidence[0].id &&
+      output.private_evidence_storage_contract.account.private_dns_zone == azurerm_private_dns_zone.marker_blob[0].id &&
+      output.private_evidence_storage_contract.account.private_dns_link == azurerm_private_dns_zone_virtual_network_link.marker_blob[0].id &&
+      output.private_evidence_storage_contract.account.linked_vnet == azurerm_virtual_network.control[0].id &&
+      output.private_evidence_storage_contract.account.endpoint_subnet == azurerm_subnet.private_executor_service_endpoints[0].id &&
+      toset(keys(output.private_evidence_storage_contract.account.containers)) == toset(["restore-evidence-v1", "restore-runtime-bindings-v1"]) &&
+      !output.private_evidence_storage_contract.versioning_verified &&
+      !output.private_evidence_storage_contract.private_blob_get_proven &&
+      !output.private_evidence_storage_contract.job_read_grants_managed &&
+      !output.private_evidence_storage_contract.publisher_write_authority_managed &&
+      !output.private_evidence_storage_contract.versioned_evidence_binding_complete &&
+      !output.private_evidence_storage_contract.locked_runtime_record_binding_complete &&
+      !output.private_executor_blocker.implemented &&
+      !terraform_data.activation_guard[0].input.private_executor_binding &&
+      !terraform_data.activation_guard[0].input.trusted_evidence_binding &&
+      output.private_executor_network_contract.private_endpoints &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_network_contract.vnet_peering &&
+      !output.private_executor_network_contract.public_ingress &&
+      !output.private_executor_registry_contract.enabled &&
+      !output.private_executor_vault_contract.enabled &&
+      !output.target_topology_contract.owned_by_this_root
+    )
+    error_message = "Empty storage must not claim live versioning, private access, permissions, trusted binding, private compute or target activation"
+  }
+
+  assert {
+    condition = (
+      length(azapi_resource.marker_container) == 7 &&
+      toset(keys(azapi_resource.marker_container)) == local.retained_containers &&
+      alltrue([for container in azapi_resource.marker_container : container.parent_id == "${azurerm_storage_account.marker[0].id}/blobServices/default"]) &&
+      !azurerm_storage_account.marker[0].blob_properties[0].versioning_enabled &&
+      length(azurerm_role_assignment.marker_create) == 0 &&
+      length(azapi_resource_action.marker_legal_hold) == 0 &&
+      length(azurerm_storage_container_immutability_policy.marker) == 0 &&
+      length(azurerm_management_lock.marker) == 0
+    )
+    error_message = "Evidence storage must preserve the seven marker containers and must not enable marker versioning, creation authority or retention controls"
+  }
+}
+
 
 run "cidr_revalidation_is_required" {
   command = plan
