@@ -73,6 +73,38 @@ variable "private_executor_registry_name" {
   }
 }
 
+variable "enable_private_executor_vault" {
+  description = "Create an empty private RBAC Key Vault and its private endpoint/DNS path; no secret, job read grant or runtime is configured."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_vault_plan_approved" {
+  description = "Action-time approval of the exact saved vault plan, global/soft-deleted name availability, private topology and empty authorization surface."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_vault_purge_protection_approved" {
+  description = "Separate action-time acceptance of irreversible purge protection and 90-day soft-delete retention; vault deletion cannot be purged early."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_vault_name" {
+  description = "Globally unique vault name; verify both active and soft-deleted name availability before apply."
+  type        = string
+  default     = "cosmaneura-rehearsal-kv"
+
+  validation {
+    condition = (
+      can(regex("^[a-z][a-z0-9-]{1,22}[a-z0-9]$", var.private_executor_vault_name)) &&
+      !strcontains(var.private_executor_vault_name, "--")
+    )
+    error_message = "private_executor_vault_name must be 3-24 lowercase alphanumeric/hyphen characters, start with a letter, end alphanumeric, and contain no consecutive hyphens"
+  }
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

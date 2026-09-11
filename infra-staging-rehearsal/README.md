@@ -105,6 +105,43 @@ a consumed base-recovery plan or consumer for this new resource set. After
 creation, `prevent_destroy` protects the registry; changing a flag is not a
 rollback. Preserve it and reconcile by a reviewed roll-forward.
 
+## Empty private-vault foundation
+
+The separately gated vault uses the existing pinned AzAPI provider for ARM-only
+management. AzureRM 4.73.0 still attempts certificate-contact data-plane reads
+during refresh even for private vaults; no such contact/secret/certificate
+resource is used here. `Microsoft.KeyVault/vaults@2023-07-01` sets
+`createMode="default"`, not implicit recovery, and exports only its public
+service URI. The root never stores secret material in Terraform state.
+
+It requires the base and approved network foundation, both fresh CIDR checks,
+and **all three** default-false switches:
+
+```hcl
+enable_private_executor_vault                    = true
+private_executor_vault_plan_approved              = true
+private_executor_vault_purge_protection_approved   = true
+```
+
+The empty Standard vault is RBAC-only with no access policies, public access,
+trusted-service bypass, IP/VNet ACL exceptions or deployment/disk-encryption/
+template-deployment access paths. Its exact `vault` private endpoint and
+`privatelink.vaultcore.azure.net` zone link only the control VNet. There are no
+secret, key, certificate, publisher or job-read resources. Exact-version root
+and HMAC publication and per-secret least-privilege job grants are later work;
+the HMAC is provision-only, while both jobs may read the pinned GitHub root.
+
+Purge protection with **90-day soft-delete retention is irreversible** and
+requires its own explicit operator acceptance in the reviewed plan. A deleted
+vault cannot be purged early. `prevent_destroy` protects the vault; toggling
+flags is not rollback. Verify active and soft-deleted name availability before
+apply. Never recover a pre-existing vault implicitly or substitute a vault-wide
+Secrets User grant for the required per-secret scopes.
+
+Source outputs remain planned identifiers, not secret-version, private-GET,
+RBAC or runtime evidence. Authenticated live readback, exact saved-plan review
+and a human apply remain necessary. See the [vault flight plan](../docs/flight-plans/2026-09-11-staging-private-vault-foundation.md).
+
 ## Dormant restore runtime binding v1
 
 `restore-runtime-binding-policy.json` and

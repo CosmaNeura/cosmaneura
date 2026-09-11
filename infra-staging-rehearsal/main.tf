@@ -68,6 +68,9 @@ locals {
     var.private_executor_network_plan_approved ||
     var.enable_private_executor_registry ||
     var.private_executor_registry_plan_approved ||
+    var.enable_private_executor_vault ||
+    var.private_executor_vault_plan_approved ||
+    var.private_executor_vault_purge_protection_approved ||
     var.enable_marker_create_assignments ||
     local.irreversible_controls_requested
   )
@@ -77,23 +80,26 @@ resource "terraform_data" "activation_guard" {
   count = local.any_control_requested ? 1 : 0
 
   input = {
-    deploy_control_plane                = var.deploy_staging_restore_control_plane
-    target_cidr_inventory_revalidated   = var.target_cidr_inventory_revalidated
-    control_cidr_inventory_revalidated  = var.control_cidr_inventory_revalidated
-    private_executor_network_foundation = var.enable_private_executor_network_foundation
-    private_executor_network_approved   = var.private_executor_network_plan_approved
-    private_executor_registry           = var.enable_private_executor_registry
-    private_executor_registry_approved  = var.private_executor_registry_plan_approved
-    marker_create_assignments           = var.enable_marker_create_assignments
-    marker_create_authorization_proven  = var.marker_create_authorization_proven
-    private_marker_network_posture      = var.private_marker_network_posture_proven
-    irreversible_controls_approved      = var.irreversible_marker_controls_approved
-    marker_legal_holds                  = var.enable_marker_legal_holds
-    marker_legal_hold_readback_proven   = var.marker_legal_hold_readback_proven
-    locked_marker_immutability_policies = var.lock_marker_immutability_policies
-    marker_readonly_lock                = var.enable_marker_readonly_lock
-    private_executor_binding            = local.private_executor_binding_implemented
-    trusted_evidence_binding            = local.trusted_evidence_binding_implemented
+    deploy_control_plane                  = var.deploy_staging_restore_control_plane
+    target_cidr_inventory_revalidated     = var.target_cidr_inventory_revalidated
+    control_cidr_inventory_revalidated    = var.control_cidr_inventory_revalidated
+    private_executor_network_foundation   = var.enable_private_executor_network_foundation
+    private_executor_network_approved     = var.private_executor_network_plan_approved
+    private_executor_registry             = var.enable_private_executor_registry
+    private_executor_registry_approved    = var.private_executor_registry_plan_approved
+    private_executor_vault                = var.enable_private_executor_vault
+    private_executor_vault_approved       = var.private_executor_vault_plan_approved
+    private_executor_vault_purge_approved = var.private_executor_vault_purge_protection_approved
+    marker_create_assignments             = var.enable_marker_create_assignments
+    marker_create_authorization_proven    = var.marker_create_authorization_proven
+    private_marker_network_posture        = var.private_marker_network_posture_proven
+    irreversible_controls_approved        = var.irreversible_marker_controls_approved
+    marker_legal_holds                    = var.enable_marker_legal_holds
+    marker_legal_hold_readback_proven     = var.marker_legal_hold_readback_proven
+    locked_marker_immutability_policies   = var.lock_marker_immutability_policies
+    marker_readonly_lock                  = var.enable_marker_readonly_lock
+    private_executor_binding              = local.private_executor_binding_implemented
+    trusted_evidence_binding              = local.trusted_evidence_binding_implemented
   }
 
   lifecycle {
@@ -129,6 +135,22 @@ resource "terraform_data" "activation_guard" {
         (var.enable_private_executor_network_foundation && var.private_executor_network_plan_approved)
       )
       error_message = "The private registry requires the separately approved private-executor network foundation"
+    }
+
+    precondition {
+      condition = (
+        var.enable_private_executor_vault == var.private_executor_vault_plan_approved &&
+        var.enable_private_executor_vault == var.private_executor_vault_purge_protection_approved
+      )
+      error_message = "The private vault requires matching enable, exact-plan and irreversible 90-day purge-protection approvals"
+    }
+
+    precondition {
+      condition = (
+        !var.enable_private_executor_vault ||
+        (var.enable_private_executor_network_foundation && var.private_executor_network_plan_approved)
+      )
+      error_message = "The private vault requires the separately approved private-executor network foundation"
     }
 
     precondition {
