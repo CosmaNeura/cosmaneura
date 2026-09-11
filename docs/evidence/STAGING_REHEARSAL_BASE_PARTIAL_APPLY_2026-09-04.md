@@ -5,10 +5,16 @@ state, credential, token, storage key, database value, or restored data.
 
 ## Disposition
 
+**Historical checkpoint, superseded for current base status:** the human
+recovery completed and passed recorded post-apply verification on September 11.
+See [the recovery closure and its evidence limitations](STAGING_REHEARSAL_BASE_RECOVERY_CLOSURE_2026-09-11.md).
+The original rejected plans and consumed handoffs remain unusable.
+
 An apply of the separately stateful `infra-staging-rehearsal/` reversible base
 was stopped after repository policy was found to prohibit agents from invoking
-Azure mutation commands. No later apply or Terraform state mutation was run.
-The base is coherent but incomplete and does not authorize a restore.
+Azure mutation commands. At that initial checkpoint, no later apply or
+Terraform state mutation had run. The then-incomplete base did not authorize
+a restore; recovery completion still does not authorize one.
 
 - Reviewed source and plan base: Core `73256c24f26ebd68a7fb97443af92bdc8cbfe944`
 - Original saved-plan SHA-256:
@@ -130,6 +136,9 @@ only permitted transition is state serial 8 to serial 9 with zero Azure
 resource actions.
 
 ## Recovery acceptance
+
+The following procedure records the historical acceptance sequence, now closed
+by the September 11 record. It is not an instruction to replay a saved plan.
 
 Follow `infra-staging-rehearsal/README.md` exactly. A human operator must own
 both state transitions. Completion first requires the independently reviewed,
