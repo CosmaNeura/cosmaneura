@@ -36,7 +36,7 @@ output "private_executor_blocker" {
     service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability        = "not-implemented"
     container_apps_environment           = "not-implemented"
-    private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled ? "partial; registry/vault contracts do not prove remaining bindings" : "not-implemented"
+    private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled ? "partial; service contracts do not prove remaining bindings" : "not-implemented"
     workflow_binding                     = "not-implemented"
     job_identity_binding                 = "not-implemented"
     trusted_evidence_binding             = "not-implemented"
@@ -45,7 +45,7 @@ output "private_executor_blocker" {
 }
 
 output "private_executor_network_contract" {
-  description = "Non-secret planned topology for later live readback; the optional registry endpoint does not imply compute, target connectivity, peering, or ingress."
+  description = "Non-secret planned topology for later live readback; optional service endpoints do not imply compute, target connectivity, peering, or ingress."
   value = {
     enabled            = var.enable_private_executor_network_foundation
     location           = local.control_location
@@ -72,7 +72,10 @@ output "private_executor_network_contract" {
       }
       private_service_endpoints = {
         address_prefix = local.private_executor_service_endpoint_subnet
-        purposes       = ["acr", "key-vault", "per-rehearsal-postgresql"]
+        purposes = [
+          "acr", "key-vault", "private-evidence-runtime-record-blob",
+          "private-launch-mailbox-blob", "per-rehearsal-postgresql",
+        ]
         resource_id = (
           var.deploy_staging_restore_control_plane &&
           var.enable_private_executor_network_foundation
@@ -84,7 +87,7 @@ output "private_executor_network_contract" {
     route_table                = false
     nat_gateway                = false
     container_apps_environment = false
-    private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled
+    private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled
   }
 }
 
@@ -134,6 +137,58 @@ output "private_executor_vault_contract" {
       private_dns_link = azurerm_private_dns_zone_virtual_network_link.private_executor_vault[0].id
       linked_vnet      = azurerm_virtual_network.control[0].id
       endpoint_subnet  = azurerm_subnet.private_executor_service_endpoints[0].id
+    } : null
+  }
+}
+
+output "private_evidence_storage_contract" {
+  description = "Planned empty-storage identifiers only; no versioned artifact, immutable record, private GET, reader/publisher grant or trusted binding is proven."
+  value = {
+    enabled                                = local.private_evidence_storage_enabled
+    versioning_verified                    = false
+    private_blob_get_proven                = false
+    job_read_grants_managed                = false
+    publisher_write_authority_managed      = false
+    versioned_evidence_binding_complete    = false
+    locked_runtime_record_binding_complete = false
+    account = local.private_evidence_storage_enabled ? {
+      resource_id              = azapi_resource.private_evidence_account[0].id
+      blob_service_resource_id = azapi_update_resource.private_evidence_blob_versioning[0].resource_id
+      blob_service_uri         = try(azapi_resource.private_evidence_account[0].output.properties.primaryEndpoints.blob, null)
+      private_endpoint         = azurerm_private_endpoint.private_evidence[0].id
+      private_dns_zone         = azurerm_private_dns_zone.marker_blob[0].id
+      private_dns_link         = azurerm_private_dns_zone_virtual_network_link.marker_blob[0].id
+      linked_vnet              = azurerm_virtual_network.control[0].id
+      endpoint_subnet          = azurerm_subnet.private_executor_service_endpoints[0].id
+      containers = {
+        for name, container in azapi_resource.private_evidence_container : name => container.id
+      }
+    } : null
+  }
+}
+
+output "private_launch_mailbox_storage_contract" {
+  description = "Planned empty action-partitioned storage only; no private receipt read, create-only broker grant, immutable retention, signed handoff or runtime is proven."
+  value = {
+    enabled                         = local.private_launch_mailbox_storage_enabled
+    blob_versioning_verified        = false
+    private_mailbox_read_proven     = false
+    broker_create_grants_managed    = false
+    job_read_grants_managed         = false
+    locked_mailbox_binding_complete = false
+    execution_receipt_handoff_bound = false
+    account = local.private_launch_mailbox_storage_enabled ? {
+      resource_id              = azapi_resource.private_launch_mailbox_account[0].id
+      blob_service_resource_id = azapi_update_resource.private_launch_mailbox_blob_versioning[0].resource_id
+      blob_service_uri         = try(azapi_resource.private_launch_mailbox_account[0].output.properties.primaryEndpoints.blob, null)
+      private_endpoint         = azurerm_private_endpoint.private_launch_mailbox[0].id
+      private_dns_zone         = azurerm_private_dns_zone.marker_blob[0].id
+      private_dns_link         = azurerm_private_dns_zone_virtual_network_link.marker_blob[0].id
+      linked_vnet              = azurerm_virtual_network.control[0].id
+      endpoint_subnet          = azurerm_subnet.private_executor_service_endpoints[0].id
+      containers = {
+        for action, container in azapi_resource.private_launch_mailbox_container : action => container.id
+      }
     } : null
   }
 }

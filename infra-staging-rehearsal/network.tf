@@ -57,9 +57,9 @@ resource "azurerm_subnet" "private_executor_reserved" {
   }
 }
 
-# Reserved only for private endpoints to a later digest-pinned ACR, private Key
-# Vault, and one second PostgreSQL private endpoint per rehearsal. No endpoint
-# or DNS zone is created in this network-only rung.
+# Reserved for ACR, Key Vault, private evidence/runtime-record Blob, private
+# launch-mailbox Blob, and per-rehearsal PostgreSQL private endpoints. No endpoint
+# or DNS zone is created by this network-only rung.
 resource "azurerm_subnet" "private_executor_service_endpoints" {
   count = (
     var.deploy_staging_restore_control_plane &&

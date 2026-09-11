@@ -34,8 +34,8 @@ persistent, non-PHI prerequisites for the isolated restore controller:
   subnet and an inert `10.76.0.32/27` executor reservation; and
 - an independently default-off private-executor network foundation that
   delegates `10.76.0.32/27` only to `Microsoft.App/environments` and reserves
-  `10.76.0.64/27` only for later ACR, Key Vault, and per-rehearsal PostgreSQL
-  private endpoints.
+  `10.76.0.64/27` for ACR, Key Vault, private evidence/runtime-record Blob,
+  private launch-mailbox Blob, and per-rehearsal PostgreSQL private endpoints.
 
 The target restore network remains controller-owned and ephemeral. Its contract
 is `10.75.0.0/24` with `10.75.0.0/27` for the PostgreSQL private endpoint. This
@@ -60,9 +60,10 @@ When enabled, the plan changes the existing empty `10.76.0.32/27` reservation
 only by adding the exact Container Apps environment delegation. It adds one
 empty `10.76.0.64/27` subnet with private-endpoint network policies disabled.
 Default outbound access is disabled on all three control subnets. The third
-subnet is reserved for a future digest-pinned ACR, private Key Vault, and one
-second PostgreSQL private endpoint per rehearsal so an executor never needs a
-VNet peer or public route to the ephemeral `10.75.0.0/24` target.
+subnet serves digest-pinned ACR, private Key Vault, evidence/runtime-record and
+launch-mailbox Blob, plus one second PostgreSQL endpoint per rehearsal so an
+executor never needs a VNet peer or public route to the ephemeral `10.75.0.0/24`
+target.
 
 This rung deliberately creates no Container Apps environment or job, ACR, Key
 Vault, PostgreSQL endpoint, DNS zone beyond the existing marker Blob zone, NAT
@@ -152,6 +153,84 @@ applicable scopes; reconcile inherited authority and prove no unintended vault
 grant was introduced. Do not add a persistent vault-wide job grant merely to
 perform these checks. Authenticated live readback, exact saved-plan review
 and a human apply remain necessary. See the [vault flight plan](../docs/flight-plans/2026-09-11-staging-private-vault-foundation.md).
+
+## Empty private-evidence storage foundation
+
+The evidence account is independently default-off and must differ from the
+marker account. The policy's required distinct sink is **not** the retained
+`restore-evidence-v1` container in the marker account. Require the approved
+base/network foundation, both fresh CIDR confirmations and paired switches:
+
+```hcl
+enable_private_evidence_storage       = true
+private_evidence_storage_plan_approved = true
+```
+
+The root models a dedicated East US Standard_ZRS account, a versioning update
+to its auto-created default Blob service, two empty private containers
+(`restore-evidence-v1`, `restore-runtime-bindings-v1`) and one private Blob
+endpoint in `10.76.0.64/27`. It reuses the existing Blob private DNS zone and
+control-VNet link. Pinned AzAPI ARM management requires no data-plane account
+probe or ListKeys call; only non-secret identifiers/endpoints are exported.
+
+HTTPS/TLS 1.2, OAuth default, private/default-deny networking and infrastructure
+encryption are explicit. Shared keys, public Blob/network access, cross-tenant
+replication, bypasses/network exceptions and HNS/NFS/SFTP/local-user paths are
+disabled. There is no evidence/record upload, reader/publisher grant, secret,
+immutability policy, retention lock, runtime or target resource in this rung.
+Versioning does not establish trusted evidence or a locked create-only record.
+
+Before planning and apply, require global name availability **and exact-ID
+absence**, fresh identity/state/source/network evidence and independent plan
+review. Human-only apply remains mandatory. Post-apply checks must prove exact
+account/Blob-versioning/container/endpoint/DNS posture, empty private containers,
+effective inherited RBAC, preserved marker resources and empty target. Private
+verification uses an independently authorized context, not broad job grants.
+All runtime and aggregate binding gates remain false. See the [evidence storage
+flight plan](../docs/flight-plans/2026-09-11-staging-private-evidence-foundation.md).
+
+Before creation, hold/revert with flags false. After creation, preserve account
+and containers with `prevent_destroy` and use reviewed roll-forward. Removing
+the Blob-service update does not reverse its settings. No existing versions or
+future immutable artifacts may be deleted as an immediate rollback.
+
+## Empty private launch-mailbox storage foundation
+
+The launch mailbox requires a third account, distinct from **both** markers and
+evidence/runtime records. The runtime validator explicitly rejects sharing any
+of those accounts. Require the separately approved base/network, both fresh
+CIDR confirmations and independent default-false switches:
+
+```hcl
+enable_private_launch_mailbox_storage       = true
+private_launch_mailbox_storage_plan_approved = true
+```
+
+This creates only an empty private Standard_ZRS account, exact default Blob
+service versioning update, `restore-provision-launches-v1` and
+`restore-cleanup-launches-v1`, and one Blob endpoint in the existing private
+service subnet using the existing control-VNet Blob DNS. The action-keyed
+container map preserves provision/cleanup partitioning. No grant, broker, job,
+signing key, receipt object, immutable policy or runtime is activated. Versioning
+alone is not a locked, create-only, authenticated launch mailbox.
+
+Management stays ARM-only on the pinned AzAPI provider: HTTPS/TLS 1.2, OAuth
+default, shared key/public/cross-tenant access off, no network bypass/exception,
+infrastructure encryption and no HNS/NFS/SFTP/local-user paths. Account and
+containers have destruction guards. A mailbox approval never activates evidence
+storage, and the converse is also false.
+
+Before planning AND human apply require exact-ID absence/global availability,
+fresh identity/state/source/network and independent exact saved-plan review.
+After apply require exact private account/versioning/container/endpoint/NIC/DNS,
+empty private object counts, effective inherited RBAC, unchanged other stores
+and empty target. No broad job grants may be introduced to make verification
+possible. Locked/create-only retention, scoped broker/job authority, signed
+receipts and execution-name handoff remain later gates.
+
+Before creation hold/revert with flags false; afterwards retain stores and use
+reviewed roll-forward. Removing the Blob-service update does not undo versioning
+or authorize deleting versions. See the [mailbox flight plan](../docs/flight-plans/2026-09-11-staging-private-mailbox-foundation.md).
 
 ## Dormant restore runtime binding v1
 
