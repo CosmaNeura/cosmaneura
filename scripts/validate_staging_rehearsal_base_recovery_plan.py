@@ -2742,11 +2742,14 @@ def _show_saved_plan(plan_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
 
 def _show_state(state_bytes: bytes, *, tofu: Path, data_dir: Path) -> bytes:
     _require_protected_directory(data_dir, label="OpenTofu data directory")
+    # The consumer binds the execution directory's timestamps across validation.
+    # Keep transient decoder input beside it, not inside that bound directory.
+    _require_protected_directory(data_dir.parent, label="state projection parent")
     try:
         with tempfile.NamedTemporaryFile(
             mode="w+b",
             prefix=".cosmaneura-recovery-state-",
-            dir=data_dir,
+            dir=data_dir.parent,
         ) as state_file:
             descriptor = state_file.fileno()
             os.fchmod(descriptor, 0o600)

@@ -53,7 +53,7 @@ def _relocated_launcher(tmp_path: Path) -> tuple[Path, Path, Path]:
     launcher_source = (
         (ROOT / "scripts/run_staging_rehearsal_base_recovery_plan.sh")
         .read_text(encoding="utf-8")
-        .replace(str(ROOT), str(root))
+        .replace("/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910", str(root))
     )
     launcher.write_text(launcher_source, encoding="utf-8")
     validator.write_bytes(SCRIPT.read_bytes())
@@ -272,7 +272,7 @@ def test_receipt_binds_exact_artifact_hashes(monkeypatch: pytest.MonkeyPatch) ->
         _validate(monkeypatch, expected_digest="0" * 64)
 
 
-def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
+def test_python_launcher_isolated_bootstrap_and_runtime_binding(tmp_path: Path) -> None:
     launcher = ROOT / "scripts/run_staging_rehearsal_base_recovery_plan.sh"
     assert launcher.stat().st_mode & 0o777 == 0o755
     launcher_source = launcher.read_text(encoding="utf-8")
@@ -332,8 +332,9 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
         b"recovery_plan_refused: python bootstrap is not isolated\n"
     )
 
+    relocated, _, _ = _relocated_launcher(tmp_path)
     launched = subprocess.run(
-        _launcher_command(launcher, "--help"),
+        _launcher_command(relocated, "--help"),
         check=False,
         capture_output=True,
         env={"PYTHONPATH": "/tmp/untrusted-python-path"},
@@ -406,9 +407,14 @@ def test_python_launcher_isolated_bootstrap_and_runtime_binding() -> None:
 
 
 @pytest.mark.parametrize("caller_name", ["prepare_staging_rehearsal_base_recovery_handoff", "consume_staging_rehearsal_base_recovery_handoff"])
-def test_python_launcher_closed_writer_pipe_executes_real_runtime(caller_name: str) -> None:
+def test_python_launcher_closed_writer_pipe_executes_real_runtime(caller_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _require_pinned_python_runtime()
     caller = importlib.import_module(f"scripts.{caller_name}")
+    # Check the production pin before exercising the same path with a relocated fixture.
+    os.close(caller._open_verified_recovery_launcher())
+    launcher, _, _ = _relocated_launcher(tmp_path)
+    monkeypatch.setattr(caller.recovery, 'LAUNCHER_PATH', launcher)
+    monkeypatch.setattr(caller, 'EXPECTED_RECOVERY_LAUNCHER_SHA256', hashlib.sha256(launcher.read_bytes()).hexdigest())
     descriptor = caller._open_verified_recovery_launcher()
     try:
         result = subprocess.run(["/bin/sh", f"/dev/fd/{descriptor}", "--authenticated-launcher-sha256", caller.EXPECTED_RECOVERY_LAUNCHER_SHA256, "--help"], pass_fds=(descriptor,), capture_output=True, env={}, timeout=30, check=False)
@@ -621,6 +627,7 @@ def test_state_json_uses_reopenable_protected_path(
     state_json = json.dumps(_valid_state_projection()).encode()
     data_dir = tmp_path / "tofu-data"
     data_dir.mkdir(mode=0o700)
+    before_directory = os.stat(data_dir)
     observed_path: Path | None = None
 
     def fake_run(
@@ -632,7 +639,7 @@ def test_state_json_uses_reopenable_protected_path(
         assert arguments[-2] == "-json"
         observed_path = Path(arguments[-1])
         assert observed_path.is_absolute()
-        assert observed_path.parent == data_dir
+        assert observed_path.parent == data_dir.parent
         metadata = os.lstat(observed_path)
         assert stat.S_ISREG(metadata.st_mode)
         assert metadata.st_uid == os.geteuid()
@@ -649,6 +656,51 @@ def test_state_json_uses_reopenable_protected_path(
     assert recovery._show_state(captured, tofu=TOFU, data_dir=data_dir) == state_json
     assert observed_path is not None
     assert not observed_path.exists()
+    after_directory = os.stat(data_dir)
+    for field in ("st_dev", "st_ino", "st_uid", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns"):
+        assert getattr(after_directory, field) == getattr(before_directory, field)
+
+
+def test_state_json_rejects_a_nonprivate_projection_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    packet = tmp_path / "packet"
+    packet.mkdir(mode=0o700)
+    data_dir = packet / "tofu-data"
+    data_dir.mkdir(mode=0o700)
+    packet.chmod(0o755)
+    monkeypatch.setattr(recovery, "_run_process", lambda *_args, **_kwargs: pytest.fail("must refuse before decoding"))
+    with pytest.raises(recovery.RecoveryPlanError, match="state projection parent must have mode 0700"):
+        recovery._show_state(b'private-state', tofu=TOFU, data_dir=data_dir)
+    assert list(packet.iterdir()) == [data_dir]
+
+
+def test_failed_state_decode_removes_only_its_private_sibling_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "tofu-data"
+    data_dir.mkdir(mode=0o700)
+    retained = tmp_path / "retained-evidence"
+    retained.write_bytes(b'preserve')
+    before_directory = os.stat(data_dir)
+    observed_path: Path | None = None
+
+    def failed_run(arguments: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        nonlocal observed_path
+        observed_path = Path(arguments[-1])
+        assert observed_path.parent == data_dir.parent
+        assert stat.S_IMODE(observed_path.stat().st_mode) == 0o600
+        return subprocess.CompletedProcess(arguments, 1, b'', b'private failure')
+
+    monkeypatch.setattr(recovery, "_run_process", failed_run)
+    with pytest.raises(recovery.RecoveryPlanError, match="state projection could not be decoded"):
+        recovery._show_state(b'private-state', tofu=TOFU, data_dir=data_dir)
+    assert observed_path is not None and not observed_path.exists()
+    assert retained.read_bytes() == b'preserve'
+    assert set(tmp_path.iterdir()) == {data_dir, retained}
+    after_directory = os.stat(data_dir)
+    for field in ("st_dev", "st_ino", "st_uid", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns"):
+        assert getattr(after_directory, field) == getattr(before_directory, field)
 
 
 def test_real_opentofu_plan_decodes_from_captured_bytes(
