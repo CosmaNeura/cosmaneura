@@ -453,6 +453,52 @@ def test_local_binding_reconstructs_receipt_and_machine_binding(tmp_path: Path, 
         consumer._validate_local(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt_path, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=consumer._digest(raw), python_binding=_python_binding(), clock=lambda: NOW, boot_session=lambda: b'different-boot')
 
 
+def test_repeated_real_state_projection_preserves_bound_directory_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plan, state, execution, receipt_path = _artifacts(tmp_path)
+    base = _base()
+    base['execution_data_dir'] = str(execution)
+    base['state_json_sha256'] = consumer._digest(state.read_bytes())
+    receipt = _receipt(base)
+    nonce = (execution / consumer.NONCE_NAME).read_bytes()
+    receipt['nonce_sha256'] = consumer._digest(nonce)
+    receipt['machine_binding_sha256'] = consumer._machine_binding(execution, nonce, b'boot')
+    raw = consumer._canonical(receipt) + b'\n'
+    receipt_path.chmod(0o600)
+    receipt_path.write_bytes(raw)
+    receipt_path.chmod(0o400)
+    decoded_paths: list[Path] = []
+
+    def decode(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        path = Path(arguments[-1])
+        decoded_paths.append(path)
+        assert path.parent == execution.parent
+        assert path.read_bytes() == state.read_bytes()
+        assert kwargs['data_dir'] == execution
+        return subprocess.CompletedProcess(arguments, 0, b'{}', b'')
+
+    def base_with_real_projection(**_: Any) -> tuple[Mapping[str, Any], Path]:
+        assert consumer.recovery._show_state(state.read_bytes(), tofu=Path('/trusted/tofu'), data_dir=execution) == b'{}'
+        return base, Path('/trusted/tofu')
+
+    monkeypatch.setattr(consumer.recovery, '_run_process', decode)
+    monkeypatch.setattr(consumer, '_base_receipt', base_with_real_projection)
+    snapshot = consumer.recovery.SourceSnapshot(SOURCE, {}, b'lock', '4' * 64)
+    monkeypatch.setattr(consumer, '_source_binding', lambda *_: (snapshot, 'c' * 64))
+    monkeypatch.setattr(consumer.handoff, '_python_runtime_binding', _python_binding)
+    monkeypatch.setattr(consumer.recovery, '_validate_state', lambda *_args, **_kwargs: (consumer.recovery.EXPECTED_LINEAGE, consumer.recovery.EXPECTED_RECOVERY_SERIAL, {}))
+    def binding() -> consumer.LocalBinding:
+        return consumer._validate_local(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt_path, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=consumer._digest(raw), python_binding=_python_binding(), clock=lambda: NOW, boot_session=lambda: b'boot')
+
+    initial = binding()
+    final = binding()
+    assert initial == final
+    assert len(decoded_paths) == 2 and all(not path.exists() for path in decoded_paths)
+    (execution / 'unexpected-entry').write_bytes(b'tamper')
+    changed = binding()
+    assert initial != changed
+    assert initial.identities[-1] != changed.identities[-1]
+
+
 def test_local_binding_rejects_semantically_equal_state_swapped_between_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan, state, execution, receipt_path = _artifacts(tmp_path)
     original_state = state.read_bytes()
