@@ -137,12 +137,20 @@ the HMAC is provision-only, while both jobs may read the pinned GitHub root.
 Purge protection with **90-day soft-delete retention is irreversible** and
 requires its own explicit operator acceptance in the reviewed plan. A deleted
 vault cannot be purged early. `prevent_destroy` protects the vault; toggling
-flags is not rollback. Verify active and soft-deleted name availability before
-apply. Never recover a pre-existing vault implicitly or substitute a vault-wide
+flags is not rollback. Before planning and apply, verify active and soft-deleted
+name availability **and an authenticated exact-ID ARM GET proving absence**;
+an ARM PUT must not adopt/update an unmanaged active vault. Never recover a
+pre-existing vault implicitly or substitute a vault-wide
 Secrets User grant for the required per-secret scopes.
 
 Source outputs remain planned identifiers, not secret-version, private-GET,
-RBAC or runtime evidence. Authenticated live readback, exact saved-plan review
+RBAC or runtime evidence. After apply, use an independently authorized operator
+context on the approved private network to prove zero secrets, keys and
+certificates via metadata-only counts. Enumerate effective vault data-plane
+RBAC, including inheritance from the resource group, subscription and higher
+applicable scopes; reconcile inherited authority and prove no unintended vault
+grant was introduced. Do not add a persistent vault-wide job grant merely to
+perform these checks. Authenticated live readback, exact saved-plan review
 and a human apply remain necessary. See the [vault flight plan](../docs/flight-plans/2026-09-11-staging-private-vault-foundation.md).
 
 ## Dormant restore runtime binding v1

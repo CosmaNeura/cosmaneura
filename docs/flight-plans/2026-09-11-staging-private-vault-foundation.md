@@ -1,6 +1,6 @@
 # Staging restore private-vault foundation
 
-Status: source implemented; 34 provider-mocked runs and nine focused source
+Status: source implemented; 34 provider-mocked runs and 20 focused source
 tests pass; CI/independent review pending. No Azure apply, secret or read grant.
 Risk: **Tier 2**, private security boundary and irreversible purge protection.
 Dependency: the approved control/network foundation; independent of registry
@@ -51,6 +51,9 @@ an explicit pre-apply check; conflicts stop the plan rather than recovering.
   full mandatory CI, change budget and exact-final-push independent review.
 - After merge, prepare a fresh state/connected-network/name/soft-deleted-name/
   provider-availability/subnet-capacity capture and independently reviewed plan.
+  Require an authenticated exact-resource-ID ARM GET to prove the intended
+  vault absent before both planning and apply; name availability alone is not
+  enough. Never adopt, update or recover an unmanaged existing vault.
   The operator must separately accept 90-day irreversible purge protection.
 
 ## Live acceptance and recovery
@@ -58,7 +61,14 @@ an explicit pre-apply check; conflicts stop the plan rather than recovering.
 No agent apply. Do not start a short-lived human handoff during an absence.
 After approved human apply, read back exact tenant, mode, empty policies,
 private endpoint/NIC/DNS graph, all disabled public/deployment paths, purge
-protection and target emptiness. Source outputs are planned identifiers only,
+protection and target emptiness. From the approved private network and a
+separately authorized operator context, prove zero secrets, keys and
+certificates using bounded metadata-only inventory; report counts, not object
+names/values. Enumerate effective data-plane RBAC at the vault and inherited
+from resource group, subscription and higher applicable scopes. Reconcile all
+inherited authority and prove no unintended vault assignment was introduced.
+Do not add a persistent vault-wide job grant to obtain this verification.
+Source outputs are planned identifiers only,
 not proof of private GET access, exact secret versions or effective job grants.
 
 Before creation, hold/revert source with flags false. After creation, preserve
@@ -73,6 +83,16 @@ OpenTofu 1.12.5, locked AzureRM 4.73.0/AzAPI 2.1.0: configuration validation
 and all 34 provider-mocked runs pass with no backend or Azure credentials.
 Twelve new vault runs cover default-off approval/prerequisite failures, name
 validation and the exact empty private ARM body/endpoint/DNS contract; prior
-base/network/registry/retention tests remain green. All nine focused network,
+base/network/registry/retention tests remain green. All 20 focused network,
 registry and vault source tests plus Ruff lint/format checks pass. These checks
 do not establish live provider acceptance, secret material or authorization.
+
+Initial independent review found no P0/P1 and two P2 hardening items. The
+follow-up expands the no-auxiliary/no-grant boundary across every root `.tf`
+file, freezes the existing non-vault role inventory, and rejects Key Vault
+resources/data sources/child actions or redirected grants. Eleven negative
+cases cover additions in another file and redirection of an existing grant.
+The live checklist now requires exact-ID absence, private metadata-only
+vault-object emptiness and effective inherited RBAC, without adding persistent
+vault-wide job grants. HCL and the 34-run mock suite are unchanged; final-push
+independent review and CI remain required.
