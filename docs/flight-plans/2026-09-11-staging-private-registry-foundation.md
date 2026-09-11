@@ -79,3 +79,13 @@ The pinned OpenTofu supports resource-wide overrides, not per-instance ones:
 job and dispatcher fixture IDs differ, but the two job instances share the
 job fixture OID. Source review and later live readback must verify each exact
 job OID; mocks are not provider-fidelity evidence.
+
+CI caught a stale global assertion from the network-only rung that prohibited
+any registry anywhere in the root. The updated source check permits ACR only
+in `registry.tf`, retains all other unimplemented-service prohibitions, and
+checks the exact five resource definitions and their creation gates. Additional
+source assertions require `job[each.key].principal_id`, exact registry scope,
+the built-in AcrPull role, and destroy/credential guards. All six focused
+network/registry Python tests and their Ruff lint/format checks pass. The HCL
+is unchanged from the 22-run passing provider-mocked suite. This test change
+requires a fresh final-push review and CI; the earlier review is not reused.

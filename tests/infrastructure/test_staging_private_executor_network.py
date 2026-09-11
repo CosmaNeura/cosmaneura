@@ -32,13 +32,12 @@ def test_private_executor_network_has_exact_default_off_contract() -> None:
     assert 'name = "Microsoft.App/environments"' in source
 
 
-def test_network_only_rung_cannot_create_connectivity_or_compute() -> None:
+def test_unimplemented_connectivity_and_compute_remain_absent() -> None:
     source = _terraform_source()
     forbidden_resource_types = (
         "azurerm_container_app_environment",
         "azurerm_container_app_job",
         "azurerm_key_vault",
-        "azurerm_container_registry",
         "azurerm_nat_gateway",
         "azurerm_network_security_group",
         "azurerm_public_ip",
@@ -48,6 +47,19 @@ def test_network_only_rung_cannot_create_connectivity_or_compute() -> None:
 
     for resource_type in forbidden_resource_types:
         assert f'resource "{resource_type}"' not in source
+
+    # A separately gated registry rung is now present. It must never move into
+    # the network-only source, and no second file may introduce another ACR.
+    registry_sources = {
+        path.name
+        for path in NETWORK_ROOT.glob("*.tf")
+        if re.search(
+            r'^resource "azurerm_container_registry"',
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    }
+    assert registry_sources == {"registry.tf"}
 
 
 def test_service_endpoint_subnet_reserves_endpoints_without_creating_them() -> None:
