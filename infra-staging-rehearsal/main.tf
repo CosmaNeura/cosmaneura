@@ -66,6 +66,8 @@ locals {
     var.deploy_staging_restore_control_plane ||
     var.enable_private_executor_network_foundation ||
     var.private_executor_network_plan_approved ||
+    var.enable_private_executor_environment ||
+    var.private_executor_environment_plan_approved ||
     var.enable_private_executor_registry ||
     var.private_executor_registry_plan_approved ||
     var.enable_private_executor_vault ||
@@ -91,6 +93,8 @@ resource "terraform_data" "activation_guard" {
     control_cidr_inventory_revalidated      = var.control_cidr_inventory_revalidated
     private_executor_network_foundation     = var.enable_private_executor_network_foundation
     private_executor_network_approved       = var.private_executor_network_plan_approved
+    private_executor_environment            = var.enable_private_executor_environment
+    private_executor_environment_approved   = var.private_executor_environment_plan_approved
     private_executor_registry               = var.enable_private_executor_registry
     private_executor_registry_approved      = var.private_executor_registry_plan_approved
     private_executor_vault                  = var.enable_private_executor_vault
@@ -131,6 +135,19 @@ resource "terraform_data" "activation_guard" {
         var.private_executor_network_plan_approved
       )
       error_message = "The private executor network foundation and its exact saved-plan approval must be enabled or disabled together"
+    }
+
+    precondition {
+      condition     = var.enable_private_executor_environment == var.private_executor_environment_plan_approved
+      error_message = "The empty private environment and its exact saved-plan approval must be enabled or disabled together"
+    }
+
+    precondition {
+      condition = (
+        !var.enable_private_executor_environment ||
+        (var.enable_private_executor_network_foundation && var.private_executor_network_plan_approved)
+      )
+      error_message = "The empty private environment requires the separately approved dedicated private-executor network foundation"
     }
 
     precondition {

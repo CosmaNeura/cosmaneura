@@ -255,6 +255,29 @@ do not delete/recreate or add broad grants for verification convenience. See the
 
 ## Dormant restore runtime binding v1
 
+### Empty internal environment source rung
+
+`enable_private_executor_environment` plus matching
+`private_executor_environment_plan_approved` model only an empty internal
+workload-profiles environment. Both default false. The approved network
+foundation, base control plane and both fresh CIDR confirmations remain required.
+Explicit `Consumption` workload profile supports the dedicated `10.76.0.32/27`;
+legacy Consumption-only is not compatible with that subnet. Public network
+access is Disabled, the load balancer is internal, and no environment identity,
+app/job, image, secret, logs sink or grant is added.
+
+Azure creates platform infrastructure in the explicitly named
+`cosmaneura-staging-rehearsal-executor-infra` resource group. Its resources,
+management/outbound paths, cost and exact absence need review before any human
+plan/apply; they are not all represented as individual Terraform resources.
+An internal environment and disabled subnet default outbound access do NOT prove
+workload default-deny egress, offline-verifier containment or private reachability.
+All runtime/identity/evidence/workflow activation assertions remain false.
+No additional endpoint, DNS zone, peering, NAT, firewall or route is added here.
+See the [empty-environment flight plan](../docs/flight-plans/2026-09-13-staging-private-executor-environment.md).
+
+### Runtime and evidence binding remain dormant
+
 `restore-runtime-binding-policy.json` and
 `validate_staging_restore_runtime_binding.py` define and validate the future
 private-runtime boundary; see the [runtime-binding flight
@@ -291,7 +314,7 @@ cutover, and authorizes no production/PHI action. It contains no live evidence.
 
 ## Deliberate blockers
 
-The optionally delegated `10.76.0.32/27` subnet is not a runner, Container Apps
+The optionally delegated `10.76.0.32/27` subnet alone is not a runner, Container Apps
 environment, route, peer, or proof of connectivity to an ephemeral
 `10.75.0.0/24` target. The empty `10.76.0.64/27` subnet is not an endpoint.
 `private_executor_binding_implemented` and
