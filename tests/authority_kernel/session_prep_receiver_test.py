@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -11,7 +12,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import app.services.authority
-from app.routes.agent import agent_api_app
+import app.services.session_prep
+from app.configuration.session_prep import SessionPrepSyntheticSettings
+from app.routes.agent import agent_api_app, get_session_prep_synthetic_settings
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
@@ -50,6 +53,32 @@ def _authorized_client() -> TestClient:
         EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
     )
     return TestClient(app)
+
+
+def _enabled_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    context_snapshot_ref: str = "context_synthetic_001",
+) -> TestClient:
+    fastapi_app = _isolated_app()
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_session_prep_synthetic_settings] = lambda: (
+        SessionPrepSyntheticSettings(
+            enabled=True,
+            context_snapshot_ref=context_snapshot_ref,
+            clerk_subject="user_test_session_prep_receiver",
+            appointment_id="appointment_01j00000000000000000000000",
+            fixture_id=("synthetic_preview_fixture_01j00000000000000000000000"),
+        )
+    )
+    monkeypatch.setattr(
+        app.services.session_prep,
+        "authorize_session_prep_read",
+        lambda **kwargs: SimpleNamespace(turn_closed=False),
+    )
+    return TestClient(fastapi_app)
 
 
 def test_receiver_authenticates_before_reading_the_body() -> None:
@@ -250,3 +279,177 @@ def test_receiver_rejects_transport_selectors(
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_FAILED"
     assert "sentinel" not in response.text
+
+
+def test_enabled_receiver_returns_exact_completed_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _enabled_client(monkeypatch).post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(),
+        json=_request_body(),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["idempotency-replayed"] == "false"
+    assert response.headers["x-trace-id"] == "trace_session_prep_receiver_0001"
+    body = response.json()
+    assert set(body) == {
+        "tool_call_ref",
+        "tool_name",
+        "tool_version",
+        "status",
+        "approval_ref",
+        "access_intent_ref",
+        "access_outcome_ref",
+        "result_classification",
+        "result",
+        "recorded_at",
+    }
+    assert body["tool_name"] == "session-prep.context.read"
+    assert body["tool_version"] == "1.0.0"
+    assert body["status"] == "completed"
+    assert body["approval_ref"] is None
+    assert body["access_intent_ref"] is None
+    assert body["access_outcome_ref"] is None
+    assert body["result_classification"] == "phi_possible"
+    assert body["result"]["state"] == "ready"
+    assert body["result"]["prepared_brief"]
+    assert body["result"]["supporting_context"] is None
+    assert "draft content" not in response.text
+
+
+def test_each_poll_reauthorizes_and_exact_transport_retry_replays(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+    client = _enabled_client(monkeypatch)
+    monkeypatch.setattr(
+        app.services.session_prep,
+        "authorize_session_prep_read",
+        lambda **kwargs: (
+            calls.append(kwargs),
+            SimpleNamespace(turn_closed=False),
+        )[1],
+    )
+    headers = _headers()
+
+    first = client.post(
+        "/service/v1/agent/tools/invoke",
+        headers=headers,
+        json=_request_body(),
+    )
+    retry = client.post(
+        "/service/v1/agent/tools/invoke",
+        headers=headers,
+        json=_request_body(),
+    )
+    poll = client.post(
+        "/service/v1/agent/tools/invoke",
+        headers={**headers, "Idempotency-Key": "idem-session-prep-poll-0002"},
+        json=_request_body(),
+    )
+
+    assert len(calls) == 3
+    assert {call["source_turn_ref"] for call in calls} == {"turn_synthetic_001"}
+    assert first.headers["idempotency-replayed"] == "false"
+    assert retry.headers["idempotency-replayed"] == "true"
+    assert retry.json() == first.json()
+    assert poll.headers["idempotency-replayed"] == "false"
+    assert poll.json()["tool_call_ref"] != first.json()["tool_call_ref"]
+    assert (
+        poll.json()["result"]["snapshot_ref"] == first.json()["result"]["snapshot_ref"]
+    )
+
+
+def test_enabled_receiver_rejects_unconfigured_context_without_reflection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _request_body()
+    body["arguments"]["context_snapshot_ref"] = (  # type: ignore[index]
+        "context_synthetic_other_001"
+    )
+
+    response = _enabled_client(monkeypatch).post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(),
+        json=body,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "SCOPE_DENIED"
+    assert "context_synthetic_other_001" not in response.text
+
+
+def test_enabled_receiver_denies_supporting_context_without_follow_up_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = _request_body()
+    body["arguments"]["detail"] = "supporting_context"  # type: ignore[index]
+
+    response = _enabled_client(monkeypatch).post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(),
+        json=body,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "SCOPE_DENIED"
+    assert "supporting_context" not in response.text
+
+
+def test_enabled_receiver_maps_revoked_source_to_content_free_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_turn_ref = "turn_synthetic_revoked_001"
+    context_snapshot_ref = "context_synthetic_revoked_001"
+    body = _request_body()
+    body["arguments"]["source_turn_ref"] = source_turn_ref  # type: ignore[index]
+    body["arguments"]["context_snapshot_ref"] = (  # type: ignore[index]
+        context_snapshot_ref
+    )
+
+    response = _enabled_client(
+        monkeypatch,
+        context_snapshot_ref=context_snapshot_ref,
+    ).post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(),
+        json=body,
+    )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["state"] == "unavailable"
+    assert result["reason_code"] == "context_not_available"
+    assert result["prepared_brief"] is None
+    assert result["supporting_context"] is None
+    assert result["provenance"] == []
+
+
+def test_enabled_receiver_preserves_value_free_authority_denial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _enabled_client(monkeypatch)
+    monkeypatch.setattr(
+        app.services.session_prep,
+        "authorize_session_prep_read",
+        lambda **kwargs: (_ for _ in ()).throw(
+            app.services.authority.AuthorityRequestDeniedError()
+        ),
+    )
+    body = _request_body()
+    body["arguments"]["source_turn_ref"] = (  # type: ignore[index]
+        "turn_synthetic_sensitive_sentinel"
+    )
+
+    response = client.post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(),
+        json=body,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "SCOPE_DENIED"
+    assert "sensitive_sentinel" not in response.text

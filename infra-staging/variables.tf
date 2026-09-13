@@ -128,8 +128,8 @@ variable "python_public_vars" {
     "AZURE_OPENAI_ENDPOINT",
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-    # zoom oauth redirects
-    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
+    # zoom oauth redirects and the source-controlled watchdog rollout gate
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT", "ZOOM_WATCHDOG_ENABLED",
     # public origin of this backend plus the recall.ai region
     "API_BASE_URL", "RECALL_API_BASE",
     # explicit cookie domain to avoid using internal Azure Container App domains
@@ -141,7 +141,7 @@ variable "python_public_vars" {
     "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
     "AUTHORITY_KERNEL_ENABLED", "AUTHORITY_CLERK_ISSUER", "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
     "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS", "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
-    "DURABLE_WEBHOOK_INBOX_ENABLED"
+    "DURABLE_WEBHOOK_INBOX_ENABLED", "SENTRY_STAGING_ENABLED"
   ]
 }
 

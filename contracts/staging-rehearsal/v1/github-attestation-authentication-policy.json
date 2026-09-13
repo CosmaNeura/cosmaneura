@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-github-attestation-authentication-v1",
+  "closed_world": true,
+  "activation_ready": false,
+  "activation": {
+    "trusted_verifier_implemented": false,
+    "trusted_linux_verifier_pinned": false,
+    "github_only_trusted_root_delivered": false,
+    "github_only_trusted_root_pinned": false,
+    "offline_bundle_delivery_implemented": false,
+    "workflow_integrated": false
+  },
+  "evidence_manifest_policy": {
+    "policy_id": "cosmaneura-staging-evidence-manifest-v2",
+    "sha256": "sha256:8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
+  },
+  "server_scope_authentication_policy": {
+    "policy_id": "cosmaneura-staging-server-scope-authentication-v1",
+    "sha256": "sha256:ad4b5ddd3e7cf8f6c50e34f63f1d2bd1d46d36f418fcd64b262b514daa2a28d5"
+  },
+  "source_provider_observation_policy": {
+    "policy_id": "cosmaneura-staging-source-provider-observation-v1",
+    "sha256": "sha256:5a5774b26852421e01388317d89fb64d093fdf5d1e49ad04165c88bdf6f3fb52"
+  },
+  "artifact": {
+    "path": "evidence/evidence-manifest.json",
+    "subject_name": "evidence-manifest.json",
+    "digest_algorithm": "sha256",
+    "subject_count": 1,
+    "additional_digest_algorithms_permitted": false
+  },
+  "repository": {
+    "name_with_owner": "CosmaNeura/cosmaneura",
+    "uri": "https://github.com/CosmaNeura/cosmaneura",
+    "id": "881573489",
+    "owner": "CosmaNeura",
+    "owner_uri": "https://github.com/CosmaNeura",
+    "owner_id": "186940615",
+    "visibility": "private",
+    "protected_ref": "refs/heads/master",
+    "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+    "workflow_name": "Staging Restore Rehearsal",
+    "event_name": "workflow_dispatch",
+    "deployment_environment": "staging-restore-provision",
+    "runner_environment": "github-hosted"
+  },
+  "producer": {
+    "attestation_action": "actions/attest-build-provenance",
+    "attestation_action_ref": "e8998f949152b193b063cb0ec769d69d929409be",
+    "attestation_action_version": "v2.4.0",
+    "predicate_action_ref": "1176ef556905f349f669722abf30bce1a6e16e01",
+    "signing_action": "actions/attest",
+    "signing_action_ref": "ce27ba3b4a9a139d9a20a4a07d69fabb52f1e5bc"
+  },
+  "verifier": {
+    "kind": "github-cli-attestation-offline",
+    "executable": "gh",
+    "version": "2.97.0",
+    "executable_sha256": "CONFIGURE_EXACT_LINUX_GH_2_97_0_EXECUTABLE_SHA256",
+    "sigstore_go_version": "1.2.2",
+    "protobuf_specs_version": "0.5.1",
+    "network_access_permitted": false,
+    "request_timeout_seconds": 30,
+    "maximum_bundle_bytes": 2097152,
+    "maximum_trusted_root_bytes": 1048576,
+    "maximum_output_bytes": 4194304,
+    "required_flags": ["--bundle", "--cert-identity", "--cert-oidc-issuer", "--custom-trusted-root", "--deny-self-hosted-runners", "--digest-alg", "--format=json", "--hostname", "--no-public-good", "--predicate-type", "--repo", "--signer-digest", "--source-digest", "--source-ref"],
+    "forbidden_flags": ["--bundle-from-oci", "--cert-identity-regex", "--owner", "--signer-repo", "--signer-workflow"]
+  },
+  "trusted_root": {
+    "media_type": "application/vnd.dev.sigstore.trustedroot+json;version=0.1",
+    "sha256": "CONFIGURE_EXACT_INDEPENDENTLY_DELIVERED_GITHUB_ONLY_TRUSTED_ROOT_SHA256",
+    "delivery": "independent_of_attestation_bundle_and_subject",
+    "format": "jsonl",
+    "record_count": 1,
+    "trailing_newline_required": true,
+    "fulcio_uri": "fulcio.githubapp.com",
+    "timestamp_authority_uri": "timestamp.githubapp.com",
+    "certificate_authority_organization": "GitHub, Inc.",
+    "public_good_permitted": false,
+    "transparency_log_permitted": false
+  },
+  "certificate": {
+    "oidc_issuer": "https://token.actions.githubusercontent.com",
+    "subject_alternative_name": "https://github.com/CosmaNeura/cosmaneura/.github/workflows/staging_restore_rehearsal.yml@refs/heads/master",
+    "subject_distinguished_name_empty": true,
+    "subject_alternative_name_critical": true,
+    "build_signer_uri": "https://github.com/CosmaNeura/cosmaneura/.github/workflows/staging_restore_rehearsal.yml@refs/heads/master",
+    "build_config_uri": "https://github.com/CosmaNeura/cosmaneura/.github/workflows/staging_restore_rehearsal.yml@refs/heads/master",
+    "source_repository_uri": "https://github.com/CosmaNeura/cosmaneura",
+    "source_repository_identifier": "881573489",
+    "source_repository_owner_uri": "https://github.com/CosmaNeura",
+    "source_repository_owner_identifier": "186940615",
+    "source_repository_visibility": "private",
+    "source_repository_ref": "refs/heads/master",
+    "runner_environment": "github-hosted",
+    "workflow_name": "Staging Restore Rehearsal",
+    "workflow_trigger": "workflow_dispatch",
+    "deployment_environment_extension": {
+      "oid": "1.3.6.1.4.1.57264.1.23",
+      "der_type": "UTF8String",
+      "der_tag": 12,
+      "value": "staging-restore-provision"
+    },
+    "raw_token_subject_extension": {
+      "oid": "1.3.6.1.4.1.57264.1.24",
+      "der_type": "UTF8String",
+      "der_tag": 12,
+      "value": "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision"
+    },
+    "extension_der_rules": {
+      "class": "universal",
+      "constructed": false,
+      "definite_length_required": true,
+      "minimal_length_encoding_required": true,
+      "valid_utf8_required": true,
+      "nul_permitted": false,
+      "trailing_bytes_permitted": false
+    }
+  },
+  "statement": {
+    "media_type": "application/vnd.dev.sigstore.bundle.v0.3+json",
+    "type": "https://in-toto.io/Statement/v1",
+    "predicate_type": "https://slsa.dev/provenance/v1",
+    "build_type": "https://actions.github.io/buildtypes/workflow/v1",
+    "subject_count": 1,
+    "subject_name": "evidence-manifest.json",
+    "subject_digest_algorithm": "sha256",
+    "predicate_is_workflow_controlled_claim": true,
+    "predicate_is_independent_identity_evidence": false
+  },
+  "dynamic_bindings": {
+    "statement_subject_sha256": "sha256(exact_manifest_file_bytes)",
+    "certificate_build_signer_digest": "manifest.provenance.workflow_sha",
+    "certificate_build_config_digest": "manifest.provenance.workflow_sha",
+    "certificate_source_repository_digest": "manifest.provenance.workflow_sha",
+    "certificate_run_invocation_uri": "https://github.com/CosmaNeura/cosmaneura/actions/runs/{manifest.provenance.run_id}/attempts/{manifest.provenance.run_attempt}",
+    "manifest_signer_sha": "manifest.provenance.workflow_sha",
+    "manifest_signer_workflow_sha": "manifest.provenance.workflow_sha",
+    "manifest_signer_run_id": "manifest.provenance.run_id",
+    "manifest_signer_run_attempt": "manifest.provenance.run_attempt"
+  },
+  "verification_result": {
+    "media_type": "application/vnd.dev.sigstore.verificationresult+json;version=0.1",
+    "result_count": 1,
+    "top_level_fields": ["attestation", "verificationResult"],
+    "minimum_verified_timestamps": 1,
+    "verified_timestamp_types": ["TimestampAuthority"],
+    "transparency_log_timestamps_permitted": false,
+    "certificate_and_verified_timestamps_are_authenticated": true,
+    "statement_is_signed_workflow_claim": true,
+    "unknown_fields_permitted": false
+  },
+  "maximum_receipt_lifetime_seconds": 60,
+  "receipt_fields": [
+    "schema_version", "policy_id", "policy_sha256", "base_binding_sha256",
+    "manifest_id", "manifest_file_sha256", "evidence_set_sha256", "source_sha", "candidate_sha",
+    "repository", "protected_ref", "workflow_path", "workflow_sha", "run_id", "run_attempt", "event_name",
+    "attestation_bundle_sha256", "statement_sha256", "subject_name", "subject_sha256", "predicate_type",
+    "certificate_sha256", "certificate_claims_sha256", "certificate_oidc_issuer", "certificate_subject_alternative_name",
+    "certificate_deployment_environment", "certificate_token_subject", "certificate_runner_environment", "certificate_run_invocation_uri",
+    "trusted_root_sha256", "verifier_version", "verifier_sha256", "verified_timestamps_sha256", "verified_at", "expires_at", "pass"
+  ],
+  "activation_blockers": [
+    "github_attestation_authentication_policy_disabled", "trusted_linux_gh_verifier_digest_unconfigured",
+    "independently_delivered_github_only_trusted_root_digest_unconfigured", "trusted_verifier_execution_unimplemented",
+    "trusted_attestation_bundle_delivery_unimplemented", "trusted_root_delivery_unimplemented",
+    "workflow_integration_unimplemented", "composite_binding_unimplemented", "restore_activation_unimplemented"
+  ],
+  "output_activation_blockers": ["composite_binding_unimplemented", "workflow_integration_unimplemented", "restore_activation_unimplemented"]
+}

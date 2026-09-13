@@ -8,6 +8,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTROL = "ENABLE_PROVIDER_V7"
 BACKEND_FLAGS = ("AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED")
+FORCED_FALSE_FLAGS = (
+    "SCRIBE_HANDOFF_ENABLED",
+    "SCRIBE_WORKFLOW_ENABLED",
+    "SESSION_PREP_SYNTHETIC_ENABLED",
+    "STRIPE_INTEGRATION_ENABLED",
+    "STRIPE_BILLING_ENABLED",
+    "STRIPE_LIVE_MODE",
+    "DURABLE_WEBHOOK_INBOX_ENABLED",
+    "ZOOM_WATCHDOG_ENABLED",
+)
 FRONTEND_FLAG = "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"
 PROVIDER_ORIGIN = (
     "https://cosmaneura-sovereign-staging-app.happygrass-736dc5a6."
@@ -57,28 +67,31 @@ def _hcl_variable(source: str, name: str) -> str:
 
 def _deploy_control_prefix() -> str:
     deploy = _read("infra-staging/deploy.sh")
-    return deploy[
-        deploy.index(f'{CONTROL}="${{{CONTROL}:-false}}"') : deploy.index(
-            'if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS"'
-        )
-    ]
-
-
-def _run_deploy_control(value: str | None) -> subprocess.CompletedProcess[str]:
-    # Execute the real validation and JSON reconciliation statements while
-    # replacing the secret-bearing direnv command with a deterministic stub.
-    script = _deploy_control_prefix().replace(
-        'if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then',
-        "if ! ENV_JSON='{}'; then",
+    capture_start = deploy.index(f'{CONTROL}="${{{CONTROL}:-}}"')
+    capture_end = deploy.index("# Resolve protected configuration", capture_start)
+    reconciliation_start = deploy.index(
+        "# Keep the provider-v7 runtime gates synchronized", capture_end
     )
-    # This helper isolates the provider-v7 flag reconciliation. Capability
-    # identity validation has its own executable tests and requires a complete
-    # resolved Clerk configuration rather than this helper's `{}` stub.
-    preflight_start = script.index("if ! printf '%s' \"$ENV_JSON\" |")
-    preflight_end = script.index("unset OP_SERVICE_ACCOUNT_TOKEN", preflight_start)
-    script = script[:preflight_start] + script[preflight_end:]
+    reconciliation_end = deploy.index("\nemit_github_output() {", reconciliation_start)
+    return (
+        deploy[capture_start:capture_end]
+        + 'ENV_JSON=\'{"SOVEREIGN_RECORD_GRANT_SECRET":"synthetic"}\'\n'
+        + deploy[reconciliation_start:reconciliation_end]
+    )
+
+
+def _run_deploy_control(
+    value: str | None, record_grants: str | None = "true"
+) -> subprocess.CompletedProcess[str]:
+    # Execute the real validation and JSON reconciliation statements without
+    # entering the protected configuration resolver.
+    script = _deploy_control_prefix()
     script += '\nprintf "%s\\n" "$ENV_JSON"\n'
     environment = os.environ.copy()
+    if record_grants is None:
+        environment.pop("ENABLE_SOVEREIGN_RECORD_GRANTS", None)
+    else:
+        environment["ENABLE_SOVEREIGN_RECORD_GRANTS"] = record_grants
     if value is None:
         environment.pop(CONTROL, None)
     else:
@@ -241,15 +254,12 @@ def test_frontend_build_allowlist_keeps_production_false(tmp_path: Path) -> None
     )
 
 
-def test_unset_switch_executably_injects_both_backend_gates_as_false() -> None:
+def test_unset_switch_blocks_canonical_deploy_while_frontend_defaults_false() -> None:
     result = _run_deploy_control(None)
     frontend = _render_frontend_flag(None)
 
-    assert result.returncode == 0, result.stderr
-    assert (
-        result.stdout.strip()
-        == '{"AUTHORITY_KERNEL_ENABLED":"false","AGENT_API_ENABLED":"false"}'
-    )
+    assert result.returncode == 1
+    assert "must remain true for canonical staging deployment" in result.stdout
     assert frontend.returncode == 0, frontend.stderr
     assert frontend.stdout.strip() == "false"
 
@@ -258,8 +268,24 @@ def test_invalid_switch_is_rejected_before_configuration_is_rendered() -> None:
     result = _run_deploy_control("TRUE")
 
     assert result.returncode == 1
-    assert result.stdout.strip() == f"{CONTROL} must be true or false."
+    assert (
+        result.stdout.strip()
+        == f"{CONTROL} must remain true for canonical staging deployment."
+    )
     assert "AUTHORITY_KERNEL_ENABLED" not in result.stdout
+
+
+def test_record_grant_switch_must_be_true_before_configuration_is_rendered() -> None:
+    for value in (None, "false", "TRUE"):
+        result = _run_deploy_control("true", record_grants=value)
+
+        assert result.returncode == 1
+        assert (
+            result.stdout.strip()
+            == "ENABLE_SOVEREIGN_RECORD_GRANTS must remain true for canonical "
+            "staging deployment."
+        )
+        assert "AUTHORITY_KERNEL_ENABLED" not in result.stdout
 
 
 def test_true_switch_executably_injects_both_backend_gates() -> None:
@@ -267,10 +293,9 @@ def test_true_switch_executably_injects_both_backend_gates() -> None:
     frontend_result = _render_frontend_flag("true")
 
     assert result.returncode == 0, result.stderr
-    assert (
-        result.stdout.strip()
-        == '{"AUTHORITY_KERNEL_ENABLED":"true","AGENT_API_ENABLED":"true"}'
-    )
+    rendered = json.loads(result.stdout)
+    assert all(rendered[name] == "true" for name in BACKEND_FLAGS)
+    assert all(rendered[name] == "false" for name in FORCED_FALSE_FLAGS)
 
     frontend = _read(".env.staging.frontend")
     assert f'export {FRONTEND_FLAG}="${{{CONTROL}:-false}}"' in frontend

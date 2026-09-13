@@ -28,6 +28,10 @@
 
 ## Current deployed state
 
+The environment observations below are historical September 2 evidence, not
+current deployment attestations. See the September 13 source-update checkpoint
+at the end of this plan for the latest source-only reconciliation.
+
 - Production evidence on 2026-09-02: API, worker, and scheduler are Running and
   provisioned successfully on image SHA
   `8fa02a71f4b880cd43f4fccc8c81c92a0d635623`; `/healthcheck` and `/sign-in`
@@ -111,3 +115,33 @@
   bootstrap promise. Do not expand PR #238 to include it.
 - Pilot communication must describe this as sign-in stability hardening, not a
   Zoom fix or a change to account, tenant, BAA, billing, or patient data.
+
+## September 13 source-update checkpoint
+
+- The latest read-only GitHub check found protected `master` at
+  `e21ba4c1fb1027de8123aca9b8aee25b8a11b612`, and PR #238 still open at
+  `c0cbce2c4e5fe2f53108eec27395f73c281e3638` with automatic merge disabled.
+- The source update is a normal merge of that exact master into the existing
+  Auth branch, prepared in an isolated local checkout. No rebase, force-push,
+  default-branch write, environment mutation, deployment or OTP entry is part
+  of this step.
+- The two Auth implementation/test files are byte-for-byte unchanged from the
+  previously reviewed PR head. The three PR paths had no upstream overlap;
+  the merge was conflict-free. The PR remains its own merge/rollback unit.
+- Existing September 2 green checks are historical. Current-head protected CI
+  and independent review must be recorded against the resulting pushed commit;
+  they cannot be inferred from the prior head or this document. Unchanged
+  passing local tests are not rerun merely to refresh their timestamps.
+- Real Clerk development-identity email-code stability smoke is still
+  incomplete. A mock, a reached code-entry screen, or a green CI run does not
+  satisfy the same-code, same-mounted-control, >30-second and focus/visibility
+  requirements. Do not enter an OTP without the required live human action.
+- Staging private-foundation preparation is a separate workstream. Its prior
+  plan and ten-minute handoff expired; its next human plan has not succeeded.
+  This source update neither accepts that plan nor authorizes staging cutover.
+- Zoom #239 and stacked #251 remain untouched pending the accepted exact Auth
+  base. Preserve the receiver-first, default-off watchdog rollout and its
+  synthetic callback, consent, idempotency, revocation and notification gates.
+- No source merge, live staging acceptance, outside-party contact, broader
+  cohort, or production promotion is authorized by this checkpoint. Existing
+  protected merge, independent-review and founder deployment boundaries remain.

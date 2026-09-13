@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
+import app.services.session_prep_scope as session_prep_scope
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
@@ -620,6 +621,7 @@ def _context_for_session(
         if actor is None or actor.status != "active" or actor.actor_kind != "human":
             raise AuthorityRequestDeniedError
 
+    source_identity = None
     if mount_session.source_identity_id is not None:
         source_identity = session.get(
             AuthorityActorExternalIdentity,
@@ -686,6 +688,17 @@ def _context_for_session(
             raise AuthorityRequestDeniedError
         auth_tier = derived_auth_tier
         capabilities = PROVIDER_CAPABILITIES
+        if (
+            binding is not None
+            and source_identity is not None
+            and session_prep_scope.synthetic_session_prep_context_ref(
+                clerk_subject=source_identity.subject,
+                record_ref=binding.binding_ref,
+                session=session,
+            )
+            is not None
+        ):
+            capabilities = (*capabilities, "session-prep:read")
     else:
         public_tier_rank = {
             "anonymous": 0,

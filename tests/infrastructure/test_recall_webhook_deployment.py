@@ -131,7 +131,8 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
 
     deploy = _read("infra-staging/deploy.sh")
     assert 'SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"' in deploy
-    assert "SCHEDULER_COMMAND=$(yq" in deploy
+    assert "SCHEDULER_COMMAND=$(printf" in deploy
+    assert 'git show "$GIT_SHA:Procfile"' in deploy
     assert "for container in $CONTAINERS" in deploy
     preflight = deploy.index("for container in $CONTAINERS")
     migration = deploy.index("\nrun_migrations\n")
@@ -151,7 +152,9 @@ def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
 
     assert "api_only_secret_live_guard.py" in deploy
     assert 'RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT"' in deploy
-    assert 'type == "string" and length > 0' not in deploy
+    assert (
+        '.RECALL_WEBHOOK_SECRET | select(type == "string" and length > 0)' not in deploy
+    )
     assert "Staging Recall webhook signing credential is invalid." in deploy
     assert deploy.index("unset RECALL_WEBHOOK_SECRET_INPUT") > validation
     assert validation < deploy.index("\nrun_migrations\n")
@@ -179,15 +182,19 @@ def test_deploy_scripts_drop_ambient_provider_credentials_before_subprocesses() 
             "unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET",
             resolution,
         )
-        first_git = deploy.index("if ! git rev-parse", credential_drop)
+        first_git = deploy.index("git rev-parse")
         first_azure = deploy.index("az account show", credential_drop)
-        first_docker = deploy.index("docker manifest inspect", credential_drop)
 
         assert resolution < credential_drop
         assert credential_drop < first_git
         assert credential_drop < first_azure
-        assert credential_drop < first_docker
         assert "export ENV_JSON" not in deploy
+        if path == "infra/deploy.sh":
+            first_registry_read = deploy.index("docker manifest inspect")
+        else:
+            assert "\ndocker " not in deploy
+            first_registry_read = deploy.index("az acr manifest show-metadata")
+        assert credential_drop < first_registry_read
 
     production = _read("infra/deploy.sh")
     guard_assignment = production.index("RECALL_WEBHOOK_SECRET_GUARD=")
@@ -277,7 +284,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     workflow = _read(".github/workflows/pull_request_checks.yml")
     publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
-    pull_request_jobs = {name: _workflow_job(workflow, name) for name in ("app", "web")}
+    pull_request_jobs = {
+        name: _workflow_job(workflow, name)
+        for name in ("backend-quality", "backend-tests", "app", "web")
+    }
     protected_jobs = {
         "deploy": _workflow_job(publish_workflow, "deploy"),
         "deploy-staging": _workflow_job(publish_workflow, "deploy-staging"),
