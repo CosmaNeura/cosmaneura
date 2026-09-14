@@ -23,9 +23,16 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 for module_name in (
+    "staging_encrypted_workspace",
     "staging_snapshot_capture",
     "staging_snapshot_identity",
     "staging_snapshot_pg_io",
+    "staging_snapshot_native_files",
+    "staging_snapshot_runtime",
+    "staging_snapshot_workspace",
+    "staging_snapshot_configuration",
+    "staging_snapshot_cli",
+    "staging_snapshot_session",
     "staging_snapshot_azure",
 ):
     if module_name in sys.modules:
@@ -40,7 +47,9 @@ for module_name in (
     spec.loader.exec_module(module)
 azure = sys.modules["staging_snapshot_azure"]
 pg = sys.modules["staging_snapshot_pg_io"]
-CLI_CLIENT_ID = sys.modules["staging_snapshot_identity"].CLI_CLIENT_ID
+identity = sys.modules["staging_snapshot_identity"]
+session = sys.modules["staging_snapshot_session"]
+CLI_CLIENT_ID = identity.CLI_CLIENT_ID
 digest = sys.modules["staging_snapshot_identity"].digest
 
 
@@ -136,10 +145,12 @@ class Response:
 class Opener:
     def __init__(self):
         self.requests = []
+        self.timeouts = []
         self.responses = []
 
     def open(self, request, timeout):
         self.requests.append(request)
+        self.timeouts.append(timeout)
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response
@@ -195,35 +206,48 @@ class AzureTests(unittest.TestCase):
         )
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
-        def read_cache(path, *, label, required_mode):
-            assert path == Path("/invented/cache/msal_token_cache.json")
-            assert required_mode == 0o600
-            return json.dumps(self.cache).encode()
-
         self.helper = SimpleNamespace(
-            SUBSCRIPTION=SUB,
-            TENANT=TENANT,
-            _reject_ambient_transport_environment=Mock(),
             _hardened_tls_context=Mock(return_value=(context, CA_SHA)),
-            _operator_paths=lambda: (
-                Path("/invented/user"),
-                Path("/invented/cache"),
-                "binding",
-            ),
-            recovery=SimpleNamespace(_read_protected_file=read_cache),
         )
+        self.session = object.__new__(session.SnapshotSession)
+        self.session._token = self.token
+
+        # This adapter fixture mocks the new session, NOT the old live wrapper.
+        # Real session/config/CLI ownership is exercised in separate tests.
+        def verified_fixture(current, *, deadline):
+            with pg.capture_deadline(deadline):
+                self.reader.refresh_account()
+                self.reader.revalidate_runtime()
+                current._token = self.reader._token
+                return identity.bind_configured_identity(
+                    self.reader.account,
+                    current._token,
+                    json.dumps(self.cache).encode(),
+                    identity.ExpectedIdentity(SUB, TENANT, digest("invented-user")),
+                    now_epoch=int(time.time()),
+                    minimum_remaining_seconds=240,
+                )
+
+        def context_fixture(_current, *, deadline):
+            with pg.capture_deadline(deadline):
+                context_value, ca_sha = self.helper._hardened_tls_context()
+                if ca_sha != CA_SHA:
+                    raise session.SnapshotSessionRefused("snapshot_session_refused")
+                return context_value
+
+        for item in (
+            patch.object(session.SnapshotSession, "verify", verified_fixture),
+            patch.object(session.SnapshotSession, "context", context_fixture),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
         self.opener = Opener()
-        self.account_patch = patch.object(
-            azure, "ACCOUNT_SHA256", digest("invented-user")
-        )
-        self.account_patch.start()
-        self.addCleanup(self.account_patch.stop)
         self.opener_patch = patch.object(
             azure.urllib.request, "build_opener", return_value=self.opener
         )
         self.opener_patch.start()
         self.addCleanup(self.opener_patch.stop)
-        self.client = azure.SnapshotAzure(self.helper, self.reader, CA_SHA)
+        self.client = azure.SnapshotAzure(self.session)
 
     def server(self):
         return {
@@ -287,6 +311,11 @@ class AzureTests(unittest.TestCase):
         self.opener.responses = [Response(self.server())]
         result = self.client.observe_server(5)
         self.assertTrue(result["target_matches"])
+        evidence = result["identity_evidence"]
+        self.assertTrue(evidence["authenticated_same_token_arm_read"])
+        self.assertFalse(evidence["authenticated_same_token_read_required"])
+        self.assertFalse(evidence["jwt_signature_independently_verified"])
+        self.assertFalse(evidence["human_apply_authorized"])
         self.assertEqual(result["exact_token_sha256"], digest(self.token))
         self.reader.refresh_account.assert_called()
         self.assertEqual(self.reader.refresh_account.call_count, 2)
@@ -297,14 +326,66 @@ class AzureTests(unittest.TestCase):
         self.assertTrue(request.full_url.endswith("?api-version=2024-08-01"))
         self.assertNotIn(self.token, str(result))
 
+    def test_unbound_session_refuses_before_http(self):
+        with self.assertRaises(azure.AzureReadRefused):
+            azure.SnapshotAzure(SimpleNamespace(_token=self.token))
+        self.assertEqual(self.opener.requests, [])
+
+    def test_one_absolute_deadline_for_identity_tls_http_and_postcheck(self):
+        observed = []
+        original_verify = session.SnapshotSession.verify
+        original_context = session.SnapshotSession.context
+
+        def verify(current, *, deadline):
+            self.assertEqual(pg.signal.getitimer(pg.signal.ITIMER_REAL), (0.0, 0.0))
+            observed.append(deadline)
+            return original_verify(current, deadline=deadline)
+
+        def context(current, *, deadline):
+            self.assertEqual(pg.signal.getitimer(pg.signal.ITIMER_REAL), (0.0, 0.0))
+            observed.append(deadline)
+            return original_context(current, deadline=deadline)
+
+        self.opener.responses = [Response(self.server())]
+        with (
+            patch.object(session.SnapshotSession, "verify", verify),
+            patch.object(session.SnapshotSession, "context", context),
+        ):
+            self.client.observe_server(5)
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(len(set(observed)), 1)
+        self.assertLess(self.opener.timeouts[0], 5)
+
+    def test_preflight_time_is_not_restored_to_http_budget(self):
+        original = session.SnapshotSession.verify
+
+        def delayed(current, *, deadline):
+            result = original(current, deadline=deadline)
+            with pg.capture_deadline(deadline):
+                time.sleep(0.04)
+            return result
+
+        self.opener.responses = [Response(self.server(), delay=1)]
+        started = time.monotonic()
+        with (
+            patch.object(session.SnapshotSession, "verify", delayed),
+            self.assertRaises(azure.AzureReadRefused),
+        ):
+            self.client.observe_server(0.08)
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertEqual(len(self.opener.timeouts), 1)
+        self.assertLess(self.opener.timeouts[0], 0.05)
+
     def test_core_limit_refuses_before_reader_or_secret_access(self):
         with (
             patch.object(pg.resource, "getrlimit", return_value=(0, 1)),
             patch.object(azure.SnapshotAzure, "_initialize") as initialize,
         ):
             with self.assertRaises(azure.AzureReadRefused):
-                azure.SnapshotAzure(self.helper, self.reader, CA_SHA)
+                azure.SnapshotAzure(self.session)
             initialize.assert_not_called()
+            with self.assertRaises(azure.AzureReadRefused):
+                self.client.observe_server(5)
             with self.assertRaises(azure.AzureReadRefused):
                 self.client.read_bound_database_credentials(IMAGE, 15)
         self.assertEqual(self.opener.requests, [])
