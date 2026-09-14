@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 NETWORK_ROOT = ROOT / "infra-staging-rehearsal"
 
@@ -35,7 +37,7 @@ def test_private_executor_network_has_exact_default_off_contract() -> None:
 def test_unimplemented_connectivity_and_compute_remain_absent() -> None:
     source = _terraform_source()
     forbidden_resource_types = (
-        "azurerm_container_app_environment",
+        "azurerm_container_app",
         "azurerm_container_app_job",
         "azurerm_key_vault",
         "azurerm_nat_gateway",
@@ -60,6 +62,52 @@ def test_unimplemented_connectivity_and_compute_remain_absent() -> None:
         )
     }
     assert registry_sources == {"registry.tf"}
+
+    # The separately gated empty environment must not move into network.tf or
+    # gain another declaration. Apps/jobs and connectivity remain forbidden.
+    _assert_environment_resource_boundary(
+        {
+            path.name: path.read_text(encoding="utf-8")
+            for path in NETWORK_ROOT.glob("*.tf")
+        }
+    )
+
+
+def _assert_environment_resource_boundary(sources: dict[str, str]) -> None:
+    declarations = {
+        name: matches
+        for name, source in sources.items()
+        if (
+            matches := re.findall(
+                r'^\s*resource\s+"azurerm_container_app_environment"\s+"([^"]+)"\s*\{',
+                source,
+                re.MULTILINE,
+            )
+        )
+    }
+    assert declarations == {"environment.tf": ["private_executor"]}
+
+
+@pytest.mark.parametrize(
+    ("filename", "resource_name"),
+    (
+        ("network.tf", "private_executor"),
+        ("another.tf", "private_executor"),
+        ("environment.tf", "duplicate"),
+        ("environment.tf", "private_executor"),
+    ),
+)
+def test_environment_boundary_rejects_extra_declarations(
+    filename: str, resource_name: str
+) -> None:
+    sources = {
+        "environment.tf": 'resource "azurerm_container_app_environment" "private_executor" {}\n'
+    }
+    sources[filename] = sources.get(filename, "") + (
+        f'  resource "azurerm_container_app_environment" "{resource_name}" {{}}\n'
+    )
+    with pytest.raises(AssertionError):
+        _assert_environment_resource_boundary(sources)
 
 
 def test_service_endpoint_subnet_reserves_endpoints_without_creating_them() -> None:
