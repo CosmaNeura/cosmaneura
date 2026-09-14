@@ -5,7 +5,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "staging_deployment_database_tls.py"
@@ -116,6 +116,58 @@ class StagingDatabaseTlsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(result.stdout, "")
         self.assertEqual(result.stderr, "staging_database_tls_contract\n")
+
+    def test_unicode_controls_and_separators_refuse_raw_and_encoded(self) -> None:
+        for character in ("\u0080", "\u0085", "\u009f", "\u2028", "\u2029", "\u202e"):
+            for representation in (character, quote(character, safe="")):
+                for original in ("synthetic:", "never-log-test-password"):
+                    replacement = representation + (
+                        ":" if original.endswith(":") else ""
+                    )
+                    value = BASE.replace(original, replacement) + "?sslmode=require"
+                    with (
+                        self.subTest(character=ascii(character)),
+                        self.assertRaises(ValueError),
+                    ):
+                        MODULE.normalize_staging_deployment_database_url(value)
+        for value in (" " + BASE, BASE + " ", BASE.replace("synthetic:", "\ud800:")):
+            with self.assertRaises(ValueError):
+                MODULE.normalize_staging_deployment_database_url(
+                    value + "?sslmode=require"
+                )
+
+    def test_malformed_percent_escapes_and_invalid_utf8_refuse(self) -> None:
+        for malformed in ("%", "%A", "%GG", "%0G", "%FF", "%C3", "%ED%A0%80"):
+            for original in ("synthetic:", "never-log-test-password"):
+                replacement = malformed + (":" if original.endswith(":") else "")
+                value = BASE.replace(original, replacement) + "?sslmode=require"
+                with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                    MODULE.normalize_staging_deployment_database_url(value)
+
+    def test_unicode_and_escape_cli_refusals_remain_constant(self) -> None:
+        for credential in ("\u0085", "%C2%85", "%E2%80%A8", "%", "%A", "%GG", "%FF"):
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT)],
+                env={
+                    "DATABASE_URL": BASE.replace("never-log-test-password", credential)
+                    + "?sslmode=require"
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                (result.returncode, result.stdout, result.stderr),
+                (2, "", "staging_database_tls_contract\n"),
+            )
+
+    def test_valid_utf8_and_literal_encoded_percent_are_preserved(self) -> None:
+        value = (
+            BASE.replace("never-log-test-password", "synthetic%C3%A9%25GG%20")
+            + "?sslmode=require"
+        )
+        actual = MODULE.normalize_staging_deployment_database_url(value)
+        self.assertEqual(urlsplit(actual).netloc, urlsplit(value).netloc)
 
     def test_cli_success_is_only_the_captured_value(self) -> None:
         result = subprocess.run(

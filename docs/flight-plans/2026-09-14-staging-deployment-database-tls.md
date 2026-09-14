@@ -34,7 +34,8 @@ included in this source change.
 - Input must select exactly the staging PostgreSQL hostname, port5432 and
   database staging with nonempty URI credentials. Only require/verify-full
   and the exact known CA path are accepted; duplicate or unknown options,
-  alternate hosts/databases, fragments and control characters are refused.
+  alternate hosts/databases, fragments, raw whitespace, malformed percent
+  escapes, invalid UTF-8 credentials and Unicode controls/separators are refused.
 - Preserve the credential authority and URI scheme. Output pins verify-full
   and /etc/ssl/certs/ca-certificates.crt; neither credential value nor vault
   configuration is rewritten. Refusals emit only a constant diagnostic.
@@ -48,10 +49,14 @@ included in this source change.
 
 ## Verification
 
-Ten new secretless unittest methods cover fixed-target normalization,
+The initial ten secretless unittest methods cover fixed-target normalization,
 idempotence, encoded credentials, both supported URI schemes, target/port
 refusals, duplicate/unknown/weaker TLS options, control characters, bounded
-CLI errors and staging-only template integration. No application/conftest,
+CLI errors and staging-only template integration. Four corrective methods add
+raw/encoded Unicode controls/separators, malformed percent escapes, invalid
+UTF-8, constant CLI refusals and valid encoded credential preservation. Only
+those four new methods and the one affected prior control-character method
+are rerun for this correction. No application/conftest,
 network, real credential, migration or existing passing test is invoked.
 Required protected current-head checks and independent exact final-source
 review must pass before normal source merge.

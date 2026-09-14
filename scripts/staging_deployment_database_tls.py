@@ -9,11 +9,17 @@ Errors are deliberately independent of the supplied connection string.
 from __future__ import annotations
 
 import os
+import re
 import sys
+import unicodedata
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 STAGING_HOST = "cosmaneura-staging-postgres.postgres.database.azure.com"
 LINUX_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
+
+def has_control_characters(value: str) -> bool:
+    return any(unicodedata.category(c) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for c in value)
 
 
 def normalize_staging_deployment_database_url(value: str) -> str:
@@ -21,7 +27,9 @@ def normalize_staging_deployment_database_url(value: str) -> str:
     if (
         not value
         or len(value) > 8192
-        or any(ord(c) < 32 or ord(c) == 127 for c in value)
+        or has_control_characters(value)
+        or any(c.isspace() for c in value)
+        or re.search(r"%(?![0-9a-fA-F]{2})", value)
     ):
         raise ValueError("staging_database_tls_contract")
     try:
@@ -41,9 +49,8 @@ def normalize_staging_deployment_database_url(value: str) -> str:
             or query.get("sslmode") not in {"require", "verify-full"}
             or query.get("sslrootcert", LINUX_CA_BUNDLE) != LINUX_CA_BUNDLE
             or any(
-                ord(c) < 32 or ord(c) == 127
+                has_control_characters(unquote(item, errors="strict"))
                 for item in (parsed.username, parsed.password)
-                for c in unquote(item)
             )
         ):
             raise ValueError("staging_database_tls_contract")
