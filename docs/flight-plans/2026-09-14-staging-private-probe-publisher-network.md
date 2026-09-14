@@ -31,9 +31,16 @@ The runner NSG denies all inbound traffic. Outbound it admits dedicated registry
 subnet TCP443, platform DNS, and Internet TCP443 routed through the firewall;
 an explicit final deny overrides ordinary Azure NSG defaults. The UDR has
 one 0.0.0.0/0 VirtualAppliance hop and BGP route propagation disabled.
+This routes the runner through the firewall; it is not the unsupported Basic
+feature that tunnels the firewall's own outbound traffic through another hop.
 The firewall has only an HTTPS application-rule allowlist, no network or NAT
 allow rules. Input is bounded to256 exact lowercase DNS names, no wildcards,
 URLs, IP literals, oversized labels or automatic API-driven expansion.
+Microsoft's current SKU documentation limits Basic threat intelligence to
+Alert, not Deny, and provides no DNS proxy. The source explicitly selects Alert;
+it does not claim malicious-destination feed blocking. If that extra blocking
+or DNS-proxy capability is required, separately review a Standard design/cost
+instead of silently changing SKU or treating Basic as equivalent.
 
 This is a configuration candidate, **not proved workload containment**.
 Platform DNS remains usable, Azure platform/IMDS flows require separate live
@@ -139,4 +146,5 @@ References (public evidence, not execution permission):
 - https://docs.github.com/en/organizations/managing-organization-settings/configuring-private-networking-for-github-hosted-runners-in-your-organization
 - https://docs.github.com/en/enterprise-cloud@latest/admin/configuring-settings/configuring-private-networking-for-hosted-compute-products/about-azure-private-networking-for-github-hosted-runners-in-your-enterprise
 - https://docs.github.com/en/billing/reference/actions-runner-pricing
+- https://learn.microsoft.com/en-us/azure/firewall/features-by-sku
 - https://prices.azure.com/api/retail/prices

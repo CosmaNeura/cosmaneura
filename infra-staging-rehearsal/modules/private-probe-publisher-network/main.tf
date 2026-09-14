@@ -168,12 +168,14 @@ resource "azurerm_public_ip" "firewall" {
 }
 
 resource "azurerm_firewall_policy" "publisher" {
-  count                    = local.active ? 1 : 0
-  name                     = "probe-publisher-egress-policy"
-  resource_group_name      = azurerm_resource_group.publisher[0].name
-  location                 = local.location
-  sku                      = "Basic"
-  threat_intelligence_mode = "Deny"
+  count               = local.active ? 1 : 0
+  name                = "probe-publisher-egress-policy"
+  resource_group_name = azurerm_resource_group.publisher[0].name
+  location            = local.location
+  sku                 = "Basic"
+  # Basic supports threat-intelligence alerts only. Explicit application rules
+  # enforce the reviewed HTTPS allowlist; do not claim threat-feed blocking.
+  threat_intelligence_mode = "Alert"
   tags                     = var.tags
 }
 

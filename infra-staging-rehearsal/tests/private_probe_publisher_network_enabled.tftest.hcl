@@ -89,7 +89,7 @@ run "reviewed_candidate_is_separate_non_authorizing_network" {
   assert {
     condition = (
       azurerm_firewall.publisher[0].sku_tier == "Basic" &&
-      azurerm_firewall_policy.publisher[0].threat_intelligence_mode == "Deny" &&
+      azurerm_firewall_policy.publisher[0].threat_intelligence_mode == "Alert" &&
       length(azurerm_firewall.publisher[0].management_ip_configuration) == 1 &&
       !azurerm_route_table.runner[0].bgp_route_propagation_enabled &&
       azapi_resource.github_network[0].type == "GitHub.Network/networkSettings@2024-04-02" &&
