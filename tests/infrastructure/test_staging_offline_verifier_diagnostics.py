@@ -569,3 +569,116 @@ def test_review_netdev_maximum_valid_intake() -> None:
 def test_review_cgroup_cannot_have_multiple_hierarchy_names() -> None:
     with pytest.raises(diagnostics.DiagnosticsUnavailable):
         diagnostics._cgroup(b"5:name=one,name=two:/x\n")
+
+
+STATUS_OBSERVATIONS = (
+    "all_real_effective_saved_filesystem_uids_nonzero",
+    "all_capability_sets_zero",
+    "no_new_privileges",
+    "seccomp_mode_observed",
+)
+
+
+@pytest.mark.parametrize("control", [*range(9), *range(11, 32), 127])
+def test_review18_status_disallowed_controls_are_unknown(control: int) -> None:
+    view = View()
+    view.files[diagnostics.STATUS_PATH] = STATUS.replace(
+        b"synthetic-probe", b"synthetic" + bytes([control]) + b"-probe"
+    )
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == ["status"]
+    assert all(report["observations"][key] is None for key in STATUS_OBSERVATIONS)
+    assert report["runtime_acceptance"] is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        STATUS[:-1],
+        STATUS.replace(b"\n", b"\r\n"),
+        STATUS + b"\n",
+        STATUS + b" \t\n",
+        STATUS + b"broken\n",
+        STATUS + b"Name:\textra\n",
+        STATUS + b"bad key:\tvalue\n",
+        STATUS + b"Extra:\tvalue\nExtra:\tvalue\n",
+    ],
+    ids=[
+        "truncated",
+        "crlf",
+        "blank",
+        "whitespace-blank",
+        "unframed",
+        "duplicate-name",
+        "invalid-key",
+        "duplicate-other",
+    ],
+)
+def test_review18_status_record_framing_is_unknown(raw: bytes) -> None:
+    view = View()
+    view.files[diagnostics.STATUS_PATH] = raw
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == ["status"]
+    assert all(report["observations"][key] is None for key in STATUS_OBSERVATIONS)
+
+
+def test_review18_status_tabs_and_unique_unobserved_fields_remain_valid() -> None:
+    observed = diagnostics._status(STATUS + b"Extra_1:\tvalue\n")
+    assert observed["all_real_effective_saved_filesystem_uids_nonzero"] is True
+    assert observed["all_capability_sets_zero"] is True
+    assert observed["no_new_privileges"] is True
+    assert observed["seccomp_mode_observed"] == 2
+
+
+@pytest.mark.parametrize("path", [diagnostics.NETNS_PATH, diagnostics.PID1_NETNS_PATH])
+@pytest.mark.parametrize(
+    "value", ["net:[01]", "net:[0]", "net:[4294967296]", "net:[18446744073709551615]"]
+)
+def test_review18_namespace_canonical_uint32_bounds(path: str, value: str) -> None:
+    view = View()
+    view.links[path] = value
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == ["namespace_comparison"]
+    assert report["observations"]["network_namespace_differs_from_pid1"] is None
+
+
+@pytest.mark.parametrize(
+    "pid1,expected", [("net:[1]", True), ("net:[4294967295]", False)]
+)
+def test_review18_namespace_positive_uint32_boundaries(
+    pid1: str, expected: bool
+) -> None:
+    view = View()
+    view.links[diagnostics.NETNS_PATH] = "net:[4294967295]"
+    view.links[diagnostics.PID1_NETNS_PATH] = pid1
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == []
+    assert report["observations"]["network_namespace_differs_from_pid1"] is expected
+    assert report["runtime_acceptance"] is False
+
+
+@pytest.mark.parametrize("prefix", [b"", b"0::/\n"])
+def test_review18_named_cgroup_before_controller_is_noncanonical(prefix: bytes) -> None:
+    raw = prefix + b"5:name=example,pids:/x\n"
+    with pytest.raises(diagnostics.DiagnosticsUnavailable):
+        diagnostics._cgroup(raw)
+    view = View()
+    view.files[diagnostics.CGROUP_PATH] = raw
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == ["cgroup"]
+    assert report["observations"]["unified_cgroup_membership_observed"] is None
+
+
+@pytest.mark.parametrize("prefix,expected", [(b"", False), (b"0::/\n", True)])
+def test_review18_kernel_ordered_named_cgroup_with_controller_is_valid(
+    prefix: bytes, expected: bool
+) -> None:
+    # Linux proc_cgroup_show emits controllers, then optional name=, in one field.
+    raw = prefix + b"5:pids,name=example:/x\n"
+    assert diagnostics._cgroup(raw) is expected
+    view = View()
+    view.files[diagnostics.CGROUP_PATH] = raw
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == []
+    assert report["observations"]["unified_cgroup_membership_observed"] is expected
+    assert report["runtime_acceptance"] is False

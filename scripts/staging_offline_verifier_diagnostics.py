@@ -17,6 +17,8 @@ from typing import Any, Protocol
 
 MAXIMUM_FILE_BYTES = 65_536
 MAXIMUM_INTERFACES = 64
+# Linux ns_common.inum is unsigned int; accept only the positive uint32 subset.
+MAXIMUM_NAMESPACE_INODE = 4_294_967_295
 IFF_UP = 0x1
 IFF_LOOPBACK = 0x8
 STATUS_PATH = "/proc/thread-self/status"
@@ -60,12 +62,15 @@ def _text(raw: bytes) -> str:
         raise DiagnosticsUnavailable("invalid_observation") from None
 
 
-def _rows(raw: bytes) -> list[str]:
+def _rows(raw: bytes, *, allow_tabs: bool = False) -> list[str]:
     text = _text(raw)
-    if not text.endswith("\n") or re.search(r"[\x00-\x09\x0b-\x1f\x7f]", text):
+    controls = (
+        r"[\x00-\x08\x0b-\x1f\x7f]" if allow_tabs else r"[\x00-\x09\x0b-\x1f\x7f]"
+    )
+    if not text.endswith("\n") or re.search(controls, text):
         raise DiagnosticsUnavailable("invalid_observation")
     rows = text[:-1].split("\n")
-    if not all(rows):
+    if any(not row.strip(" \t") for row in rows):
         raise DiagnosticsUnavailable("invalid_observation")
     return rows
 
@@ -175,11 +180,17 @@ class _KernelView:
 def _status(raw: bytes) -> dict[str, bool | int | None]:
     wanted = {"Uid", "NoNewPrivs", "Seccomp", *CAPABILITY_FIELDS}
     values: dict[str, str] = {}
-    for line in _text(raw).splitlines():
+    seen = set()
+    for line in _rows(raw, allow_tabs=True):
         name, separator, value = line.partition(":")
-        if separator and name in wanted:
-            if name in values:
-                raise DiagnosticsUnavailable("invalid_observation")
+        if (
+            not separator
+            or re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name) is None
+            or name in seen
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        seen.add(name)
+        if name in wanted:
             values[name] = value.strip()
     if not wanted - {"Seccomp"} <= values.keys():
         raise DiagnosticsUnavailable("invalid_observation")
@@ -273,7 +284,12 @@ def _cgroup(raw: bytes) -> bool:
             raise DiagnosticsUnavailable("invalid_observation")
         hierarchies.add(hierarchy)
         selected = controller_field.split(",") if controller_field else []
-        if sum(controller.startswith("name=") for controller in selected) > 1:
+        named = [
+            controller for controller in selected if controller.startswith("name=")
+        ]
+        # proc_cgroup_show emits subsystem names, then an optional hierarchy name.
+        # Named hierarchies can have controllers; name= must occur once, last.
+        if len(named) > 1 or (named and selected[-1] != named[0]):
             raise DiagnosticsUnavailable("invalid_observation")
         for controller in selected:
             if (
@@ -292,11 +308,12 @@ def _cgroup(raw: bytes) -> bool:
 def _network_namespace_differs(view: _View) -> bool:
     current = view.readlink(NETNS_PATH)
     pid1 = view.readlink(PID1_NETNS_PATH)
-    if any(
-        type(value) is not str or re.fullmatch(r"net:\[[0-9]{1,20}\]", value) is None
-        for value in (current, pid1)
-    ):
-        raise DiagnosticsUnavailable("invalid_observation")
+    for value in (current, pid1):
+        if type(value) is not str:
+            raise DiagnosticsUnavailable("invalid_observation")
+        token = re.fullmatch(r"net:\[([1-9][0-9]{0,9})\]", value)
+        if token is None or int(token[1]) > MAXIMUM_NAMESPACE_INODE:
+            raise DiagnosticsUnavailable("invalid_observation")
     # PID 1 may itself be inside the verifier's PID namespace. It is only a
     # comparison point, NOT an authenticated outer network namespace.
     return current != pid1

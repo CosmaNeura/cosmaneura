@@ -45,6 +45,14 @@ platform. These diagnostics do not attempt those syscalls or solve containment.
   Validate cgroup hierarchy/controller uniqueness and v1/v2 field relationships.
 - Import Linux's ioctl helper only when reading interfaces; unsupported-platform
   import succeeds and the public capture entry point refuses with a fixed code.
+- Require newline-terminated status records, valid unique field labels and no
+  disallowed control/blank records, while preserving ordinary tab separators.
+  Namespace tokens must be canonical positive uint32 values; a larger or
+  unsupported representation is unknown, not favorable difference evidence.
+- Preserve valid cgroup-v1 controller lists with one optional `name=` last.
+  Linux permits named hierarchies with controllers: `none`, rather than `name=`,
+  excludes controllers. Reject a hierarchy name before a controller as
+  noncanonical ordering; do not conflate that with rejecting every mixed list.
 
 Every report permanently says diagnostic-only, runtime-acceptance false and
 activation-authorized false, even with entirely favorable facts. This report
@@ -80,3 +88,10 @@ protocol, accepted-base shortcut or human approval exception is introduced.
 References: [containers](https://learn.microsoft.com/en-us/azure/container-apps/containers),
 [Jobs schema](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/app/resource-manager/Microsoft.App/ContainerApps/stable/2024-03-01/Jobs.json),
 [container definitions](https://github.com/Azure/azure-rest-api-specs/blob/main/specification/app/resource-manager/Microsoft.App/ContainerApps/stable/2024-03-01/CommonDefinitions.json).
+
+Parser source references (not a claim about the unobserved Azure kernel): Linux
+v6.6 [`ns_common.inum`](https://github.com/torvalds/linux/blob/v6.6/include/linux/ns_common.h#L12)
+is `unsigned int`; [`check_cgroupfs_options`](https://github.com/torvalds/linux/blob/v6.6/kernel/cgroup/cgroup-v1.c#L1063)
+excludes `none` with subsystems, while
+[`proc_cgroup_show`](https://github.com/torvalds/linux/blob/v6.6/kernel/cgroup/cgroup.c#L6267)
+emits controllers followed by the optional hierarchy name in the same field.
