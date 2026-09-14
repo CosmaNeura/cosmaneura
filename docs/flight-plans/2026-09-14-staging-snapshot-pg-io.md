@@ -45,6 +45,16 @@ encrypted files for exact inspection; no overwrite, automatic deletion or retry.
 
 ## Time and child process handling
 
+Review34 found that the original pre-spawn core-limit check was too late for
+parent-held credentials. The HUMAN bootstrap must irreversibly lower BOTH
+RLIMIT_CORE soft/hard limits to zero before any identity/cache/token/DSN read,
+before constructing credential readers, and before sealing. Sealing now requires
+(0,0); credential parsing, environment creation and capture entry recheck it.
+The pre-spawn check remains. The library refuses; it never silently changes
+limits or retrieves secrets to establish this invariant. A pre-secret bootstrap
+failure must exit without any credential retrieval. The final launcher review
+must verify this ordering, not infer it from a successful later spawn check.
+
 Review33 identified that per-thread signal masking is unsafe with any additional
 unblocked worker. The corrected interface requires the complete HUMAN launcher
 to be a fresh dedicated `python -I -S` process. After loading/attesting its pinned
@@ -149,6 +159,12 @@ test-class selectors (loader errors, not executions) and are checked separately.
 Signal/child/payload tests now execute in their own fresh sealed processes when
 called by shared pytest, never freezing its runner. No unchanged unrelated
 contract tests are replayed. Local success still is not independent acceptance.
+
+Review34 correction:1new plus6directly affected methods PASS. Nonzero core-limit
+fixture refuses before seal/native inspection, DSN parsing, environment lookup
+and capture entry. Dedicated test bootstraps lower only their own core limits
+before running invented fixture code; they never enable core dumps. Existing
+thread/signal and pre-spawn checks remain covered.46methods now; no live operation.
 
 Recovery for this dormant source is to stop using it; no deployed state changed.
 If future live capture fails, preserve its protected partial artifact and remove

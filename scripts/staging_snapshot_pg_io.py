@@ -61,6 +61,12 @@ def require(condition: object, code: str) -> None:
 _capture_process_pid: int | None = None
 
 
+def require_core_disabled() -> None:
+    require(
+        resource.getrlimit(resource.RLIMIT_CORE) == (0, 0), "core_dumps_not_disabled"
+    )
+
+
 def native_single_thread() -> None:
     """Check OS threads, including ones not registered with threading."""
     if sys.platform == "darwin":
@@ -100,6 +106,7 @@ def seal_capture_process() -> None:
     malicious code already loaded in this process. Never use in a shared host.
     """
     global _capture_process_pid
+    require_core_disabled()
     require(
         _capture_process_pid is None
         and sys.flags.isolated
@@ -142,6 +149,7 @@ def seal_capture_process() -> None:
 
 
 def require_capture_process() -> None:
+    require_core_disabled()
     require(
         _capture_process_pid == os.getpid()
         and threading.current_thread() is threading.main_thread()
@@ -237,6 +245,7 @@ def credentials_from_exact_source_dsn(raw: str) -> Credentials:
     Parsing is target validation, not credential provenance or identity proof.
     The human launcher must retrieve it only from the exact authenticated app.
     """
+    require_core_disabled()
     require(type(raw) is str and 1 <= len(raw) <= 8192, "credential_contract")
     require(not any(ord(character) < 32 for character in raw), "credential_contract")
     try:
@@ -267,6 +276,7 @@ def credentials_from_exact_source_dsn(raw: str) -> Credentials:
 
 
 def connection_environment(credentials: Credentials) -> dict[str, str]:
+    require_core_disabled()
     require(type(credentials) is Credentials, "credential_contract")
     require(
         all(

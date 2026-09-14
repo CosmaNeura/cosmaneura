@@ -105,6 +105,7 @@ class FixtureChildren:
         return len(output)
 
 
+@dedicated_process_tests
 class ContractTests(unittest.TestCase):
     def test_source_url_is_fixed_and_secrets_do_not_appear_in_repr(self):
         credentials = pg.credentials_from_exact_source_dsn(SOURCE)
@@ -723,6 +724,7 @@ spec = importlib.util.spec_from_file_location('staging_snapshot_pg_io', sys.argv
 pg = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = pg
 spec.loader.exec_module(pg)
+resource.setrlimit(resource.RLIMIT_CORE, (0,0))
 def refused(call, code):
     try: call()
     except pg.PostgreSQLRefused as error: assert str(error) == code, str(error)
@@ -751,6 +753,20 @@ with patch.object(signal, 'setitimer') as arm, patch.object(subprocess, 'Popen')
     refused(lambda: pg.capture_deadline(time.monotonic()+1).__enter__(), 'capture_sealed_process_required')
     refused(lambda: pg.defer_control_signals().__enter__(), 'capture_sealed_process_required')
     arm.assert_not_called(); spawn.assert_not_called()
+""")
+
+    def test_core_limit_refuses_before_seal_credentials_or_environment(self):
+        self.isolated("""
+with patch.object(resource, 'getrlimit', return_value=(0,1)), \
+     patch.object(pg, 'native_single_thread') as native, \
+     patch.object(pg, 'urlsplit') as parse, \
+     patch.object(pg.pwd, 'getpwuid') as account:
+    refused(pg.seal_capture_process, 'core_dumps_not_disabled')
+    refused(lambda: pg.credentials_from_exact_source_dsn('not-read'), 'core_dumps_not_disabled')
+    refused(lambda: pg.connection_environment(pg.Credentials('invented','invented')), 'core_dumps_not_disabled')
+    refused(lambda: pg.capture_deadline(time.monotonic()+1).__enter__(), 'core_dumps_not_disabled')
+    native.assert_not_called(); parse.assert_not_called(); account.assert_not_called()
+assert pg._capture_process_pid is None
 """)
 
     def test_real_unblocked_python_worker_prevents_sealing(self):
@@ -843,5 +859,6 @@ assert signal.getitimer(signal.ITIMER_REAL) == (0.0,0.0)
 
 
 if __name__ == "__main__":
+    pg.resource.setrlimit(pg.resource.RLIMIT_CORE, (0, 0))
     pg.seal_capture_process()
     unittest.main()
