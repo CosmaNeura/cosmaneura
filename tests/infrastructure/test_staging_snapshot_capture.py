@@ -127,6 +127,26 @@ class MemoryOperations:
 
 
 class SnapshotCoreTests(unittest.TestCase):
+    def test_case_insensitive_existing_name_refuses_before_create(self):
+        operations = MemoryOperations()
+        planned = inputs()
+        existing = replace(planned.rule, name=planned.rule.name.upper())
+        operations.rules[existing.name] = existing
+        before = dict(operations.rules)
+        with self.assertRaisesRegex(core.CaptureRefused, "planned_rule_already_exists"):
+            core.execute_after_human_gate(planned, operations)
+        self.assertFalse(operations.created)
+        self.assertEqual(operations.rules, before)
+
+    def test_case_insensitive_duplicate_inventory_is_rejected(self):
+        with self.assertRaisesRegex(core.CaptureRefused, "duplicate_rule_names"):
+            core.rules_by_name(
+                (
+                    core.Rule("Existing", "0.0.0.0", "0.0.0.0"),
+                    core.Rule("existing", "0.0.0.0", "0.0.0.0"),
+                )
+            )
+
     def test_success_closes_only_new_access_before_publication(self):
         operations = MemoryOperations()
         result = core.execute_after_human_gate(inputs(), operations)

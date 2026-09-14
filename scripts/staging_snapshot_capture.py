@@ -218,7 +218,13 @@ def rules_by_name(rules: tuple[Rule, ...]) -> dict[str, Rule]:
         type(rules) is tuple and all(type(rule) is Rule for rule in rules),
         "rule_inventory_shape",
     )
-    result = {rule.name: rule for rule in rules}
+    require(
+        all(type(rule.name) is str and 0 < len(rule.name) <= 128 for rule in rules),
+        "rule_inventory_name",
+    )
+    # ARM resource names are case-insensitive. An existing differently cased
+    # name is still the SAME resource, never a new rule we may replace/delete.
+    result = {rule.name.casefold(): rule for rule in rules}
     require(len(result) == len(rules), "duplicate_rule_names")
     return result
 

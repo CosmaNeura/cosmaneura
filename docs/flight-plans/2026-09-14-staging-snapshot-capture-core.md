@@ -41,6 +41,8 @@ access deadline. No second operation may start using an expired handoff.
 - Current IPv4 verified before and after opening; equal start/end, globally
   routable canonical IPv4, no private/range/Azure-wide rule. Unique exact rule
   name, absent before creation, with all existing rules retained.
+  Compare rule names case-insensitively, matching ARM resource identity; a
+  differently capitalized existing rule must never be overwritten as "new".
 - One monotonic timeline covers preparation and operation; no reset after
   slow prerequisites. Capture capped at20minutes/1GiB, with five minutes
   reserved for closure inside the overall30-minute bound. Adapter must enforce
