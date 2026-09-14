@@ -4,6 +4,7 @@ import functools
 import hashlib
 import importlib.util
 import json
+import locale
 import os
 import signal
 import stat
@@ -859,6 +860,9 @@ assert signal.getitimer(signal.ITIMER_REAL) == (0.0,0.0)
 
 
 if __name__ == "__main__":
+    # Python3.13.2 gettext imports locale lazily during unittest argument parsing.
+    # Warm the parser dependency before freezing; do not weaken the import guard.
+    locale.normalize("C")
     pg.resource.setrlimit(pg.resource.RLIMIT_CORE, (0, 0))
     pg.seal_capture_process()
     unittest.main()
