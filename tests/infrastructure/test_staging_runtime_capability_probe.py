@@ -34,7 +34,7 @@ class Kernel:
     def unshare(self, flag: int) -> None:
         self.calls.append(("unshare", flag))
         if flag == self.failure:
-            raise PermissionError(errno.EPERM, "synthetic-private-error")
+            raise probe.KernelAdmissionRefused("denied")
         index = {
             probe.CLONE_NEWUSER: 0,
             probe.CLONE_NEWNET: 1,
@@ -465,7 +465,7 @@ def test_parent_timeout_after_output_kills_child(
     parent: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     values = iter([10, 40])
-    monkeypatch.setattr(probe.time, "monotonic", lambda: next(values))
+    monkeypatch.setattr(probe.time, "monotonic", lambda: next(values, 40))
     with pytest.raises(probe.ProbeRefused):
         probe._run()
     assert ("kill", 101, probe.signal.SIGKILL) in parent.calls
@@ -490,7 +490,7 @@ def test_main_fixed_exit_and_bounded_nonblocking_output(
     report = (
         probe._result(len(probe.PHASES), None)
         if outcome != "negative"
-        else probe._result(2, "denied")
+        else probe._result(2, "denied", kernel_refused=True)
     )
     writes = []
     monkeypatch.setattr(probe.sys, "argv", ["probe.py"])
@@ -615,6 +615,125 @@ def test_child_setup_and_single_exit(
             )
             == 1
         )
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "_identity",
+        "_diagnostic_module",
+        "_namespace",
+        "_map_identity",
+        "network_parser",
+        "status_parser",
+    ],
+)
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("private"),
+        ImportError("private"),
+        OSError(errno.EPERM, "private"),
+        OSError(errno.ENOENT, "private"),
+    ],
+)
+def test_review_context_and_parser_failures_are_never_denial(
+    environment: Any, monkeypatch: pytest.MonkeyPatch, target: str, error: Exception
+) -> None:
+    def fail(*args: Any) -> Any:
+        raise error
+
+    if target == "network_parser":
+        monkeypatch.setattr(probe._diagnostic_module(), "_interfaces", fail)
+    elif target == "status_parser":
+        monkeypatch.setattr(probe._diagnostic_module(), "_status", fail)
+    else:
+        monkeypatch.setattr(probe, target, fail)
+    result = probe._probe(environment.kernel)
+    assert result["outcome"] == "probe_error"
+    assert result["runtime_acceptance"] is False
+    assert result["activation_authorized"] is False
+    assert "private" not in json.dumps(result)
+    assert probe._validate(json.dumps(result).encode()) == result
+
+
+@pytest.mark.parametrize(
+    "number",
+    [errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EINVAL, errno.ENOMEM, errno.EIO],
+)
+def test_review_only_kernel_return_produces_admission_refusal(
+    monkeypatch: pytest.MonkeyPatch, number: int
+) -> None:
+    monkeypatch.setattr(probe.ctypes, "get_errno", lambda: number)
+    expected = (
+        probe.KernelAdmissionRefused
+        if number in {errno.EPERM, errno.EACCES, errno.ENOSYS, errno.EINVAL}
+        else OSError
+    )
+    with pytest.raises(expected):
+        probe._Linux.checked(-1)
+    probe._Linux.checked(0)
+
+
+@pytest.mark.parametrize("phase", sorted(probe.KERNEL_PHASES))
+@pytest.mark.parametrize("reason", ["denied", "unavailable"])
+def test_review_kernel_outcomes_roundtrip(phase: int, reason: str) -> None:
+    report = probe._result(phase, reason, kernel_refused=True)
+    assert report["outcome"] == "unsupported_or_unavailable"
+    assert probe._validate(json.dumps(report).encode()) == report
+
+
+@pytest.mark.parametrize("phase", [0, 3, 5, 9])
+def test_review_context_cannot_be_promoted_to_denial(phase: int) -> None:
+    report = probe._result(phase, "denied")
+    report["outcome"] = "unsupported_or_unavailable"
+    with pytest.raises(probe.ProbeRefused):
+        probe._validate(json.dumps(report).encode())
+    with pytest.raises(probe.ProbeRefused):
+        probe._result(phase, "denied", kernel_refused=True)
+
+
+def test_review_probe_error_exit_is_three(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(probe.sys, "argv", ["probe.py"])
+    monkeypatch.setattr(probe, "_run", lambda: probe._result(0, "internal"))
+    monkeypatch.setattr(probe.os, "set_blocking", lambda *args: None)
+    monkeypatch.setattr(probe.os, "write", lambda fd, raw: len(raw))
+    assert probe.main() == 3
+
+
+def test_review_reap_retries_until_child_waitable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits = iter([(0, 0), (101, 9)])
+    calls = []
+    monkeypatch.setattr(probe.time, "monotonic", lambda: 10)
+    monkeypatch.setattr(
+        probe.os,
+        "waitpid",
+        lambda pid, flags: calls.append((pid, flags)) or next(waits),
+    )
+    monkeypatch.setattr(probe.select, "select", lambda *args: ([], [], []))
+    assert probe._reap_after_kill(101) is True
+    assert calls == [(101, probe.os.WNOHANG)] * 2
+
+
+def test_review_reap_deadline_preserves_external_backstop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter([10, 12])
+    monkeypatch.setattr(probe.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(probe.os, "waitpid", lambda pid, flags: (0, 0))
+    assert probe._reap_after_kill(101) is False
+
+
+def test_review_cleanup_failure_still_closes_pipe(
+    parent: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(probe, "_receive", lambda *args: b"{}")
+    monkeypatch.setattr(probe, "_reap_after_kill", lambda pid: False)
+    with pytest.raises(probe.ProbeRefused):
+        probe._run()
+    assert parent.calls[-1] == ("close", 8)
 
 
 def test_image_candidate_binds_current_source_without_acceptance() -> None:

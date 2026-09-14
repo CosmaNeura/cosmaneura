@@ -24,6 +24,7 @@ from typing import Any
 UID = 65532
 MAX_REPORT_BYTES = 4096
 WALL_SECONDS = 25
+CLEANUP_SECONDS = 2
 CLONE_NEWUSER = 0x10000000
 CLONE_NEWNET = 0x40000000
 CLONE_NEWNS = 0x00020000
@@ -52,10 +53,20 @@ UNPROVEN = (
 REASONS = frozenset(
     {"denied", "unavailable", "resource_limit", "verification_failed", "internal"}
 )
+KERNEL_PHASES = frozenset({1, 2, 4, 6, 7, 8})
 
 
 class ProbeRefused(RuntimeError):
     """A fixed-code failure, without raw system metadata or exception text."""
+
+
+class KernelAdmissionRefused(RuntimeError):
+    """Only an explicit prctl/unshare/capset return can produce this signal."""
+
+    def __init__(self, reason: str) -> None:
+        if reason not in {"denied", "unavailable"}:
+            raise ProbeRefused()
+        self.reason = reason
 
 
 class _Header(ctypes.Structure):
@@ -87,8 +98,13 @@ class _Linux:
     @staticmethod
     def checked(result: int) -> None:
         if result != 0:
+            number = ctypes.get_errno()
+            if number in (errno.EACCES, errno.EPERM):
+                raise KernelAdmissionRefused("denied")
+            if number in (errno.ENOSYS, errno.EINVAL):
+                raise KernelAdmissionRefused("unavailable")
             # OSError carries an errno only; its text is never serialized.
-            raise OSError(ctypes.get_errno(), "kernel_operation_failed")
+            raise OSError(number, "kernel_operation_failed")
 
     def prctl(self, option: int, argument: int = 0) -> None:
         self.checked(self.lib.prctl(option, argument, 0, 0, 0))
@@ -175,16 +191,23 @@ def _reason(error: Exception) -> str:
     return "internal"
 
 
-def _result(completed: int, reason: str | None) -> dict[str, Any]:
+def _result(
+    completed: int, reason: str | None, *, kernel_refused: bool = False
+) -> dict[str, Any]:
+    if kernel_refused and (
+        completed not in KERNEL_PHASES or reason not in {"denied", "unavailable"}
+    ):
+        raise ProbeRefused()
+    outcome = "prerequisites_observed"
+    if reason is not None:
+        outcome = "unsupported_or_unavailable" if kernel_refused else "probe_error"
     return {
         "schema_version": 1,
         "kind": "runtime-namespace-prerequisites-v1",
         "diagnostic_only": True,
         "runtime_acceptance": False,
         "activation_authorized": False,
-        "outcome": "prerequisites_observed"
-        if reason is None
-        else "unsupported_or_unavailable",
+        "outcome": outcome,
         "completed_phases": list(PHASES[:completed]),
         "failed_phase": None if reason is None else PHASES[completed],
         "reason": reason,
@@ -244,7 +267,11 @@ def _probe(kernel: _Linux) -> dict[str, Any]:
         ):
             raise ProbeRefused()
         completed += 1
+    except KernelAdmissionRefused as error:
+        return _result(completed, error.reason, kernel_refused=True)
     except Exception as error:
+        # Import/parser/context/identity-map/verification failures are NOT
+        # evidence of syscall admission failure, even when errno is EPERM.
         return _result(completed, _reason(error))
     return _result(completed, None)
 
@@ -285,9 +312,15 @@ def _validate(raw: bytes) -> dict[str, Any]:
     value = json.loads(raw)
     # Compare against the finite set of whole canonical outcomes, rather than
     # trusting arbitrary child-supplied booleans or accepting additional fields.
-    allowed = [_result(len(PHASES), None)] + [
-        _result(index, reason) for index in range(len(PHASES)) for reason in REASONS
-    ]
+    allowed = (
+        [_result(len(PHASES), None)]
+        + [_result(index, reason) for index in range(len(PHASES)) for reason in REASONS]
+        + [
+            _result(index, reason, kernel_refused=True)
+            for index in KERNEL_PHASES
+            for reason in ("denied", "unavailable")
+        ]
+    )
     if not any(
         json.dumps(value, sort_keys=True) == json.dumps(candidate, sort_keys=True)
         for candidate in allowed
@@ -342,6 +375,21 @@ def _close_inherited() -> None:
                     raise
 
 
+def _reap_after_kill(child: int) -> bool:
+    deadline = time.monotonic() + CLEANUP_SECONDS
+    while True:
+        try:
+            waited, _ = os.waitpid(child, os.WNOHANG)
+        except ChildProcessError:
+            return False
+        if waited == child:
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        select.select([], [], [], min(0.01, remaining))
+
+
 def _run() -> dict[str, Any]:
     _identity()
     _close_inherited()
@@ -369,17 +417,20 @@ def _run() -> dict[str, Any]:
             select.select([], [], [], min(0.01, max(0, deadline - time.monotonic())))
         raise ProbeRefused()
     finally:
-        if child > 0:
-            try:
-                os.kill(child, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            # The external disposable-job timeout is the final cleanup backstop
-            # for an uninterruptible kernel task; do not hang this parent reaping.
-            os.waitpid(child, os.WNOHANG)
-        os.close(read_fd)
-        if write_fd >= 0:
-            os.close(write_fd)
+        try:
+            if child > 0:
+                try:
+                    os.kill(child, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                # Allow ordinary killable children to become waitable. D-state
+                # tasks still require the external disposable-job backstop.
+                if not _reap_after_kill(child):
+                    raise ProbeRefused()
+        finally:
+            os.close(read_fd)
+            if write_fd >= 0:
+                os.close(write_fd)
 
 
 def main() -> int:
@@ -391,7 +442,11 @@ def main() -> int:
         os.set_blocking(1, False)
         if os.write(1, raw) != len(raw):
             return 3
-        return 0 if report["outcome"] == "prerequisites_observed" else 2
+        return {
+            "prerequisites_observed": 0,
+            "unsupported_or_unavailable": 2,
+            "probe_error": 3,
+        }[report["outcome"]]
     except BaseException:
         # Execution-context/transport failures are not namespace-denial evidence.
         return 3

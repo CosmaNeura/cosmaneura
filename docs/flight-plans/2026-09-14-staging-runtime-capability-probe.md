@@ -41,13 +41,16 @@ The legacy builder emitted OCI base layers and Docker gzip COPY-layer media
 types. Every encoded layer digest and uncompressed diff ID was verified.
 No MIME conversion or registry acceptance is inferred.
 
-Local assembly used Docker Engine 29.5.2, Linux arm64 host, explicit amd64
-target and a three-file tar context. There are no Dockerfile RUN instructions,
+Local assembly used a macOS arm64 CLIENT with bsdtar 3.5.3 / libarchive 3.7.4,
+and an existing Colima Linux arm64 Docker Engine 29.5.2 DAEMON. The target was
+explicit amd64, with a three-file tar context. There are no Dockerfile RUN instructions,
 build secrets, external COPYs, installs or application dependencies. The
 builder's intermediate metadata containers were not workload executions.
 No emulated or native probe execution was used as Azure evidence.
 
-Reassembly recipe (build-only, NOT a run/handoff):
+Reassembly recipe for that macOS/bsdtar client only (build-only, NOT a
+run/handoff). The macOS metadata-removal flags below are not GNU tar options;
+this is not presented as a portable Linux-client recipe:
 
 ```sh
 tar --no-xattrs --no-acls --no-fflags --disable-copyfile -cf - \
@@ -97,17 +100,29 @@ absent from the probe image; a future verifier-runtime image needs its own pin.
 9. Emit one finite-schema report, under 4096 bytes, to the parent pipe. No raw
    IDs, proc data, errors, identity values or operational logs are serialized.
    The parent requires both the fixed outcome schema and a clean child exit.
-   On failure it kills only that exact child and reaps without unbounded waiting.
+   On failure it kills only that exact child and retries nonblocking reap for
+   up to two additional seconds. Failure to reap remains exit 3 and explicitly
+   relies on the external backstop; total result-plus-cleanup budget is 27 seconds.
 
-Exit 0 means only `prerequisites_observed`; exit 2 means a redacted unsupported
-or unavailable prerequisite; exit 3 means context, setup, transport or cleanup
-failure and is NOT evidence that Azure denied namespaces. Every JSON outcome
+Exit 0 means only `prerequisites_observed`. Exit 2 requires an explicit
+prctl/unshare/capset denial or unavailable-syscall return at a kernel-operation
+phase. Internal errors, imports/parsers, proc observations, identity-map/context
+failures, resources and cleanup are `probe_error`/exit 3 (or no report/exit 3),
+even when their errno is EPERM. They are NOT namespace-denial evidence. Every JSON outcome
 permanently includes `diagnostic_only=true`, `runtime_acceptance=false` and
 `activation_authorized=false`. No verdict authorizes another invocation.
 
 The outer disposable-job deadline is a REQUIRED backstop if a child is stuck
 in uninterruptible kernel sleep. Parent-death signaling and nonblocking reap
 are not substituted for full cgroup/tree cleanup proof.
+
+Independent review20 of the initial source/image proposal returned FAIL. The
+four source/documentation findings are being corrected; exact re-review is
+required. Its image-artifact finding remains OPEN: the reviewer received
+metadata, not the full archive. Implementer hash checks are not independent
+artifact acceptance. The complete retained archive needs an authorized
+independent inspection path; the current review transmission cap is 500 KB.
+Do not close that finding by relabeling metadata or by another implementer run.
 
 ## Proposed Azure envelope — NOT deployable configuration
 

@@ -373,13 +373,15 @@ def test_interface_reader_only_uses_mocked_local_ioctl(
     assert calls == ["socket", "ioctl", "closed"]
 
 
-def test_no_cli_or_policy_consumer_wiring() -> None:
+def test_only_fixed_probe_consumer_and_no_policy_wiring() -> None:
     source = ROOT / "scripts/staging_offline_verifier_diagnostics.py"
+    fixed_probe = ROOT / "scripts/staging_runtime_capability_probe.py"
+    assert b"staging_offline_verifier_diagnostics.py" in fixed_probe.read_bytes()
     tree = ast.parse(source.read_text())
     assert not any(isinstance(node, ast.If) for node in tree.body)
     for directory in (ROOT / "scripts", ROOT / ".github/workflows"):
         for path in directory.iterdir():
-            if path != source and path.is_file():
+            if path not in {source, fixed_probe} and path.is_file():
                 assert b"staging_offline_verifier_diagnostics" not in path.read_bytes()
     policy = json.loads(
         (
