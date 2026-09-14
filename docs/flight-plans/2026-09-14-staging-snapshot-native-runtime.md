@@ -8,8 +8,10 @@ dependency, CLI invocation, cache discovery, database capture, migration, or
 human launcher. No create/delete/cleanup/claim operation. Direct execution
 refuses. Source preparation is not a deployment or execution authorization.
 
-Stacked on PR397. PR398's remaining live integration hold is not resolved just
-by merging this component: an owned CLI/configuration session and exact human
+Stacked on PR398, exact base6ca006616df5581a7e0d6cb88dfd8909f79e48c1, which
+already includes PR397. The normal dependency merge changes no native/runtime
+source bytes. PR398's remaining live integration hold is not resolved just by
+merging this component: an owned CLI/configuration session and exact human
 bootstrap must connect these primitives without bypassing existing protections.
 
 ## Native and file boundary
