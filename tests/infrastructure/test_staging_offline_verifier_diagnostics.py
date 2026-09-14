@@ -12,7 +12,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from scripts import staging_offline_verifier_diagnostics as diagnostics
+from scripts import staging_offline_verifier_diagnostics as diagnostics  # noqa: E402
 
 sys.path.pop(0)
 
