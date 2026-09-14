@@ -103,6 +103,36 @@ class Observation:
     exact_token_sha256: str
 
 
+def fixed_operation(operation: str) -> tuple[str, str, bytes | None]:
+    """Closed source literals, never instance-, reader- or plan-selected routes."""
+    require(type(operation) is str)
+    prefix = (
+        "https://management.azure.com/subscriptions/"
+        "bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging"
+    )
+    app = prefix + "/providers/Microsoft.App/containerApps/cosmaneura-staging-app"
+    server = (
+        prefix
+        + "/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres"
+    )
+    if operation == "app":
+        return "GET", app + "?api-version=2024-03-01", None
+    if operation == "revision":
+        return (
+            "GET",
+            app
+            + "/revisions/cosmaneura-staging-app--recovery-475908dbb4c?api-version=2024-03-01",
+            None,
+        )
+    if operation == "server":
+        return "GET", server + "?api-version=2024-08-01", None
+    if operation == "rules":
+        return "GET", server + "/firewallRules?api-version=2024-08-01", None
+    if operation == "database_secret":
+        return "POST", app + "/listSecrets?api-version=2024-03-01", b""
+    raise AzureReadRefused("snapshot_azure_read_refused")
+
+
 class SnapshotAzure:
     """Fixed endpoints; original token linked to pinned account/cache each time.
 
@@ -110,6 +140,32 @@ class SnapshotAzure:
     existing normally merged runtime before the short human interaction window.
     Every public operation fails with one content-free code.
     """
+
+    __slots__ = ("_helper", "_reader", "_token", "_expected", "_ca_sha", "_identity")
+
+    @property
+    def app_id(self):
+        return (
+            fixed_operation("app")[1]
+            .removeprefix("https://management.azure.com")
+            .split("?", 1)[0]
+        )
+
+    @property
+    def revision_id(self):
+        return (
+            fixed_operation("revision")[1]
+            .removeprefix("https://management.azure.com")
+            .split("?", 1)[0]
+        )
+
+    @property
+    def server_id(self):
+        return (
+            fixed_operation("server")[1]
+            .removeprefix("https://management.azure.com")
+            .split("?", 1)[0]
+        )
 
     def __init__(self, helper: Any, prepared_reader: Any, expected_ca_sha256: str):
         try:
@@ -128,21 +184,6 @@ class SnapshotAzure:
         require(re.fullmatch(r"[0-9a-f]{64}", expected_ca_sha256))
         self._ca_sha = expected_ca_sha256
         self._identity: dict[str, object] | None = None
-        group = (
-            f"/subscriptions/{helper.SUBSCRIPTION}/resourceGroups/cosmaneura-staging"
-        )
-        self.app_id = group + "/providers/Microsoft.App/containerApps/" + APP
-        self.revision_id = self.app_id + "/revisions/" + REVISION
-        self.server_id = (
-            group + "/providers/Microsoft.DBforPostgreSQL/flexibleServers/" + SERVER
-        )
-        self._routes = {
-            "app": ("GET", self.app_id, API_APP),
-            "revision": ("GET", self.revision_id, API_APP),
-            "server": ("GET", self.server_id, API_PG),
-            "rules": ("GET", self.server_id + "/firewallRules", API_PG),
-            "database_secret": ("POST", self.app_id + "/listSecrets", API_APP),
-        }
 
     def _verify_session(self) -> dict[str, object]:
         h, r = self._helper, self._reader
@@ -180,7 +221,7 @@ class SnapshotAzure:
 
     def _request(self, operation: str, timeout: float) -> Observation:
         require(type(timeout) in (int, float) and 0 < timeout <= 30)
-        require(operation in self._routes)
+        method, url, body = fixed_operation(operation)
         with capture_deadline(time.monotonic() + timeout):
             identity = self._verify_session()
             context, ca_sha = self._helper._hardened_tls_context()
@@ -195,8 +236,6 @@ class SnapshotAzure:
                 NoRedirect(),
                 urllib.request.HTTPSHandler(context=context),
             )
-            method, resource, version = self._routes[operation]
-            url = ORIGIN + resource + "?api-version=" + version
             headers = {
                 "Authorization": "Bearer " + self._token,
                 "Accept": "application/json",
@@ -208,10 +247,14 @@ class SnapshotAzure:
                 url,
                 method=method,
                 headers=headers,
-                data=b"" if method == "POST" else None,
+                data=body,
             )
             # Exactly ONE attempt. No retry, pagination, redirects, alternate
             # endpoint, resource PUT/PATCH/DELETE, registration or console output.
+            require(
+                (request.get_method(), request.full_url, request.data)
+                == fixed_operation(operation)
+            )
             with opener.open(request, timeout=timeout) as response:
                 require(response.status == 200 and response.geturl() == url)
                 dates = response.headers.get_all("Date") or []

@@ -8,6 +8,7 @@ import functools
 import importlib.util
 import io
 import json
+import locale
 import os
 import ssl
 import subprocess
@@ -353,15 +354,62 @@ class AzureTests(unittest.TestCase):
                 self.client.list_rules(5)
 
     def test_only_fixed_gets_and_one_readonly_post_are_possible(self):
-        routes = list(self.client._routes.values())
+        routes = [
+            azure.fixed_operation(value)
+            for value in ("app", "revision", "server", "rules", "database_secret")
+        ]
         self.assertEqual([method for method, _, _ in routes].count("POST"), 1)
         self.assertEqual(
             [path for method, path, _ in routes if method == "POST"],
-            [self.client.app_id + "/listSecrets"],
+            [
+                "https://management.azure.com"
+                + self.client.app_id
+                + "/listSecrets?api-version=2024-03-01"
+            ],
         )
         for action in ("create_rule", "delete_rule", "apply", "register", "foreign"):
             with self.assertRaises(azure.AzureReadRefused):
                 self.client._observe(action, 5)
+        self.assertEqual(self.opener.requests, [])
+
+    def test_route_like_instance_state_cannot_enable_authenticated_mutations(self):
+        for name, value in (
+            ("_routes", {"rules": ("DELETE", self.client.server_id, "2024-08-01")}),
+            ("routes", {"app": ("PUT", self.client.app_id, "2024-03-01")}),
+            ("app_id", self.client.server_id + "/firewallRules/foreign"),
+            ("server_id", self.client.app_id + "/restart"),
+            ("revision_id", self.client.app_id + "/delete"),
+        ):
+            with self.assertRaises(AttributeError):
+                setattr(self.client, name, value)
+        for action in (
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "restart",
+            "listSecrets",
+            "rules/delete",
+        ):
+            with self.assertRaises(azure.AzureReadRefused):
+                self.client._observe(action, 5)
+        self.assertEqual(self.opener.requests, [])
+
+    def test_preopen_gate_rejects_method_url_or_post_body_tampering(self):
+        original = azure.urllib.request.Request
+        for field, value in (
+            ("method", "DELETE"),
+            ("full_url", "https://management.azure.com/foreign"),
+            ("data", b"mutating-body"),
+        ):
+
+            def changed(*args, **kwargs):
+                request = original(*args, **kwargs)
+                setattr(request, field, value)
+                return request
+
+            with patch.object(azure.urllib.request, "Request", side_effect=changed):
+                with self.assertRaises(azure.AzureReadRefused):
+                    self.client._observe("database_secret", 5)
         self.assertEqual(self.opener.requests, [])
 
     def test_network_failure_is_single_attempt_and_error_text_is_redacted(self):
@@ -533,6 +581,7 @@ class AzureTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    locale.normalize("C")  # Preload gettext's lazy parser dependency before sealing.
     pg.resource.setrlimit(pg.resource.RLIMIT_CORE, (0, 0))
     pg.seal_capture_process()
     unittest.main()

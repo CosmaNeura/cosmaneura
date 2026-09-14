@@ -89,6 +89,29 @@ concurrent source edits and fail on observed drift; do not claim a locked app.
 
 ## Verification and recovery
 
+Review35 rejected head2598ec1913fd0e73eea1d2bc6e95c4876f28a6c8 because an
+instance route dictionary could be changed into an authenticated mutation.
+The correction removes that state: a closed function returns literal fixed
+method/URL/body triples, properties derive IDs from those literals, and the
+final Request triple is checked immediately before open. Two new regressions
+and six affected fixture tests pass. This correction still needs independent
+review of the final exact head; it is not accepted by the earlier FAIL verdict.
+
+Local inspection also identified a separate integration hold: the current
+reused reader enters the validator's old process runner under the new alarm,
+but that runner does not own/clean up on every BaseException and its wrapper
+starts a nested CLI session. Its native ACL reader also dynamically resolves
+ctypes symbols after the new seal, which correctly refuses. Do not run this
+adapter against the real helper yet, weaken the seal, or call mock callbacks
+runtime evidence. A reviewed owned-child/native/session integration is still
+required before any live plan or handoff. This source change fixes the route
+finding only; it does not resolve that separate integration hold.
+
+CI Python3.13.2 exposed a test-launcher lazy locale import after sealing.
+Tests now preload that standard-library dependency before the seal, matching
+PR397's test-only correction. The import guard and production PG source are
+unchanged. Required CI must pass on the new head; failed checks are not waived.
+
 Eight pure identity-fixture tests previously PASS; only import-path relocation
 and type/lint checks followed, not replaying unchanged tests. Eighteen new Azure
 fixture methods initially PASS. After the constructor/core gate changed,19
