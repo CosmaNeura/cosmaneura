@@ -33,9 +33,24 @@ directory left after detach cannot pass. The mount must have a distinct device
 from its parent. Spotlight is disabled for creation; a no-index marker is
 created before the workspace can hold snapshot material.
 
+Preparation and verification require an externally reviewed expected source
+SHA-256. The handoff uses an owned, single-link, no-symlink 0400 source copy,
+verified before native operations and again before manifest publication. The
+validated hash is retained; a later replacement cannot relabel executed code.
+The exact handoff launcher also validates that protected source before Python
+starts. Do not invoke the writable repository copy for actual preparation.
+
 The manifest is value-minimized local evidence, not a receipt or permanent
 proof of safety. It records creation-source and command hashes, image inode,
-mount/device binding and time. Later read-only `verify` requires the caller's
+mount/device binding, dedicated payload directory inode and time. Both initial
+preparation and every `verify` require a zero-length, owned, single-link 0600
+no-index marker on the mounted device and an empty owned 0700 payload directory.
+The marker and payload are created relative to a no-follow mount descriptor,
+whose device/inode are checked before any write. A detach cannot redirect those
+writes into a plaintext directory. Native image/mount checks are repeated after
+creation, with no-index/payload bindings checked before and after live readback.
+The empty claim refers to the payload area, not native filesystem housekeeping.
+Later read-only `verify` requires the caller's
 exact protected manifest hash, the same helper source, image inode and live
 mount binding. Detach/re-attach or source changes may invalidate it: fail and
 prepare a newly reviewed binding, never edit the old evidence to pass.
@@ -45,7 +60,7 @@ must be pinned in the later independent exact handoff. The manifest is not
 Azure identity evidence. Same-user/root compromise, screenshots, VM host memory
 and arbitrary external tools are not made safe by this helper. The downstream
 capture must recheck the mounted destination immediately before writes and
-use an opened directory/file descriptor with exclusive no-follow creation;
+use the verified payload directory descriptor with exclusive no-follow creation;
 never fall back to a plain directory if a mount disappears. No capture code is
 included here or authorized by a verification result.
 
@@ -74,7 +89,9 @@ included here or authorized by a verification result.
 
 New secretless tests exercise metadata and command construction, fail-closed
 path/owner/encryption/capacity/mount checks, native invocation boundaries and
-manifest binding. Native commands are mocked: tests never create a disk image,
+manifest binding, missing/changed markers, nonempty/replaced payloads, a detach
+before marker creation, and source replacement before publication. Native
+commands are mocked: tests never create a disk image,
 receive a password, connect to Azure or copy data. Actual native preparation
 must succeed in the human's Terminal before this destination is accepted.
 Do not describe unit tests as native encryption or restore/rehearsal evidence.

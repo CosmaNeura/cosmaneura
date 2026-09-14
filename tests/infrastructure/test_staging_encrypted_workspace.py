@@ -1,5 +1,6 @@
 """Secretless native-metadata fixtures; never create or mount a disk image."""
 
+import hashlib
 import importlib.util
 import os
 import plistlib
@@ -252,7 +253,11 @@ class EncryptedWorkspaceTests(unittest.TestCase):
 
     def test_prepare_without_tty_stops_before_any_creation(self):
         with (
-            patch.object(workspace.sys, "argv", [str(SCRIPT), "prepare-empty"]),
+            patch.object(
+                workspace.sys,
+                "argv",
+                [str(SCRIPT), "prepare-empty", "--expected-source-sha256", "a" * 64],
+            ),
             patch.object(workspace.sys, "platform", "darwin"),
             patch.object(workspace.sys, "flags") as flags,
             patch.object(workspace.os, "geteuid", return_value=501),
@@ -275,13 +280,26 @@ class EncryptedWorkspaceTests(unittest.TestCase):
             "image_inode": 123,
             "image_device": 4,
             "mount_device": 8,
+            "mount_inode": 20,
+            "payload_device": 8,
+            "payload_inode": 21,
+            "noindex_marker_inode": 22,
             "capacity_bytes": workspace.SIZE_BYTES,
             "empty_workspace_prepared": True,
             "source_sha256": workspace.hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
         }
         raw = workspace.canonical(original)
         expected = workspace.hashlib.sha256(raw).hexdigest()
-        for changed in (None, "image_inode", "mount_device", "device"):
+        for changed in (
+            None,
+            "image_inode",
+            "mount_device",
+            "device",
+            "mount_inode",
+            "payload_device",
+            "payload_inode",
+            "noindex_marker_inode",
+        ):
             with self.subTest(changed=changed):
                 current = deepcopy(original)
                 if changed:
@@ -290,22 +308,178 @@ class EncryptedWorkspaceTests(unittest.TestCase):
                     patch.object(workspace, "workspace_paths"),
                     patch.object(workspace, "private_path") as metadata,
                     patch.object(
+                        workspace,
+                        "checked_source",
+                        return_value=original["source_sha256"],
+                    ),
+                    patch.object(
                         workspace.Path,
                         "read_bytes",
-                        side_effect=[raw, SCRIPT.read_bytes()],
+                        return_value=raw,
                     ),
-                    patch.object(workspace, "verify_mounted", return_value=current),
+                    patch.object(workspace, "verify_empty", return_value=current),
                 ):
                     metadata.return_value.st_size = len(raw)
                     if changed:
                         with self.assertRaises(workspace.WorkspaceError):
-                            workspace.verify_prepared(ROOT, expected)
+                            workspace.verify_prepared(
+                                ROOT, expected, original["source_sha256"]
+                            )
                     else:
-                        result = workspace.verify_prepared(ROOT, expected)
+                        result = workspace.verify_prepared(
+                            ROOT, expected, original["source_sha256"]
+                        )
                         self.assertEqual(result["manifest_sha256"], expected)
                         self.assertTrue(
                             result["not_a_receipt_or_permanent_readiness_proof"]
                         )
+
+    def test_marker_and_empty_payload_are_on_expected_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary).resolve()
+            (mount / workspace.MARKER_NAME).touch(mode=0o600)
+            (mount / workspace.PAYLOAD_NAME).mkdir(mode=0o700)
+            fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                area = workspace.empty_area(fd, mount.stat().st_dev)
+                self.assertEqual(
+                    area["payload_inode"],
+                    (mount / workspace.PAYLOAD_NAME).stat().st_ino,
+                )
+                with self.assertRaises(workspace.WorkspaceError):
+                    workspace.empty_area(fd, mount.stat().st_dev + 1)
+            finally:
+                os.close(fd)
+
+    def test_removed_changed_or_aliased_noindex_marker_refused(self):
+        for mode in ("missing", "content", "symlink", "hardlink", "permissions"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                mount = Path(temporary).resolve()
+                marker = mount / workspace.MARKER_NAME
+                (mount / workspace.PAYLOAD_NAME).mkdir(mode=0o700)
+                if mode != "missing":
+                    marker.touch(mode=0o600)
+                if mode == "content":
+                    marker.write_bytes(b"invented")
+                elif mode == "symlink":
+                    marker.rename(mount / "target")
+                    marker.symlink_to(mount / "target")
+                elif mode == "hardlink":
+                    os.link(marker, mount / "hardlink")
+                elif mode == "permissions":
+                    marker.chmod(0o644)
+                fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with self.assertRaises((workspace.WorkspaceError, OSError)):
+                        workspace.empty_area(fd, mount.stat().st_dev)
+                finally:
+                    os.close(fd)
+
+    def test_nonempty_and_symlink_payload_refused(self):
+        for mode in ("file", "directory", "symlink"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temporary:
+                mount = Path(temporary).resolve()
+                (mount / workspace.MARKER_NAME).touch(mode=0o600)
+                payload = mount / workspace.PAYLOAD_NAME
+                payload.mkdir(mode=0o700)
+                if mode == "file":
+                    (payload / "invented").touch(mode=0o600)
+                elif mode == "directory":
+                    (payload / "invented").mkdir(mode=0o700)
+                else:
+                    payload.rename(mount / "other")
+                    payload.symlink_to(mount / "other")
+                fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    with self.assertRaises((workspace.WorkspaceError, OSError)):
+                        workspace.empty_area(fd, mount.stat().st_dev)
+                finally:
+                    os.close(fd)
+
+    def test_unmount_before_marker_creation_cannot_write_plaintext_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary).resolve()
+            mounted = {
+                "mount": str(mount),
+                "mount_device": mount.stat().st_dev + 1,
+                "mount_inode": mount.stat().st_ino,
+            }
+            with patch.object(workspace, "verify_mounted", return_value=mounted):
+                with self.assertRaisesRegex(workspace.WorkspaceError, "mount_replaced"):
+                    workspace.initialize_empty_area(mount.parent)
+            self.assertEqual(list(mount.iterdir()), [])
+
+    def test_verify_rechecks_mount_after_empty_area_inspection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary).resolve()
+            (mount / workspace.MARKER_NAME).touch(mode=0o600)
+            (mount / workspace.PAYLOAD_NAME).mkdir(mode=0o700)
+            mounted = {
+                "mount": str(mount),
+                "mount_device": mount.stat().st_dev,
+                "mount_inode": mount.stat().st_ino,
+                "image_device": 1,
+                "image_inode": 5,
+                "device": DEVICE,
+            }
+            with patch.object(
+                workspace,
+                "verify_mounted",
+                side_effect=[
+                    mounted,
+                    {**mounted, "mount_inode": mounted["mount_inode"] + 1},
+                ],
+            ):
+                with self.assertRaisesRegex(workspace.WorkspaceError, "mount_changed"):
+                    workspace.verify_empty(mount.parent)
+
+    def test_wrong_source_hash_refuses_before_directory_or_native_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve() / "source.py"
+            source.write_bytes(b"invented source fixture")
+            source.chmod(0o400)
+            with (
+                patch.object(workspace, "__file__", str(source)),
+                patch.object(workspace.tempfile, "mkdtemp") as create,
+                patch.object(workspace, "run_native") as native,
+            ):
+                with self.assertRaisesRegex(workspace.WorkspaceError, "source_hash"):
+                    workspace.prepare_empty("a" * 64)
+                create.assert_not_called()
+                native.assert_not_called()
+
+    def test_source_change_during_native_preparation_prevents_manifest_publication(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source = root / "source.py"
+            source.write_bytes(b"invented source fixture")
+            source.chmod(0o400)
+            expected = hashlib.sha256(source.read_bytes()).hexdigest()
+            image = root / workspace.IMAGE_NAME
+            image.touch(mode=0o600)
+            mount = root / workspace.MOUNT_NAME
+
+            def native(_argv, **_kwargs):
+                source.chmod(0o600)
+                source.write_bytes(b"changed synthetic source fixture")
+                source.chmod(0o400)
+                return plistlib.dumps({"encrypted": True})
+
+            with (
+                patch.object(workspace, "__file__", str(source)),
+                patch.object(workspace.tempfile, "mkdtemp", return_value=str(root)),
+                patch.object(workspace, "workspace_paths", return_value=(image, mount)),
+                patch.object(workspace, "run_native", side_effect=native),
+                patch.object(workspace, "image_binding", return_value=DEVICE),
+                patch.object(workspace, "check_disk"),
+                patch.object(workspace.os.path, "ismount", return_value=True),
+                patch.object(workspace, "initialize_empty_area", return_value={}),
+            ):
+                with self.assertRaisesRegex(workspace.WorkspaceError, "source_hash"):
+                    workspace.prepare_empty(expected)
+            self.assertFalse((root / workspace.MANIFEST_NAME).exists())
 
 
 if __name__ == "__main__":

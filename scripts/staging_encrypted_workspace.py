@@ -28,6 +28,8 @@ PREFIX = "cosmaneura-staging-snapshot-"
 IMAGE_NAME = "staging.sparseimage"
 MOUNT_NAME = "mounted"
 MANIFEST_NAME = "empty-workspace.json"
+PAYLOAD_NAME = "payload"
+MARKER_NAME = ".metadata_never_index"
 SIZE_BYTES = 8 * 1024**3
 
 
@@ -204,6 +206,7 @@ def verify_mounted(root: Path) -> dict[str, Any]:
         "image_inode": after.st_ino,
         "image_device": after.st_dev,
         "mount_device": mount_stat.st_dev,
+        "mount_inode": mount_stat.st_ino,
         "capacity_bytes": SIZE_BYTES,
         "encrypted_image_bound_to_mounted_apfs": True,
         "observed_at": datetime.now(UTC).isoformat(),
@@ -212,7 +215,122 @@ def verify_mounted(root: Path) -> dict[str, Any]:
     }
 
 
-def prepare_empty() -> dict[str, Any]:
+def checked_source(expected_sha256: str) -> str:
+    require(re.fullmatch(r"[0-9a-f]{64}", expected_sha256), "source_hash_shape")
+    path = Path(__file__)
+    before = private_path(path, directory=False, mode=0o400)
+    require(0 < before.st_size < 128 * 1024, "source_size")
+    raw = path.read_bytes()
+    after = private_path(path, directory=False, mode=0o400)
+    require(stable_file(before, after), "source_changed")
+    require(hashlib.sha256(raw).hexdigest() == expected_sha256, "source_hash")
+    return expected_sha256
+
+
+def open_bound_mount(mounted: dict[str, Any]) -> int:
+    fd = os.open(
+        mounted["mount"], os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    )
+    try:
+        value = os.fstat(fd)
+        require(
+            value.st_dev == mounted["mount_device"]
+            and value.st_ino == mounted["mount_inode"],
+            "mount_replaced",
+        )
+        require(
+            value.st_uid == os.geteuid() and stat.S_IMODE(value.st_mode) == 0o700,
+            "mount_permissions",
+        )
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def empty_area(mount_fd: int, device: int) -> dict[str, int]:
+    marker_fd = os.open(
+        MARKER_NAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=mount_fd
+    )
+    try:
+        marker = os.fstat(marker_fd)
+        require(
+            stat.S_ISREG(marker.st_mode)
+            and marker.st_uid == os.geteuid()
+            and stat.S_IMODE(marker.st_mode) == 0o600
+            and marker.st_nlink == 1
+            and marker.st_size == 0
+            and marker.st_dev == device,
+            "invalid_noindex_marker",
+        )
+    finally:
+        os.close(marker_fd)
+    payload_fd = os.open(
+        PAYLOAD_NAME,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=mount_fd,
+    )
+    try:
+        payload = os.fstat(payload_fd)
+        require(
+            payload.st_uid == os.geteuid()
+            and stat.S_IMODE(payload.st_mode) == 0o700
+            and payload.st_dev == device,
+            "invalid_payload_directory",
+        )
+        require(not os.listdir(payload_fd), "payload_not_empty")
+        return {
+            "payload_device": payload.st_dev,
+            "payload_inode": payload.st_ino,
+            "noindex_marker_inode": marker.st_ino,
+        }
+    finally:
+        os.close(payload_fd)
+
+
+def verify_empty(root: Path) -> dict[str, Any]:
+    before = verify_mounted(root)
+    fd = open_bound_mount(before)
+    try:
+        area = empty_area(fd, before["mount_device"])
+        after = verify_mounted(root)
+        for key in (
+            "mount_device",
+            "mount_inode",
+            "image_device",
+            "image_inode",
+            "device",
+        ):
+            require(before[key] == after[key], "mount_changed")
+        require(area == empty_area(fd, before["mount_device"]), "empty_area_changed")
+        after.update(area, empty_payload_verified=True, noindex_marker_verified=True)
+        return after
+    finally:
+        os.close(fd)
+
+
+def initialize_empty_area(root: Path) -> dict[str, Any]:
+    mounted = verify_mounted(root)
+    # If detach races the open, the device/inode comparison refuses before any
+    # write. Once opened, relative writes stay on that encrypted filesystem,
+    # never on a plaintext directory that later replaces the mount path.
+    fd = open_bound_mount(mounted)
+    try:
+        marker_fd = os.open(
+            MARKER_NAME,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=fd,
+        )
+        os.close(marker_fd)
+        os.mkdir(PAYLOAD_NAME, mode=0o700, dir_fd=fd)
+    finally:
+        os.close(fd)
+    return verify_empty(root)
+
+
+def prepare_empty(expected_source_sha256: str) -> dict[str, Any]:
+    source_sha256 = checked_source(expected_source_sha256)
     os.umask(0o077)
     root = Path(tempfile.mkdtemp(prefix=PREFIX, dir="/private/tmp"))
     image, mount = workspace_paths(root)
@@ -239,16 +357,12 @@ def prepare_empty() -> dict[str, Any]:
     require(mount.resolve() == mount and os.path.ismount(mount), "not_mount")
     require(mount.lstat().st_uid == os.geteuid(), "mount_owner")
     mount.chmod(0o700)
-    evidence = verify_mounted(root)
-    # Do not index future snapshot material; this marker is not data capture.
-    marker = mount / ".metadata_never_index"
-    fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    os.close(fd)
+    evidence = initialize_empty_area(root)
     evidence.update(
         {
             "schema_version": 1,
             "empty_workspace_prepared": True,
-            "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "source_sha256": source_sha256,
             "creation_command_sha256": hashlib.sha256(
                 canonical(create_command(image))
             ).hexdigest(),
@@ -257,6 +371,7 @@ def prepare_empty() -> dict[str, Any]:
             "not_a_receipt_or_permanent_readiness_proof": True,
         }
     )
+    require(checked_source(expected_source_sha256) == source_sha256, "source_changed")
     manifest = root / MANIFEST_NAME
     fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(fd, "wb") as stream:
@@ -282,7 +397,10 @@ def stable_file(before: os.stat_result, after: os.stat_result) -> bool:
     return all(getattr(before, key) == getattr(after, key) for key in fields)
 
 
-def verify_prepared(root: Path, expected_manifest_sha256: str) -> dict[str, Any]:
+def verify_prepared(
+    root: Path, expected_manifest_sha256: str, expected_source_sha256: str
+) -> dict[str, Any]:
+    source_sha256 = checked_source(expected_source_sha256)
     workspace_paths(root)
     require(
         re.fullmatch(r"[0-9a-f]{64}", expected_manifest_sha256), "manifest_hash_shape"
@@ -302,11 +420,10 @@ def verify_prepared(root: Path, expected_manifest_sha256: str) -> dict[str, Any]
         previous.get("empty_workspace_prepared") is True, "manifest_not_preparation"
     )
     require(
-        previous.get("source_sha256")
-        == hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        previous.get("source_sha256") == source_sha256,
         "source_changed",
     )
-    current = verify_mounted(root)
+    current = verify_empty(root)
     for name in (
         "workspace",
         "image",
@@ -315,21 +432,28 @@ def verify_prepared(root: Path, expected_manifest_sha256: str) -> dict[str, Any]
         "image_inode",
         "image_device",
         "mount_device",
+        "mount_inode",
+        "payload_device",
+        "payload_inode",
+        "noindex_marker_inode",
         "capacity_bytes",
     ):
         require(previous.get(name) == current[name], "workspace_changed")
     current["manifest_sha256"] = expected_manifest_sha256
     current["not_a_receipt_or_permanent_readiness_proof"] = True
+    require(checked_source(expected_source_sha256) == source_sha256, "source_changed")
     return current
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest="operation", required=True)
-    subs.add_parser("prepare-empty")
+    prepare = subs.add_parser("prepare-empty")
+    prepare.add_argument("--expected-source-sha256", required=True)
     verify = subs.add_parser("verify")
     verify.add_argument("--workspace", type=Path, required=True)
     verify.add_argument("--manifest-sha256", required=True)
+    verify.add_argument("--expected-source-sha256", required=True)
     args = parser.parse_args()
     require(sys.platform == "darwin" and os.geteuid() != 0, "human_macos_required")
     require(
@@ -338,12 +462,14 @@ def main() -> None:
     )
     if args.operation == "prepare-empty":
         require(all(os.isatty(fd) for fd in (0, 1, 2)), "regular_terminal_required")
-        result = prepare_empty()
+        result = prepare_empty(args.expected_source_sha256)
         result["manifest_sha256"] = hashlib.sha256(
             (Path(result["workspace"]) / MANIFEST_NAME).read_bytes()
         ).hexdigest()
     else:
-        result = verify_prepared(args.workspace, args.manifest_sha256)
+        result = verify_prepared(
+            args.workspace, args.manifest_sha256, args.expected_source_sha256
+        )
     print(json.dumps(result, sort_keys=True))
 
 
