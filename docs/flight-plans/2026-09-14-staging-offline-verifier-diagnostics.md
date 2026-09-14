@@ -27,6 +27,10 @@ platform. These diagnostics do not attempt those syscalls or solve containment.
   ioctl. Do not trust `/sys/class/net` as the current namespace's view after a
   namespace change. The temporary control socket sends no network traffic;
   denied socket/ioctl access becomes unknown rather than a weaker fallback.
+- Classify loopback identity from `IFF_LOOPBACK`, never its name. A sole
+  non-loopback named `lo` is not favorable evidence; a renamed real loopback
+  is classified by its flags. Zero or multiple flagged loopbacks leave the
+  loopback-down observation unknown. This is still not isolation acceptance.
 - Return booleans/count-free classifications only: no raw UID, cgroup path,
   namespace token, kernel file content or OS exception text leaves the report.
 - Missing, malformed, oversized, duplicate or ambiguous observations become

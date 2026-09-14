@@ -18,6 +18,8 @@ from typing import Any, Protocol
 
 MAXIMUM_FILE_BYTES = 65_536
 MAXIMUM_INTERFACES = 64
+IFF_UP = 0x1
+IFF_LOOPBACK = 0x8
 STATUS_PATH = "/proc/thread-self/status"
 MOUNTS_PATH = "/proc/thread-self/mountinfo"
 CGROUP_PATH = "/proc/thread-self/cgroup"
@@ -189,11 +191,14 @@ def _interfaces(values: list[tuple[str, int]]) -> dict[str, bool | None]:
         ):
             raise DiagnosticsUnavailable("invalid_observation")
         observed[name] = flags
+    # Names are not interface identity: lo can be misleading, and a real
+    # loopback can be renamed. More than one flagged loopback is ambiguous.
+    loopbacks = [flags for flags in observed.values() if flags & IFF_LOOPBACK]
     return {
-        "only_loopback_interface_observed": set(observed) == {"lo"},
+        "only_loopback_interface_observed": len(observed) == len(loopbacks) == 1,
         "loopback_down_observed": None
-        if "lo" not in observed
-        else not observed["lo"] & 1,
+        if len(loopbacks) != 1
+        else not loopbacks[0] & IFF_UP,
     }
 
 

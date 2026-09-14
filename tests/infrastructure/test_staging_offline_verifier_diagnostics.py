@@ -187,6 +187,37 @@ def test_interface_facts_do_not_equate_down_with_absent(
 
 
 @pytest.mark.parametrize(
+    ("values", "only_loopback", "loopback_down"),
+    [
+        ([("lo", 0)], False, None),
+        ([("lo", 1)], False, None),
+        ([("renamed0", 8)], True, True),
+        ([("renamed0", 9)], True, False),
+        ([("lo", 8), ("second0", 8)], False, None),
+        ([("lo", 1), ("actual0", 8)], False, True),
+        ([("actual0", 9), ("eth0", 0)], False, False),
+    ],
+)
+def test_loopback_identity_uses_kernel_flag_not_name(
+    values: Any, only_loopback: bool, loopback_down: bool | None
+) -> None:
+    assert diagnostics._interfaces(values) == {
+        "only_loopback_interface_observed": only_loopback,
+        "loopback_down_observed": loopback_down,
+    }
+
+
+def test_interface_named_lo_without_loopback_flag_is_not_positive() -> None:
+    view = View()
+    view.interface_values = [("lo", 0)]
+    report = diagnostics._collect(view)
+    assert report["observations"]["only_loopback_interface_observed"] is False
+    assert report["observations"]["loopback_down_observed"] is None
+    assert report["runtime_acceptance"] is False
+    assert report["activation_authorized"] is False
+
+
+@pytest.mark.parametrize(
     "values",
     [
         [("lo", True)],
