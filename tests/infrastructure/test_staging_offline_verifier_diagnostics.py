@@ -278,7 +278,7 @@ def test_kernel_file_reads_are_allowlisted_bounded_read_only(
     calls = []
 
     class Stream(io.BytesIO):
-        def read(self, size: int = -1) -> bytes:
+        def read(self, size: int | None = -1) -> bytes:
             calls.append(size)
             return super().read(size)
 
