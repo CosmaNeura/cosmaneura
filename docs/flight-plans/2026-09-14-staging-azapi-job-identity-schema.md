@@ -69,7 +69,13 @@ pull identity/grant, private publication path, image readback/provenance, networ
 capture, cleanup, fresh plan/handoff and actual human execution remain separate
 unresolved/reviewed gates. No image is uploaded or run. No public ACR access,
 preview service, provider schema bypass or workflow dispatch is introduced.
-The sole workflow change adds this secretless schema check to PR validation.
+The workflow changes only secretless PR validation, not deployment paths.
+Its path filter explicitly includes checker-only changes. The staging root's
+preceding init uses lockfile=readonly and checks the tracked lock is unchanged
+before the schema check reads it. These close the two P2 findings from the
+first exact-source review; final corrected-source review remains required.
+Two new workflow regressions and readonly root initialization pass; the tracked
+lock remains byte-identical. The original21harness cases were not replayed.
 
 Recovery before any live use: normally revert the provider pin/lock, standalone
 fixture/check and CI step. Once live resources have been planned or applied with

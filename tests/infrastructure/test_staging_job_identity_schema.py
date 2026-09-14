@@ -214,3 +214,21 @@ def test_subprocess_environment_is_credential_neutral(
     assert observed["timeout"] == 300
     assert observed["capture_output"] is True
     assert observed["check"] is False
+
+
+def test_workflow_triggers_for_checker_only_changes() -> None:
+    workflow = (checker.REPO / ".github/workflows/infra_plan.yml").read_text()
+    trigger = workflow.split("permissions:", 1)[0]
+    assert "      - 'scripts/check_staging_job_identity_schema.py'\n" in trigger
+
+
+def test_workflow_preserves_reviewed_lock_before_schema_check() -> None:
+    workflow = (checker.REPO / ".github/workflows/infra_plan.yml").read_text()
+    staging_job = workflow.split("  staging-rehearsal-static-plan:\n", 1)[1].split(
+        "  staging-sanitizer-bootstrap-identity-static-plan:\n", 1
+    )[0]
+    initialize = "tofu init -backend=false -input=false -lockfile=readonly"
+    unchanged = "git diff --exit-code -- .terraform.lock.hcl"
+    schema = "python3 scripts/check_staging_job_identity_schema.py"
+    assert staging_job.index(initialize) < staging_job.index(unchanged)
+    assert staging_job.index(unchanged) < staging_job.index(schema)

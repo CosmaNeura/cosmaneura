@@ -9,6 +9,7 @@ on:
       - 'infra/**'
       - 'infra-staging-rehearsal/**'
       - 'infra-staging-sanitizer-bootstrap-identity/**'
+      - 'scripts/check_staging_job_identity_schema.py'
       - '.env'
       - '.env.production.backend'
       - '.env.production.frontend'
@@ -92,7 +93,10 @@ jobs:
 
       - name: tofu init without backend
         working-directory: infra-staging-rehearsal
-        run: tofu init -backend=false -input=false
+        run: |
+          set -euo pipefail
+          tofu init -backend=false -input=false -lockfile=readonly
+          git diff --exit-code -- .terraform.lock.hcl
 
       - name: tofu fmt -check
         working-directory: infra-staging-rehearsal
