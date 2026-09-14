@@ -806,8 +806,42 @@ refused(lambda: _thread.start_new_thread(lambda: None, ()), 'capture_process_fro
 refused(lambda: threading.Thread(target=lambda: None).start(), 'capture_process_frozen')
 for event in ('ctypes.dlopen', 'cpython.PyInterpreterState_New', 'os.fork'):
     refused(lambda: sys.audit(event), 'capture_process_frozen')
-refused(lambda: __import__('ctypes'), 'capture_process_frozen')
+refused(lambda: pg.ctypes.CDLL(None), 'capture_process_frozen')
+refused(lambda: pg.ctypes.get_errno(), 'capture_process_frozen')
+assert 'fractions' not in sys.modules
+refused(lambda: __import__('fractions'), 'capture_process_frozen')
 pg.require_capture_process(); pg.native_single_thread()
+""")
+
+    def test_only_closed_prebound_native_function_events_are_allowed(self):
+        self.isolated("""
+binding = pg._prebound_native_calls()
+if sys.platform == 'darwin':
+    assert binding[0] is not None and len(binding[1]) == 7
+    count = binding[0]._dyld_image_count
+    count.argtypes = (); count.restype = pg.ctypes.c_uint32
+else:
+    assert binding == (None, frozenset())
+pg.seal_capture_process()
+for address in binding[1]:
+    sys.audit('ctypes.call_function', address, ())
+for arguments in ((0, ()), (1, ()), (None, ()), ('unbound', ()), (0,), (0, [])):
+    refused(lambda: sys.audit('ctypes.call_function', *arguments), 'capture_process_frozen')
+for event in ('ctypes.dlopen', 'ctypes.dlsym', 'ctypes.cdata', 'ctypes.get_errno'):
+    refused(lambda: sys.audit(event), 'capture_process_frozen')
+if sys.platform == 'darwin': assert count() > 0
+""")
+
+    def test_native_registry_rejects_missing_and_duplicate_addresses(self):
+        self.isolated("""
+from types import SimpleNamespace
+for value in (None, 0, 1):
+    with patch.object(sys, 'platform', 'darwin'), \
+         patch.object(pg.ctypes, 'CDLL', return_value=SimpleNamespace(**{
+             name: object() for name in ('acl_get_fd_np','acl_get_entry','acl_get_tag_type','acl_free','__error','_dyld_image_count','_dyld_get_image_name')
+         })), patch.object(pg.ctypes, 'cast', return_value=SimpleNamespace(value=value)):
+        refused(pg._prebound_native_calls, 'capture_native_binding')
+assert pg._capture_process_pid is None
 """)
 
     def test_actual_signals_cannot_lose_native_child_before_assignment(self):
