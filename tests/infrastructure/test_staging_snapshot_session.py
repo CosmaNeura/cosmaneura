@@ -57,6 +57,35 @@ FILES = None
 PUBLIC_CA = b""
 
 
+def public_ca_fixture():
+    # Test data only: hosted Python's compiled CA path can be absent even when
+    # the OS bundle exists. Production still accepts only its exact pinned CA.
+    for candidate in ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem"):
+        path = Path(candidate)
+        if path.is_file():
+            return path.read_bytes()
+    raise AssertionError("public OS CA fixture unavailable")
+
+
+class PublicCaFixtureTests(unittest.TestCase):
+    def test_missing_python_default_does_not_select_production_trust(self):
+        for available in ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem"):
+            with (
+                self.subTest(available=available),
+                patch.object(ssl, "get_default_verify_paths", side_effect=AssertionError),
+                patch.object(Path, "is_file", lambda path: str(path) == available),
+                patch.object(Path, "read_bytes", return_value=b"invented-fixture"),
+            ):
+                self.assertEqual(public_ca_fixture(), b"invented-fixture")
+
+    def test_no_os_fixture_fails_without_a_skip_or_network(self):
+        with (
+            patch.object(Path, "is_file", return_value=False),
+            self.assertRaisesRegex(AssertionError, "public OS CA fixture unavailable"),
+        ):
+            public_ca_fixture()
+
+
 def isolated_tests(cls):
     for name, method in list(vars(cls).items()):
         if not name.startswith("test_"):
@@ -498,9 +527,7 @@ if __name__ == "__main__":
     assert callable(atexit.register)
     locale.normalize("C")
     pg.resource.setrlimit(pg.resource.RLIMIT_CORE, (0, 0))
-    public_path = ssl.get_default_verify_paths().cafile
-    assert public_path is not None
-    PUBLIC_CA = Path(public_path).read_bytes()
+    PUBLIC_CA = public_ca_fixture()
     FILES = native.NativeFiles()
     pg.seal_capture_process()
     unittest.main()

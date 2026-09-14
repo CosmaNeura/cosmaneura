@@ -75,6 +75,20 @@ Three newly added adapter tests cover unbound sessions,one absolute deadline,
 and preflight time not restored to the HTTP budget. No unchanged suite replay.
 Ruff/Pyright/diff PASS; required final-head CI and independent review pending.
 
+Current-head Linux CI exposed a test-data setup defect: hosted Python's compiled
+default CA file is absent even though the public OS certificate bundle exists.
+All15 isolated session/CA tests stopped at that fixture assertion before their
+test bodies. The fixture now reads only the conventional public Linux/macOS
+bundle paths before sealing; it does not select production trust, change a
+runtime pin, download data or skip a test. Two new fixture regressions exercise
+both OS paths without consulting Python defaults and refusal when neither exists.
+The15 failed tests nowPASS locally; both new fixture regressions PASS. The first
+restricted local run reached the native thread-count check but sandbox policy
+refused /bin/ps; only those15 failed methods were repeated with that read-only
+access. No guard was mocked or relaxed to pass. Ruff/Pyright/diff PASS. Current
+Linux CI remains required. Review36's source PASS applies to prior head d635e16f,
+not this later test edit; both production source files remain byte-identical.
+
 ## Recovery and remaining execution gates
 
 Stop using dormant code; no deployed state changed. Preserve original/partial
