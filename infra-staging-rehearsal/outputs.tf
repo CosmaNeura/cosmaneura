@@ -35,7 +35,7 @@ output "private_executor_blocker" {
     infrastructure_subnet_address_prefix = local.private_executor_infrastructure_subnet
     service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability        = "not-implemented"
-    container_apps_environment           = "not-implemented"
+    container_apps_environment           = local.private_executor_environment_enabled ? "empty internal environment only; runtime not implemented" : "not-implemented"
     private_service_endpoints            = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled ? "partial; service contracts do not prove remaining bindings" : "not-implemented"
     workflow_binding                     = "not-implemented"
     job_identity_binding                 = "not-implemented"
@@ -86,7 +86,7 @@ output "private_executor_network_contract" {
     public_ingress             = false
     route_table                = false
     nat_gateway                = false
-    container_apps_environment = false
+    container_apps_environment = local.private_executor_environment_enabled
     private_endpoints          = local.private_executor_registry_enabled || local.private_executor_vault_enabled || local.private_evidence_storage_enabled || local.private_launch_mailbox_storage_enabled
   }
 }
