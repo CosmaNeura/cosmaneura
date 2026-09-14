@@ -56,6 +56,18 @@ variable "enable_private_executor_registry" {
   default     = false
 }
 
+variable "enable_private_executor_environment" {
+  description = "Create only the empty internal workload-profiles environment after separate exact-plan approval; no jobs, grants, workload egress or runtime activation."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_environment_plan_approved" {
+  description = "Action-time approval of the exact empty-environment plan, dedicated /27, environment and managed infrastructure RG absence, Azure-managed resources and cost; not workload activation."
+  type        = bool
+  default     = false
+}
+
 variable "private_executor_registry_plan_approved" {
   description = "Action-time approval of the exact saved registry plan, global name availability, Premium cost, private topology and job-only pull grants; not runtime activation."
   type        = bool
