@@ -34,6 +34,9 @@ HOST = "cosmaneura-staging-postgres.postgres.database.azure.com"
 DATABASE = "staging"
 REVISION = "89c31f0ae275"
 CLIENT_DIRECTORY = Path("/opt/homebrew/Cellar/postgresql@16/16.15/bin")
+CLIENT_LIBRARIES = Path(
+    "/private/tmp/cosmaneura-staging-baseline-20260914.adNnmt/pg-libraries"
+)
 CA_FILE = "/etc/ssl/cert.pem"
 ARCHIVE_NAME = "staging-snapshot.dump"
 MAX_BYTES = 1024**3
@@ -318,6 +321,24 @@ def credentials_from_exact_source_dsn(raw: str) -> Credentials:
     return Credentials(username, password)
 
 
+def client_environment() -> dict[str, str]:
+    """No ambient/native OpenSSL or Kerberos config, cache or plugin search."""
+    require_capture_process()
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": "/dev/null",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "DYLD_LIBRARY_PATH": str(CLIENT_LIBRARIES),
+        "__CF_USER_TEXT_ENCODING": f"0x{os.geteuid():X}:0x0:0x0",
+        "OPENSSL_CONF": "/dev/null",
+        "OPENSSL_MODULES": "/dev/null",
+        "KRB5_CONFIG": "/dev/null",
+        "KRB5CCNAME": "FILE:/dev/null",
+        "KRB5_CLIENT_KTNAME": "FILE:/dev/null",
+    }
+
+
 def connection_environment(credentials: Credentials) -> dict[str, str]:
     require_core_disabled()
     require(type(credentials) is Credentials, "credential_contract")
@@ -343,9 +364,7 @@ def connection_environment(credentials: Credentials) -> dict[str, str]:
     # file, PGOPTIONS, proxy, DYLD, Python or application/provider configuration.
     # PGPASSWORD exists only in child memory/environment, never argv or a file.
     return {
-        "PATH": "/usr/bin:/bin",
-        "LANG": "C",
-        "LC_ALL": "C",
+        **client_environment(),
         "PGHOST": HOST,
         "PGPORT": "5432",
         "PGDATABASE": DATABASE,
@@ -355,6 +374,9 @@ def connection_environment(credentials: Credentials) -> dict[str, str]:
         "PGSSLMODE": "verify-full",
         "PGSSLROOTCERT": CA_FILE,
         "PGGSSENCMODE": "disable",
+        "PGREQUIREAUTH": "password,md5,scram-sha-256",
+        "PGSSLCERTMODE": "disable",
+        "PGSYSCONFDIR": "/dev/null",
         "PGCONNECT_TIMEOUT": "10",
         "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=1200000 -c lock_timeout=5000",
         "PGAPPNAME": "cosmaneura-bounded-staging-snapshot",
@@ -701,7 +723,7 @@ def _capture_with_verified_payload(
         check_archive_binding(binding, fd, size)
         # The reader uses this open descriptor, not a mutable pathname. No
         # connection flags or credentials are present in either restore command.
-        local_environment = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+        local_environment = client_environment()
         os.lseek(fd, 0, os.SEEK_SET)
         children.run(
             [
