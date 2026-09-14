@@ -72,7 +72,9 @@ class PublicCaFixtureTests(unittest.TestCase):
         for available in ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/cert.pem"):
             with (
                 self.subTest(available=available),
-                patch.object(ssl, "get_default_verify_paths", side_effect=AssertionError),
+                patch.object(
+                    ssl, "get_default_verify_paths", side_effect=AssertionError
+                ),
                 patch.object(Path, "is_file", lambda path: str(path) == available),
                 patch.object(Path, "read_bytes", return_value=b"invented-fixture"),
             ):
