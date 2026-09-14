@@ -9,7 +9,6 @@ can belong to the namespace in which sysfs was mounted.
 
 from __future__ import annotations
 
-import fcntl
 import re
 import socket
 import struct
@@ -23,9 +22,10 @@ IFF_LOOPBACK = 0x8
 STATUS_PATH = "/proc/thread-self/status"
 MOUNTS_PATH = "/proc/thread-self/mountinfo"
 CGROUP_PATH = "/proc/thread-self/cgroup"
+NETDEV_PATH = "/proc/thread-self/net/dev"
 NETNS_PATH = "/proc/thread-self/ns/net"
 PID1_NETNS_PATH = "/proc/1/ns/net"
-READ_PATHS = frozenset({STATUS_PATH, MOUNTS_PATH, CGROUP_PATH})
+READ_PATHS = frozenset({STATUS_PATH, MOUNTS_PATH, CGROUP_PATH, NETDEV_PATH})
 LINK_PATHS = frozenset({NETNS_PATH, PID1_NETNS_PATH})
 CAPABILITY_FIELDS = ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
 INTERFACE_NAME = re.compile(r"[A-Za-z0-9_.:-]{1,15}")
@@ -60,6 +60,81 @@ def _text(raw: bytes) -> str:
         raise DiagnosticsUnavailable("invalid_observation") from None
 
 
+def _rows(raw: bytes) -> list[str]:
+    text = _text(raw)
+    if not text.endswith("\n") or re.search(r"[\x00-\x09\x0b-\x1f\x7f]", text):
+        raise DiagnosticsUnavailable("invalid_observation")
+    rows = text[:-1].split("\n")
+    if not all(rows):
+        raise DiagnosticsUnavailable("invalid_observation")
+    return rows
+
+
+def _decimal(value: str, *, positive: bool = False) -> bool:
+    return (
+        re.fullmatch(r"0|[1-9][0-9]{0,19}", value) is not None
+        and int(value) <= 18_446_744_073_709_551_615
+        and (not positive or value != "0")
+    )
+
+
+def _encoded_token(value: str, *, absolute: bool = False) -> bool:
+    # mountinfo escapes only space, tab, newline and backslash with these octals.
+    return (
+        bool(value)
+        and (not absolute or value.startswith("/"))
+        and re.fullmatch(r"(?:[^\x00-\x20\x7f\\]|\\(?:040|011|012|134))+", value)
+        is not None
+    )
+
+
+def _mount_options(value: str) -> set[str]:
+    options = value.split(",")
+    keys = set()
+    for option in options:
+        key, separator, argument = option.partition("=")
+        if (
+            re.fullmatch(r"[A-Za-z0-9_.-]+", key) is None
+            or key in keys
+            or (key in {"ro", "rw"} and separator)
+            or (separator and not _encoded_token(argument))
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        keys.add(key)
+    if len(keys & {"ro", "rw"}) != 1:
+        raise DiagnosticsUnavailable("invalid_observation")
+    return set(options)
+
+
+def _interface_names(raw: bytes) -> list[str]:
+    rows = _rows(raw)
+    if not 2 <= len(rows) <= MAXIMUM_INTERFACES + 2:
+        raise DiagnosticsUnavailable("invalid_observation")
+    headings = [part.strip() for part in rows[0].split("|")]
+    counters = [part.split() for part in rows[1].split("|")]
+    if headings != ["Inter-", "Receive", "Transmit"] or counters != [
+        ["face"],
+        "bytes packets errs drop fifo frame compressed multicast".split(),
+        "bytes packets errs drop fifo colls carrier compressed".split(),
+    ]:
+        raise DiagnosticsUnavailable("invalid_observation")
+    names = []
+    for row in rows[2:]:
+        padded, separator, data = row.rpartition(":")
+        name = padded.strip()
+        values = data.split()
+        if (
+            not separator
+            or INTERFACE_NAME.fullmatch(name) is None
+            or name in names
+            or len(values) != 16
+            or not all(_decimal(value) for value in values)
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        names.append(name)
+    return names
+
+
 class _KernelView:
     def read(self, path: str) -> bytes:
         if path not in READ_PATHS:
@@ -78,16 +153,18 @@ class _KernelView:
         return os.readlink(path)
 
     def interfaces(self) -> list[tuple[str, int]]:
-        names = socket.if_nameindex()
-        if len(names) > MAXIMUM_INTERFACES:
-            raise DiagnosticsUnavailable("invalid_observation")
+        # Bound intake before allocating/parsing interface lists; no if_nameindex
+        # or sysfs fallback. This proc path reflects the observing thread's netns.
+        names = _interface_names(self.read(NETDEV_PATH))
+        try:
+            import fcntl
+        except ImportError:
+            raise DiagnosticsUnavailable("kernel_interface_unavailable") from None
         result = []
         # SIOCGIFFLAGS reads this thread's current network namespace. No bind,
         # connect, send, listen, DNS lookup or remote endpoint is involved.
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as control:
-            for _index, name in names:
-                if type(name) is not str or INTERFACE_NAME.fullmatch(name) is None:
-                    raise DiagnosticsUnavailable("invalid_observation")
+            for name in names:
                 request = struct.pack("256s", name.encode("ascii"))
                 response = fcntl.ioctl(control.fileno(), 0x8913, request)
                 flags = struct.unpack_from("@H", response, 16)[0]
@@ -130,35 +207,86 @@ def _status(raw: bytes) -> dict[str, bool | int | None]:
 
 def _root_mount(raw: bytes) -> bool:
     roots = []
-    for line in _text(raw).splitlines():
-        fields = line.split()
+    mount_ids = set()
+    for line in _rows(raw):
+        fields = line.split(" ")
         if len(fields) < 10 or "-" not in fields[6:]:
             raise DiagnosticsUnavailable("invalid_observation")
         separator = fields.index("-", 6)
         if len(fields) != separator + 4:
             raise DiagnosticsUnavailable("invalid_observation")
-        if fields[4] == "/":
-            access = set(fields[5].split(",")) & {"ro", "rw"}
-            if len(access) != 1:
+        device = fields[2].split(":")
+        if (
+            not _decimal(fields[0], positive=True)
+            or not _decimal(fields[1], positive=True)
+            or fields[0] in mount_ids
+            or len(device) != 2
+            or not all(_decimal(part) and int(part) <= 4_294_967_295 for part in device)
+            or not _encoded_token(fields[3], absolute=True)
+            or not _encoded_token(fields[4], absolute=True)
+            or re.fullmatch(r"[A-Za-z0-9_.-]+", fields[separator + 1]) is None
+            or not _encoded_token(fields[separator + 2])
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        mount_ids.add(fields[0])
+        options = _mount_options(fields[5])
+        _mount_options(fields[separator + 3])
+        optional = set()
+        for field in fields[6:separator]:
+            tag, colon, value = field.partition(":")
+            if tag in optional or (
+                field != "unbindable"
+                and (
+                    tag not in {"shared", "master", "propagate_from"}
+                    or not colon
+                    or not _decimal(value, positive=True)
+                )
+            ):
                 raise DiagnosticsUnavailable("invalid_observation")
-            roots.append(access == {"ro"})
+            optional.add(tag)
+        if ("unbindable" in optional and len(optional) != 1) or (
+            "propagate_from" in optional and "master" not in optional
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        if fields[4] == "/":
+            roots.append("ro" in options)
     if len(roots) != 1:
         raise DiagnosticsUnavailable("invalid_observation")
     return roots[0]
 
 
 def _cgroup(raw: bytes) -> bool:
-    rows = _text(raw).splitlines()
-    if not rows or any(
-        re.fullmatch(r"[0-9]+:[A-Za-z0-9_=,.-]*:/[^\x00-\x1f]*", row) is None
-        for row in rows
-    ):
-        raise DiagnosticsUnavailable("invalid_observation")
-    unified = [row for row in rows if row.startswith("0::")]
-    if len(unified) > 1:
-        raise DiagnosticsUnavailable("invalid_observation")
+    hierarchies = set()
+    controllers = set()
+    for row in _rows(raw):
+        fields = row.split(":", 2)
+        if len(fields) != 3:
+            raise DiagnosticsUnavailable("invalid_observation")
+        hierarchy, controller_field, path = fields
+        if (
+            not _decimal(hierarchy)
+            or int(hierarchy) > 4_294_967_295
+            or hierarchy in hierarchies
+            or not path.startswith("/")
+            or (hierarchy == "0") != (controller_field == "")
+        ):
+            raise DiagnosticsUnavailable("invalid_observation")
+        hierarchies.add(hierarchy)
+        selected = controller_field.split(",") if controller_field else []
+        if sum(controller.startswith("name=") for controller in selected) > 1:
+            raise DiagnosticsUnavailable("invalid_observation")
+        for controller in selected:
+            if (
+                re.fullmatch(
+                    r"(?:[A-Za-z_][A-Za-z0-9_.-]*|name=[A-Za-z0-9_.-]+)", controller
+                )
+                is None
+                or controller in controllers
+            ):
+                raise DiagnosticsUnavailable("invalid_observation")
+            controllers.add(controller)
     # Membership is not a pids.max, namespace ownership or process-kill proof.
-    return len(unified) == 1
+    return "0" in hierarchies
 
 
 def _network_namespace_differs(view: _View) -> bool:

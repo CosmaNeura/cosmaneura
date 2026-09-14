@@ -23,7 +23,10 @@ platform. These diagnostics do not attempt those syscalls or solve containment.
 - Observe all four UID slots, all five capability sets, NoNewPrivs, optional
   seccomp mode, root mount access and cgroup-v2 membership. Cgroup membership
   is not evidence of a PID limit or process-tree cleanup.
-- Enumerate current network interfaces and read flags through a local kernel
+- Intake current interface names from a byte-bounded `/proc/thread-self/net/dev`
+  read, rejecting truncation, malformed counters and more than 64 interfaces
+  before opening a control socket. Never call unbounded `socket.if_nameindex`.
+  Read flags through a local kernel
   ioctl. Do not trust `/sys/class/net` as the current namespace's view after a
   namespace change. The temporary control socket sends no network traffic;
   denied socket/ioctl access becomes unknown rather than a weaker fallback.
@@ -36,6 +39,12 @@ platform. These diagnostics do not attempt those syscalls or solve containment.
 - Missing, malformed, oversized, duplicate or ambiguous observations become
   explicit unknowns. Do not retry, infer success from missing access, or obtain
   broader privileges to observe a value.
+- Validate the mandatory mountinfo fields, encoded paths, IDs, unique options
+  and known propagation tags before reporting root access. Unrecognized formats
+  conservatively become unknown; this is not a universal filesystem parser.
+  Validate cgroup hierarchy/controller uniqueness and v1/v2 field relationships.
+- Import Linux's ioctl helper only when reading interfaces; unsupported-platform
+  import succeeds and the public capture entry point refuses with a fixed code.
 
 Every report permanently says diagnostic-only, runtime-acceptance false and
 activation-authorized false, even with entirely favorable facts. This report

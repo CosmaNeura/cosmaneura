@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import json
 import struct
 import sys
+import types
 from pathlib import Path
 from typing import Any, Self
 
@@ -27,6 +29,12 @@ NoNewPrivs:\t1
 Seccomp:\t2
 """
 MOUNTS = b"23 1 0:20 / / ro,nosuid - overlay overlay rw\n24 23 0:21 / /tmp rw - tmpfs tmpfs rw\n"
+NETDEV_HEADER = (
+    b"Inter-| Receive | Transmit\n"
+    b" face |bytes packets errs drop fifo frame compressed multicast|"
+    b"bytes packets errs drop fifo colls carrier compressed\n"
+)
+NETDEV = NETDEV_HEADER + b" lo: " + b"0 " * 15 + b"0\n"
 
 
 class View:
@@ -73,9 +81,9 @@ def test_favorable_facts_never_grant_acceptance() -> None:
     assert report["unproven_requirements"] == list(diagnostics.UNPROVEN)
     assert report["unavailable_observations"] == []
     assert all(value is True or value == 2 for value in report["observations"].values())
-    assert set(view.calls) == diagnostics.READ_PATHS | diagnostics.LINK_PATHS | {
-        "interfaces"
-    }
+    assert set(view.calls) == (
+        diagnostics.READ_PATHS - {diagnostics.NETDEV_PATH}
+    ) | diagnostics.LINK_PATHS | {"interfaces"}
     serialized = json.dumps(report)
     assert "synthetic-cgroup" not in serialized
     assert "10001" not in serialized
@@ -354,9 +362,13 @@ def test_interface_reader_only_uses_mocked_local_ioctl(
         calls.append("ioctl")
         return b"\x00" * 16 + struct.pack("@H", 8) + b"\x00" * 238
 
-    monkeypatch.setattr(diagnostics.socket, "if_nameindex", lambda: [(1, "lo")])
+    def read_netdev(_view: object, path: str) -> bytes:
+        assert path == diagnostics.NETDEV_PATH
+        return NETDEV
+
+    monkeypatch.setattr(diagnostics._KernelView, "read", read_netdev)
     monkeypatch.setattr(diagnostics.socket, "socket", control_socket)
-    monkeypatch.setattr(diagnostics.fcntl, "ioctl", ioctl)
+    monkeypatch.setitem(sys.modules, "fcntl", types.SimpleNamespace(ioctl=ioctl))
     assert diagnostics._KernelView().interfaces() == [("lo", 8)]
     assert calls == ["socket", "ioctl", "closed"]
 
@@ -376,3 +388,184 @@ def test_no_cli_or_policy_consumer_wiring() -> None:
     )
     assert policy["activation_ready"] is False
     assert not any(policy["activation"].values())
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        b"x y z q / ro - overlay overlay rw\n",
+        b"01 1 0:20 / / ro - overlay overlay rw\n",
+        b"23 0 0:20 / / ro - overlay overlay rw\n",
+        b"23 1 00:20 / / ro - overlay overlay rw\n",
+        b"23 1 0:x / / ro - overlay overlay rw\n",
+        b"23 1 0:20 relative / ro - overlay overlay rw\n",
+        b"23 1 0:20 /bad\\999 / ro - overlay overlay rw\n",
+        b"23 1 0:20 /bad\\0400\\ / ro - overlay overlay rw\n",
+        b"23 1 0:20 / / ro,ro - overlay overlay rw\n",
+        b"23 1 0:20 / / ro,,nosuid - overlay overlay rw\n",
+        b"23 1 0:20 / / ro,foo= - overlay overlay rw\n",
+        b"23 1 0:20 / / ro shared:x - overlay overlay rw\n",
+        b"23 1 0:20 / / ro shared:1 shared:2 - overlay overlay rw\n",
+        b"23 1 0:20 / / ro - overlay bad\\999 rw\n",
+        b"23 1 0:20 / / ro - overlay overlay rw,rw\n",
+        b"23 1 0:20 / / ro - overlay overlay rw\r\n",
+        b"23 1 0:20 / / ro - overlay overlay rw",
+        MOUNTS.replace(b"24 23", b"23 23"),
+    ],
+)
+def test_review_malformed_mountinfo_is_unknown(row: bytes) -> None:
+    view = View()
+    view.files[diagnostics.MOUNTS_PATH] = row
+    report = diagnostics._collect(view)
+    assert report["observations"]["root_mount_read_only_observed"] is None
+    assert report["unavailable_observations"] == ["mounts"]
+    assert report["runtime_acceptance"] is False
+
+
+def test_review_valid_encoded_mount_fields_remain_observable() -> None:
+    raw = (
+        b"23 1 0:20 /path\\040space\\134slash / ro,nosuid shared:7 "
+        b"master:2 propagate_from:3 - fuse.example /dev/path\\040space rw,foo=bar\n"
+        b"24 23 0:21 / /tmp rw - tmpfs tmpfs rw\n"
+    )
+    assert diagnostics._root_mount(raw) is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"0:pids:/x\n",
+        b"5:pids:/x\n5:pids:/x\n",
+        b"05:pids:/x\n",
+        b"5::/x\n",
+        b"5:pids,pids:/x\n",
+        b"5:pids,:/x\n",
+        b"5:pids:/x\n6:pids:/y\n",
+        b"5:name=:/x\n",
+        b"5:name=a,name=a:/x\n",
+        b"5:pids:/x\r\n",
+        b"5:pids:/x",
+        b"0::/x\x7f\n",
+    ],
+)
+def test_review_malformed_cgroup_is_unknown(raw: bytes) -> None:
+    view = View()
+    view.files[diagnostics.CGROUP_PATH] = raw
+    report = diagnostics._collect(view)
+    assert report["observations"]["unified_cgroup_membership_observed"] is None
+    assert report["unavailable_observations"] == ["cgroup"]
+
+
+def test_review_valid_hybrid_and_named_cgroups() -> None:
+    assert diagnostics._cgroup(b"0::/\n5:cpu,cpuacct:/x\n7:name=systemd:/x\n") is True
+    assert diagnostics._cgroup(b"5:pids:/x\n7:name=systemd:/x\n") is False
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"x" * (diagnostics.MAXIMUM_FILE_BYTES + 2),
+        NETDEV_HEADER
+        + b"".join(
+            f" eth{index}: ".encode() + b"0 " * 15 + b"0\n" for index in range(65)
+        ),
+        NETDEV[:-1],
+    ],
+    ids=["oversized-bytes", "too-many-interfaces", "truncated-row"],
+)
+def test_review_interface_intake_is_bounded_and_overflow_unknown(
+    raw: bytes, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    reads = []
+
+    class Stream(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            reads.append(size)
+            return super().read(size)
+
+    def opened(path: str, mode: str) -> Stream:
+        assert path == "/proc/thread-self/net/dev" and mode == "rb"
+        return Stream(raw)
+
+    def forbidden(*_args: object) -> Any:
+        pytest.fail("overflow must refuse without unbounded enumeration or socket")
+
+    monkeypatch.setattr(builtins, "open", opened)
+    monkeypatch.setattr(diagnostics.socket, "if_nameindex", forbidden)
+    monkeypatch.setattr(diagnostics.socket, "socket", forbidden)
+    view = View()
+    monkeypatch.setattr(view, "interfaces", diagnostics._KernelView().interfaces)
+    report = diagnostics._collect(view)
+    assert report["unavailable_observations"] == ["interfaces"]
+    assert report["observations"]["only_loopback_interface_observed"] is None
+    assert reads == [diagnostics.MAXIMUM_FILE_BYTES + 1]
+
+
+def test_review_unsupported_import_without_fcntl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_import = builtins.__import__
+
+    def importing(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "fcntl":
+            raise ModuleNotFoundError("synthetic fcntl unavailable")
+        return original_import(name, *args, **kwargs)
+
+    module = types.ModuleType("diagnostics_unsupported_platform_fixture")
+    source = (ROOT / "scripts/staging_offline_verifier_diagnostics.py").read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "__import__", importing)
+        patch.setattr(sys, "platform", "win32")
+        exec(compile(source, "unsupported_fixture", "exec"), module.__dict__)
+        with pytest.raises(
+            module.DiagnosticsUnavailable, match="^platform_unsupported$"
+        ):
+            module.capture_linux_verifier_diagnostics()
+
+
+@pytest.mark.parametrize("access", [b"ro=1", b"rw=1"])
+def test_review_access_options_cannot_take_values(access: bytes) -> None:
+    with pytest.raises(diagnostics.DiagnosticsUnavailable):
+        diagnostics._root_mount(b"23 1 0:20 / / " + access + b" - overlay overlay rw\n")
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        NETDEV.replace(b"Receive", b"Wrong"),
+        NETDEV.replace(b"colls", b"wrong"),
+        NETDEV.replace(b" lo:", b" ../escape:"),
+        NETDEV.replace(b"0 ", b"00 ", 1),
+        NETDEV.replace(b"0 ", b"-1 ", 1),
+        NETDEV.replace(b"0 ", b"18446744073709551616 ", 1),
+        NETDEV.replace(b"0 ", b"", 1),
+        NETDEV + NETDEV.splitlines(keepends=True)[-1],
+        NETDEV + b"\n",
+    ],
+    ids=[
+        "heading",
+        "counter-heading",
+        "name",
+        "leading-zero",
+        "negative",
+        "overflow",
+        "count",
+        "duplicate",
+        "blank",
+    ],
+)
+def test_review_netdev_malformed_names_or_counters_refuse(raw: bytes) -> None:
+    with pytest.raises(diagnostics.DiagnosticsUnavailable):
+        diagnostics._interface_names(raw)
+
+
+def test_review_netdev_maximum_valid_intake() -> None:
+    raw = NETDEV_HEADER + b"".join(
+        f" eth{index}: ".encode() + b"0 " * 15 + b"0\n" for index in range(64)
+    )
+    assert diagnostics._interface_names(raw) == [f"eth{index}" for index in range(64)]
+
+
+def test_review_cgroup_cannot_have_multiple_hierarchy_names() -> None:
+    with pytest.raises(diagnostics.DiagnosticsUnavailable):
+        diagnostics._cgroup(b"5:name=one,name=two:/x\n")
