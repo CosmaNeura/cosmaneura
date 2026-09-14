@@ -9,7 +9,7 @@
     "amd64_manifest_digest": "sha256:5e511b0e940def74dd23389510300c76017ca9bbc92484c40cff0951adf32245",
     "version": "python:3.12.11-alpine3.22"
   },
-  "archive_sha256": "c776733e08c27c5609d0fe4348b4b6298aefd228c246a3d8f587a3a7daf5a017",
+  "archive_sha256": "2859230e2a0fc2232b0f34ca90adec1c83ce94e81ff2c13dd8b2a9d4c0f5561b",
   "dockerfile_sha256": "0d619d472896d94e8f8ac12efd7600e0363e9a345ddd6db5ec55e9ab1ce3a110",
   "verifier_candidate_not_in_probe_image": {
     "version": "2.97.0",
@@ -24,9 +24,135 @@
   "inspection": {
     "architecture": "amd64",
     "config": {
-      "digest": "sha256:30470f4e173dada7ffcadeecf685a2412d191afe2b1aae21f010234abe6b09d5",
+      "digest": "sha256:e8abc9f994ac32f533c33a464683e5228925493891cc37360d0184af6e343a08",
       "mediaType": "application/vnd.oci.image.config.v1+json",
       "size": 6557
+    },
+    "config_contents": {
+      "architecture": "amd64",
+      "config": {
+        "Entrypoint": [
+          "/usr/local/bin/python3",
+          "-I",
+          "-S",
+          "-B",
+          "/probe/staging_runtime_capability_probe.py"
+        ],
+        "Env": [
+          "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "LANG=C.UTF-8",
+          "GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305",
+          "PYTHON_VERSION=3.12.11",
+          "PYTHON_SHA256=c30bb24b7f1e9a19b11b55a546434f74e739bb4c271a3e3a80ff4380d49f7adb"
+        ],
+        "User": "65532:65532",
+        "WorkingDir": "/probe"
+      },
+      "created": "2026-09-14T08:36:24.390808772-04:00",
+      "history": [
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T11:04:56Z",
+          "created_by": "ADD alpine-minirootfs-3.22.2-x86_64.tar.gz / # buildkit"
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T11:04:56Z",
+          "created_by": "CMD [\"/bin/sh\"]",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "ENV LANG=C.UTF-8",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "RUN /bin/sh -c set -eux; \tapk add --no-cache \t\tca-certificates \t\ttzdata \t; # buildkit"
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "ENV GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "ENV PYTHON_VERSION=3.12.11",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "ENV PYTHON_SHA256=c30bb24b7f1e9a19b11b55a546434f74e739bb4c271a3e3a80ff4380d49f7adb",
+          "empty_layer": true
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "RUN /bin/sh -c set -eux; \t\tapk add --no-cache --virtual .build-deps \t\tbluez-dev \t\tbzip2-dev \t\tdpkg-dev dpkg \t\tfindutils \t\tgcc \t\tgdbm-dev \t\tgnupg \t\tlibc-dev \t\tlibffi-dev \t\tlibnsl-dev \t\tlibtirpc-dev \t\tlinux-headers \t\tmake \t\tncurses-dev \t\topenssl-dev \t\tpax-utils \t\treadline-dev \t\tsqlite-dev \t\ttar \t\ttcl-dev \t\ttk \t\ttk-dev \t\tutil-linux-dev \t\txz \t\txz-dev \t\tzlib-dev \t; \t\twget -O python.tar.xz \"https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz\"; \techo \"$PYTHON_SHA256 *python.tar.xz\" | sha256sum -c -; \twget -O python.tar.xz.asc \"https://www.python.org/ftp/python/${PYTHON_VERSION%%[a-z]*}/Python-$PYTHON_VERSION.tar.xz.asc\"; \tGNUPGHOME=\"$(mktemp -d)\"; export GNUPGHOME; \tgpg --batch --keyserver hkps://keys.openpgp.org --recv-keys \"$GPG_KEY\"; \tgpg --batch --verify python.tar.xz.asc python.tar.xz; \tgpgconf --kill all; \trm -rf \"$GNUPGHOME\" python.tar.xz.asc; \tmkdir -p /usr/src/python; \ttar --extract --directory /usr/src/python --strip-components=1 --file python.tar.xz; \trm python.tar.xz; \t\tcd /usr/src/python; \tgnuArch=\"$(dpkg-architecture --query DEB_BUILD_GNU_TYPE)\"; \t./configure \t\t--build=\"$gnuArch\" \t\t--enable-loadable-sqlite-extensions \t\t--enable-option-checking=fatal \t\t--enable-shared \t\t$(test \"${gnuArch%%-*}\" != 'riscv64' && echo '--with-lto') \t\t--with-ensurepip \t; \tnproc=\"$(nproc)\"; \tEXTRA_CFLAGS=\"-DTHREAD_STACK_SIZE=0x100000\"; \tLDFLAGS=\"${LDFLAGS:--Wl},--strip-all\"; \t\tarch=\"$(apk --print-arch)\"; \t\tcase \"$arch\" in \t\t\tx86_64|aarch64) \t\t\t\tEXTRA_CFLAGS=\"${EXTRA_CFLAGS:-} -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer\"; \t\t\t\t;; \t\t\tx86) \t\t\t\t;; \t\t\t*) \t\t\t\tEXTRA_CFLAGS=\"${EXTRA_CFLAGS:-} -fno-omit-frame-pointer\"; \t\t\t\t;; \t\tesac; \tmake -j \"$nproc\" \t\t\"EXTRA_CFLAGS=${EXTRA_CFLAGS:-}\" \t\t\"LDFLAGS=${LDFLAGS:-}\" \t; \trm python; \tmake -j \"$nproc\" \t\t\"EXTRA_CFLAGS=${EXTRA_CFLAGS:-}\" \t\t\"LDFLAGS=${LDFLAGS:--Wl},-rpath='\\$\\$ORIGIN/../lib'\" \t\tpython \t; \tmake install; \t\tcd /; \trm -rf /usr/src/python; \t\tfind /usr/local -depth \t\t\\( \t\t\t\\( -type d -a \\( -name test -o -name tests -o -name idle_test \\) \\) \t\t\t-o \\( -type f -a \\( -name '*.pyc' -o -name '*.pyo' -o -name 'libpython*.a' \\) \\) \t\t\\) -exec rm -rf '{}' + \t; \t\tfind /usr/local -type f -executable -not \\( -name '*tkinter*' \\) -exec scanelf --needed --nobanner --format '%n#p' '{}' ';' \t\t| tr ',' '\\n' \t\t| sort -u \t\t| awk 'system(\"[ -e /usr/local/lib/\" $1 \" ]\") == 0 { next } { print \"so:\" $1 }' \t\t| xargs -rt apk add --no-network --virtual .python-rundeps \t; \tapk del --no-network .build-deps; \t\texport PYTHONDONTWRITEBYTECODE=1; \tpython3 --version; \tpip3 --version # buildkit"
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "RUN /bin/sh -c set -eux; \tfor src in idle3 pip3 pydoc3 python3 python3-config; do \t\tdst=\"$(echo \"$src\" | tr -d 3)\"; \t\t[ -s \"/usr/local/bin/$src\" ]; \t\t[ ! -e \"/usr/local/bin/$dst\" ]; \t\tln -svT \"$src\" \"/usr/local/bin/$dst\"; \tdone # buildkit"
+        },
+        {
+          "comment": "buildkit.dockerfile.v0",
+          "created": "2025-10-08T18:52:37Z",
+          "created_by": "CMD [\"python3\"]",
+          "empty_layer": true
+        },
+        {
+          "created": "2026-09-14T12:36:23.741300515Z",
+          "created_by": "/bin/sh -c #(nop) COPY file:4635f777ea4e02f81ce77154541fd96ff2c31efd782fc5f2df422d51616ed9bf in /probe/staging_runtime_capability_probe.py "
+        },
+        {
+          "created": "2026-09-14T12:36:23.858407689Z",
+          "created_by": "/bin/sh -c #(nop) COPY file:40d23f26253eca3abbf22914425fd6e6f7a3e2f7c890617745954c2684f623bb in /probe/staging_offline_verifier_diagnostics.py "
+        },
+        {
+          "created": "2026-09-14T08:36:23.998343639-04:00",
+          "created_by": "/bin/sh -c #(nop) WORKDIR /probe",
+          "empty_layer": true
+        },
+        {
+          "created": "2026-09-14T08:36:24.130889141-04:00",
+          "created_by": "/bin/sh -c #(nop)  USER 65532:65532",
+          "empty_layer": true
+        },
+        {
+          "created": "2026-09-14T08:36:24.266581568-04:00",
+          "created_by": "/bin/sh -c #(nop)  ENTRYPOINT [\"/usr/local/bin/python3\" \"-I\" \"-S\" \"-B\" \"/probe/staging_runtime_capability_probe.py\"]",
+          "empty_layer": true
+        },
+        {
+          "created": "2026-09-14T08:36:24.390808772-04:00",
+          "created_by": "/bin/sh -c #(nop)  CMD []",
+          "empty_layer": true
+        }
+      ],
+      "os": "linux",
+      "rootfs": {
+        "diff_ids": [
+          "sha256:256f393e029fa2063d8c93720da36a74a032bed3355a2bc3e313ad12f8bde9d1",
+          "sha256:0a0fe510ed12a2de8d5b6232d4c872b96688ab4785eb2993c90b7c2ed43b3585",
+          "sha256:8ddd81c1a9c115e78258edb87135b3a747b081a2ed6396db5730f63cdb779898",
+          "sha256:c8b0d4ebc237696ed81caaadf2d1ef97f3cf1004f46010f3759a464638e3a906",
+          "sha256:a60fd89c3db8f669e3e97af41e405dbac0f12885850be54ae5a27c6f03c2e9b6",
+          "sha256:02d1c39287a92193d9a5042f1645b055978342b84e9ef9383bbc86431acc313a"
+        ],
+        "type": "layers"
+      }
     },
     "directories": {
       "probe": {
@@ -50,7 +176,7 @@
         "uid": 0
       }
     },
-    "encoded_layer_bytes": 17952439,
+    "encoded_layer_bytes": 17952948,
     "entrypoint": [
       "/usr/local/bin/python3",
       "-I",
@@ -60,17 +186,17 @@
     ],
     "files": {
       "probe/staging_offline_verifier_diagnostics.py": {
-        "bytes": 16035,
+        "bytes": 16277,
         "gid": 0,
         "mode": "0o644",
-        "sha256": "3b3d398255c209ce63396e2b5d860ad17309f804992708c94d1be45b93f4e51f",
+        "sha256": "c5a955a58df3d35cc2781c29d6190964254d6563097b7c731ffcc260adc55767",
         "uid": 0
       },
       "probe/staging_runtime_capability_probe.py": {
-        "bytes": 13876,
+        "bytes": 15806,
         "gid": 0,
         "mode": "0o644",
-        "sha256": "83b5167027771c71d26f77e87c23c182b992cbd39da3941f7a6402d509d85e90",
+        "sha256": "7e0f100a61711c87ed653b1fe2a20742609b5ca6cd5330429d36ea73669dc598",
         "uid": 0
       },
       "usr/local/bin/python3": {
@@ -108,23 +234,69 @@
         "size": 247
       },
       {
-        "digest": "sha256:b4aac5b48db5f88118492f52566ae3e17f72b45385a287ff6fe40d015a3ef260",
+        "digest": "sha256:586ac9c1f389f187abb2e9eaa780b949aa47ef2b88df5c0fa9c8ae80d518bb93",
         "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-        "size": 4968
+        "size": 5370
       },
       {
-        "digest": "sha256:963e1b95c005059a1094d2c37a38e3da9e2c6eb90d0ed0149d666384d4d1c574",
+        "digest": "sha256:1a94e11f2741f74b546368fd832efb9755f04a29b657e55f2ffe3cf6a03d5fc8",
         "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
-        "size": 5009
+        "size": 5116
       }
     ],
     "manifest": {
-      "digest": "sha256:496882a5ac5301240ec5d9bc50cbbc473e38fd9bdef53e0a35d81956f7243868",
+      "digest": "sha256:66c56cb1090d04483fc04bc18e61c68a6d3dedefd090a146d4ff7419a30e7233",
       "mediaType": "application/vnd.oci.image.manifest.v1+json",
       "size": 1623
     },
+    "manifest_contents": {
+      "config": {
+        "digest": "sha256:e8abc9f994ac32f533c33a464683e5228925493891cc37360d0184af6e343a08",
+        "mediaType": "application/vnd.oci.image.config.v1+json",
+        "size": 6557
+      },
+      "layers": [
+        {
+          "digest": "sha256:2d35ebdb57d9971fea0cac1582aa78935adf8058b2cc32db163c98822e5dfa1b",
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "size": 3802452
+        },
+        {
+          "digest": "sha256:0e7981d7adf08345e86a8f1e865e135d48976f253bc88f2078b9cc19c604508e",
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "size": 456912
+        },
+        {
+          "digest": "sha256:ceab0f9a612ffe233cde5cace4f51d7931a192422d41afbdd8525ba04ac5eb81",
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "size": 13682851
+        },
+        {
+          "digest": "sha256:b5479191cfc91bdd920031939a8f444635d4d690f1a3384e8600e2fbd81f2e32",
+          "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+          "size": 247
+        },
+        {
+          "digest": "sha256:586ac9c1f389f187abb2e9eaa780b949aa47ef2b88df5c0fa9c8ae80d518bb93",
+          "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+          "size": 5370
+        },
+        {
+          "digest": "sha256:1a94e11f2741f74b546368fd832efb9755f04a29b657e55f2ffe3cf6a03d5fc8",
+          "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+          "size": 5116
+        }
+      ],
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "schemaVersion": 2
+    },
     "os": "linux",
     "runtime_acceptance": false,
-    "uncompressed_layer_bytes": 51099136
-  }
+    "uncompressed_layer_bytes": 51100672,
+    "verification_actor": "implementer; not independent artifact review"
+  },
+  "source_head": "95cc148479340f3bae461d82af9178070c3414cc",
+  "source_head_scope": "Exact committed three-file image build input; the final PR review head separately includes metadata/docs updates.",
+  "independent_artifact_review_status": "OPEN: full archive not available to independent reviewer; metadata and implementer checks are not artifact acceptance.",
+  "archive_bytes": 17972736
 }

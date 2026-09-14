@@ -22,10 +22,13 @@ No actual Linux probe, verifier, container workload or Azure job has run.
 ## Exact artifact and execution method
 
 The source-adjacent `infra/runtime_capability/image-candidate.json` records the
-full verified OCI descriptor/config/layer closure and copied-file SHA-256s.
+implementer-verified OCI descriptor/config/layer closure and copied-file hashes.
+It now includes complete config/manifest contents, diff IDs and the exact
+image-input source head `95cc148479340f3bae461d82af9178070c3414cc` separately
+from the base. This is NOT independent artifact verification or acceptance.
 
-- Probe image manifest: `sha256:496882a5ac5301240ec5d9bc50cbbc473e38fd9bdef53e0a35d81956f7243868`.
-- Config: `sha256:30470f4e173dada7ffcadeecf685a2412d191afe2b1aae21f010234abe6b09d5`.
+- Probe image manifest: `sha256:66c56cb1090d04483fc04bc18e61c68a6d3dedefd090a146d4ff7419a30e7233`.
+- Config: `sha256:e8abc9f994ac32f533c33a464683e5228925493891cc37360d0184af6e343a08`.
 - Platform: Linux amd64. Image user/group: `65532:65532`.
 - Fixed argv: `/usr/local/bin/python3 -I -S -B /probe/staging_runtime_capability_probe.py`.
 - Python executable: `d7fc81b2f93779e4278fc7b928190d5e86d52b6c8076706512dc567874adb262`.
@@ -48,12 +51,14 @@ build secrets, external COPYs, installs or application dependencies. The
 builder's intermediate metadata containers were not workload executions.
 No emulated or native probe execution was used as Azure evidence.
 
-Reassembly recipe for that macOS/bsdtar client only (build-only, NOT a
-run/handoff). The macOS metadata-removal flags below are not GNU tar options;
-this is not presented as a portable Linux-client recipe:
+Corrected reassembly recipe (build-only, NOT a run/handoff) uses `git archive`,
+not client-specific tar options. Explicit `tar.umask=0022` is essential: the
+default archive mask yielded group-writable source and that candidate failed
+inspection. This corrected invocation was exercised on the recorded macOS client:
 
 ```sh
-tar --no-xattrs --no-acls --no-fflags --disable-copyfile -cf - \
+git -c tar.umask=0022 archive --format=tar \
+  95cc148479340f3bae461d82af9178070c3414cc \
   scripts/staging_runtime_capability_probe.py \
   scripts/staging_offline_verifier_diagnostics.py \
   infra/runtime_capability/Dockerfile |
@@ -117,7 +122,7 @@ in uninterruptible kernel sleep. Parent-death signaling and nonblocking reap
 are not substituted for full cgroup/tree cleanup proof.
 
 Independent review20 of the initial source/image proposal returned FAIL. The
-four source/documentation findings are being corrected; exact re-review is
+four source/documentation findings are corrected locally; exact re-review is
 required. Its image-artifact finding remains OPEN: the reviewer received
 metadata, not the full archive. Implementer hash checks are not independent
 artifact acceptance. The complete retained archive needs an authorized
@@ -168,9 +173,10 @@ transport remains outside the offline publisher-verifier namespace.
 
 ## Verification, recovery and follow-on milestones
 
-143 new synthetic mock cases passed across focused runs (115 initial, 17 new
-descriptor/parent/output regressions, 10 new identity/worker cases, one exact
-image/source binding case). No actual
+The new probe module contains 193 synthetic cases exercised across focused
+runs: 143 initial cases and 50 new review regressions. The correction run passed
+126 affected/new cases; the changed fixed-consumer guard passed separately.
+The image/source binding is rechecked after each artifact change. No actual
 fork, namespace, resource-limit mutation, image execution or network call occurs
 in those tests. Pinned Ruff 0.11.6 and Pyright 1.1.399 pass. Existing passing
 diagnostic/application tests were not rerun locally; normal new-head CI remains
