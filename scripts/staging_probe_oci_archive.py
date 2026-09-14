@@ -115,7 +115,57 @@ class ProbeImage:
         }
 
 
+def _physical_tar(raw: bytes) -> None:
+    """Check the entire bounded USTAR stream before a library can hide records."""
+    if len(raw) % 512 or len(raw) < 1024:
+        _fail("archive_framing")
+    offset = 0
+    count = 0
+
+    def octal(field: bytes) -> int:
+        value = field.rstrip(b" \x00").lstrip(b" ")
+        if not value or any(byte not in b"01234567" for byte in value):
+            _fail("archive_numeric_field")
+        return int(value, 8)
+
+    while offset < len(raw):
+        block = raw[offset : offset + 512]
+        if not any(block):
+            # Two complete zero end markers, followed only by zero padding.
+            if offset + 1024 > len(raw) or any(raw[offset:]):
+                _fail("archive_end_marker")
+            return
+        count += 1
+        if count > MAX_MEMBERS:
+            _fail("archive_members")
+        kind = block[156:157]
+        if kind in (b"L", b"K", b"x", b"g", b"S"):
+            _fail("archive_extensions")
+        if kind not in (b"0", b"\x00", b"5"):
+            _fail("archive_member_type_or_size")
+        if block[257:265] != b"ustar\x0000" or any(block[345:512]):
+            _fail("archive_ustar_header")
+        # This selected layout has no long names, prefix or link fields.
+        if any(block[157:257]):
+            _fail("archive_link_field")
+        _name, separator, padding = block[:100].partition(b"\x00")
+        if not separator or any(padding):
+            _fail("archive_name_field")
+        if octal(block[148:156]) != sum(block[:148]) + 8 * 32 + sum(block[156:]):
+            _fail("archive_checksum")
+        size = octal(block[124:136])
+        if size > MAX_ARCHIVE_BYTES or (kind == b"5" and size != 0):
+            _fail("archive_member_type_or_size")
+        end = offset + 512 + size
+        next_offset = (end + 511) // 512 * 512
+        if next_offset > len(raw) or any(raw[end:next_offset]):
+            _fail("archive_payload_padding")
+        offset = next_offset
+    _fail("archive_end_marker")
+
+
 def _archive_members(raw: bytes) -> dict[str, bytes]:
+    _physical_tar(raw)
     result: dict[str, bytes] = {}
     seen: set[str] = set()
     total = 0
@@ -152,7 +202,7 @@ def _archive_members(raw: bytes) -> dict[str, bytes]:
                 result[member.name] = data
     except ProbeArchiveRefused:
         raise
-    except (tarfile.TarError, OSError, ValueError, OverflowError):
+    except (tarfile.TarError, OSError, ValueError, OverflowError, RecursionError):
         raise ProbeArchiveRefused("archive_invalid") from None
     return result
 

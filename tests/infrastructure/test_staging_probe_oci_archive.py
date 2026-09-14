@@ -354,3 +354,128 @@ def test_resource_limits(monkeypatch: pytest.MonkeyPatch, limit: str) -> None:
     monkeypatch.setattr(subject, limit, 0)
     with pytest.raises(subject.ProbeArchiveRefused):
         subject.inspect_probe_archive(raw, **pins)
+
+
+def repinned(raw: bytes, pins: dict[str, str]) -> dict[str, str]:
+    return {**pins, "archive_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def archive_end(raw: bytes) -> int:
+    offset = 0
+    while any(raw[offset : offset + 512]):
+        size = int(raw[offset + 124 : offset + 136].strip(b"\x00 "), 8)
+        offset = (offset + 512 + size + 511) // 512 * 512
+    return offset
+
+
+@pytest.mark.parametrize("tail", [b"not-zero", b"\x00" * 512 + b"x"])
+def test_repinned_nonzero_trailing_bytes_refuse(tail: bytes) -> None:
+    raw, pins, _ = fixture()
+    changed = raw + tail
+    changed += b"\x00" * (-len(changed) % 512)
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_end_marker$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))
+
+
+def test_repinned_concatenated_archive_refuses() -> None:
+    raw, pins, _ = fixture()
+    changed = raw + raw
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_end_marker$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))
+
+
+@pytest.mark.parametrize("zero_blocks", [0, 1])
+def test_repinned_missing_complete_end_markers(zero_blocks: int) -> None:
+    raw, pins, _ = fixture()
+    changed = raw[: archive_end(raw)] + b"\x00" * (zero_blocks * 512)
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_end_marker$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))
+
+
+def test_explicitly_allowed_zero_padding_remains_valid() -> None:
+    raw, pins, _ = fixture()
+    changed = raw + b"\x00" * 1024
+    assert subject.inspect_probe_archive(changed, **repinned(changed, pins)).manifest
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        tarfile.GNUTYPE_LONGNAME,
+        tarfile.GNUTYPE_LONGLINK,
+        tarfile.XHDTYPE,
+        tarfile.XGLTYPE,
+        tarfile.GNUTYPE_SPARSE,
+    ],
+)
+@pytest.mark.parametrize("count", [1, 1200])
+def test_hidden_extensions_refuse_before_tarfile(
+    monkeypatch: pytest.MonkeyPatch, kind: bytes, count: int
+) -> None:
+    raw, pins, _ = fixture()
+    extension = tarfile.TarInfo("././@LongLink")
+    extension.type = kind
+    extension.size = len(b"blobs/\x00")
+    header = extension.tobuf(format=tarfile.GNU_FORMAT)
+    record = header + b"blobs/\x00" + b"\x00" * (512 - extension.size)
+    # A logical parser can consume these before yielding the otherwise allowed
+    # first directory. No extension chain may reach tarfile recursion at all.
+    changed = record * count + raw
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("hidden record reached logical tar parser")
+
+    monkeypatch.setattr(subject.tarfile, "open", forbidden)
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_extensions$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))
+
+
+def test_repinned_nonzero_member_padding_refuses() -> None:
+    raw, pins, _ = fixture()
+    offset = 0
+    while True:
+        size = int(raw[offset + 124 : offset + 136].strip(b"\x00 "), 8)
+        if size % 512:
+            position = offset + 512 + size
+            break
+        offset += 512 + size
+    changed = raw[:position] + b"x" + raw[position + 1 :]
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_payload_padding$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))
+
+
+def test_logical_parser_recursion_is_fixed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw, pins, _ = fixture()
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise RecursionError("synthetic-private-parser-detail")
+
+    monkeypatch.setattr(subject.tarfile, "open", fail)
+    with pytest.raises(subject.ProbeArchiveRefused, match="^archive_invalid$"):
+        subject.inspect_probe_archive(raw, **pins)
+
+
+@pytest.mark.parametrize(
+    ("offset", "replacement", "code"),
+    [
+        (257, b"badmagic", "archive_ustar_header"),
+        (345, b"prefix", "archive_ustar_header"),
+        (90, b"hidden", "archive_name_field"),
+        (124, b"\x0000000000001", "archive_numeric_field"),
+        (148, b"0000000\x00", "archive_checksum"),
+    ],
+)
+def test_repinned_header_ambiguity_refuses(
+    offset: int, replacement: bytes, code: str
+) -> None:
+    raw, pins, _ = fixture()
+    header = bytearray(raw[:512])
+    header[offset : offset + len(replacement)] = replacement
+    if offset != 148:
+        header[148:156] = b"        "
+        header[148:156] = f"{sum(header):06o}\x00 ".encode()
+    changed = bytes(header) + raw[512:]
+    with pytest.raises(subject.ProbeArchiveRefused, match="^" + code + "$"):
+        subject.inspect_probe_archive(changed, **repinned(changed, pins))

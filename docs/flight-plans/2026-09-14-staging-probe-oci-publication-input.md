@@ -23,6 +23,11 @@ input and call that trusted. All failures use fixed error codes.
 The validator:
 
 - Checks the complete tar hash, including framing and padding, before parsing.
+- Pre-scans every physical USTAR header/payload before the logical tar reader:
+  unsigned checksums, unambiguous name/size fields, bounded physical member count,
+  no prefix/link/extension records, zero payload padding, two complete end markers
+  and only zero padding through the exact end. GNU/PAX and legacy non-USTAR
+  formats are deliberately unsupported by this selected-archive profile.
 - Accepts bounded regular OCI layout/index/blob files, optional matching Docker
   compatibility metadata, and the two standard blob directories only.
 - Rejects duplicate names/JSON keys, links, special files, sparse/PAX entries,
@@ -45,10 +50,18 @@ execution, runtime acceptance and activation as false; it is not a receipt.
 
 ## Verification actually performed
 
-75 new synthetic unit cases pass. They cover successful byte retention, exact
+98 synthetic unit cases were added across the initial75 and23 corrective cases.
+The initial75 passed before review. After the physical-stream correction, all23
+new cases and seven affected existing cases passed across focused batches; final
+full-suite CI is still required. The unchanged initial suite was not replayed.
+They cover successful byte retention, exact
 readback, independent pin mismatch, padding/framing changes, malformed archives,
 special nodes, duplicate/unsafe paths and JSON, foreign descriptors, unsupported
 configuration and resource limits. They never execute an image or use a registry.
+The corrective cases repin their modified tar bytes: trailing nonzero data,
+concatenated archives, missing end markers, hidden GNU/PAX/sparse records and
+1200-record extension chains, payload padding, header ambiguity/checksum and
+fixed recursion failures. The retained image also passed the new physical scan.
 Ruff0.11.6 lint/format and targeted Pyright1.1.399 Linux checks pass. The local
 typecheck explicitly uses the existing test interpreter; its initial missing-
 pytest environment diagnostic was resolved without changing source or rerunning
@@ -71,6 +84,11 @@ The new module is included in the existing infrastructure-general CI shard,
 which runs the infrastructure directory except its explicit specialist globs.
 No workflow or dependency was added. Require final-head CI and durable exact
 independent source review before normal merge; agent review is not GitHub approval.
+
+Initial independent review23 found oneP2: logical tar iteration alone did not
+cover hidden physical records or bytes beyond the end marker. The physical
+pre-scan and adversarial cases above are the implementer's correction; they
+require fresh final-head independent review. Do not reuse the earlier verdict.
 
 ## Next integration and live gates
 
