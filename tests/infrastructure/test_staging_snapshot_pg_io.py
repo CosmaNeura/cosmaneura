@@ -498,6 +498,123 @@ class CleanupDenialTests(unittest.TestCase):
 
 
 class WallClockTests(unittest.TestCase):
+    def test_existing_pending_alarm_is_refused_before_handler_installation(self):
+        with (
+            patch.object(pg.signal, "sigpending", return_value={signal.SIGALRM}),
+            patch.object(pg.signal, "signal") as install,
+            patch.object(pg.signal, "setitimer") as arm,
+            self.assertRaisesRegex(pg.PostgreSQLRefused, "pending_alarm_refused"),
+        ):
+            with pg.capture_deadline(time.monotonic() + 1):
+                self.fail("entered with a caller-owned pending alarm")
+        install.assert_not_called()
+        arm.assert_not_called()
+
+    def test_expiry_at_each_teardown_step_restores_handler_timer_and_mask(self):
+        original = signal.getsignal(signal.SIGALRM)
+        original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        for point in (
+            "block",
+            "disarm_before",
+            "disarm_after",
+            "pending",
+            "restore_before",
+            "restore_after",
+            "unmask_before",
+            "unmask_after",
+        ):
+            real_mask = signal.pthread_sigmask
+            real_timer = signal.setitimer
+            real_pending = signal.sigpending
+            real_handler = signal.signal
+            expiry = []
+            fired = []
+
+            def inject(candidate):
+                if candidate == point and expiry and not fired:
+                    fired.append(candidate)
+                    expiry[0](signal.SIGALRM, None)
+
+            def mask(how, values):
+                if how == signal.SIG_SETMASK:
+                    inject("unmask_before")
+                result = real_mask(how, values)
+                if how == signal.SIG_BLOCK and values == {signal.SIGALRM}:
+                    inject("block")
+                if how == signal.SIG_SETMASK:
+                    inject("unmask_after")
+                return result
+
+            def timer(which, seconds, interval=0):
+                if seconds == 0:
+                    inject("disarm_before")
+                result = real_timer(which, seconds, interval)
+                if seconds == 0:
+                    inject("disarm_after")
+                return result
+
+            def pending():
+                inject("pending")
+                return real_pending()
+
+            def handler(number, value):
+                if value == original:
+                    inject("restore_before")
+                result = real_handler(number, value)
+                if value == original:
+                    inject("restore_after")
+                return result
+
+            with (
+                self.subTest(point=point),
+                patch.object(pg.signal, "pthread_sigmask", side_effect=mask),
+                patch.object(pg.signal, "setitimer", side_effect=timer),
+                patch.object(pg.signal, "sigpending", side_effect=pending),
+                patch.object(pg.signal, "signal", side_effect=handler),
+                self.assertRaisesRegex(pg.PostgreSQLRefused, "capture_deadline"),
+            ):
+                with pg.capture_deadline(time.monotonic() + 1):
+                    expiry.append(signal.getsignal(signal.SIGALRM))
+            self.assertEqual(fired, [point])
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertEqual(signal.getsignal(signal.SIGALRM), original)
+            self.assertEqual(
+                signal.pthread_sigmask(signal.SIG_BLOCK, set()), original_mask
+            )
+
+    def test_real_pending_alarm_drained_before_previous_handler_restored(self):
+        previous_calls = []
+        original = signal.getsignal(signal.SIGALRM)
+        original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        signal.signal(signal.SIGALRM, lambda *_: previous_calls.append("unexpected"))
+        previous = signal.getsignal(signal.SIGALRM)
+        real_timer = signal.setitimer
+        fired = []
+
+        def timer(which, seconds, interval=0):
+            result = real_timer(which, seconds, interval)
+            if seconds == 0 and not fired:
+                fired.append(True)
+                os.kill(os.getpid(), signal.SIGALRM)
+                self.assertIn(signal.SIGALRM, signal.sigpending())
+            return result
+
+        try:
+            with (
+                patch.object(pg.signal, "setitimer", side_effect=timer),
+                self.assertRaisesRegex(pg.PostgreSQLRefused, "capture_deadline"),
+            ):
+                with pg.capture_deadline(time.monotonic() + 1):
+                    pass
+            self.assertEqual(previous_calls, [])
+            self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+            self.assertEqual(signal.getsignal(signal.SIGALRM), previous)
+            self.assertEqual(
+                signal.pthread_sigmask(signal.SIG_BLOCK, set()), original_mask
+            )
+        finally:
+            signal.signal(signal.SIGALRM, original)
+
     def test_blocking_operation_is_interrupted_and_previous_handler_restored(self):
         original = signal.getsignal(signal.SIGALRM)
         start = time.monotonic()

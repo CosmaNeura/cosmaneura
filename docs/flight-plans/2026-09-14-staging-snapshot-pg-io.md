@@ -53,6 +53,16 @@ handler/disarms on all exits and refuses even a swallowed alarm. The future
 launcher must finish/disarm its confirmation timer before capture, without
 extending the original plan/handoff or access-window deadline.
 
+Review32 found a P1 alarm-during-teardown race. Corrected teardown first makes
+the capture handler record-only, masks SIGALRM, disarms and drains a pending
+one-shot signal, then restores the caller's handler and original mask through
+nested finally blocks. Only after that restoration does it propagate recorded
+expiry. A caller-owned already-pending alarm refuses before handler installation.
+Deterministic tests inject expiry at eight teardown steps; another test delivers
+a real pending signal in the test process and proves it never reaches the
+restored prior handler. The original review FAIL remains until independent
+re-review of this correction; local tests are not independent acceptance.
+
 Stream output in bounded chunks, with no shell and discarded native diagnostic
 stderr. Each child has its own session/process group. Non-reaping wait keeps the
 leader PID allocated until group cancellation. Native exact process-group
@@ -104,6 +114,12 @@ directories hold ONLY invented bytes; no actual PG/Azure/encryption operation.
 Relocated test import smoke, Ruff0.11.6 format/lint, Pyright1.1.399/Linux and
 whitespace checks pass. Required final-head CI and independent source review
 remain gates, not replaced by these statements.
+
+Review32 correction adds3new methods. Two new teardown methods plus6affected
+alarm methods passed; the new entry-pending-alarm method also passed separately.
+There are now39methods, with25distinct new/affected methods checked during this
+revision series and14unchanged passing methods left alone. No live client or
+encryption operation was run. Final source still needs independent re-review.
 
 Recovery for this dormant source is to stop using it; no deployed state changed.
 If future live capture fails, preserve its protected partial artifact and remove

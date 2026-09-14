@@ -86,26 +86,51 @@ def capture_deadline(deadline: float) -> Iterator[None]:
         math.isfinite(remaining) and 0 < remaining <= MAX_SECONDS, "capture_deadline"
     )
     require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0), "active_alarm_refused")
-    require(
-        signal.SIGALRM not in signal.pthread_sigmask(signal.SIG_BLOCK, set()),
-        "blocked_alarm_refused",
-    )
+    original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    require(signal.SIGALRM not in original_mask, "blocked_alarm_refused")
+    require(signal.SIGALRM not in signal.sigpending(), "pending_alarm_refused")
     previous = signal.getsignal(signal.SIGALRM)
     expired = False
+    closing = False
 
     def expire(_number: int, _frame: object) -> None:
         nonlocal expired
         expired = True
-        raise PostgreSQLRefused("capture_deadline")
+        if not closing:
+            raise PostgreSQLRefused("capture_deadline")
 
     try:
         signal.signal(signal.SIGALRM, expire)
         signal.setitimer(signal.ITIMER_REAL, max(0.000001, deadline - time.monotonic()))
         yield
-        require(not expired and time.monotonic() < deadline, "capture_deadline")
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous)
+        # A queued Python handler can run as teardown starts. Once closing is
+        # set it only records expiry. Nested finally also covers delivery at
+        # that first transition, before any global state has been restored.
+        try:
+            closing = True
+        finally:
+            closing = True
+            try:
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+            finally:
+                try:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                finally:
+                    try:
+                        # Drain this one-shot timer's blocked pending signal
+                        # before restoring a handler that belongs to the caller.
+                        if signal.SIGALRM in signal.sigpending():
+                            expired = True
+                            signal.sigwait({signal.SIGALRM})
+                    finally:
+                        try:
+                            signal.signal(signal.SIGALRM, previous)
+                        finally:
+                            signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+        # Propagate expiry only after the old handler/mask and disarmed timer
+        # are restored, never from the middle of teardown.
+        require(not expired and time.monotonic() < deadline, "capture_deadline")
 
 
 @dataclass(frozen=True)
