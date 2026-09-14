@@ -3342,7 +3342,7 @@ def _validate_provider_configuration(plan: Mapping[str, Any]) -> None:
     assert isinstance(builtin, Mapping)
     expected_providers = {
         "azurerm": (azurerm, "registry.opentofu.org/hashicorp/azurerm", "4.73.0"),
-        "azapi": (azapi, "registry.opentofu.org/azure/azapi", "2.1.0"),
+        "azapi": (azapi, "registry.opentofu.org/azure/azapi", "2.4.0"),
         "terraform": (builtin, "terraform.io/builtin/terraform", None),
     }
     for name, (provider, full_name, version) in expected_providers.items():

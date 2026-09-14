@@ -102,6 +102,9 @@ jobs:
         working-directory: infra-staging-rehearsal
         run: tofu validate -no-color
 
+      - name: Validate pull-only Job identity schema without Azure
+        run: python3 scripts/check_staging_job_identity_schema.py
+
       - name: tofu plan (mock providers, no backend)
         working-directory: infra-staging-rehearsal
         run: tofu test -test-directory=tests -no-color
