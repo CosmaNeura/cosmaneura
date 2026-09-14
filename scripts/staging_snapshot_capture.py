@@ -5,6 +5,8 @@ explicit current identity, two foreground confirmations, exact independent
 plan/handoff review and start-time expiry BEFORE calling this core. This module
 does not implement, mint, renew, or substitute for any of those authority gates.
 Tests supply in-memory operations only. There is deliberately no live CLI here.
+Firewall changes are HUMAN-MANAGED: this protocol has no mutation operation.
+Readbacks plus operator attestations do not prove atomic resource ownership.
 """
 
 from __future__ import annotations
@@ -25,10 +27,62 @@ MAX_ACCESS_SECONDS = 1800
 MAX_CAPTURE_SECONDS = 1200
 CLEANUP_RESERVE_SECONDS = 300
 MAX_ARCHIVE_BYTES = 1024**3
+SAFE_REFUSAL_CODES = frozenset(
+    {
+        "access_window_exceeded_human_action_required",
+        "action_deadline",
+        "archive_digest",
+        "archive_not_complete_or_bound",
+        "archive_size",
+        "archive_type",
+        "capture_failed_access_closed",
+        "capture_stop_failed_human_action_required",
+        "cleanup_failed_human_action_required",
+        "cleanup_not_confirmed_human_action_required",
+        "cleanup_rule_changed_human_action_required",
+        "clock",
+        "clock_divergence",
+        "clock_regression",
+        "duplicate_rule_names",
+        "evidence_hash",
+        "future_or_reordered_artifact",
+        "handoff_lifetime",
+        "handoff_remaining_lifetime",
+        "handoff_expired_before_capture",
+        "human_creation_not_confirmed",
+        "human_removal_not_confirmed",
+        "input_type",
+        "new_rule_not_exact",
+        "plan_lifetime",
+        "plan_remaining_lifetime",
+        "planned_rule_already_exists",
+        "pending_mutation_unresolved_human_action_required",
+        "preexisting_rules_changed",
+        "preexisting_rules_changed_human_action_required",
+        "public_ip_changed",
+        "public_ipv4_required",
+        "rule_inventory_name",
+        "rule_inventory_shape",
+        "rule_name",
+        "rule_type",
+        "single_exact_ipv4",
+        "snapshot_check_failed_no_acceptance",
+        "source_commit",
+        "source_revision_changed",
+        "utc_required",
+    }
+)
 
 
 class CaptureRefused(RuntimeError):
     """Only fixed non-sensitive codes may be surfaced by the human launcher."""
+
+    def __init__(self, code: object):
+        super().__init__(
+            code
+            if type(code) is str and code in SAFE_REFUSAL_CODES
+            else "snapshot_check_failed_no_acceptance"
+        )
 
 
 def require(condition: object, code: str) -> None:
@@ -55,6 +109,7 @@ class CaptureInputs:
     plan_sha256: str
     identity_evidence_sha256: str
     workspace_manifest_sha256: str
+    manual_window_approval_sha256: str
     plan_created_at: datetime
     plan_expires_at: datetime
     handoff_created_at: datetime
@@ -66,7 +121,10 @@ class CaptureInputs:
             re.fullmatch(r"cosmaneura-snapshot-[0-9a-f]{16}", self.rule.name),
             "rule_name",
         )
-        address = ipaddress.ip_address(self.rule.start)
+        try:
+            address = ipaddress.ip_address(self.rule.start)
+        except (ValueError, TypeError):
+            raise CaptureRefused("public_ipv4_required") from None
         require(
             type(address) is ipaddress.IPv4Address and address.is_global,
             "public_ipv4_required",
@@ -84,6 +142,7 @@ class CaptureInputs:
                     self.plan_sha256,
                     self.identity_evidence_sha256,
                     self.workspace_manifest_sha256,
+                    self.manual_window_approval_sha256,
                 )
             ),
             "evidence_hash",
@@ -145,6 +204,14 @@ class Archive:
         )
 
 
+@dataclass(frozen=True)
+class HumanClosure:
+    # From actual operator interaction, NOT inferred from a transient GET/404.
+    # These attestations are not provider-side atomicity/serialization proof.
+    all_mutations_terminal: bool
+    rule_removal_completed: bool
+
+
 class Operations(Protocol):
     """No implementation is supplied in this PR. Every timeout is mandatory.
 
@@ -152,6 +219,9 @@ class Operations(Protocol):
     use the exact staging server/subscription, retain authenticated response
     dates and the exact ARM-token identity, refuse redirects/ambient overrides,
     and expose only value-minimized results. Test doubles confer no authority.
+    Human methods only show reviewed instructions/read genuine foreground TTY
+    responses; they MUST NOT invoke a firewall PUT/DELETE/CLI mutation. Publish
+    the removal fallback and deadline BEFORE the human may create the rule.
     """
 
     def monotonic(self) -> float: ...
@@ -165,12 +235,15 @@ class Operations(Protocol):
     def verify_empty_encrypted_payload(
         self, inputs: CaptureInputs, timeout: float
     ) -> None: ...
-    def create_exact_rule(self, rule: Rule, timeout: float) -> None: ...
+    def present_manual_window_instructions(
+        self, inputs: CaptureInputs, window_closes_at: datetime, timeout: float
+    ) -> None: ...
+    def await_human_rule_creation(self, rule: Rule, timeout: float) -> bool: ...
     def capture_to_exclusive_encrypted_descriptor(
         self, inputs: CaptureInputs, timeout: float, max_bytes: int
     ) -> Archive: ...
     def cancel_capture_and_reap(self, timeout: float) -> None: ...
-    def delete_exact_rule(self, rule: Rule, timeout: float) -> None: ...
+    def await_human_rule_removal(self, rule: Rule, timeout: float) -> HumanClosure: ...
     def publish_metadata(self, metadata: dict[str, object], timeout: float) -> None: ...
 
 
@@ -230,39 +303,52 @@ def rules_by_name(rules: tuple[Rule, ...]) -> dict[str, Rule]:
 
 
 def without_new_rule(rules: dict[str, Rule], rule: Rule) -> dict[str, Rule]:
-    return {name: value for name, value in rules.items() if name != rule.name}
+    return {
+        name: value for name, value in rules.items() if name != rule.name.casefold()
+    }
 
 
-def close_exact_access(
-    operations: Operations, rule: Rule, baseline: dict[str, Rule]
+def observe_human_closure(
+    operations: Operations, rule: Rule, baseline: dict[str, Rule], clock: Clock
 ) -> None:
-    """Safety cleanup is not blocked by expired receipts or a failed clock.
+    """Request HUMAN cleanup even on expired authority/failed clocks/children.
 
-    No generalized rule deletion and no existing-rule repair. If creation had
-    an unknown outcome, inspect before deleting. Matching the exact rule is
-    mandatory. Cleanup failure must be reported; never claim automatic Azure TTL.
+    No firewall mutation is performed here. The operator must settle ALL create
+    and remove operations (including unknown outcomes), then confirm removal.
+    Absence alone is insufficient: a pending create may take effect later.
+    This is the expressly approved residual-risk contract, not atomic ownership.
     """
     cancellation_failed = False
     try:
         operations.cancel_capture_and_reap(timeout=15)
     except BaseException:
-        # A stuck child must not prevent best-effort closure of its access rule.
+        # A stuck child must not suppress the human's removal instructions.
         cancellation_failed = True
-    rules = rules_by_name(operations.list_rules(timeout=30))
-    if rule.name in rules:
-        require(rules[rule.name] == rule, "cleanup_rule_changed_human_action_required")
-        try:
-            operations.delete_exact_rule(rule, timeout=60)
-        except BaseException:
-            # Unknown DELETE outcome: one readback, no replay or blind retry.
-            pass
+    clock_failed = False
+    try:
+        # Leave time for the final readback; a broken/expired clock never hides
+        # the operator's fallback. It still prevents later success publication.
+        timeout = max(1, min(240, MAX_ACCESS_SECONDS - clock.elapsed() - 30))
+    except BaseException:
+        clock_failed = True
+        timeout = 240
+    closure = operations.await_human_rule_removal(rule, timeout=timeout)
+    require(type(closure) is HumanClosure, "human_removal_not_confirmed")
+    require(
+        closure.all_mutations_terminal is True,
+        "pending_mutation_unresolved_human_action_required",
+    )
+    require(closure.rule_removal_completed is True, "human_removal_not_confirmed")
     after = rules_by_name(operations.list_rules(timeout=30))
-    require(rule.name not in after, "cleanup_not_confirmed_human_action_required")
+    require(
+        rule.name.casefold() not in after, "cleanup_not_confirmed_human_action_required"
+    )
     require(after == baseline, "preexisting_rules_changed_human_action_required")
     require(not cancellation_failed, "capture_stop_failed_human_action_required")
+    require(not clock_failed, "clock")
 
 
-def execute_after_human_gate(
+def _execute_after_human_gate(
     inputs: CaptureInputs, operations: Operations
 ) -> dict[str, object]:
     """Run only after the separate reviewed human launcher establishes authority.
@@ -283,38 +369,55 @@ def execute_after_human_gate(
         "public_ip_changed",
     )
     baseline = rules_by_name(operations.list_rules(clock.remaining(120, 30)))
-    require(inputs.rule.name not in baseline, "planned_rule_already_exists")
+    require(inputs.rule.name.casefold() not in baseline, "planned_rule_already_exists")
     operations.verify_empty_encrypted_payload(inputs, clock.remaining(120, 30))
     operations.revalidate_human_gate(inputs, clock.remaining(120, 30))
     inputs.validate(operations.utcnow())
-    # Intent is in memory only; no one-use claim is created. Set before PUT so
-    # timeout/unknown result still reaches exact inspected cleanup.
-    create_attempted = False
+    # Set before showing ANY creation instructions: a partial prompt/interrupt
+    # must still request human removal. This is not a persisted claim or lock.
+    instructions_released = False
     archive: Archive | None = None
     failed = False
     try:
-        create_attempted = True
-        operations.create_exact_rule(inputs.rule, clock.remaining(150, 30))
-        observed = rules_by_name(operations.list_rules(clock.remaining(180, 30)))
-        require(observed.get(inputs.rule.name) == inputs.rule, "new_rule_not_exact")
+        instructions_released = True
+        operations.present_manual_window_instructions(
+            inputs,
+            clock.started_utc + timedelta(seconds=MAX_ACCESS_SECONDS),
+            clock.remaining(120, 15),
+        )
+        require(
+            operations.await_human_rule_creation(inputs.rule, clock.remaining(240, 120))
+            is True,
+            "human_creation_not_confirmed",
+        )
+        observed = rules_by_name(operations.list_rules(clock.remaining(300, 30)))
+        require(
+            observed.get(inputs.rule.name.casefold()) == inputs.rule,
+            "new_rule_not_exact",
+        )
         require(
             without_new_rule(observed, inputs.rule) == baseline,
             "preexisting_rules_changed",
         )
         require(
-            operations.current_public_ipv4(clock.remaining(180, 15))
+            operations.current_public_ipv4(clock.remaining(300, 15))
             == inputs.rule.start,
             "public_ip_changed",
         )
-        operations.revalidate_runtime_identity(inputs, clock.remaining(210, 30))
-        operations.verify_empty_encrypted_payload(inputs, clock.remaining(210, 30))
+        operations.revalidate_runtime_identity(inputs, clock.remaining(330, 30))
+        operations.verify_empty_encrypted_payload(inputs, clock.remaining(330, 30))
+        operations.revalidate_human_gate(inputs, clock.remaining(330, 30))
+        require(
+            operations.utcnow() < inputs.handoff_expires_at,
+            "handoff_expired_before_capture",
+        )
         # A live adapter opens the verified encrypted payload with no-follow and
         # exclusive creation. Timeout/max bytes must be enforced while streaming,
         # not merely checked after pg_dump returns.
         archive = operations.capture_to_exclusive_encrypted_descriptor(
             inputs,
             clock.remaining(
-                MAX_ACCESS_SECONDS - CLEANUP_RESERVE_SECONDS, MAX_CAPTURE_SECONDS
+                MAX_ACCESS_SECONDS - CLEANUP_RESERVE_SECONDS - 30, MAX_CAPTURE_SECONDS
             ),
             MAX_ARCHIVE_BYTES,
         )
@@ -325,9 +428,9 @@ def execute_after_human_gate(
     except BaseException:
         failed = True
     finally:
-        if create_attempted:
+        if instructions_released:
             try:
-                close_exact_access(operations, inputs.rule, baseline)
+                observe_human_closure(operations, inputs.rule, baseline, clock)
             except BaseException:
                 # Generic code never exposes provider diagnostics or secrets.
                 raise CaptureRefused("cleanup_failed_human_action_required") from None
@@ -339,12 +442,20 @@ def execute_after_human_gate(
         raise CaptureRefused("capture_failed_access_closed")
     archive.validate()
     metadata: dict[str, object] = {
-        "schema_version": 1,
-        "status": "captured_access_closed",
+        "schema_version": 2,
+        "status": "captured_human_closure_observed",
         "source_commit": inputs.source_commit,
         "plan_sha256": inputs.plan_sha256,
         "identity_evidence_sha256": inputs.identity_evidence_sha256,
         "workspace_manifest_sha256": inputs.workspace_manifest_sha256,
+        "manual_window_approval_sha256": inputs.manual_window_approval_sha256,
+        "firewall_management": "human_only",
+        "operator_reports_all_mutations_terminal": True,
+        "operator_reports_rule_removal_completed": True,
+        "atomic_rule_ownership_proved": False,
+        "native_firewall_expiry_proved": False,
+        "crash_proof_cleanup_proved": False,
+        "concurrent_edit_risk_accepted_in_reviewed_plan": True,
         "archive_sha256": archive.sha256,
         "archive_bytes": archive.size,
         "source_revision": archive.source_revision,
@@ -359,6 +470,27 @@ def execute_after_human_gate(
     # Success publication is after confirmed closure, never a substitute for it.
     operations.publish_metadata(metadata, timeout=15)
     return metadata
+
+
+def execute_after_human_gate(
+    inputs: CaptureInputs, operations: Operations
+) -> dict[str, object]:
+    """Content-free public boundary, including pre-window and publication errors.
+
+    Human cleanup interaction is inside the implementation's finally block and runs
+    before this boundary normalizes its final error. No failure attests capture.
+    """
+    try:
+        return _execute_after_human_gate(inputs, operations)
+    except CaptureRefused as error:
+        code = (
+            error.args[0]
+            if type(error) is CaptureRefused and len(error.args) == 1
+            else None
+        )
+        raise CaptureRefused(code) from None
+    except BaseException:
+        raise CaptureRefused("snapshot_check_failed_no_acceptance") from None
 
 
 if __name__ == "__main__":

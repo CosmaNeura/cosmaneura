@@ -3,9 +3,17 @@
 ## Outcome and limits
 
 One small sequencing core for the already-approved staging logical-snapshot
-route. It puts exact single-IP rule creation, bounded capture, exact cleanup,
-absence verification and value-minimized success publication in one auditable
-order. It is not a new recovery platform, cloud service or deployment workflow.
+route. It sequences HUMAN single-IP rule creation/removal, bounded read-only
+capture, closure observation and value-minimized publication. The helper has
+NO firewall mutation operation. It is not a new recovery platform, cloud service
+or deployment workflow.
+
+The owner explicitly approved a separately reviewed human-managed single-IP
+window of30minutes, with the owner creating/removing the rule and accepting
+concurrent-edit risk. This changes the earlier automatic-ownership contract;
+it does not waive independent source/plan/handoff review or prove atomicity.
+Azure's checked firewall contract uses create-or-update and asynchronous delete,
+without demonstrated conditional ownership semantics. Never claim otherwise.
 
 There is deliberately NO live adapter, executable human launcher, ARM request,
 database client invocation, credential resolution or restore implementation in
@@ -21,6 +29,8 @@ merged control source, immutable runtime/client/library pins, exact fresh plan
 and handoff review, configured-user identity linked to the exact ARM token and
 MSAL home account, and both foreground human confirmations before entry.
 Operation inputs here are evidence REFERENCES, not trusted authorization.
+The manual-window approval reference must be authenticated by that launcher,
+not accepted merely because it looks like a SHA256.
 The adapter must actually revalidate these gates where the core requests it.
 No partial or dummy adapter is acceptable for use.
 
@@ -38,11 +48,19 @@ access deadline. No second operation may start using an expired handoff.
 ## Execution contract for the future adapter
 
 - Exact existing staging server/database only, verify-full TLS and pinned CA.
-- Current IPv4 verified before and after opening; equal start/end, globally
+- Current IPv4 verified before and after HUMAN opening; equal start/end, globally
   routable canonical IPv4, no private/range/Azure-wide rule. Unique exact rule
   name, absent before creation, with all existing rules retained.
   Compare rule names case-insensitively, matching ARM resource identity; a
   differently capitalized existing rule must never be overwritten as "new".
+- Show both exact reviewed human commands and the absolute closure deadline
+  before releasing creation instructions. The user runs creation/removal in a
+  separate regular Terminal tab; the foreground observer NEVER runs those
+  mutations. A partial prompt/interrupt still requests human closure. Human
+  progress confirmations are not repeated scope-approval requests.
+- Creation must finish normally (including the provider's long-running action)
+  before capture. Recheck original handoff validity, identity, exact current
+  rule, baseline and encrypted destination; do not reset clocks after waiting.
 - One monotonic timeline covers preparation and operation; no reset after
   slow prerequisites. Capture capped at20minutes/1GiB, with five minutes
   reserved for closure inside the overall30-minute bound. Adapter must enforce
@@ -61,13 +79,19 @@ access deadline. No second operation may start using an expired handoff.
 
 ## Failure and cleanup
 
-Create intent is recorded in memory before the call so an unknown create
-outcome still triggers inspection. No retries. Inspect the exact name/range
-before removing it; do not delete a changed/foreign rule or repair existing
-rules. Inspect after unknown deletion rather than replaying it. Capture failure,
-interrupt, elapsed deadline, expired handoff or clock failure must not suppress
-the scoped safety cleanup. Even a failed child cancellation still attempts
-network closure, but cannot yield a success result.
+No automatic PUT, DELETE, retry, ownership claim or existing-rule repair exists.
+Once instructions might have been seen, the finally path cancels/reaps capture
+and requests HUMAN removal even on interruption, expiry or a broken clock.
+Cancellation or failed readback cannot suppress that request. The human must
+settle ALL creation/removal operations, including unknown outcomes, and attest
+both that none remains pending and that exact rule removal completed. A missing
+attestation refuses even if a read happens to show absence. This is operator
+evidence plus observation, not a provider-side serialization guarantee.
+
+The exact reviewed human procedure must explain how to inspect any unknown
+long-running action before removal. A failed/timed-out CLI is not proof that
+the action stopped; never replay it blindly or accept a temporary absence.
+Changed rules or baseline require explicit operator attention, no helper repair.
 
 Never assume native Azure firewall TTL. A crashed machine, network loss,
 unreaped child, changed rule, or failed absence readback requires immediate
@@ -75,20 +99,31 @@ human action and must not be called successful. The exact live plan must
 specify that operator fallback; these tests do not prove crash-proof cleanup.
 Do not introduce a scheduled cloud executor as an unapproved workaround.
 
-Success metadata is published only after new-rule absence and unchanged prior
-rules are confirmed. Partial encrypted artifacts are preserved, not accepted or
+Success metadata is published only after human terminal-operation/removal
+attestations plus observed new-rule absence and unchanged prior rules. It says
+human-only management and explicitly false atomic ownership/native expiry/
+crash-proof cleanup. These bounded observations do not exclude later concurrent
+edits; that residual risk is the specific owner-approved policy, not hidden.
+Partial encrypted artifacts are preserved, not accepted or
 automatically deleted. Retention and later exact cleanup remain separately
 scoped. Existing backups and persistent staging data are untouched.
 
 ## Validation and recovery
 
 New pure tests cover ordering, stale/extended artifacts, unsafe IPs, duplicate
-inventory, preexisting-name refusal, unknown create/delete outcomes, source or
+inventory, preexisting-name refusal, unknown HUMAN create/delete outcomes, source or
 archive errors, changed IP/rules, deadline overruns, clock jumps, interruption,
-failed cancellation/deletion, and publication only after closure. No unchanged
+failed cancellation/removal, pending-operation attestations, partial prompts,
+shared human-wait deadlines, no mutation methods, and publication only after
+closure. Fixed-code public exception normalization includes pre-window and
+publication failures, malformed IPs and malicious exception subclasses. No unchanged
 passing suites are manually replayed; required GitHub CI still applies.
 
 Independent review follows the final substantive push. This PR stays dormant
 until a complete live adapter and human launcher are independently reviewed
 and normally adopted, with a fresh exact plan/handoff. Recovery now is to stop
 using the unactivated core; there is no deployed state or source data to revert.
+
+Prior review30 FAIL is retained as history: P1 unsupported automatic ownership
+is replaced by this separately approved human-managed contract, requiring
+independent re-review; P2 redaction is corrected, also requiring re-review.
