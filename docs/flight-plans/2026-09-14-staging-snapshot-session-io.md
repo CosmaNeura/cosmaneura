@@ -72,8 +72,13 @@ cases then passed. Ruff/Pyright pass. Unchanged passing suites not replayed.
 The first local relocation attempt was sandbox-denied at read-only /bin/ps
 before test bodies; the same four tests passed with scoped process-inspection
 permission. No seal or test expectation was weakened for this restriction.
-Linux CI maps only the fixture's /private/tmp literal to its temporary parent;
-the separate unmapped production-root regression preserves the real constraint.
+Linux CI exposed a second literal root check in the reused pure path parser.
+Fixtures now always use a nonstandard parent (even on macOS) and map ONLY that
+literal in both fixture modules. The separate unmapped production-root test
+preserves the real constraint. No production source/path check was changed.
+After correction, all18 previously failed and four other affected fixture cases
+pass locally with this nonstandard parent; the independent root test was not
+replayed. Current-head Linux CI remains required, not inferred from local tests.
 Native encryption/mount inventory and runtime attestation are MOCKED, all
 account/cache/CLI contents invented. These tests are NOT live encryption,
 credential identity, real configured-session or deployment acceptance.

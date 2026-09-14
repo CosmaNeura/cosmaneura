@@ -89,18 +89,24 @@ class SessionFixture(unittest.TestCase):
         if FILES is None:
             return
         self.patches = []
-        fixture_parent = Path(tempfile.gettempdir()).resolve()
-        # Linux CI has no /private/tmp. Map ONLY that literal in the fixture,
-        # never change production's fixed root or exercise live encryption.
-        self.start_patch(
-            patch.object(
-                workspace,
-                "Path",
-                side_effect=lambda value: fixture_parent
-                if value == "/private/tmp"
-                else Path(value),
-            )
+        self.ci_parent = tempfile.TemporaryDirectory(
+            prefix="snapshot-session-ci-parent-"
         )
+        self.addCleanup(self.ci_parent.cleanup)
+        fixture_parent = Path(self.ci_parent.name).resolve()
+        # Always exercise a NONstandard parent, including on macOS. Both the
+        # outer binder and reused pure path parser require the fixed literal.
+        # Map only that literal in fixtures; production remains unchanged.
+        for module in (workspace, workspace.workspace):
+            self.start_patch(
+                patch.object(
+                    module,
+                    "Path",
+                    side_effect=lambda value: fixture_parent
+                    if value == "/private/tmp"
+                    else Path(value),
+                )
+            )
         self.temporary = tempfile.TemporaryDirectory(
             prefix="cosmaneura-staging-snapshot-", dir=fixture_parent
         )
