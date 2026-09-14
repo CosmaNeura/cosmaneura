@@ -45,6 +45,24 @@ encrypted files for exact inspection; no overwrite, automatic deletion or retry.
 
 ## Time and child process handling
 
+Review33 identified that per-thread signal masking is unsafe with any additional
+unblocked worker. The corrected interface requires the complete HUMAN launcher
+to be a fresh dedicated `python -I -S` process. After loading/attesting its pinned
+source and standard-library/native closure, it must call `seal_capture_process`
+ONCE before identity/network/capture operations. Shared hosts, embedded launchers
+and threaded callers are unsupported; no adapter fallback silently creates a
+worker or refreshes an expired action. Missing seal refuses before timer/spawn.
+
+Sealing verifies main-thread/Python thread count and actual OS thread count
+(macOS fixed read-only ps; Linux /proc/self/task), then retains a process-lifetime
+audit hook that refuses Python worker creation, subinterpreters, fork, ctypes
+loading and imports of not-yet-loaded modules. The hook is probed before use;
+its PID binding cannot carry across a fork. The trusted pinned closure must not
+create native workers internally. This is an enforced calling convention for
+that reviewed closure, NOT a sandbox for hostile code already loaded. The final
+launcher review must establish fresh exec and completeness of that closure;
+this library still has no runnable live launcher or authority of its own.
+
 One supplied absolute monotonic deadline, maximum20minutes, covers the entire
 capture including filesystem writes/fsync and native/runtime callbacks. A
 foreground SIGALRM guard refuses an active timer, blocked alarm or non-main
@@ -120,6 +138,17 @@ alarm methods passed; the new entry-pending-alarm method also passed separately.
 There are now39methods, with25distinct new/affected methods checked during this
 revision series and14unchanged passing methods left alone. No live client or
 encryption operation was run. Final source still needs independent re-review.
+
+Review33 correction adds6new methods PASS: real unblocked Python and unregistered
+native threads refuse before entry; post-seal worker/native-loader/fork attempts
+refuse; actual SIGINT and SIGALRM between Popen return and handle assignment do
+not lose/release an unreaped child; real pending alarm plus attempted worker
+creation at teardown cannot reach the prior handler. Fourteen affected prior
+methods PASS; two additional selected cleanup cases initially had incorrect
+test-class selectors (loader errors, not executions) and are checked separately.
+Signal/child/payload tests now execute in their own fresh sealed processes when
+called by shared pytest, never freezing its runner. No unchanged unrelated
+contract tests are replayed. Local success still is not independent acceptance.
 
 Recovery for this dormant source is to stop using it; no deployed state changed.
 If future live capture fails, preserve its protected partial artifact and remove

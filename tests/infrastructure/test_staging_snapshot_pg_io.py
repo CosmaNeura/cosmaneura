@@ -1,11 +1,13 @@
 """Secretless adapter tests; no PostgreSQL, Azure or native encryption calls."""
 
+import functools
 import hashlib
 import importlib.util
 import json
 import os
 import signal
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -37,6 +39,36 @@ SCHEMA = json.dumps(
 ).encode()
 ARCHIVED_REVISION = b"-- Invented fixture\nCOPY public.alembic_version (version_num) FROM stdin;\n89c31f0ae275\n\\.\n"
 FAKE_DUMP = b"PGDMP" + b"invented bytes, not a real database archive" * 5
+
+
+def dedicated_process_tests(cls):
+    """Never freeze pytest's shared process or exercise signals with its threads."""
+    for name, method in list(vars(cls).items()):
+        if not name.startswith("test_"):
+            continue
+
+        @functools.wraps(method)
+        def run(self, _method=method, _name=name):
+            if pg._capture_process_pid == os.getpid():
+                return _method(self)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-B",
+                    __file__,
+                    cls.__name__ + "." + _name,
+                ],
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+        setattr(cls, name, run)
+    return cls
 
 
 class FixtureChildren:
@@ -168,6 +200,7 @@ class ContractTests(unittest.TestCase):
                 pg.archive_revision(value)
 
 
+@dedicated_process_tests
 class PayloadTests(unittest.TestCase):
     def setUp(self):
         # Only invented non-sensitive bytes touch this ordinary temporary
@@ -309,6 +342,7 @@ class PayloadTests(unittest.TestCase):
 @unittest.skipUnless(
     hasattr(os, "waitid") and hasattr(os, "WNOWAIT"), "requires POSIX non-reaping wait"
 )
+@dedicated_process_tests
 class ProcessTests(unittest.TestCase):
     def run_invented_child(self, source, *, limit=4096, seconds: float = 2):
         children = pg.BoundedChildren(time.monotonic() + seconds, lambda: None)
@@ -370,6 +404,7 @@ class ProcessTests(unittest.TestCase):
         spawn.assert_not_called()
 
 
+@dedicated_process_tests
 class CleanupDenialTests(unittest.TestCase):
     def test_failed_inspection_still_reaps_and_never_signals_reaped_pid(self):
         children = pg.BoundedChildren(time.monotonic() + 2, lambda: None)
@@ -497,6 +532,7 @@ class CleanupDenialTests(unittest.TestCase):
         self.assertIsNone(children.child)
 
 
+@dedicated_process_tests
 class WallClockTests(unittest.TestCase):
     def test_existing_pending_alarm_is_refused_before_handler_installation(self):
         with (
@@ -677,5 +713,135 @@ class WallClockTests(unittest.TestCase):
             fixture.tearDown()
 
 
+class ProcessSealTests(unittest.TestCase):
+    def isolated(self, source):
+        assert pg.__file__ is not None
+        bootstrap = """
+import _thread, importlib.util, os, resource, signal, subprocess, sys, threading, time
+from unittest.mock import patch
+spec = importlib.util.spec_from_file_location('staging_snapshot_pg_io', sys.argv[1])
+pg = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = pg
+spec.loader.exec_module(pg)
+def refused(call, code):
+    try: call()
+    except pg.PostgreSQLRefused as error: assert str(error) == code, str(error)
+    else: raise AssertionError('operation unexpectedly accepted')
+"""
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                bootstrap + source,
+                str(Path(pg.__file__).resolve()),
+            ],
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_unsealed_caller_refuses_before_alarm_or_spawn(self):
+        self.isolated("""
+with patch.object(signal, 'setitimer') as arm, patch.object(subprocess, 'Popen') as spawn:
+    refused(lambda: pg.capture_deadline(time.monotonic()+1).__enter__(), 'capture_sealed_process_required')
+    refused(lambda: pg.defer_control_signals().__enter__(), 'capture_sealed_process_required')
+    arm.assert_not_called(); spawn.assert_not_called()
+""")
+
+    def test_real_unblocked_python_worker_prevents_sealing(self):
+        self.isolated("""
+ready, done = threading.Event(), threading.Event()
+def worker():
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGALRM, signal.SIGINT})
+    ready.set(); done.wait(3)
+thread = threading.Thread(target=worker); thread.start(); assert ready.wait(1)
+try:
+    with patch.object(signal, 'signal') as install, patch.object(signal, 'setitimer') as arm:
+        refused(pg.seal_capture_process, 'capture_single_thread_required')
+        refused(lambda: pg.defer_control_signals().__enter__(), 'capture_sealed_process_required')
+        install.assert_not_called(); arm.assert_not_called()
+finally:
+    done.set(); thread.join(2)
+""")
+
+    def test_native_count_catches_unregistered_unblocked_thread(self):
+        self.isolated("""
+ready, done, stopped = threading.Event(), threading.Event(), threading.Event()
+def worker():
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGALRM, signal.SIGINT})
+    ready.set(); done.wait(3); stopped.set()
+_thread.start_new_thread(worker, ()); assert ready.wait(1)
+assert threading.active_count() == 1
+try: refused(pg.seal_capture_process, 'capture_single_thread_required')
+finally: done.set(); assert stopped.wait(2)
+assert pg._capture_process_pid is None
+""")
+
+    def test_sealed_process_prevents_all_python_worker_apis(self):
+        self.isolated("""
+pg.seal_capture_process()
+refused(lambda: _thread.start_new_thread(lambda: None, ()), 'capture_process_frozen')
+refused(lambda: threading.Thread(target=lambda: None).start(), 'capture_process_frozen')
+for event in ('ctypes.dlopen', 'cpython.PyInterpreterState_New', 'os.fork'):
+    refused(lambda: sys.audit(event), 'capture_process_frozen')
+refused(lambda: __import__('ctypes'), 'capture_process_frozen')
+pg.require_capture_process(); pg.native_single_thread()
+""")
+
+    def test_actual_signals_cannot_lose_native_child_before_assignment(self):
+        for number in (signal.SIGINT, signal.SIGALRM):
+            with self.subTest(number=number):
+                self.isolated(f"""
+pg.seal_capture_process(); resource.setrlimit(resource.RLIMIT_CORE, (0,0))
+real_spawn = subprocess.Popen
+owned = []
+children = pg.BoundedChildren(time.monotonic()+3, lambda: None)
+def spawn(*args, **kwargs):
+    if args[0][0] != sys.executable:
+        return real_spawn(*args, **kwargs)
+    child = real_spawn(*args, **kwargs); owned.append(child)
+    refused(lambda: threading.Thread(target=lambda: None).start(), 'capture_process_frozen')
+    os.kill(os.getpid(), {int(number)})
+    return child
+try:
+    with patch.object(subprocess, 'Popen', side_effect=spawn):
+        with pg.capture_deadline(children.deadline):
+            children.run([sys.executable,'-I','-S','-c','import time; time.sleep(5)'],
+                         {{'PATH':'/usr/bin:/bin'}}, 0, lambda _: None)
+except (KeyboardInterrupt, pg.PostgreSQLRefused): pass
+else: raise AssertionError('real signal did not refuse')
+assert len(owned) == 1 and owned[0].returncode is not None
+assert children.child is None
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0,0.0)
+""")
+
+    def test_real_pending_alarm_and_worker_attempt_during_teardown(self):
+        self.isolated("""
+pg.seal_capture_process()
+prior_calls = []
+signal.signal(signal.SIGALRM, lambda *_: prior_calls.append(True))
+prior = signal.getsignal(signal.SIGALRM)
+real_timer = signal.setitimer
+def timer(which, seconds, interval=0):
+    result = real_timer(which, seconds, interval)
+    if seconds == 0:
+        refused(lambda: _thread.start_new_thread(lambda: None, ()), 'capture_process_frozen')
+        os.kill(os.getpid(), signal.SIGALRM)
+    return result
+def exercise():
+    with patch.object(signal, 'setitimer', side_effect=timer):
+        with pg.capture_deadline(time.monotonic()+1): pass
+refused(exercise, 'capture_deadline')
+assert prior_calls == [] and signal.getsignal(signal.SIGALRM) is prior
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0,0.0)
+""")
+
+
 if __name__ == "__main__":
+    pg.seal_capture_process()
     unittest.main()

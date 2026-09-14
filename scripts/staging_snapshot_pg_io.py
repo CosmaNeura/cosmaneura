@@ -20,6 +20,7 @@ import selectors
 import signal
 import stat
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -57,6 +58,98 @@ def require(condition: object, code: str) -> None:
         raise PostgreSQLRefused(code)
 
 
+_capture_process_pid: int | None = None
+
+
+def native_single_thread() -> None:
+    """Check OS threads, including ones not registered with threading."""
+    if sys.platform == "darwin":
+        observed = subprocess.run(
+            ["/bin/ps", "-M", "-p", str(os.getpid()), "-o", "pid="],
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+            check=False,
+        )
+        lines = observed.stdout.splitlines()
+        require(
+            observed.returncode == 0
+            and len(lines) == 2
+            and lines[0].split()[:2] == [b"USER", b"PID"]
+            and lines[1].split()[-1:] == [str(os.getpid()).encode()],
+            "capture_single_thread_required",
+        )
+    elif sys.platform == "linux":
+        require(
+            len(list(Path("/proc/self/task").iterdir())) == 1,
+            "capture_single_thread_required",
+        )
+    else:
+        raise PostgreSQLRefused("capture_single_thread_required")
+
+
+def seal_capture_process() -> None:
+    """Once, at startup of the reviewed fresh -I -S human process.
+
+    Preload the complete pinned standard-library/source closure first. This
+    permanent audit guard prohibits Python workers, subinterpreters, fork and
+    later native-library loading. Existing native threads are also refused.
+    It is an interface invariant for TRUSTED pinned code, not a sandbox for
+    malicious code already loaded in this process. Never use in a shared host.
+    """
+    global _capture_process_pid
+    require(
+        _capture_process_pid is None
+        and sys.flags.isolated
+        and sys.flags.no_site
+        and sys.version_info >= (3, 13)
+        and sys.gettrace() is None
+        and sys.getprofile() is None,
+        "capture_fresh_process_required",
+    )
+    require(
+        threading.current_thread() is threading.main_thread()
+        and threading.active_count() == 1,
+        "capture_single_thread_required",
+    )
+
+    def guard(event: str, args: tuple[object, ...]) -> None:
+        if (
+            event.startswith("_thread.")
+            or event.startswith("ctypes.")
+            or event
+            in {
+                "cpython.PyInterpreterState_New",
+                "os.fork",
+                "os.forkpty",
+                "cosmaneura.capture.guard_probe",
+            }
+            or (event == "import" and args and args[0] not in sys.modules)
+        ):
+            raise PostgreSQLRefused("capture_process_frozen")
+
+    sys.addaudithook(guard)
+    try:
+        sys.audit("cosmaneura.capture.guard_probe")
+    except PostgreSQLRefused as error:
+        require(str(error) == "capture_process_frozen", "capture_guard_unavailable")
+    else:
+        raise PostgreSQLRefused("capture_guard_unavailable")
+    native_single_thread()
+    _capture_process_pid = os.getpid()
+
+
+def require_capture_process() -> None:
+    require(
+        _capture_process_pid == os.getpid()
+        and threading.current_thread() is threading.main_thread()
+        and threading.active_count() == 1,
+        "capture_sealed_process_required",
+    )
+
+
 @contextmanager
 def defer_control_signals() -> Iterator[None]:
     """Keep child ownership updates/reaping atomic with respect to Ctrl-C/alarm.
@@ -64,6 +157,7 @@ def defer_control_signals() -> Iterator[None]:
     Only trusted process spawn and bounded cleanup use this mask. SIGKILL still
     terminates children; this is not a guarantee against a hung host/kernel.
     """
+    require_capture_process()
     previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGALRM})
     try:
         yield
@@ -78,9 +172,7 @@ def capture_deadline(deadline: float) -> Iterator[None]:
     Never overwrite another active timer, reset the supplied absolute deadline,
     or accept a swallowed timeout. Cleanup has its own short bounded reserve.
     """
-    require(
-        threading.current_thread() is threading.main_thread(), "capture_main_thread"
-    )
+    require_capture_process()
     remaining = deadline - time.monotonic()
     require(
         math.isfinite(remaining) and 0 < remaining <= MAX_SECONDS, "capture_deadline"
