@@ -44,9 +44,16 @@ def _digest_context(source: SchedulingProviderSource, suffix: str) -> str:
     return f"{source.value}-oauth-{suffix}"
 
 
-def _redis_key(source: SchedulingProviderSource, state: str) -> str:
+def scheduling_oauth_state_redis_key(
+    source: SchedulingProviderSource, state: str
+) -> str:
+    """Return a non-reversible Redis key for an opaque OAuth state value."""
+
     digest = pseudonymous_digest(state, context=_digest_context(source, "state"))
     return f"scheduling:{source.value}:oauth_state:{digest}"
+
+
+_redis_key = scheduling_oauth_state_redis_key
 
 
 def _browser_binding_digest(

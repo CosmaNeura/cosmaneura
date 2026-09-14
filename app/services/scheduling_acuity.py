@@ -20,7 +20,12 @@ from datetime import datetime, timedelta
 import httpx
 
 from app import log
-from app.configuration.acuity import ACUITY_API_BASE
+from app.configuration.acuity import (
+    ACUITY_API_BASE,
+    ACUITY_CLIENT_ID,
+    ACUITY_CLIENT_SECRET,
+    ACUITY_OAUTH_DISCONNECT_URL,
+)
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.scheduling_provider import NormalizedAppointmentEvent
 
@@ -46,6 +51,48 @@ def get_acuity_integration(doctor: Doctor) -> DoctorSchedulingIntegration | None
 
 def _doctor_ref(doctor_id) -> str:
     return provider_log_ref(f"doctor:{doctor_id}")
+
+
+def revoke_token(doctor: Doctor) -> None:
+    """Revoke the doctor's Acuity OAuth grant and delete the integration record.
+
+    Mirrors app/services/zoom.py::revoke_token. Errors from Acuity are
+    logged but never raised — the token may already be invalid, and a
+    doctor-initiated disconnect must still succeed locally either way.
+    """
+    integration = get_acuity_integration(doctor)
+    if integration is None:
+        return
+
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+        response = client.post(
+            ACUITY_OAUTH_DISCONNECT_URL,
+            data={
+                "access_token": integration.access_token,
+                "client_id": ACUITY_CLIENT_ID,
+                "client_secret": ACUITY_CLIENT_SECRET,
+            },
+        )
+
+    if not response.is_success:
+        log.warning(
+            "acuity token revoke returned error",
+            doctor_ref=_doctor_ref(doctor.id),
+            operation="revoke_token",
+            status="failed",
+            provider_status=response.status_code,
+            error_type="provider_http_error",
+        )
+    else:
+        log.info(
+            "acuity token revoked",
+            doctor_ref=_doctor_ref(doctor.id),
+            operation="revoke_token",
+            status="succeeded",
+            provider_status=response.status_code,
+        )
+
+    integration.delete()
 
 
 def _get(

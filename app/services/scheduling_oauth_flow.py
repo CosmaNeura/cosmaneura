@@ -18,6 +18,7 @@ from redis.exceptions import RedisError
 from starlette import status
 
 from app import log
+from app.jobs import backfill_scheduling_roster, sync_scheduling_provider
 from app.routes.dependencies.view_as import (
     deny_view_as_browser_activity,
     view_as_browser_session_present,
@@ -252,6 +253,13 @@ def handle_oauth_callback(
         source=source.value,
         doctor_ref=_doctor_ref(doctor.id),
     )
+    # Connecting must actually populate the roster, not just store a
+    # credential. backfill_scheduling_roster.perform() is idempotent (it
+    # no-ops once last_backfilled_at is set), so queuing it unconditionally
+    # here — including on a reconnect after a revoked grant — is safe and
+    # also retries a backfill that errored before completing the first time.
+    backfill_scheduling_roster.queue(str(doctor.id), source.value)
+    sync_scheduling_provider.queue(str(doctor.id), source.value)
     return clear_binding(
         RedirectResponse(url=success_redirect, status_code=status.HTTP_302_FOUND)
     )

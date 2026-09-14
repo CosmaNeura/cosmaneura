@@ -574,6 +574,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.external_webhooks.reconcile",
         "schedule": 30.0,
     },
+    # Keeps every connected Acuity/Google Calendar integration's roster
+    # current. Connecting an integration also queues an immediate sync (see
+    # scheduling_oauth_flow.py); this cadence covers everything booked or
+    # changed afterward. Hourly is frequent enough that a same-day booking
+    # still reaches the roster well before the visit.
+    "sync_all_scheduling_providers": {
+        "task": "app.jobs.sync_all_scheduling_providers.perform",
+        "schedule": crontab(minute="0"),
+    },
 }
 
 # Import crontab at the top of the file

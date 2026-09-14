@@ -28,6 +28,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.scheduling_acuity as scheduling_acuity
 import app.services.scheduling_oauth_state as scheduling_oauth_state
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
@@ -1020,15 +1021,8 @@ def acuity_auth_url(request: Request, response: Response) -> SchedulingAuthUrlRe
     "/acuity-connect", name="acuity_disconnect", status_code=status.HTTP_204_NO_CONTENT
 )
 def acuity_disconnect(request: Request) -> None:
-    # TODO also call Acuity's /oauth2/disconnect so the grant is revoked on
-    # their side, not just forgotten here (mirrors zoom_service.revoke_token,
-    # which does call Zoom's revoke endpoint).
     doctor: Doctor = request.state.doctor
-    integration = DoctorSchedulingIntegration.get(
-        doctor_id=doctor.id, source=SchedulingProviderSource.acuity
-    )
-    if integration is not None:
-        integration.delete()
+    scheduling_acuity.revoke_token(doctor)
 
 
 @internal_api_app.get("/google-calendar-auth-url", name="google_calendar_auth_url")

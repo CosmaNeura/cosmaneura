@@ -206,21 +206,33 @@ def confirm_queued_match(
             )
 
         session.commit()
-        session.refresh(appointment)
+
+        # appointment is expired after the commit above. Read its id into a
+        # local now, before mutating db_queued below: touching an expired
+        # attribute mid-mutation triggers a lazy-load SELECT, which autoflushes
+        # whatever partial set of db_queued's fields has been assigned so far
+        # (e.g. status=resolved but resolved_appointment_id still unset) and
+        # trips the DB's all-or-nothing CHECK constraint on resolved_* columns.
+        appointment_id = appointment.id
 
         db_queued = session.get(AmbiguousPatientMatch, queued.id)
         assert db_queued is not None
         db_queued.status = AmbiguousPatientMatchStatus.resolved
         db_queued.resolved_patient_id = patient.id
-        db_queued.resolved_appointment_id = appointment.id
+        db_queued.resolved_appointment_id = appointment_id
         db_queued.resolved_at = datetime.now(timezone.utc)
         db_queued.resolved_by = resolved_by
         session.add(db_queued)
         session.commit()
 
-    log.info(
-        "scheduling queue entry confirmed",
-        event_code="scheduling_queue_confirmed",
-        doctor_ref=_doctor_ref(queued.doctor_id),
-    )
-    return appointment
+        # This commit (like the first one) expires every attribute on every
+        # object still tracked by the session, appointment included. Refresh
+        # it as the last thing before the session closes so the caller
+        # doesn't hit a DetachedInstanceError touching a plain column.
+        session.refresh(appointment)
+        log.info(
+            "scheduling queue entry confirmed",
+            event_code="scheduling_queue_confirmed",
+            doctor_ref=_doctor_ref(queued.doctor_id),
+        )
+        return appointment

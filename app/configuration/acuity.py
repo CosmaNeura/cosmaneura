@@ -7,4 +7,5 @@ ACUITY_SUCCESS_REDIRECT = config("ACUITY_SUCCESS_REDIRECT", default="", cast=str
 
 ACUITY_OAUTH_AUTHORIZE_URL = "https://acuityscheduling.com/oauth2/authorize"
 ACUITY_OAUTH_TOKEN_URL = "https://acuityscheduling.com/oauth2/token"
+ACUITY_OAUTH_DISCONNECT_URL = "https://acuityscheduling.com/oauth2/disconnect"
 ACUITY_API_BASE = "https://acuityscheduling.com/api/v1"
