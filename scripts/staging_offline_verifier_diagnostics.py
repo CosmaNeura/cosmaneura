@@ -1,10 +1,13 @@
 """Dormant, read-only Linux observations; never containment or activation proof.
 
-No executable path imports this module. A separately authorized runtime capture
-may call ``capture_linux_verifier_diagnostics`` after exact-source review. This
-does not run gh, create namespaces, change capabilities/mounts, or send network
+The fixed synthetic ``staging_runtime_capability_probe.py`` is an executable
+consumer of this module's bounded readers/parsers. Import itself performs no
+capture or mutation. A separately authorized runtime capture may also call
+``capture_linux_verifier_diagnostics`` after exact-source review. These readers
+do not run gh, create namespaces, change capabilities/mounts, or send network
 traffic. Interface flags use a local kernel ioctl, not sysfs, whose network view
-can belong to the namespace in which sysfs was mounted.
+can belong to the namespace in which sysfs was mounted. No production consumer
+or policy gate imports or accepts this diagnostic as containment proof.
 """
 
 from __future__ import annotations
