@@ -172,6 +172,30 @@ def canonical_name(name: str) -> str:
     return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
 
 
+def source_member_name(raw: bytes, member: tarfile.TarInfo) -> str:
+    """Check original POSIX Git-archive names before tarfile's slash rewriting."""
+    require(member.type in {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE})
+    require(member.sparse is None and 512 <= member.offset_data <= len(raw))
+    header = raw[member.offset_data - 512 : member.offset_data]
+    require(header[257:265] == tarfile.POSIX_MAGIC and header[156:157] == member.type)
+    field = header[:100].split(b"\0", 1)[0].decode("utf-8")
+    prefix = header[345:500].split(b"\0", 1)[0].decode("utf-8")
+    header_name = prefix + "/" + field if prefix else field
+
+    def checked(value: str) -> str:
+        require(type(value) is str)
+        if member.isdir() and value.endswith("/"):
+            value = value[:-1]
+        require(not value.endswith("/"))
+        return value
+
+    name = checked(header_name)
+    if "path" in member.pax_headers:
+        name = checked(member.pax_headers["path"])
+    require(name == member.name)
+    return name
+
+
 def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bool]]:
     require(type(raw) is bytes and 0 < len(raw) <= MAX_SOURCE_BYTES)
     require(type(inputs) is BuildInputs)
@@ -196,7 +220,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
             files: list[tuple[str, bytes, bool]] = []
             size = 0
             for member in members:
-                name = member.name.rstrip("/")
+                name = source_member_name(raw, member)
                 path = PurePosixPath(name)
                 require(len(name) <= 1024 and name.isprintable())
                 require(name == str(path) and not path.is_absolute())
@@ -218,7 +242,6 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
                 )
                 require(canonical_path.parts and canonical_path.parts[0] != "public")
                 require(canonical not in names and not member.linkname)
-                require(member.isfile() or member.isdir())
                 require(member.mode & 0o7000 == 0)
                 names.add(canonical)
                 if member.isdir():

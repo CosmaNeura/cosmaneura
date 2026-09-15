@@ -139,3 +139,21 @@ FAIL decisions remain retained, not relabeled as passes.
 Five new/affected cases PASS (four in0.019s, new prefix-count boundary in0.007s),
 with Ruff/Pyright/whitespace checks clean. Corrected source validation also accepts
 the same actual1,298-file proposed candidate archive read-only; no build occurred.
+
+Review55 of `5142a801169d41cb143ca538136a2fc322f7485c` returned FAIL for one P2:
+regular-file trailing slashes could be stripped and satisfy exact file anchors.
+Member type is now checked before path normalization. Regular files permit no
+trailing slash; only directories permit one conventional marker, and repeated
+markers refuse. Prior macOS-prefix, Unicode and controller fixes were confirmed
+present. New tests cover malformed required/extra regular files, valid directory
+markers and repeated directory markers. The original FAIL remains retained;
+this last correction requires another exact independent review.
+The first repeated-directory regression failed because Python's tar reader
+normalizes directory and PAX path markers itself. The fix therefore inspects
+the original POSIX header at the member's data offset and its original PAX path,
+checks raw type/markers, and requires agreement with the parsed member name.
+Source accepts the POSIX ustar/PAX representation produced by Git; unsupported
+GNU/sparse representations refuse. Five focused raw/PAX marker cases now PASS
+in0.020s, including valid directory markers. The original failed test is retained.
+Ruff/Pyright/whitespace PASS; the actual proposed1,298-file Git archive also passes
+the corrected reader, without any build, credential, consumer or live operation.

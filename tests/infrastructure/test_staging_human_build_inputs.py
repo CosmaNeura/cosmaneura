@@ -44,7 +44,7 @@ def configuration():
     }
 
 
-def archive(entries, *, compressed=False, comment=CANDIDATE):
+def archive(entries, *, compressed=False, comment=CANDIDATE, pax_paths=None):
     output = io.BytesIO()
     with tarfile.open(
         fileobj=output,
@@ -54,6 +54,8 @@ def archive(entries, *, compressed=False, comment=CANDIDATE):
     ) as target:
         for name, content, kind in entries:
             member = tarfile.TarInfo(name)
+            if pax_paths is not None and name in pax_paths:
+                member.pax_headers = {"path": pax_paths[name]}
             member.mode = 0o755 if name == "nixpacks" else 0o644
             member.type = kind
             if kind in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
@@ -272,6 +274,91 @@ class WorkspaceTests(unittest.TestCase):
                     inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
                 )
             self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_regular_file_trailing_slashes_cannot_rewrite_exact_anchors(self):
+        for suffix in ("/", "//"):
+            required = [
+                (name + suffix if name == "web/package.json" else name, value, kind)
+                for name, value, kind in source_files()
+            ]
+            extra = source_files() + [("extra" + suffix, b"invented", tarfile.REGTYPE)]
+            for entries in (required, extra):
+                raw = archive(entries)
+                with (
+                    self.subTest(suffix=suffix, required=entries is required),
+                    self.assertRaises(m.BuildInputRefused),
+                ):
+                    self.prepare(
+                        source_archive=raw,
+                        inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                    )
+                self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_directory_marker_accepts_only_zero_or_one_trailing_slash(self):
+        for name in ("plain", "conventional/"):
+            raw = archive(
+                source_files()
+                + [
+                    (name, b"", tarfile.DIRTYPE),
+                    (name.rstrip("/") + "/file", b"invented", tarfile.REGTYPE),
+                ]
+            )
+            prepared = self.prepare(
+                source_archive=raw,
+                inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+            )
+            self.assertEqual(
+                (prepared.root / "source" / name / "file").read_bytes(), b"invented"
+            )
+
+    def test_repeated_directory_markers_refuse_before_writes(self):
+        for name in ("extra//", "extra///"):
+            raw = archive(source_files() + [(name, b"", tarfile.DIRTYPE)])
+            with self.subTest(name=name), self.assertRaises(m.BuildInputRefused):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_pax_paths_do_not_hide_invalid_markers(self):
+        for name, kind, path in (
+            ("web/package.json", tarfile.REGTYPE, "web/package.json/"),
+            ("extra", tarfile.REGTYPE, "extra/"),
+            ("extra", tarfile.DIRTYPE, "extra//"),
+        ):
+            entries = (
+                source_files()
+                if name == "web/package.json"
+                else source_files() + [(name, b"", kind)]
+            )
+            raw = archive(entries, pax_paths={name: path})
+            with (
+                self.subTest(path=path, kind=kind),
+                self.assertRaises(m.BuildInputRefused),
+            ):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_valid_pax_directory_marker_preserves_resolved_path(self):
+        raw = archive(
+            source_files()
+            + [
+                ("header-parent", b"", tarfile.DIRTYPE),
+                ("nested/file", b"invented", tarfile.REGTYPE),
+            ],
+            pax_paths={"header-parent": "nested/"},
+        )
+        prepared = self.prepare(
+            source_archive=raw,
+            inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+        )
+        self.assertEqual(
+            (prepared.root / "source/nested/file").read_bytes(), b"invented"
+        )
 
     def test_implicit_directory_aliases_refuse_before_writes(self):
         for names in (
