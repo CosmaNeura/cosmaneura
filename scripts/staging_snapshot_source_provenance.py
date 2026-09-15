@@ -28,9 +28,11 @@ API = "repos/" + REPOSITORY
 CHECKS = ["Backend", "Frontend", "change-budget"]
 GH = Path("/opt/homebrew/Cellar/gh/2.97.0/bin/gh")
 GIT = Path("/usr/bin/git")
+PS = Path("/bin/ps")
 TOOL_PINS = {
     GH: (38983666, "6a2ab5fa89553eac1f0df50a26a5eaeea9a665d8971f5a51b32487b72c708f5c"),
     GIT: (118640, "b8763cf250e607a778bb4603cecb5b90338814d0a3dfcba0d57b1de242f610e9"),
+    PS: (170432, "3bbba882e30d91fc4ff6e6844ca7c59fef4351b9a3fea35dca55708d6d487d1c"),
 }
 SOURCE_NAMES = {
     "staging_encrypted_workspace.py",
@@ -181,6 +183,70 @@ def closed_arguments(argv: list[str]) -> None:
     )
 
 
+def group_members(process_id: int, deadline: float) -> tuple[tuple[int, str], ...]:
+    """Inspect only the owned PGID; denied/ambiguous reads are not absence."""
+    identity = tool_identity(PS)
+    remaining = deadline - time.monotonic()
+    require(remaining > 0)
+    result = subprocess.run(
+        [str(PS), "-g", str(process_id), "-o", "pid=,pgid=,stat="],
+        env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=min(remaining, 1),
+        check=False,
+    )
+    require(tool_identity(PS) == identity and len(result.stdout) <= 16384)
+    if result.returncode == 1 and not result.stdout.strip():
+        return ()
+    require(result.returncode == 0 and result.stdout.strip())
+    members = []
+    for line in result.stdout.decode("ascii").splitlines():
+        fields = line.split()
+        require(
+            len(fields) == 3
+            and all(value.isdigit() for value in fields[:2])
+            and int(fields[1]) == process_id
+            and re.fullmatch(r"[A-Z][A-Za-z+<>s]*", fields[2])
+        )
+        members.append((int(fields[0]), fields[2]))
+    return tuple(members)
+
+
+def finish_group(process: subprocess.Popen[bytes]) -> None:
+    """Terminate descendants while leader PID is allocated, then reap once."""
+    require(process.returncode is None)
+    deadline = time.monotonic() + 2
+    inspection_failed = False
+    try:
+        members = group_members(process.pid, deadline)
+    except BaseException:
+        # Still cancel the known unreaped child's group, but never accept this
+        # read as evidence of absence or success.
+        inspection_failed, members = True, None
+    try:
+        if members is None or any(not state.startswith("Z") for _, state in members):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        while True:
+            members = group_members(process.pid, deadline)
+            if all(
+                pid == process.pid and state.startswith("Z") for pid, state in members
+            ):
+                break
+            remaining = deadline - time.monotonic()
+            require(remaining > 0)
+            time.sleep(min(0.01, remaining))
+    finally:
+        # No signal may follow this wait: even error paths must not target a
+        # recycled PID/PGID. A failed inspection or surviving group refuses.
+        process.wait(timeout=max(0.01, deadline - time.monotonic()))
+    require(not group_members(process.pid, deadline) and not inspection_failed)
+
+
 def read_command(
     argv: list[str],
     root: Path,
@@ -188,7 +254,7 @@ def read_command(
     deadline: float,
     maximum: int,
 ) -> tuple[int, bytes]:
-    """Bound stdout during reads and own/reap one fresh process group on failure."""
+    """Bound stdout and retire the owned group on success as well as failure."""
     require(deadline > time.monotonic() and 0 < maximum <= 8 * 1024**2)
     process = subprocess.Popen(
         argv,
@@ -218,22 +284,32 @@ def read_command(
                     size += len(chunk)
                     require(size <= maximum)
                     chunks.append(chunk)
-        remaining = deadline - time.monotonic()
-        require(remaining > 0)
-        result = process.wait(timeout=remaining)
-        require(time.monotonic() < deadline)
-        return result, b"".join(chunks)
+        # WNOWAIT observes exit without releasing the leader's PID. Its PGID
+        # remains safe to signal if a descendant closed stdout and stayed alive.
+        while True:
+            remaining = deadline - time.monotonic()
+            require(remaining > 0)
+            status = os.waitid(
+                os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT
+            )
+            if status is not None:
+                require(status.si_pid == process.pid)
+                require(status.si_code in {os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED})
+                result = (
+                    status.si_status
+                    if status.si_code == os.CLD_EXITED
+                    else -status.si_status
+                )
+                break
+            time.sleep(min(0.01, remaining))
     finally:
-        # Until wait() records returncode, this unreaped child's PID cannot be
-        # reused. Never poll/reap before failure cleanup of its owned group.
-        if process.returncode is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait(timeout=2)
-        if process.stdout is not None:
-            process.stdout.close()
+        try:
+            finish_group(process)
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
+    require(time.monotonic() < deadline)
+    return result, b"".join(chunks)
 
 
 class ReadOnlySource:

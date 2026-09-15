@@ -502,6 +502,52 @@ class PolicyTests(unittest.TestCase):
 
 
 class BoundedReadTests(unittest.TestCase):
+    def test_successful_leader_cannot_leave_closed_stdout_descendant(self):
+        source = (
+            "import os,time\n"
+            "child=os.fork()\n"
+            "if child==0:\n"
+            " os.close(0);os.close(1);os.close(2);time.sleep(2);os._exit(0)\n"
+            "print(str(os.getpid())+':'+str(child),flush=True)\n"
+            "os._exit(0)\n"
+        )
+        code, raw = m.read_command(
+            [sys.executable, "-I", "-S", "-B", "-c", source],
+            Path.cwd().resolve(),
+            {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            time.monotonic() + 3,
+            64,
+        )
+        leader, child = (int(value) for value in raw.strip().split(b":"))
+        self.assertEqual(code, 0)
+        self.assertEqual(m.group_members(leader, time.monotonic() + 2), ())
+        with self.assertRaises(ProcessLookupError):
+            os.getpgid(child)
+
+    def test_cleanup_cannot_signal_after_reaping_leader(self):
+        calls = []
+
+        class Child:
+            pid = 123
+            returncode = None
+
+            def wait(self, **_kwargs):
+                calls.append("reap")
+                self.returncode = 0
+
+        def kill(_pid, _signal):
+            self.assertNotIn("reap", calls)
+            calls.append("kill")
+
+        with (
+            patch.object(
+                m, "group_members", side_effect=[((124, "S"),), ((123, "Z"),), ()]
+            ),
+            patch.object(m.os, "killpg", side_effect=kill),
+        ):
+            m.finish_group(Child())
+        self.assertEqual(calls, ["kill", "reap"])
+
     def test_tool_pin_identity_content_type_and_mode(self):
         with tempfile.TemporaryDirectory(prefix="invented-public-tool-") as tmp:
             leaf = Path(tmp) / "tool"
