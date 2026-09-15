@@ -424,17 +424,21 @@ class BoundedChildren:
         require(value > 0, "capture_deadline")
         return value
 
-    def group_members(self, process_id: int) -> tuple[tuple[int, str], ...]:
+    def group_members(
+        self, process_id: int, *, deadline: float | None = None
+    ) -> tuple[tuple[int, str], ...]:
         # On macOS killpg(..., 0) can report EPERM for a zombie-only group.
         # Exact read-only ps selection distinguishes that from active children;
         # denial, malformed output or an unknown state is never called absence.
+        remaining = 2 if deadline is None else min(2, deadline - time.monotonic())
+        require(remaining > 0, "capture_group_readback")
         result = subprocess.run(
             ["/bin/ps", "-g", str(process_id), "-o", "pid=,pgid=,stat="],
             env={"PATH": "/usr/bin:/bin", "LC_ALL": "C", "LANG": "C"},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=2,
+            timeout=remaining,
             check=False,
         )
         require(len(result.stdout) <= 16384, "capture_group_readback")
@@ -465,14 +469,33 @@ class BoundedChildren:
         if child is None:
             require(not self.cleanup_failed, "capture_group_not_gone")
             return
+        if child.returncode is not None:
+            self.may_signal_child = False
+            self.cleanup_failed = True
+            self.child = None
+            if child.stdout is not None:
+                child.stdout.close()
+            raise PostgreSQLRefused("capture_child_already_reaped")
+        cleanup_deadline = time.monotonic() + 5
+
+        def unreaped_members() -> tuple[tuple[int, str], ...]:
+            members = self.group_members(child.pid, deadline=cleanup_deadline)
+            require(
+                members
+                and len({pid for pid, _state in members}) == len(members)
+                and any(pid == child.pid for pid, _state in members),
+                "capture_group_readback",
+            )
+            return members
+
         # Keep the leader unreaped until group termination to avoid PID reuse.
         try:
-            members = self.group_members(child.pid)
+            members = unreaped_members()
         except BaseException:
             self.cleanup_failed = True
             members = None
         if self.may_signal_child and (
-            members is None or any(not state.startswith("Z") for _, state in members)
+            members is None or len(members) != 1 or not members[0][1].startswith("Z")
         ):
             # Failed inspection must not suppress the known, unreaped child's
             # group cancellation. This signal cannot target a recycled PID.
@@ -481,13 +504,24 @@ class BoundedChildren:
             self.may_signal_child = False
             try:
                 os.killpg(child.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             except BaseException:
                 self.cleanup_failed = True
+        self.may_signal_child = False
         try:
-            self.may_signal_child = False
-            child.wait(timeout=5)
+            while not (
+                members is not None
+                and len(members) == 1
+                and members[0][1].startswith("Z")
+            ):
+                require(time.monotonic() < cleanup_deadline, "capture_group_readback")
+                members = unreaped_members()
+                if len(members) != 1 or not members[0][1].startswith("Z"):
+                    time.sleep(min(0.01, max(0, cleanup_deadline - time.monotonic())))
+        except BaseException:
+            # A later valid observation cannot erase any ambiguous pre-reap read.
+            self.cleanup_failed = True
+        try:
+            child.wait(timeout=max(0.01, cleanup_deadline - time.monotonic()))
             # A later cleanup call MUST NOT signal this now-reaped PID again.
             self.child = None
         except BaseException:
@@ -499,7 +533,7 @@ class BoundedChildren:
             if child.stdout is not None:
                 child.stdout.close()
         try:
-            if self.group_members(child.pid):
+            if self.group_members(child.pid, deadline=cleanup_deadline):
                 self.cleanup_failed = True
         except BaseException:
             self.cleanup_failed = True
@@ -572,10 +606,11 @@ class BoundedChildren:
                     break
                 time.sleep(min(0.01, self.remaining()))
             self.remaining()
-            return size
         finally:
             # Even a successful leader cannot leave a hidden descendant behind.
             self.cancel_and_reap()
+        self.remaining()
+        return size
 
 
 @dataclass(frozen=True)
