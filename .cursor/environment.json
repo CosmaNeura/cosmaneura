@@ -12,5 +12,14 @@
       "command": "/usr/bin/env -i /bin/bash --noprofile --norc -- .cursor/credential-neutral.sh frontend"
     }
   ],
-  "ports": [8205, 8207]
+  "ports": [
+    {
+      "name": "backend",
+      "port": 8205
+    },
+    {
+      "name": "frontend",
+      "port": 8207
+    }
+  ]
 }

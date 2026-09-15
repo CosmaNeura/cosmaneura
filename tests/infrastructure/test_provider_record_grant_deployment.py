@@ -224,8 +224,9 @@ def test_staging_deployment_requires_founder_manual_dispatch() -> None:
     authorization_job = workflow[authorization_start:deployment_scope_start]
     staging_job = workflow[workflow.index("\n  deploy-staging:") :]
 
-    # Pushes still run validation, but they cannot satisfy either deployment job.
-    assert "branches: [master, staging]" in workflow_scope
+    # Manual validation and deployment cannot be entered by an ordinary push.
+    assert "  workflow_dispatch:" in workflow_scope
+    assert "\n  push:" not in workflow_scope
     assert "github.event_name == 'workflow_dispatch'" in authorization_job
     assert "github.ref == 'refs/heads/staging'" in authorization_job
     assert "permissions: {}" in authorization_job
