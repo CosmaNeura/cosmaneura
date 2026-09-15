@@ -131,6 +131,30 @@ def replace_record(originals: dict[str, bytes], name: str, **fields: object) -> 
 
 
 class ReviewRecordTests(unittest.TestCase):
+    def test_nonzero_first_sequence_refuses(self):
+        frames = fixtures()["stream"].split(b"\n\n")
+        shifted = b"\n\n".join(
+            frame.replace(
+                b'"sequence_number":' + str(index).encode(),
+                b'"sequence_number":' + str(index + 1).encode(),
+            )
+            for index, frame in enumerate(frames)
+        )
+        with self.assertRaises(module.ReviewRecordRefused):
+            module.completed_stream(shifted, ID)
+
+    def test_missing_middle_frame_refuses_even_with_recomputed_hashes(self):
+        originals = fixtures()
+        first, _middle, last, _empty = originals["stream"].split(b"\n\n")
+        originals["stream"] = first + b"\n\n" + last + b"\n\n"
+        for name in ("summary", "diagnostic"):
+            replace_record(
+                originals, name, stream_sha256=module.sha(originals["stream"])
+            )
+        replace_record(originals, "diagnostic", stream_bytes=len(originals["stream"]))
+        with self.assertRaises(module.ReviewRecordRefused):
+            build(originals)
+
     def test_original_text_framing_and_stream_limits(self):
         for raw in (TEXT.encode(), TEXT.encode() + b"\n\n", b"replacement\n"):
             with self.subTest(raw=raw[-20:]):

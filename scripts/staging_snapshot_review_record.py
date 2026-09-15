@@ -114,7 +114,9 @@ def completed_stream(raw: bytes, response_id: str) -> dict[str, Any]:
         kind = cast(str, kind)
         require(name is None or name == kind.encode())
         current = event.get("sequence_number")
-        require(type(current) is int and current > sequence)
+        # Provider frames are numbered from zero without gaps. A monotonic but
+        # incomplete capture is not complete evidence, even if its hashes match.
+        require(type(current) is int and current == sequence + 1)
         sequence = cast(int, current)
         require(kind not in {"error", "response.failed", "response.incomplete"})
         if kind in {"response.created", "response.in_progress", "response.completed"}:
