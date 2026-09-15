@@ -37,6 +37,9 @@ USERNAME_SHA = "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a
 # Retain the session's35min floor plus the loader90s and human preparation240s.
 # Reviews and human delay consume additional time; never promise token renewal.
 MIN_TOKEN_SECONDS = 2100 + 90 + 240
+PACKET_PARENT = PurePosixPath(
+    "/private/tmp/cosmaneura-staging-baseline-20260914.adNnmt"
+)
 
 
 class PublicPlanRefused(RuntimeError):
@@ -375,8 +378,7 @@ def rules(value: object) -> list[dict[str, str]]:
     return sorted(rows, key=lambda item: item["name"].casefold())
 
 
-@content_free
-def preparation_files(
+def preparation_content(
     source: SourceCollection,
     source_review: ReviewRecord,
     workspace_manifest: bytes,
@@ -389,14 +391,14 @@ def preparation_files(
     operator_uid: int,
     observation_root: str,
     human_presence_confirmed_at: datetime,
+    created: datetime,
 ) -> tuple[tuple[str, bytes], ...]:
-    """Public six-file READ-ONLY preparation packet, not a capture plan/receipt.
+    """Canonical content at its ORIGINAL creation time; never renew an artifact.
 
-    Actual Terminal presence and original authenticated source/review/workspace
-    anchors are caller prerequisites. Returned bytes still need exclusive
-    publication and exact independent human-command review; no command is run.
+    Only preparation_files creates new content at the actual current time. The
+    publisher reconstructs these bytes at their original time for comparison.
     """
-    created = now_utc()
+    encoded_time(created)
     value = source_record(source, expected_source_sha256, created)
     bundle = sha(canonical(value["files"]))
     checked_review(
@@ -418,9 +420,10 @@ def preparation_files(
     require(valid_sha(hdiutil_sha256) and valid_sha(diskutil_sha256))
     require(
         type(observation_root) is str
+        and str(PurePosixPath(observation_root)) == observation_root
+        and PurePosixPath(observation_root).parent == PACKET_PARENT
         and re.fullmatch(
-            r"/private/tmp/cosmaneura-staging-baseline-20260914\.adNnmt/human-observation-[0-9a-f]{32}",
-            observation_root,
+            r"human-observation-[0-9a-f]{32}", PurePosixPath(observation_root).name
         )
     )
     presence = timestamp(encoded_time(human_presence_confirmed_at))
@@ -458,6 +461,42 @@ def preparation_files(
         ("source-review-request.json", source_review.request),
         ("source-review-response.json", source_review.response),
         ("source-review-text.md", source_review.text),
+    )
+
+
+@content_free
+def preparation_files(
+    source: SourceCollection,
+    source_review: ReviewRecord,
+    workspace_manifest: bytes,
+    *,
+    expected_source_sha256: str,
+    expected_source_review_sha256: str,
+    expected_workspace_manifest_sha256: str,
+    hdiutil_sha256: str,
+    diskutil_sha256: str,
+    operator_uid: int,
+    observation_root: str,
+    human_presence_confirmed_at: datetime,
+) -> tuple[tuple[str, bytes], ...]:
+    """Create six public files at actual time; no writer, command or authority.
+
+    Actual presence and original authenticated source/review/workspace anchors
+    remain caller prerequisites. An exact human-command review is still owed.
+    """
+    return preparation_content(
+        source,
+        source_review,
+        workspace_manifest,
+        expected_source_sha256=expected_source_sha256,
+        expected_source_review_sha256=expected_source_review_sha256,
+        expected_workspace_manifest_sha256=expected_workspace_manifest_sha256,
+        hdiutil_sha256=hdiutil_sha256,
+        diskutil_sha256=diskutil_sha256,
+        operator_uid=operator_uid,
+        observation_root=observation_root,
+        human_presence_confirmed_at=human_presence_confirmed_at,
+        created=now_utc(),
     )
 
 
