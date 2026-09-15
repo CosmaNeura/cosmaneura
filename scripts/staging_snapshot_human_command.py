@@ -253,7 +253,6 @@ def draft_command(
     require(type(uid) is int and uid == os.geteuid())
     cutoffs = [
         presence + timedelta(minutes=5),
-        plan.timestamp(artifact["human_presence_confirmed_at"]) + timedelta(minutes=5),
         plan.timestamp(record(source.source.provenance)["observed_at"])
         + timedelta(minutes=10),
         plan.timestamp(artifact["expires_at"])

@@ -65,7 +65,7 @@ The emitted command is macOS-specific. Its structure:
 - Disable core dumps and use077umask only in this dedicated shell/child, never
   alter the existing interactive shell. No configured account/cache access here.
 - Check absolute UTC bounds before AND after hashing. Upper bound is the minimum
-  of original presence, source age, preparation/handoff expiry, plan headroom and
+  of actual launch presence, source age, preparation/handoff expiry, plan headroom and
   token headroom; no command extends them. Need>30seconds at render time. Identical
   original inputs produce identical command text on read-only revalidation.
 - Before executing interpreter/loader bytes, fixed system stat/shasum check exact
@@ -86,7 +86,7 @@ ARM-token identity; the unchanged human preparation/consumer still must do so.
 
 ## Verification and failure recovery
 
-19new fixture methods PASS, plus three affected existing publisher tests. All
+20new fixture methods PASS, plus three affected existing publisher tests. All
 source/review/identity/presence data is invented2030evidence. Actual local native
 publication/readback and OS-shell/PTY plumbing are exercised; the latter uses
 ONLY a tiny invented dummy entrypoint and copied TEST interpreter, its installed
@@ -99,7 +99,11 @@ presence exception isolation, both command modes, unchanged revalidation,
 source/plan/review changes, expiry, shell syntax, injected environment removal,
 real TTY stdin preservation and hash/size/mode/operator/non-TTY refusals BEFORE
 dummy execution. A new regression first failed for JSON-equivalent but
-byte-different provenance; exact byte equality fixed it. The copied test Python
+byte-different provenance; exact byte equality fixed it. Another regression
+keeps presence-at-artifact-creation distinct from actual current launch presence:
+do not invent a five-minute artifact expiry. New actual confirmation can yield
+a NEW unreviewed command, never rewrite/extend the original packet or reuse an
+expired command. The copied test Python
 initially lacked its stdlib; correcting ONLY that fixture made integration pass.
 
 Pure startup-environment function is extracted by AST for comparison, not loader

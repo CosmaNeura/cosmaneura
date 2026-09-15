@@ -245,7 +245,9 @@ class CommandTests(unittest.TestCase):
             self.assertEqual(self.preparation_command(), first)
         self.assertEqual(plan.sha(first.command), first.command_sha256)
         self.assertTrue(first.independent_exact_command_review_required)
-        self.assertEqual(first.not_after, plan.encoded_time(NOW + timedelta(minutes=5)))
+        self.assertEqual(
+            first.not_after, plan.encoded_time(NOW + timedelta(seconds=345))
+        )
         argv = shlex.split(first.command.decode())
         self.assertEqual(
             argv[:7],
@@ -287,7 +289,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(script.count("\ncheck_file "), 35)
         self.assertNotIn(" prepare ", script.splitlines()[-1])
         self.assertEqual(
-            draft.not_after, plan.encoded_time(NOW + timedelta(seconds=330))
+            draft.not_after, plan.encoded_time(NOW + timedelta(seconds=345))
         )
         original = self.base.handoff
         self.base.handoff = replace(
@@ -316,12 +318,25 @@ class CommandTests(unittest.TestCase):
 
     def test_no_late_or_expired_draft_even_with_new_presence(self):
         self.preparation()
-        self.base.now = NOW + timedelta(seconds=275)
+        self.base.now = NOW + timedelta(seconds=320)
         with self.assertRaises(module.HumanCommandRefused):
-            self.preparation_command(human_presence_confirmed_at=self.base.now)
+            self.preparation_command()
         self.base.now = NOW + timedelta(minutes=31)
         with self.assertRaises(module.HumanCommandRefused):
             self.preparation_command(human_presence_confirmed_at=self.base.now)
+
+    def test_actual_new_presence_cannot_rewrite_or_extend_original_artifacts(self):
+        self.preparation()
+        original = self.preparation_command()
+        original_files = dict(self.base.preparation.files)
+        self.base.now = NOW + timedelta(minutes=6)
+        newer = self.preparation_command(human_presence_confirmed_at=self.base.now)
+        self.assertEqual(dict(self.base.preparation.files), original_files)
+        self.assertEqual(
+            newer.not_after, plan.encoded_time(NOW + timedelta(minutes=10))
+        )
+        self.assertNotEqual(newer.command_sha256, original.command_sha256)
+        self.assertTrue(newer.independent_exact_command_review_required)
 
     def test_plan_change_or_token_expiry_cannot_get_capture_command(self):
         self.capture()
