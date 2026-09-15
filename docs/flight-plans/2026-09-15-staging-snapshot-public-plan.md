@@ -4,7 +4,7 @@
 
 Assemble the existing human reader's exact public plan/handoff/review packet
 from externally authenticated source, review and human-preparation evidence.
-Actual PR412 base: `7846a28ecec69f2bc86454e9902720f12c7d4807` (PR411).
+Actual PR412 base: `be7a533c6d8b302b1bf491bcdd3f2408a5e5811c` (PR411).
 The original PR411 head09f4d148bd3732a2edff9c365e7fd6f4bd1b8e85 is historical,
 not this review's base. Only three new files;
 no human bootstrap/runtime dependency, pin, deployment workflow or cloud change.
