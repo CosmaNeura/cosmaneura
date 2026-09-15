@@ -32,6 +32,7 @@ NIXPACKS_BINARY_SHA256 = (
 NIXPACKS_BINARY_BYTES = 8194488
 SOURCE_REPOSITORY = "https://github.com/CosmaNeura/cosmaneura"
 MAX_SOURCE_BYTES = 256 * 1024 * 1024
+MAX_CANONICAL_PATHS = 20000
 PUBLIC_KEYS = frozenset(
     {
         "NODE_ENV",
@@ -191,6 +192,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
             members = archive.getmembers()
             require(0 < len(members) <= 20000)
             names: set[str] = set()
+            prefixes: dict[str, str] = {}
             files: list[tuple[str, bytes, bool]] = []
             size = 0
             for member in members:
@@ -200,6 +202,14 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
                 require(name == str(path) and not path.is_absolute())
                 canonical = canonical_name(name)
                 canonical_path = PurePosixPath(canonical)
+                for depth in range(1, len(path.parts) + 1):
+                    original_prefix = str(PurePosixPath(*path.parts[:depth]))
+                    canonical_prefix = canonical_name(original_prefix)
+                    require(
+                        prefixes.setdefault(canonical_prefix, original_prefix)
+                        == original_prefix
+                    )
+                    require(len(prefixes) <= MAX_CANONICAL_PATHS)
                 require(
                     all(
                         p not in {".", "..", ".git", ".nixpacks"}

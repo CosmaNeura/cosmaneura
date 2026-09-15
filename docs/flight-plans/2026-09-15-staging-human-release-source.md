@@ -125,3 +125,17 @@ controls/surrogates, valid printable Unicode, and clean checkout/origin switches
 Ruff/format, explicit-interpreter Pyright (zero errors/warnings) and whitespace
 checks PASS. No unrelated suite, Nixpacks/Docker, account, human consumer or live
 operation ran. The corrected exact commit requires a new independent review.
+
+Review54 of `e77ab290732954cb31054625cb2c91023a55693b` returned FAIL for one
+remaining P1: implicit parent directory aliases with different child filenames
+could collapse even though complete member names were distinct. Preparation now
+tracks every cumulative canonical prefix and requires one original spelling per
+prefix, before any write; prefix count is bounded at20,000. Complete-member
+duplicate and file-parent checks remain. New host-independent regressions cover
+case and Unicode-normalization aliases without explicit directory members, nested
+aliases, and a positive case with multiple children using the same exact spelling.
+This further correction requires its own final exact independent review; previous
+FAIL decisions remain retained, not relabeled as passes.
+Five new/affected cases PASS (four in0.019s, new prefix-count boundary in0.007s),
+with Ruff/Pyright/whitespace checks clean. Corrected source validation also accepts
+the same actual1,298-file proposed candidate archive read-only; no build occurred.

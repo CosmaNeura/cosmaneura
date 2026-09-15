@@ -273,6 +273,55 @@ class WorkspaceTests(unittest.TestCase):
                 )
             self.assertEqual(list(self.parent.iterdir()), [])
 
+    def test_implicit_directory_aliases_refuse_before_writes(self):
+        for names in (
+            ("Case/one", "case/two"),
+            ("caf\u00e9/one", "cafe\u0301/two"),
+            ("outer/Case/one", "outer/case/two"),
+            ("web/one", "WEB/two"),
+        ):
+            raw = archive(
+                source_files()
+                + [(name, b"invented", tarfile.REGTYPE) for name in names]
+            )
+            with self.subTest(names=names), self.assertRaises(m.BuildInputRefused):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_canonical_prefix_count_bound_is_enforced_before_writes(self):
+        entries = source_files() + [("new/one", b"invented", tarfile.REGTYPE)]
+        prefixes = {
+            str(Path(*Path(name).parts[:depth]))
+            for name, _, _ in entries
+            for depth in range(1, len(Path(name).parts) + 1)
+        }
+        raw = archive(entries)
+        inputs = replace(self.inputs, source_archive_sha256=m.sha(raw))
+        with patch.object(m, "MAX_CANONICAL_PATHS", len(prefixes)):
+            self.assertEqual(len(m.source_entries(raw, inputs)), len(entries))
+        with patch.object(m, "MAX_CANONICAL_PATHS", len(prefixes) - 1):
+            with self.assertRaises(m.BuildInputRefused):
+                self.prepare(source_archive=raw, inputs=inputs)
+        self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_shared_exact_directory_spelling_preserves_distinct_children(self):
+        names = ("Case/one", "Case/two", "caf\u00e9/one", "caf\u00e9/two")
+        raw = archive(
+            source_files() + [(name, b"invented", tarfile.REGTYPE) for name in names]
+        )
+        prepared = self.prepare(
+            source_archive=raw,
+            inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+        )
+        self.assertTrue(set(names) <= dict(prepared.files).keys())
+        for name in names:
+            self.assertEqual(
+                (prepared.root / "source" / name).read_bytes(), b"invented"
+            )
+
     def test_distinct_printable_unicode_source_and_public_values_remain_valid(self):
         entries = source_files() + [
             ("caf\u00e9.txt", b"invented", tarfile.REGTYPE),
