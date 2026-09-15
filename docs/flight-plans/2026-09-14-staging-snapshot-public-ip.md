@@ -1,5 +1,36 @@
 # Approved bounded human public-IP check (Tier 2)
 
+## Review40 correction — September15
+
+Independent review40 found P1 at the original head09def321: incrementing the
+integer `_attempts` replaced a retained module-global binding. The real
+SourceRuntimeBinding callback therefore refused the first public-IP check
+before HTTP. No actual live request or human consumer was attempted.
+
+Use one identity-preserving list with a checked integer element. Increment it
+before I/O; keep the same process-wide three-attempt limit across instances and
+failed requests. No reset API, retry, extra network permission or relaxed source
+binding is introduced. The bootstrap pin changes to the corrected exact source.
+
+Two new regressions pass with the real sealed-process/source_bindings and
+SourceRuntimeBinding.revalidate paths: three mocked-HTTP checks preserve all
+recorded source bindings, the fourth refuses, and replacing the counter object
+still refuses before HTTP. Interpreter, native/runtime observations, approval,
+CA and file observations are explicitly invented/mocked. No bind_process/main,
+human consumer, credential, real IP service or encrypted workspace executes.
+
+The positive regression failed on original source after its missing inert-module
+fixture setup was corrected, then passed with the counter fix. Two existing
+affected limit/failure tests and the changed source-pin check pass. An initial
+combined invocation exhausted the intended process-wide budget across methods;
+only the two affected methods were then run in their required separate fresh
+processes. No test-only production reset was added. Ruff/format/Pyright pass.
+
+Review40 remains FAIL for its original405/406/408/409 heads. This correction and
+all propagated exact heads require a new independent review; no passing review
+or merge approval is inferred. Original evidence is retained at
+https://github.com/CosmaNeura/cosmaneura/pull/409#issuecomment-5673691514.
+
 ## Outcome and authority
 
 Stacked on PR404 at d6132c171ee6bf4c2a7f19a4c40f2c4fa54f709f. Supply the
