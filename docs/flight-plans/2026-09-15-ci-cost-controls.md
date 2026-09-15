@@ -18,7 +18,7 @@ This change neither deploys nor authorizes infrastructure or database mutation.
 PR checks, all test recipes/selectors, application and integration conftests,
 common setup, dependencies and lockfile are identical to protected-master base
 `16ad15538b218f9e5bfd9cb4a5970cbfaef90a82`. Existing test cases are retained;
-only the obsolete push-trigger assertion is changed, with timeout coverage added.
+only obsolete push-trigger assertions are changed, with timeout coverage added.
 The excluded `infra_apply.yml`, `infra_production_plan.yml` and
 `deploy_staging_candidate.yml` remain byte-for-byte unchanged.
 

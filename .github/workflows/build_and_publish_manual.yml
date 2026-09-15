@@ -32,7 +32,7 @@ concurrency:
   group: Build & Publish-${{ github.ref }}
   # Neither release branch may cancel an in-flight run: migrations or Azure
   # revision reconciliation can outlive GitHub's cancellation signal. Queue a
-  # newer push behind the current release instead of creating partial state.
+  # newer dispatch behind the current release instead of creating partial state.
   cancel-in-progress: false
 
 # Long-lived credentials are scoped to the protected deploy jobs below. Pull
