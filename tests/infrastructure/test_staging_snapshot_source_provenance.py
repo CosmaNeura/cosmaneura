@@ -502,6 +502,64 @@ class PolicyTests(unittest.TestCase):
 
 
 class BoundedReadTests(unittest.TestCase):
+    def test_group_read_and_tool_revalidation_cannot_outlive_deadline(self):
+        for stage in ("process", "tool_hash"):
+            for end in (101.999, 102.0, 102.001):
+                with self.subTest(stage=stage, end=end):
+                    calls = []
+                    with patch.object(m.time, "monotonic", return_value=100.0) as clock:
+
+                        def identity(_path):
+                            calls.append("hash")
+                            if stage == "tool_hash" and len(calls) == 2:
+                                clock.return_value = end
+                            return ("invented",)
+
+                        def run(*_args, **_kwargs):
+                            if stage == "process":
+                                clock.return_value = end
+                            return subprocess.CompletedProcess([], 1, stdout=b"")
+
+                        with (
+                            patch.object(m, "tool_identity", side_effect=identity),
+                            patch.object(m.subprocess, "run", side_effect=run),
+                        ):
+                            if end < 102:
+                                self.assertEqual(m.group_members(123, 102), ())
+                            else:
+                                with self.assertRaises(m.SourceProvenanceRefused):
+                                    m.group_members(123, 102)
+
+    def test_final_group_result_requires_post_call_absolute_deadline(self):
+        class Child:
+            pid, returncode, waits = 123, None, 0
+
+            def wait(self, **_kwargs):
+                self.returncode, self.waits = 0, self.waits + 1
+
+        for end in (101.999, 102.0, 102.001):
+            child = Child()
+            with patch.object(m.time, "monotonic", return_value=100.0) as clock:
+
+                def observe(_pid, deadline):
+                    self.assertEqual(deadline, 102)
+                    if child.returncode is None:
+                        return ((123, "Z"),)
+                    clock.return_value = end
+                    return ()
+
+                with (
+                    patch.object(m, "group_members", side_effect=observe),
+                    patch.object(m.os, "killpg") as kill,
+                ):
+                    if end < 102:
+                        m.finish_group(child)
+                    else:
+                        with self.assertRaises(m.SourceProvenanceRefused):
+                            m.finish_group(child)
+                self.assertEqual(child.waits, 1)
+                kill.assert_not_called()
+
     def test_successful_leader_cannot_leave_closed_stdout_descendant(self):
         source = (
             "import os,time\n"

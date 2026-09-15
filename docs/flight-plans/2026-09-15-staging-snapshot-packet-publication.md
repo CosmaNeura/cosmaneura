@@ -9,7 +9,18 @@ or merge permission is created by this PR. No new service, runtime or dependency
 Publish the existing six-file read-only preparation packet or sixteen-file
 already-reviewed capture packet without inventing a filesystem receipt/claim or
 rewriting the reviewed bytes. This stays OUTSIDE the existing 18-file human
-runtime. All eighteen runtime hashes, including loader fe65c2db..., are unchanged.
+runtime. This helper changes no runtime18 bytes; current exact runtime pins must
+come from their separate independent whole-runtime review, not this paragraph.
+
+Review48 found a pending-alarm teardown race. Closing now makes the handler
+record-only, masks signals, disarms/drains its pending one-shot, restores the
+prior handler/mask through nested finally, then checks the original30second
+deadline. A caller-owned pending alarm refuses before timer/handler changes.
+Regressions include a real pending alarm with SIG_IGN and sentinel prior handlers,
+no prior invocation or returned publication, full state restoration, and expiry
+during final handler restoration. Original48FAIL remains until exact re-review.
+Three new and five affected methods PASS0.021s with invented public packets and
+actual local alarm/ACL/file operations. Ruff/format/Pyright/diff PASS; no live I/O.
 
 The two public APIs accept the typed original source/review/plan evidence and
 externally anchored preparation or handoff/review hashes. These inputs and the

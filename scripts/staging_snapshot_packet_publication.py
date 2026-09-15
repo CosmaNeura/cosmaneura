@@ -98,10 +98,13 @@ def operation() -> Iterator[Callable[[], None]]:
     require(sys.platform in {"darwin", "linux"})
     require(threading.current_thread() is threading.main_thread())
     require(signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0))
-    require(signal.SIGALRM not in signal.pthread_sigmask(signal.SIG_BLOCK, set()))
+    original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    require(signal.SIGALRM not in original_mask)
+    require(signal.SIGALRM not in signal.sigpending())
     started, wall = time.monotonic(), plan.now_utc()
     handler = signal.getsignal(signal.SIGALRM)
     fired = [False]
+    closing = False
 
     def tick() -> None:
         elapsed = time.monotonic() - started
@@ -110,7 +113,8 @@ def operation() -> Iterator[Callable[[], None]]:
 
     def expired(_signal, _frame):
         fired[0] = True
-        raise PacketPublicationRefused("snapshot_packet_publication_refused")
+        if not closing:
+            raise PacketPublicationRefused("snapshot_packet_publication_refused")
 
     try:
         with masked():
@@ -121,9 +125,30 @@ def operation() -> Iterator[Callable[[], None]]:
         tick()
         require(signal.getsignal(signal.SIGALRM) is expired)
     finally:
-        with masked():
-            signal.setitimer(signal.ITIMER_REAL, 0)
-            signal.signal(signal.SIGALRM, handler)
+        # Record expiry during teardown; never deliver our pending alarm to the
+        # restored caller handler or interrupt restoration half way through.
+        try:
+            closing = True
+        finally:
+            closing = True
+            try:
+                signal.pthread_sigmask(
+                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGALRM}
+                )
+            finally:
+                try:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                finally:
+                    try:
+                        if signal.SIGALRM in signal.sigpending():
+                            fired[0] = True
+                            signal.sigwait({signal.SIGALRM})
+                    finally:
+                        try:
+                            signal.signal(signal.SIGALRM, handler)
+                        finally:
+                            signal.pthread_sigmask(signal.SIG_SETMASK, original_mask)
+        tick()
 
 
 class ACL:
