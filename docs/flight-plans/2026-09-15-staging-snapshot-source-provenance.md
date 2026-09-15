@@ -1,5 +1,18 @@
 # Read-only snapshot source collection (Tier 2)
 
+## Review43 documentation correction — September15
+
+Actual PR411 base: `a07c97cdffebafcaf6ff35135421acd3bf648605` (PR410).
+Code head evaluated by review43: `496bb61e7f5523a64cf783dd5a0abf84068c1374`.
+Review43 response: `resp_0d3038609829de25006aa916cd78f88190b3c9080ba79f65e6`.
+That review passed the implementation and public-helper integration, but failed
+the PR because this flight plan still named a historical base and review state.
+This documentation correction preserves those code bytes. Its exact new head
+is supplied by the Git review manifest, not by a self-referential hash here.
+Packaging checks must compare this base, reviewed-code head and review identifier
+with the exact manifest and retained review43 response before transmission.
+No historical source review is current plan, merge or execution authority.
+
 ## Review42 correction — September15
 
 The empty pre-reap process list was ambiguous, not proof of absence. Cleanup now
@@ -37,15 +50,18 @@ standard streams and the kill-before-reap ordering. Fresh exact review is owed.
 ## One outcome
 
 Collect actual GitHub readbacks and local Git object bytes for the snapshot's
-exact18-file source bundle. Stack on PR410 at
-8af123a56a2262f62b3cb7b27ad7f26e70951a8d. This is public preparation, outside the
+exact18-file source bundle. Stack on the actual PR410 base recorded above.
+The earlier `8af123a56a2262f62b3cb7b27ad7f26e70951a8d` was a historical PR410
+head, not this correction's base. This is public preparation, outside the
 human consumer; no bootstrap dependency/pin or deployment policy changes.
 
 The expected PR head and every file digest MUST come from an actual independent
 review of the WHOLE bundle, not only a patch, a locally computed hash or an
 implementer's assertion. A source-review record and external provenance remain
-necessary; this module cannot independently establish the review. Current
-review40 is FAIL and does not authorize use of its corrected successor.
+necessary; this module cannot independently establish the review. Historical
+review40 failed an earlier runtime. Review43's source-code PASS is limited to
+the code head above; the corrected PR still requires independent review, and
+the final runtime/plan/handoff retain their separate exact-review gates.
 
 The selected final PR must be merged to this repository's protected master.
 All18 files are attributed to that reviewed final head as REVIEW COVERAGE, not
@@ -146,8 +162,10 @@ parents matched the recorded normal merge. It made NO GitHub network call and
 did NOT invoke collect_provenance or produce any source/plan/handoff artifact.
 It is tool/Git-read compatibility evidence, not live acceptance of the snapshot.
 
-Independent exact source review is pending. No review quota remains and no new
-submission/merge authority is inferred. Source recovery is a normal reviewed
+Independent review of this documentation correction is pending. Transmission
+allowance and expiry belong to the actual same-task authorization ledger, not
+this historical flight plan. No submission/merge authority is inferred.
+Source recovery is a normal reviewed
 revert or leaving this dormant; no deployed state or user data was changed.
 Next finish the reviewed public artifact producer and actual human-return gates,
 then snapshot/isolated restore/four migrations and the separately authorized
