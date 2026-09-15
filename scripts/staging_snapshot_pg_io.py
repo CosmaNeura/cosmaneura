@@ -418,6 +418,7 @@ class BoundedChildren:
         self.child: subprocess.Popen[bytes] | None = None
         self.cleanup_failed = False
         self.may_signal_child = False
+        self.cleanup_deadline: float | None = None
 
     def remaining(self) -> float:
         value = self.deadline - time.monotonic()
@@ -476,10 +477,19 @@ class BoundedChildren:
             if child.stdout is not None:
                 child.stdout.close()
             raise PostgreSQLRefused("capture_child_already_reaped")
-        cleanup_deadline = time.monotonic() + 5
+        if self.cleanup_deadline is None:
+            self.cleanup_deadline = time.monotonic() + 5
+        cleanup_deadline = self.cleanup_deadline
+
+        def remaining_cleanup() -> float:
+            remaining = cleanup_deadline - time.monotonic()
+            require(remaining > 0, "capture_group_not_gone")
+            return remaining
 
         def unreaped_members() -> tuple[tuple[int, str], ...]:
+            remaining_cleanup()
             members = self.group_members(child.pid, deadline=cleanup_deadline)
+            remaining_cleanup()
             require(
                 members
                 and len({pid for pid, _state in members}) == len(members)
@@ -503,11 +513,13 @@ class BoundedChildren:
             # or ambiguous wait cleanup may only reap/read, never signal again.
             self.may_signal_child = False
             try:
+                remaining_cleanup()
                 os.killpg(child.pid, signal.SIGKILL)
             except BaseException:
                 self.cleanup_failed = True
         self.may_signal_child = False
         try:
+            require(members is not None, "capture_group_not_gone")
             while not (
                 members is not None
                 and len(members) == 1
@@ -518,10 +530,12 @@ class BoundedChildren:
                 if len(members) != 1 or not members[0][1].startswith("Z"):
                     time.sleep(min(0.01, max(0, cleanup_deadline - time.monotonic())))
         except BaseException:
-            # A later valid observation cannot erase any ambiguous pre-reap read.
+            # Preserve ownership until an unambiguous lone zombie is observed.
+            # A retry may inspect/reap within the ORIGINAL bound, never signal.
             self.cleanup_failed = True
+            raise PostgreSQLRefused("capture_group_not_gone") from None
         try:
-            child.wait(timeout=max(0.01, cleanup_deadline - time.monotonic()))
+            child.wait(timeout=remaining_cleanup())
             # A later cleanup call MUST NOT signal this now-reaped PID again.
             self.child = None
         except BaseException:
@@ -530,7 +544,7 @@ class BoundedChildren:
                 self.child = None
             raise PostgreSQLRefused("capture_child_not_reaped") from None
         finally:
-            if child.stdout is not None:
+            if self.child is None and child.stdout is not None:
                 child.stdout.close()
         try:
             if self.group_members(child.pid, deadline=cleanup_deadline):
@@ -561,6 +575,7 @@ class BoundedChildren:
             # A deferred deadline/Ctrl-C is delivered only after the exact
             # Popen handle is registered inside this try/finally.
             with defer_control_signals():
+                self.cleanup_deadline = None
                 self.child = subprocess.Popen(
                     argv,
                     env=environment,
