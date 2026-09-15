@@ -214,7 +214,9 @@ class SnapshotConsole(ForegroundConsole):
                 self._ask(
                     "You remain responsible for removal within 30 minutes, even on "
                     "failure. You may perform the exact Portal steps or explicitly "
-                    "delegate them to an assistant. Only you may enter these "
+                    "delegate them to an assistant only while you actively observe "
+                    "and supervise the exact creation AND removal in Azure Portal. "
+                    "If you cannot supervise, cancel. Only you may enter these "
                     "Terminal confirmations. Concurrent edits are not prevented. "
                     "Type I WILL REMOVE IT to confirm: ",
                     b"I WILL REMOVE IT",
@@ -236,6 +238,9 @@ class SnapshotConsole(ForegroundConsole):
     def _removal(self) -> str:
         return (
             self._target() + f"REMOVE ONLY the rule named {self._inputs.rule.name}.\n"
+            "Delegated removal is permitted only while you actively observe and "
+            "supervise the exact removal in Azure Portal. Otherwise remove the "
+            "rule yourself; removal remains required even on failure.\n"
             "Wait for every creation/removal attempt to finish, including any "
             "uncertain or pending operation. Verify removal after they finish.\n"
             "Preserve every pre-existing rule, including Azure-services and "
@@ -272,7 +277,8 @@ class SnapshotConsole(ForegroundConsole):
             require(datetime.now(UTC) < window_closes_at)
             self._write(
                 "Only after the checks above, you or your explicitly delegated "
-                "assistant may create and save exactly:\n"
+                "assistant, only while you actively observe and supervise the "
+                "exact creation in Azure Portal, may create and save exactly:\n"
                 f"Rule name: {inputs.rule.name}\n"
                 f"Start IPv4: {inputs.rule.start}\nEnd IPv4: {inputs.rule.end}\n"
                 "No range, other rule, resource, role, or permission change.\n",

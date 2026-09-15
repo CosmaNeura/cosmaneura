@@ -89,7 +89,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_console",
-        "90991adfd198283b2e323e8c7f96efaf90c4a144099f954d922492f05a30a5d9",
+        "9ee18cf36b63a762e85d6c6fcfe5afd8d79e61e2f569d936b5ab71a14afb91a8",
     ),
     (
         "staging_snapshot_operations",
