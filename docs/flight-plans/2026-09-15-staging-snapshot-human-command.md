@@ -12,13 +12,23 @@ is not an executable source capsule. Reuse the preceding public packet publisher
 for a closed18-file source catalog and add a read-only command-text renderer.
 No new service, dependency, Azure resource, runtime or recovery platform.
 
-The18 human files are UNCHANGED. Full bundle:
-`edc3a435fe4aaaa1d2796362711cf63905051338ce36d14511270b2ab25e552a`.
-Loader:`fe65c2dbd54a768966c4b4eaac7d3a4a5bc2108d528055298008a4ca9632378d`.
+Review48 found stale command-helper pins after runtime corrections. Bind the
+current18files independently PASSED by reviews47/48 (runtime-only decisions):
+`0c79667e6e7088c926b609afb6991ff093098ea725bcd8f7842bfc1760711d50`.
+Loader:`2f69e3a66c6ce9339bcb86586b8a59b32a2734215d537d3cdc8276b46cbc3d9a`.
 Interpreter:`e8179bf1ac3710499f164f877a3713bbaa34b5921beb70881f5dcd4c45a17827`,
 52448bytes, exact private Python3.14.7 path. These are externally recorded pins,
 not hashes of arbitrary current files accepted as authority. Whole runtime still
 binds its separately derived manifest/native closure at human startup.
+
+The new unpatched regression hashes actual loader/source bytes and derives the
+closed18-file map from AST-only SOURCE_PINS, then calls source_check with invented
+2030 provider/review fixtures. It does not import/run the loader, authenticate
+real evidence, publish source or create an execution packet. This changed helper
+still needs independent exact re-review; original48whole-composition FAIL remains.
+The unpatched source-pin case PASS0.005s. Its first invented review timestamp was
+equal to NOW and correctly failed the strict earlier-than observation gate; only
+that fixture timestamp was corrected. Ruff/format/Pyright/diff PASS; no gate waiver.
 
 ## Public source publication
 

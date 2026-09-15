@@ -50,6 +50,52 @@ publication, plan = fixtures.publisher, fixtures.plan
 NOW = fixtures.NOW
 
 
+class ProductionPinTests(unittest.TestCase):
+    def test_unpatched_pins_and_source_check_match_actual_closed_runtime(self):
+        loader = (ROOT / "scripts/staging_snapshot_bootstrap.py").read_bytes()
+        self.assertEqual(plan.sha(loader), module.LOADER_SHA256)
+        pins = next(
+            ast.literal_eval(node.value)
+            for node in ast.parse(loader).body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "SOURCE_PINS"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(len(pins), 17)
+        files = {"staging_snapshot_bootstrap.py": loader}
+        for name, expected in pins:
+            raw = (ROOT / "scripts" / (name + ".py")).read_bytes()
+            self.assertEqual(plan.sha(raw), expected)
+            files[name + ".py"] = raw
+        self.assertEqual(set(files), module.SOURCE_NAMES)
+        catalog = {name: plan.sha(raw) for name, raw in files.items()}
+        self.assertEqual(plan.sha(module.canonical(catalog)), module.BUNDLE_SHA256)
+        # Actual source BYTES, but invented2030 provider/review evidence: neither
+        # source collection, authentication, publication nor human main executes.
+        fixture = fixtures.fixtures
+        source = fixture.source(NOW)
+        value = json.loads(source.provenance)
+        value["files"] = value["pull_requests"][0]["reviewed_files"] = catalog
+        source = replace(
+            source,
+            provenance=fixture.encoded(value),
+            source_files=tuple(sorted(files.items())),
+        )
+        review = fixture.review(
+            "source",
+            module.BUNDLE_SHA256,
+            module.BUNDLE_SHA256,
+            NOW - timedelta(seconds=1),
+        )
+        packet = module.SourcePacket(
+            source, review, plan.sha(source.provenance), plan.sha(review.summary)
+        )
+        with patch.object(plan, "now_utc", return_value=NOW):
+            self.assertEqual(module.source_check(packet), files)
+
+
 class CommandTests(unittest.TestCase):
     def setUp(self):
         self.base = fixtures.PublicationTests()
