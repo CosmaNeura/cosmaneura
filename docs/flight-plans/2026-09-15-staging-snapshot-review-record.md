@@ -1,5 +1,15 @@
 # Retained public review-record adapter (Tier 2)
 
+## Review41 correction — September15
+
+The original monotonic sequence check allowed missing SSE frames. Require the
+first sequence to be zero and each subsequent provider frame exactly previous+1.
+Retain all lifecycle, response identity, tail, external hash and false-authority
+checks. New fixtures cover shifted starting numbers and a removed middle frame
+with recomputed transport hashes; neither may normalize into accepted evidence.
+This changes public evidence normalization only, not the sealed human runtime.
+The failed exact-head review remains historical; new source review is required.
+
 ## One outcome
 
 Convert the established sender's retained public evidence into the exact review
