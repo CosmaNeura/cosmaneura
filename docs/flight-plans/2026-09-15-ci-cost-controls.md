@@ -78,7 +78,7 @@ Current master requires Backend, Frontend and change-budget from GitHub Actions
 app 15368 only. The active force-push ruleset also requires change-budget from
 that app. An exhausted Actions budget therefore blocks otherwise valid PRs.
 
-Proposed live configuration change (record exact readback separately): keep all
+Applied live configuration change (exact before/after readback retained): keep all
 three contexts and strict/up-to-date enforcement, but remove only the Actions
 issuer binding in both classic branch protection and the applicable ruleset.
 Keep PR-only merges, stale-review dismissal, existing human approval count,
@@ -111,9 +111,26 @@ paid runs or publish false statuses to get this change merged. Existing runs
 do not adopt new workflow YAML. Other workstreams must incorporate the merged
 master commit before their next PR push; no cross-task messages are authorized.
 
-The provider-only rules change, once independently reviewed and applied, affects
-all PRs targeting master immediately. The workflow savings apply only after
-merge and branch synchronization. No global workflow-disable or budget increase.
+The provider-only rules change affects all PRs targeting master immediately.
+Its independent policy review and exact-source review remain separate from
+actual test evidence; no passing status was fabricated when applying it.
+
+The user subsequently directed that GitHub Actions remain unused until platform
+stabilization and major feature rollout, not merely until a budget reset.
+Repository Actions is now disabled (`enabled: false`), read back through the
+GitHub API. No workflow was running; the latest five scheduled restore-cleanup
+runs were skipped. The cleanup-enable variable was absent from repository vars;
+organization-var access was denied and no additional scope was requested.
+This is not a claim that all Azure resources have been cleaned up.
+
+GitHub remains the source/PR host; use local validation and codex-auto-review.
+Actions-based CI, deployment and security workflows cannot be relied on during
+this pause. Existing running Azure applications are not changed by this setting.
+No budget increase, new paid runner or new deployment path is authorized.
+Re-enabling Actions requires explicit user instruction; first reconcile current
+workflow/source, cost bounds and any safety/deployment dependencies. The retained
+master/manual full-suite fallback is dormant until then. Optimized workflow
+savings require merge, branch synchronization AND an authorized future re-enable.
 
 Rollback the source through a normal revert PR. Restore app/integration ID 15368
 on the same required contexts if reverting the status-provider policy, preserving
