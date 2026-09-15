@@ -218,28 +218,39 @@ def finish_group(process: subprocess.Popen[bytes]) -> None:
     """Terminate descendants while leader PID is allocated, then reap once."""
     require(process.returncode is None)
     deadline = time.monotonic() + 2
+
+    def inspect_unreaped() -> tuple[tuple[int, str], ...]:
+        members = group_members(process.pid, deadline)
+        require(
+            members
+            and len({pid for pid, _state in members}) == len(members)
+            and any(pid == process.pid for pid, _state in members)
+        )
+        return members
+
     inspection_failed = False
     try:
-        members = group_members(process.pid, deadline)
+        members = inspect_unreaped()
     except BaseException:
-        # Still cancel the known unreaped child's group, but never accept this
-        # read as evidence of absence or success.
+        # An ambiguous read still requires cancellation and can never become
+        # accepted evidence, even if later cleanup succeeds.
         inspection_failed, members = True, None
     try:
-        if members is None or any(not state.startswith("Z") for _, state in members):
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        # A proven lone zombie needs no signal (macOS may reject that signal).
+        # Every other state gets one cancellation attempt before any reap.
+        if members is None or len(members) != 1 or not members[0][1].startswith("Z"):
+            os.killpg(process.pid, signal.SIGKILL)
         while True:
-            members = group_members(process.pid, deadline)
-            if all(
-                pid == process.pid and state.startswith("Z") for pid, state in members
+            if (
+                members is not None
+                and len(members) == 1
+                and members[0][1].startswith("Z")
             ):
                 break
             remaining = deadline - time.monotonic()
             require(remaining > 0)
             time.sleep(min(0.01, remaining))
+            members = inspect_unreaped()
     finally:
         # No signal may follow this wait: even error paths must not target a
         # recycled PID/PGID. A failed inspection or surviving group refuses.
