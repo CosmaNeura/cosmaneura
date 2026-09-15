@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ast
 import configparser
+import hashlib
 import json
 import os
 import re
@@ -42,6 +43,15 @@ class CandidateContext:
     ref_protected: str
     actor: str
     triggering_actor: str
+
+
+@dataclass(frozen=True, slots=True)
+class HumanCandidateContext:
+    candidate_sha: str
+    approval_pr_number: str
+    expected_schema_after: str
+    controller_sha: str
+    repository: str
 
 
 def _stdout(command: list[str]) -> str:
@@ -290,6 +300,106 @@ def _candidate_schema_head(
     return heads.pop()
 
 
+def _verify_candidate_source(
+    *,
+    candidate_sha: str,
+    approval_pr_number: str,
+    expected_schema_after: str,
+    controller_sha: str,
+    repository: str,
+    stdout: Callable[[list[str]], str],
+    commit_exists: Callable[[str], bool],
+    is_ancestor: Callable[[str, str], bool],
+) -> dict[str, str | int]:
+    """Shared source decision only; no actor or execution authority."""
+    if repository != REPOSITORY or not all(
+        type(value) is str
+        for value in (
+            candidate_sha,
+            approval_pr_number,
+            expected_schema_after,
+            controller_sha,
+        )
+    ):
+        raise CandidateVerificationError("invalid candidate source context")
+    if FULL_SHA.fullmatch(candidate_sha) is None:
+        raise CandidateVerificationError(
+            "candidate SHA must be a full lowercase 40-character commit SHA"
+        )
+    if FULL_SHA.fullmatch(controller_sha) is None:
+        raise CandidateVerificationError("controller SHA is invalid")
+    if PR_NUMBER.fullmatch(approval_pr_number) is None:
+        raise CandidateVerificationError("approval PR number is invalid")
+    if SCHEMA_REVISION.fullmatch(expected_schema_after) is None:
+        raise CandidateVerificationError(
+            "expected schema-after revision must be 12 lowercase hexadecimal characters"
+        )
+
+    local_head = stdout(["git", "rev-parse", "HEAD"])
+    if local_head != controller_sha:
+        raise CandidateVerificationError(
+            "verifier checkout does not match the workflow SHA"
+        )
+
+    current_master = _protected_master_sha(repository, stdout=stdout)
+    if current_master != controller_sha:
+        raise CandidateVerificationError(
+            "master advanced after dispatch; start a new reviewed deployment"
+        )
+    if not commit_exists(candidate_sha):
+        raise CandidateVerificationError("candidate commit is unavailable")
+    if not is_ancestor(candidate_sha, current_master):
+        raise CandidateVerificationError(
+            "candidate is not contained in current protected master"
+        )
+
+    schema_head = _candidate_schema_head(candidate_sha, stdout=stdout)
+    if schema_head != expected_schema_after:
+        raise CandidateVerificationError(
+            "expected schema-after revision does not match the candidate migration head"
+        )
+
+    pull_text = stdout(
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOSTNAME,
+            f"repos/{repository}/pulls/{approval_pr_number}",
+        ]
+    )
+    try:
+        pull: dict[str, Any] = json.loads(pull_text)
+    except (TypeError, json.JSONDecodeError):
+        raise CandidateVerificationError("approval PR metadata is invalid") from None
+    if not isinstance(pull, dict):
+        raise CandidateVerificationError("approval PR metadata is invalid")
+    base = pull.get("base")
+    if (
+        pull.get("state") != "closed"
+        or not pull.get("merged_at")
+        or not isinstance(base, dict)
+        or base.get("ref") != "master"
+        or pull.get("merge_commit_sha") != candidate_sha
+    ):
+        raise CandidateVerificationError(
+            "candidate is not the merge commit of the supplied approved master PR"
+        )
+
+    final_master = _protected_master_sha(repository, stdout=stdout)
+    if final_master != current_master:
+        raise CandidateVerificationError(
+            "master advanced during candidate verification; start a new reviewed deployment"
+        )
+
+    return {
+        "approval_pr_number": int(approval_pr_number),
+        "candidate_sha": candidate_sha,
+        "master_sha": current_master,
+        "schema_head": schema_head,
+    }
+
+
 def verify_candidate(
     context: CandidateContext,
     *,
@@ -311,79 +421,108 @@ def verify_candidate(
         raise CandidateVerificationError(
             "staging deployment and reruns are restricted to the founder account"
         )
-    if FULL_SHA.fullmatch(context.candidate_sha) is None:
-        raise CandidateVerificationError(
-            "candidate SHA must be a full lowercase 40-character commit SHA"
-        )
-    if FULL_SHA.fullmatch(context.workflow_sha) is None:
-        raise CandidateVerificationError("workflow SHA is invalid")
-    if PR_NUMBER.fullmatch(context.approval_pr_number) is None:
-        raise CandidateVerificationError("approval PR number is invalid")
-    if SCHEMA_REVISION.fullmatch(context.expected_schema_after) is None:
-        raise CandidateVerificationError(
-            "expected schema-after revision must be 12 lowercase hexadecimal characters"
-        )
-
-    local_head = stdout(["git", "rev-parse", "HEAD"])
-    if local_head != context.workflow_sha:
-        raise CandidateVerificationError(
-            "verifier checkout does not match the workflow SHA"
-        )
-
-    current_master = _protected_master_sha(context.repository, stdout=stdout)
-    if current_master != context.workflow_sha:
-        raise CandidateVerificationError(
-            "master advanced after dispatch; start a new reviewed deployment"
-        )
-    if not commit_exists(context.candidate_sha):
-        raise CandidateVerificationError("candidate commit is unavailable")
-    if not is_ancestor(context.candidate_sha, current_master):
-        raise CandidateVerificationError(
-            "candidate is not contained in current protected master"
-        )
-
-    schema_head = _candidate_schema_head(context.candidate_sha, stdout=stdout)
-    if schema_head != context.expected_schema_after:
-        raise CandidateVerificationError(
-            "expected schema-after revision does not match the candidate migration head"
-        )
-
-    pull_text = stdout(
-        [
-            "gh",
-            "api",
-            "--hostname",
-            GITHUB_HOSTNAME,
-            f"repos/{context.repository}/pulls/{context.approval_pr_number}",
-        ]
+    return _verify_candidate_source(
+        candidate_sha=context.candidate_sha,
+        approval_pr_number=context.approval_pr_number,
+        expected_schema_after=context.expected_schema_after,
+        controller_sha=context.workflow_sha,
+        repository=context.repository,
+        stdout=stdout,
+        commit_exists=commit_exists,
+        is_ancestor=is_ancestor,
     )
+
+
+def _human_github_user(stdout: Callable[[list[str]], str]) -> str:
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate metadata key")
+            result[key] = value
+        return result
+
     try:
-        pull: dict[str, Any] = json.loads(pull_text)
-    except (TypeError, json.JSONDecodeError):
-        raise CandidateVerificationError("approval PR metadata is invalid") from None
-    base = pull.get("base")
+        raw = stdout(
+            ["gh", "api", "--hostname", GITHUB_HOSTNAME, "--method", "GET", "user"]
+        )
+        user = json.loads(raw, object_pairs_hook=unique)
+        if (
+            not isinstance(user, dict)
+            or user.get("login") != FOUNDER_LOGIN
+            or user.get("type") != "User"
+            or type(user.get("id")) is not int
+            or user["id"] <= 0
+        ):
+            raise ValueError("unexpected configured GitHub user")
+    except (ValueError, TypeError):
+        raise CandidateVerificationError("human GitHub identity is invalid") from None
+    identity = {"id": user["id"], "login": user["login"], "type": user["type"]}
+    return hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def verify_human_candidate(
+    context: HumanCandidateContext,
+    *,
+    stdout: Callable[[list[str]], str],
+    commit_exists: Callable[[str], bool],
+    is_ancestor: Callable[[str, str], bool],
+) -> dict[str, str | int]:
+    """Human-route source decision with REQUIRED externally bound read transport.
+
+    No default runner, CLI flag, credentials, presence, plan or release authority.
+    A reviewed human controller must bind bounded authenticated GET-only transport
+    and revalidate this decision at each privileged boundary. Mock callbacks or
+    matching GITHUB_* strings do not authenticate a user or authorize execution.
+    Azure configured-user/same-token identity, role disclosure, founder candidate
+    selection, review, rehearsal, expiry and human execution remain separate gates.
+    """
     if (
-        pull.get("state") != "closed"
-        or not pull.get("merged_at")
-        or not isinstance(base, dict)
-        or base.get("ref") != "master"
-        or pull.get("merge_commit_sha") != context.candidate_sha
+        not isinstance(context, HumanCandidateContext)
+        or context.repository != REPOSITORY
+    ):
+        raise CandidateVerificationError("invalid human candidate context")
+    user_before = _human_github_user(stdout)
+    if stdout(["git", "remote", "get-url", "origin"]) != (
+        "https://github.com/" + REPOSITORY + ".git"
+    ):
+        raise CandidateVerificationError("human controller origin is invalid")
+    if stdout(["git", "status", "--porcelain=v1", "--untracked-files=all"]):
+        raise CandidateVerificationError("human controller checkout is dirty")
+    result = _verify_candidate_source(
+        candidate_sha=context.candidate_sha,
+        approval_pr_number=context.approval_pr_number,
+        expected_schema_after=context.expected_schema_after,
+        controller_sha=context.controller_sha,
+        repository=context.repository,
+        stdout=stdout,
+        commit_exists=commit_exists,
+        is_ancestor=is_ancestor,
+    )
+    if _human_github_user(stdout) != user_before:
+        raise CandidateVerificationError(
+            "human GitHub identity changed during verification"
+        )
+    if stdout(["git", "rev-parse", "HEAD"]) != context.controller_sha:
+        raise CandidateVerificationError(
+            "human controller HEAD changed during verification"
+        )
+    if stdout(["git", "remote", "get-url", "origin"]) != (
+        "https://github.com/" + REPOSITORY + ".git"
     ):
         raise CandidateVerificationError(
-            "candidate is not the merge commit of the supplied approved master PR"
+            "human controller origin changed during verification"
         )
-
-    final_master = _protected_master_sha(context.repository, stdout=stdout)
-    if final_master != current_master:
+    if stdout(["git", "status", "--porcelain=v1", "--untracked-files=all"]):
         raise CandidateVerificationError(
-            "master advanced during candidate verification; start a new reviewed deployment"
+            "human controller checkout changed during verification"
         )
-
-    return {
-        "approval_pr_number": int(context.approval_pr_number),
-        "candidate_sha": context.candidate_sha,
-        "master_sha": current_master,
-        "schema_head": schema_head,
+    return result | {
+        "github_user_sha256": user_before,
+        "execution_authorized": False,
+        "deployment_authorized": False,
     }
 
 
