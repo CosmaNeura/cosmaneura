@@ -1,6 +1,8 @@
 """Exclusive PUBLIC snapshot packet publication, never human execution.
 
-Only invented fixtures may publish while the operator is absent. Actual callers
+Only invented execution packets may publish while the operator is absent. Public
+source-only publication needs authenticated reviewed source, not human presence.
+Actual execution-packet callers
 owe authenticated original evidence, reviewed source and same-task presence;
 hashes/dataclasses are consistency anchors, not self-authentication. No network,
 credentials, human consumer, claim, receipt, overwrite, retry or cleanup here.
@@ -418,18 +420,28 @@ def publish(
     check: Callable[[], dict[str, bytes]],
     kind: str,
     token: str,
-    confirmed_at: datetime,
+    confirmed_at: datetime | None,
     prior: Publication | None = None,
 ) -> Publication:
     """Internal closed callers only; prior selects READ-ONLY revalidation."""
-    require(kind in {"preparation", "snapshot"})
+    require(kind in {"preparation", "snapshot", "source"})
+    require((kind == "source") == (confirmed_at is None))
+
+    def check_presence() -> None:
+        if confirmed_at is not None:
+            presence(confirmed_at)
+
     require(type(token) is str and re.fullmatch(r"[0-9a-f]{32}", token))
     name = "human-" + kind + "-" + token
     path = PACKET_PARENT / name
     with operation() as tick:
-        presence(confirmed_at)
+        check_presence()
         files = check()
-        anchor = "preparation.json" if kind == "preparation" else "handoff.json"
+        anchor = {
+            "preparation": "preparation.json",
+            "snapshot": "handoff.json",
+            "source": "staging_snapshot_bootstrap.py",
+        }[kind]
         observation = (
             Path(record(files[anchor])["observation_root"])
             if kind == "preparation"
@@ -488,7 +500,7 @@ def publish(
                 for key in [*sorted(set(files) - {anchor}), anchor]:
                     tick()
                     if key == anchor:
-                        presence(confirmed_at)
+                        check_presence()
                         require(check() == files)
                     identities[key] = write_file(root, key, files[key], acl, tick)
                 os.fsync(root)
@@ -512,7 +524,7 @@ def publish(
                     == observation_identity
                 )
                 require(not os.listdir(observation_fd))
-            presence(confirmed_at)
+            check_presence()
             require(check() == files)
             result = Publication(
                 path,
@@ -524,7 +536,7 @@ def publish(
             )
         # Descriptor close, ancestor-link and timer failures cannot return success.
         tick()
-        presence(confirmed_at)
+        check_presence()
         require(check() == files)
     return result
 
