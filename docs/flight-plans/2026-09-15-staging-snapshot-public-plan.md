@@ -4,7 +4,9 @@
 
 Assemble the existing human reader's exact public plan/handoff/review packet
 from externally authenticated source, review and human-preparation evidence.
-Stack on PR411 at09f4d148bd3732a2edff9c365e7fd6f4bd1b8e85. Only three new files;
+Actual PR412 base: `56545f35aa7fcc75f1212530b7fc8df0f0d4cf6d` (PR411).
+The original PR411 head09f4d148bd3732a2edff9c365e7fd6f4bd1b8e85 is historical,
+not this review's base. Only three new files;
 no human bootstrap/runtime dependency, pin, deployment workflow or cloud change.
 This is the bounded snapshot path, not a new recovery platform.
 
@@ -102,7 +104,8 @@ subject/text/order, fresh same source/presence, changed/expired artifacts and to
 headroom. Public API exceptions are content-free. Ruff/format, explicit-interpreter
 Pyright and whitespace checks pass; no unchanged passing suite replayed.
 
-Independent final exact-source review is pending; review allowance is exhausted.
+Independent final exact-source review is pending. Actual review allowance and
+expiry are recorded in the same-task authorization ledger, not this flight plan.
 No transmission, merge or deployment permission is inferred. Actual human
 preparation, source reconciliation/approved merges, exclusive packet publication,
 fresh actual reviews, snapshot/isolated restore/four migrations, human release,
