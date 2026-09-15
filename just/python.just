@@ -378,6 +378,21 @@ py_test-ci-integration:
 	just _banner_echo "Running Integration"
 	uv run pytest tests/integration --verbosity=2 {{PYTEST_COV_PARAMS}}
 
+# Offline infrastructure tests do not use the application's database/browser
+# fixtures. File partitioning covers new tests automatically; each node runs
+# once. Keep the legacy recipes above for the separately gated deploy workflows.
+[script]
+py_test-ci-infrastructure-1:
+	[[ "${CI:-}" == "true" ]] || { echo "infrastructure workers are CI-only" >&2; exit 1; }
+	infra_tests=("${(@f)$(uv run python scripts/ci_backend_shards.py 1)}")
+	uv run pytest "${infra_tests[@]}" --confcutdir=tests/infrastructure --verbosity=2 -n auto {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-2:
+	[[ "${CI:-}" == "true" ]] || { echo "infrastructure workers are CI-only" >&2; exit 1; }
+	infra_tests=("${(@f)$(uv run python scripts/ci_backend_shards.py 2)}")
+	uv run pytest "${infra_tests[@]}" --confcutdir=tests/infrastructure --verbosity=2 -n auto {{PYTEST_COV_PARAMS}}
+
 # run tests with the exact same environment that will be used on CI
 [script]
 py_test:

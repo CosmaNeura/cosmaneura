@@ -22,8 +22,9 @@ on:
         description: "Attest that a real provider-signed non-PHI Recall callback passed immediately before production deploy"
         required: true
         default: false
-  push:
-    branches: [master, staging]
+
+# Full merge-time verification now runs in pull_request_checks.yml. Deployment
+# validation belongs only to explicit manual promotions, not every branch push.
 
 concurrency:
   # Match historical Build & Publish runs during the short registration

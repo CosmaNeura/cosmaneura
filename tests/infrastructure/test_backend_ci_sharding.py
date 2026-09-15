@@ -1480,12 +1480,22 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     assert tests["timeout-minutes"] == 30
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]
-    assert [entry["shard"] for entry in matrix] == list(SHARDS)
+    is_pr = path.name == "pull_request_checks.yml"
+    expected_shards = (
+        ["application", "infrastructure-1", "infrastructure-2", "integration"]
+        if is_pr
+        else list(SHARDS)
+    )
+    assert [entry["shard"] for entry in matrix] == expected_shards
     assert [entry["apt-packages"] for entry in matrix] == ["zsh"] * (
-        len(SHARDS) - 1
+        len(expected_shards) - 1
     ) + ["zsh libnss3-tools"]
-    assert "needs" not in quality or quality["needs"] == "authorize"
-    assert "needs" not in tests or tests["needs"] == "authorize"
+    for job in (quality, tests):
+        if is_pr:
+            assert job["needs"] == "changes"
+            assert job["if"] == "${{ needs.changes.outputs.backend == 'true' }}"
+        else:
+            assert "needs" not in job or job["needs"] == "authorize"
 
     quality_commands = _run_commands(quality)
     test_commands = _run_commands(tests)
@@ -1542,7 +1552,11 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         if path.name == "deploy_staging_candidate.yml"
         else "Backend"
     )
-    assert aggregator["needs"] == ["backend-quality", "backend-tests"]
+    assert aggregator["needs"] == (
+        ["changes", "backend-quality", "backend-tests"]
+        if is_pr
+        else ["backend-quality", "backend-tests"]
+    )
     assert aggregator["if"] == "${{ always() }}"
     assert aggregator["timeout-minutes"] == 5
     assert "continue-on-error" not in quality
@@ -1576,6 +1590,8 @@ def test_backend_aggregator_rejects_every_non_success_dependency(
     environment = os.environ | {
         "BACKEND_QUALITY_RESULT": quality_result,
         "BACKEND_TESTS_RESULT": tests_result,
+        "CHANGES_RESULT": "success",
+        "BACKEND_CHANGED": "true",
     }
     completed = subprocess.run(
         ["bash", "-c", f"set -euo pipefail\n{command}"],

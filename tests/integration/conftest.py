@@ -67,6 +67,8 @@ def _requires_clerk_integration(path: Path) -> bool:
 
 # NOTE this runs on any pytest invocation, even if no tests are run, once per pytest invocation
 def pytest_configure(config):
+    if config.option.collectonly:
+        return
     # start JS build right away, since it takes some time. Separately, the test server will wait until the build
     # is finished to start running tests against the server.
     global _LOCALIAS_READY, _CLERK_READY
