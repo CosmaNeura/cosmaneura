@@ -197,7 +197,9 @@ def group_members(process_id: int, deadline: float) -> tuple[tuple[int, str], ..
         timeout=min(remaining, 1),
         check=False,
     )
+    require(deadline - time.monotonic() > 0)
     require(tool_identity(PS) == identity and len(result.stdout) <= 16384)
+    require(deadline - time.monotonic() > 0)
     if result.returncode == 1 and not result.stdout.strip():
         return ()
     require(result.returncode == 0 and result.stdout.strip())
@@ -255,7 +257,9 @@ def finish_group(process: subprocess.Popen[bytes]) -> None:
         # No signal may follow this wait: even error paths must not target a
         # recycled PID/PGID. A failed inspection or surviving group refuses.
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
-    require(not group_members(process.pid, deadline) and not inspection_failed)
+    members = group_members(process.pid, deadline)
+    require(deadline - time.monotonic() > 0)
+    require(not members and not inspection_failed)
 
 
 def read_command(

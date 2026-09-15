@@ -1,5 +1,17 @@
 # Read-only snapshot source collection (Tier 2)
 
+## Review48 deadline correction — September15
+
+Require the original process-read deadline immediately after native ps returns
+and again after post-read executable revalidation. Final cleanup also checks
+its original two-second deadline after the empty group read. A subprocess timeout
+alone does not include all native creation/return/hash time. New invented tests
+cover just-before, exactly-at and after expiry in both native read and tool hash,
+plus final cleanup read. No runtime18 file, network route, credential, resource
+operation or human gate changes. Original48FAIL remains; exact re-review is owed.
+Two new and two directly affected methods PASS0.182s, including actual dedicated
+credentialless-child output/timeout cleanup; Ruff/format/Pyright/diff PASS.
+
 ## Review43 documentation correction — September15
 
 Actual PR411 base: `34650cc8b3d9a408c5573943b2032473be2cf793` (PR410).
