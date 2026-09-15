@@ -91,19 +91,35 @@ a real pending signal in the test process and proves it never reaches the
 restored prior handler. The original review FAIL remains until independent
 re-review of this correction; local tests are not independent acceptance.
 
+Review44 runtime correction (September15): an empty/duplicate/missing-leader
+pre-reap process list is never evidence of retirement. Every accepted pre-reap
+inspection must include the still-unreaped leader with unique PIDs. Initial or
+later ambiguity permanently fails cleanup, even if a later observation is valid.
+Unless exactly one zombie leader is proven, cancellation is attempted at most
+once before reaping. Successful cleanup requires that exact lone-zombie state,
+then reaping, then an empty post-reap group. An already-reaped child cannot be
+signalled. The complete final bundle and its new pins require independent review;
+review44's FAIL is preserved, not converted into acceptance by these tests.
+Thirteen new/affected secretless fixture and real dedicated-child tests passed
+in0.197s. They cover ambiguous reads with/without survivors, denied/later reads,
+post-reap survivors, repeated cleanup, lone zombies, actual output/timeout/nonzero
+exit and descendant absence. No PostgreSQL connection, credential or human
+consumer ran. Ruff/format, explicit-interpreter Pyright and diff checks pass.
+
 Stream output in bounded chunks, with no shell and discarded native diagnostic
 stderr. Each child has its own session/process group. Non-reaping wait keeps the
 leader PID allocated until group cancellation. Native exact process-group
-readback treats denial/unknown state as failure, not absence. A zombie-only
-group can be reaped without signalling; active/unknown groups get at most one
+readback treats denial/unknown state as failure, not absence. Exactly one zombie
+leader can be reaped without signalling; other/unknown groups get at most one
 SIGKILL attempt before reaping. No later cleanup signals a potentially reaped
 PID. Interrupt/denied inspection still attempts owned-child cleanup; uncertain
 wait state cannot become success.
 
 Ctrl-C/alarm delivery is deferred only across trusted spawn/handle registration
 and short cleanup, to avoid losing child ownership between a native return and
-Python assignment/reaping. Cleanup has separate bounded process inspections
-(2seconds each) and wait(5seconds). This does not guarantee progress on a hung
+Python assignment/reaping. Inspections (at most2seconds each), zombie-retirement
+wait and reaping share a five-second cleanup deadline; accepted capture evidence
+still has its original capture deadline. This does not guarantee progress on a hung
 kernel, failed hardware, host crash, escaped malicious descendant, compromised
 runtime or other same-user process. It is a fixed reviewed-client boundary,
 not a general sandbox for untrusted executables. Any unresolved child or timeout
