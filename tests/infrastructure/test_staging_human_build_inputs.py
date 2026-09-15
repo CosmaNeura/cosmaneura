@@ -80,6 +80,15 @@ def source_files():
 
 
 class PublicInputTests(unittest.TestCase):
+    def test_unicode_controls_formats_and_surrogates_refuse(self):
+        for value in ("\u0085", "\u202e", "\u200d", "\ud800", "\udfff"):
+            raw = encoded(configuration() | {"VITE_POSTHOG_KEY": "public" + value})
+            with (
+                self.subTest(codepoint=ord(value)),
+                self.assertRaises(m.BuildInputRefused),
+            ):
+                m.public_configuration(raw, m.sha(raw))
+
     def test_exact_public_input_is_independent_of_ambient_credentials(self):
         raw = encoded(configuration())
         with patch.dict(os.environ, {"GH_TOKEN": "invented", "NODE_ENV": "production"}):
@@ -225,6 +234,65 @@ class WorkspaceTests(unittest.TestCase):
                     inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
                 )
             self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_mac_reserved_aliases_and_nested_nixpacks_refuse_before_writes(self):
+        for name in (
+            ".GIT/config",
+            "PUBLIC/old",
+            ".NIXPACKS/build.sh",
+            "web/.nixpacks/Dockerfile",
+            "web/.GiT/config",
+            "web/.NIXPACKS/build.sh",
+        ):
+            raw = archive(source_files() + [(name, b"invented", tarfile.REGTYPE)])
+            with self.subTest(name=name), self.assertRaises(m.BuildInputRefused):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_mac_canonical_duplicates_and_file_parent_aliases_refuse_before_writes(
+        self,
+    ):
+        for first, second in (
+            ("README", "readme"),
+            ("caf\u00e9", "cafe\u0301"),
+            ("Parent", "parent/file"),
+            ("CAF\u00c9", "cafe\u0301/file"),
+        ):
+            extras = [(name, b"invented", tarfile.REGTYPE) for name in (first, second)]
+            raw = archive(source_files() + extras)
+            with (
+                self.subTest(names=(first, second)),
+                self.assertRaises(m.BuildInputRefused),
+            ):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_distinct_printable_unicode_source_and_public_values_remain_valid(self):
+        entries = source_files() + [
+            ("caf\u00e9.txt", b"invented", tarfile.REGTYPE),
+            ("tea.txt", b"invented", tarfile.REGTYPE),
+        ]
+        raw = archive(entries)
+        frontend = encoded(configuration() | {"VITE_POSTHOG_KEY": "public-caf\u00e9"})
+        prepared = self.prepare(
+            source_archive=raw,
+            frontend_json=frontend,
+            inputs=replace(
+                self.inputs,
+                source_archive_sha256=m.sha(raw),
+                frontend_configuration_sha256=m.sha(frontend),
+            ),
+        )
+        self.assertIn("caf\u00e9.txt", dict(prepared.files))
+        self.assertEqual(
+            dict(prepared.frontend)["VITE_POSTHOG_KEY"], "public-caf\u00e9"
+        )
 
     def test_missing_anchor_or_changed_shared_environment_refuses(self):
         for files in (

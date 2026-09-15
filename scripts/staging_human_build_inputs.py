@@ -15,6 +15,7 @@ import re
 import secrets
 import stat
 import tarfile
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -95,9 +96,7 @@ def public_configuration(raw: bytes, expected_sha256: str) -> dict[str, str]:
     require(type(value) is dict and set(value) == PUBLIC_KEYS)
     require(
         all(
-            type(v) is str
-            and 0 < len(v) <= 4096
-            and all(ord(c) >= 32 and ord(c) != 127 for c in v)
+            type(v) is str and 0 < len(v) <= 4096 and v.isprintable()
             for v in value.values()
         )
     )
@@ -167,6 +166,11 @@ class PreparedBuild:
         return "cosmaneura-assets-" + self.root.name.removeprefix("staging-build-")
 
 
+def canonical_name(name: str) -> str:
+    """Conservative macOS caseless/canonical comparison; retain original names."""
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
+
+
 def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bool]]:
     require(type(raw) is bytes and 0 < len(raw) <= MAX_SOURCE_BYTES)
     require(type(inputs) is BuildInputs)
@@ -192,17 +196,21 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
             for member in members:
                 name = member.name.rstrip("/")
                 path = PurePosixPath(name)
-                require(
-                    len(name) <= 1024
-                    and all(ord(c) >= 32 and ord(c) != 127 for c in name)
-                )
+                require(len(name) <= 1024 and name.isprintable())
                 require(name == str(path) and not path.is_absolute())
-                require(all(p not in {".", "..", ".git"} for p in path.parts))
-                require(path.parts and path.parts[0] not in {"public", ".nixpacks"})
-                require(name not in names and not member.linkname)
+                canonical = canonical_name(name)
+                canonical_path = PurePosixPath(canonical)
+                require(
+                    all(
+                        p not in {".", "..", ".git", ".nixpacks"}
+                        for p in canonical_path.parts
+                    )
+                )
+                require(canonical_path.parts and canonical_path.parts[0] != "public")
+                require(canonical not in names and not member.linkname)
                 require(member.isfile() or member.isdir())
                 require(member.mode & 0o7000 == 0)
-                names.add(name)
+                names.add(canonical)
                 if member.isdir():
                     continue
                 size += member.size
@@ -218,6 +226,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
     except (tarfile.TarError, OSError, ValueError):
         raise BuildInputRefused("staging_build_input_refused") from None
     file_names = {name for name, _, _ in files}
+    canonical_file_names = {canonical_name(name) for name in file_names}
     require(
         {
             ".env",
@@ -233,7 +242,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
     )
     require(
         not any(
-            str(parent) in file_names
+            str(parent) in canonical_file_names
             for name in names
             for parent in PurePosixPath(name).parents
         )

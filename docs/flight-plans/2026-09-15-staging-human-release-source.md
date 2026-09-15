@@ -95,3 +95,33 @@ revalidation, bounded owned child/container handling, exact frontend extraction,
 image/archive integrity and closure BEFORE separate credentialed publication.
 OS/same-user integrity remains trusted. Publication, migration and deployment
 are separate human phases; none is authorized by this source/input helper.
+
+## Independent review 53 — corrections pending new exact review
+
+Review53 of `a6c727f257204cd55d762578529dfd871b7649e5` returned FAIL:
+two P1 findings (macOS path aliases/nested Nixpacks output; missing final local
+controller HEAD/origin observations), and one P2 (Unicode controls/surrogates).
+The failed original review remains evidence; prior passing tests did not cover
+these defects. Review52's connection-reset record and unavailable response are
+also retained and not represented as a code verdict.
+
+Source names now use conservative Unicode NFD/case-folded comparisons before
+any workspace creation. Canonical `.git` and `.nixpacks` components are forbidden
+at every depth, canonical top-level `public` is forbidden, and duplicate or
+file-parent aliases refuse. Original names and exact required source anchors
+remain unchanged. Public values and source paths require printable Unicode,
+rejecting C1/format controls and unpaired surrogates.
+
+Human verification now reads local controller HEAD and exact origin again
+after the source/GitHub observations and before its final clean-status check.
+Existing protected-master and configured-user checks remain. This is sequential
+observation, not an atomic filesystem lock; later privileged boundaries still
+require their own revalidation under the approved no-concurrent-release rules.
+
+Ten new/affected methods PASS: four source-decision cases in0.001s and six
+build-input cases in0.020s. This includes case-only and Unicode-normalization
+aliases, canonical file-parent collisions, nested generated paths, Unicode
+controls/surrogates, valid printable Unicode, and clean checkout/origin switches.
+Ruff/format, explicit-interpreter Pyright (zero errors/warnings) and whitespace
+checks PASS. No unrelated suite, Nixpacks/Docker, account, human consumer or live
+operation ran. The corrected exact commit requires a new independent review.

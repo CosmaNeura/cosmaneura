@@ -505,6 +505,16 @@ def verify_human_candidate(
         raise CandidateVerificationError(
             "human GitHub identity changed during verification"
         )
+    if stdout(["git", "rev-parse", "HEAD"]) != context.controller_sha:
+        raise CandidateVerificationError(
+            "human controller HEAD changed during verification"
+        )
+    if stdout(["git", "remote", "get-url", "origin"]) != (
+        "https://github.com/" + REPOSITORY + ".git"
+    ):
+        raise CandidateVerificationError(
+            "human controller origin changed during verification"
+        )
     if stdout(["git", "status", "--porcelain=v1", "--untracked-files=all"]):
         raise CandidateVerificationError(
             "human controller checkout changed during verification"

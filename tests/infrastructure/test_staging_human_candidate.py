@@ -78,12 +78,36 @@ class HumanSourceTests(unittest.TestCase):
             (result["candidate_sha"], result["master_sha"]), (CANDIDATE, MASTER)
         )
         self.assertEqual((self.user_reads, self.status_reads), (2, 2))
+        self.assertEqual(self.commands.count(["git", "rev-parse", "HEAD"]), 2)
+        self.assertEqual(self.commands.count(["git", "remote", "get-url", "origin"]), 2)
         self.assertEqual(len(result["github_user_sha256"]), 64)
         self.assertIs(result["execution_authorized"], False)
         self.assertIs(result["deployment_authorized"], False)
         self.assertNotIn("login", result)
         self.assertNotIn("id", result)
         self.assertEqual(self.commands[0][-3:], ["--method", "GET", "user"])
+
+    def test_final_clean_controller_head_and_origin_changes_refuse(self):
+        for command, changed, message in (
+            (["git", "rev-parse", "HEAD"], "d" * 40, "HEAD changed"),
+            (
+                ["git", "remote", "get-url", "origin"],
+                "https://foreign.invalid/repo.git",
+                "origin changed",
+            ),
+        ):
+            self.commands.clear()
+            self.hook = (
+                lambda current: changed
+                if current == command and self.commands.count(command) == 2
+                else None
+            )
+            with (
+                self.subTest(command=command),
+                self.assertRaisesRegex(m.CandidateVerificationError, message),
+            ):
+                self.verify()
+            self.assertEqual(self.commands.count(command), 2)
 
     def test_wrong_user_bot_bool_or_missing_id_refuses(self):
         for change in (
