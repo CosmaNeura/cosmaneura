@@ -51,7 +51,7 @@ NOW = fixtures.NOW
 
 
 class ProductionPinTests(unittest.TestCase):
-    def test_unpatched_pins_and_source_check_match_actual_closed_runtime(self):
+    def test_unpatched_runtime_pins_source_check_and_environment_consistency(self):
         loader = (ROOT / "scripts/staging_snapshot_bootstrap.py").read_bytes()
         self.assertEqual(plan.sha(loader), module.LOADER_SHA256)
         pins = next(
@@ -94,6 +94,31 @@ class ProductionPinTests(unittest.TestCase):
         )
         with patch.object(plan, "now_utc", return_value=NOW):
             self.assertEqual(module.source_check(packet), files)
+        # Consolidate the old actual-source/environment case here, OUTSIDE the
+        # invented CommandTests.setUp pin patching. One actual catalog and one
+        # fixed production bundle now cover both checks; no historical literal.
+        function = next(
+            node
+            for node in ast.parse(loader).body
+            if isinstance(node, ast.FunctionDef) and node.name == "startup_environment"
+        )
+        namespace = {
+            "RUNTIME_ROOT": module.RUNTIME_ROOT,
+            "python_prefix": lambda: module.PYTHON_PREFIX,
+            "os": os,
+        }
+        # Only this pure environment function, never imports or executable main.
+        exec(
+            compile(
+                ast.Module(body=[function], type_ignores=[]),
+                "invented-environment-comparison",
+                "exec",
+            ),
+            namespace,
+        )
+        self.assertEqual(
+            namespace["startup_environment"](), module.startup_environment(os.geteuid())
+        )
 
 
 class CommandTests(unittest.TestCase):
@@ -437,53 +462,6 @@ class CommandTests(unittest.TestCase):
         )
         with self.assertRaises(module.HumanCommandRefused):
             self.preparation_command()
-
-    def test_runtime_pins_and_environment_match_source_without_importing_human_runtime(
-        self,
-    ):
-        # Read/parse Git source only. Do not import loader or call bind_process/main.
-        raw = (ROOT / "scripts/staging_snapshot_bootstrap.py").read_bytes()
-        tree = ast.parse(raw)
-        constants = {
-            node.targets[0].id: node.value
-            for node in tree.body
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-        }
-        pins = {
-            name + ".py": digest
-            for name, digest in ast.literal_eval(constants["SOURCE_PINS"])
-        }
-        pins["staging_snapshot_bootstrap.py"] = plan.sha(raw)
-        self.assertEqual(
-            plan.sha(plan.canonical(pins)),
-            "edc3a435fe4aaaa1d2796362711cf63905051338ce36d14511270b2ab25e552a",
-        )
-        for name, digest in pins.items():
-            self.assertEqual(plan.sha((ROOT / "scripts" / name).read_bytes()), digest)
-        function = next(
-            node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "startup_environment"
-        )
-        namespace = {
-            "RUNTIME_ROOT": module.RUNTIME_ROOT,
-            "python_prefix": lambda: module.PYTHON_PREFIX,
-            "os": os,
-        }
-        # Only this pure environment function, never imports or executable main.
-        exec(
-            compile(
-                ast.Module(body=[function], type_ignores=[]),
-                "invented-environment-comparison",
-                "exec",
-            ),
-            namespace,
-        )
-        self.assertEqual(
-            namespace["startup_environment"](), module.startup_environment(os.geteuid())
-        )
 
 
 class ShellFixtureTests(unittest.TestCase):

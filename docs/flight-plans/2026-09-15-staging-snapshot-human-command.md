@@ -30,6 +30,17 @@ The unpatched source-pin case PASS0.005s. Its first invented review timestamp wa
 equal to NOW and correctly failed the strict earlier-than observation gate; only
 that fixture timestamp was corrected. Ruff/format/Pyright/diff PASS; no gate waiver.
 
+Review49 PASSED all23 production files and current411–414 corrections/propagation,
+but correctly FAILED exact415 because the older source/environment test retained
+a historical bundle literal. Consolidate its pure environment check into the
+unpatched production-pin/source_check test; delete the duplicate patched-fixture
+case and its stale literal. The single changed regression now checks actual
+loader/all17 dependency hashes, closed bundle, source_check and startup environment
+together without importing the human runtime. No production byte changed.
+Original49 FAIL is retained; the corrected exact test/doc head needs review.
+Combined changed regression PASS0.008s; Ruff/format/Pyright/diff PASS. Other
+unchanged passing tests and paid CI were not rerun.
+
 ## Public source publication
 
 The caller FIRST authenticates the whole exact source review, protected normal
@@ -133,5 +144,5 @@ Independent source reviews and specifically authorized normal merges are still
 outstanding. Then actual human encrypted workspace, read-only identity preparation,
 fresh exact plan/handoff/command reviews, human snapshot, actual-source isolated
 online migration rehearsal and founder-selected staging release. Actions remains
-OFF; an alternative human release route needs its own explicit policy decision
-and review. This PR provides no release route or staging/Auth/Zoom acceptance.
+OFF; the separately approved human-release implementation still needs its own
+review and execution decision. This PR provides no release route or staging/Auth/Zoom acceptance.
