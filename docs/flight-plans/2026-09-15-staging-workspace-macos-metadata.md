@@ -44,6 +44,9 @@ bounded native transport now permits only the required `images` and `disk`
 queries; the unavailable backing-file query is not silently ignored.
 The bootstrap's two exact dependency hashes are updated atomically with those
 files. Its existing source-closure test must pass; no stale loader pin is waived.
+The public source publisher/command renderer also pins the resulting NEW loader
+and full18-file bundle. Historical independent reviews cannot authorize those
+new bytes; source publication still requires an actual matching new review.
 
 New `complete-empty` is HUMAN-ONLY and is NOT an automatic retry. Before any
 workspace modification it requires all three real TTYs, exact source hash,
@@ -85,6 +88,10 @@ these checks are not a hostile-same-user or dynamic-library attestation claim.
   also required updating. The prior b5982c3a review request and evidence remain
   historical, not final-head coverage. Run the one affected exact dependency-pin
   test and bootstrap static checks; do not replay the 22 passing cases above.
+- The final publisher/renderer closure inspection additionally updates its two
+  loader/bundle constants. Its existing real-source (but invented provider/review)
+  ProductionPinTests case is the affected validation; never publish or execute a
+  real human packet to test this. Earlier head evidence is retained as history.
 
 Previously passing unaffected tests are reused, not rerun. Frontend/application
 tests do not apply to this isolated helper/parser change. No GitHub Actions,
@@ -107,7 +114,7 @@ Native parser compatibility is evidence, not successful human completion.
    no automatic repeat/cleanup or success inference from a shell exit alone.
 5. Actual snapshot still needs fresh source composition review, explicit account/
    ARM-token identity evidence, current plan, independent exact plan/handoff
-   review and the approved human-managed firewall/snapshot controls. Four
+   review and the approved human-managed firewall/snapshot controls. Five
    source modules change here, so old review58's bundle is NOT a review of the
    new bundle. Cursor PR review cannot be relabeled as an Azure ReviewRecord.
 
