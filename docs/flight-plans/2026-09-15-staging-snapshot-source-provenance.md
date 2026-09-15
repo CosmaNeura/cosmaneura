@@ -1,5 +1,27 @@
 # Read-only snapshot source collection (Tier 2)
 
+## Review42 correction — September15
+
+The empty pre-reap process list was ambiguous, not proof of absence. Cleanup now
+makes one cancellation attempt against the owned, still-unreaped group unless
+inspection proves it contains only its zombie leader (macOS can reject signalling
+that already-dead group). Every pre-reap read must contain the leader and unique PIDs;
+success requires exactly one zombie leader, followed by reaping and an empty
+post-reap group. Empty, duplicate, missing-leader or denied pre-reap reads refuse,
+even if later cleanup succeeds. No signal follows reaping on any path. Existing
+two-second cleanup and original accepted-evidence deadlines remain unchanged.
+Tests cover ambiguous reads with/without active survivors, duplicate zombie
+rows, missing leaders, denied inspection and a post-reap survivor, plus affected
+real descendant/timeout cleanup. This is only a public source-helper correction;
+the sealed snapshot runtime, human-only gates and cloud operations are unchanged.
+
+Six selected new/affected methods passed in0.341s, including real dedicated
+descendant absence and timeout/output cleanup. The first candidate's unconditional
+signal failed one selected test with macOS EPERM on a lone zombie; that failure
+was retained and fixed by the exact lone-zombie proof above, not by accepting a
+denied signal. A test-only parameter-name warning was corrected separately.
+No full-suite, unchanged-test, paid-CI or human-consumer execution occurred.
+
 ## Review41 correction — September15
 
 Observe a finished leader with waitid/WNOWAIT, keeping its PID allocated while
