@@ -541,12 +541,94 @@ class BoundedReadTests(unittest.TestCase):
 
         with (
             patch.object(
-                m, "group_members", side_effect=[((124, "S"),), ((123, "Z"),), ()]
+                m,
+                "group_members",
+                side_effect=[((123, "Z"), (124, "S")), ((123, "Z"),), ()],
             ),
             patch.object(m.os, "killpg", side_effect=kill),
         ):
             m.finish_group(Child())
         self.assertEqual(calls, ["kill", "reap"])
+
+    def test_ambiguous_pre_reap_membership_cancels_once_and_refuses(self):
+        for members in ((), ((123, "Z"), (123, "Z")), ((124, "S"),)):
+            for active_survivor in (False, True):
+                with self.subTest(members=members, active_survivor=active_survivor):
+                    calls = []
+                    case = self
+
+                    class Child:
+                        pid = 123
+                        returncode = None
+                        survivor_active = active_survivor
+
+                        def wait(self, **_kwargs):
+                            case.assertFalse(self.survivor_active)
+                            calls.append("reap")
+                            self.returncode = 0
+
+                    child = Child()
+
+                    def kill(pid, sig):
+                        self.assertEqual((pid, sig), (123, m.signal.SIGKILL))
+                        self.assertIsNone(child.returncode)
+                        child.survivor_active = False
+                        calls.append("kill")
+
+                    with (
+                        patch.object(m, "group_members", return_value=members),
+                        patch.object(m.os, "killpg", side_effect=kill),
+                    ):
+                        with self.assertRaises(m.SourceProvenanceRefused):
+                            m.finish_group(child)
+                    self.assertEqual(calls, ["kill", "reap"])
+
+    def test_inspection_failure_or_post_reap_survivor_never_signals_again(self):
+        for observations in (
+            [
+                m.SourceProvenanceRefused("invented denied inspection"),
+                ((123, "Z"),),
+                (),
+            ],
+            [((123, "Z"), (124, "S")), ((123, "Z"),), ((124, "S"),)],
+        ):
+            with self.subTest(observations=observations):
+                calls = []
+
+                class Child:
+                    pid = 123
+                    returncode = None
+
+                    def wait(self, **_kwargs):
+                        calls.append("reap")
+                        self.returncode = 0
+
+                with (
+                    patch.object(m, "group_members", side_effect=observations),
+                    patch.object(
+                        m.os, "killpg", side_effect=lambda *_: calls.append("kill")
+                    ),
+                ):
+                    with self.assertRaises(m.SourceProvenanceRefused):
+                        m.finish_group(Child())
+                self.assertEqual(calls, ["kill", "reap"])
+
+    def test_proven_lone_zombie_is_reaped_without_a_signal(self):
+        class Child:
+            pid = 123
+            returncode = None
+
+            def wait(self, **_kwargs):
+                self.returncode = 0
+
+        with (
+            patch.object(m, "group_members", side_effect=[((123, "Z"),), ()]),
+            patch.object(m.os, "killpg") as kill,
+        ):
+            child = Child()
+            m.finish_group(child)
+            self.assertEqual(child.returncode, 0)
+            kill.assert_not_called()
 
     def test_tool_pin_identity_content_type_and_mode(self):
         with tempfile.TemporaryDirectory(prefix="invented-public-tool-") as tmp:
