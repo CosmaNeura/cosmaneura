@@ -1,5 +1,17 @@
 # Read-only snapshot source collection (Tier 2)
 
+## Review41 correction — September15
+
+Observe a finished leader with waitid/WNOWAIT, keeping its PID allocated while
+retiring its owned process group. The pinned system ps selects only that PGID;
+unknown/denied reads are not absence. Cancel surviving active members, require
+only the unreaped zombie leader to remain, reap it, then read back an empty group.
+Never signal after reaping. Retain the shared two-second cleanup bound and reject
+accepted evidence beyond the original command deadline. No new network route,
+credential operation, human consumer or sealed-runtime change is introduced.
+New regressions cover a successful leader leaving a sleeping child that closes
+standard streams and the kill-before-reap ordering. Fresh exact review is owed.
+
 ## One outcome
 
 Collect actual GitHub readbacks and local Git object bytes for the snapshot's
