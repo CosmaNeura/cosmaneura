@@ -16,7 +16,7 @@ import secrets
 import stat
 import tarfile
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -33,6 +33,7 @@ NIXPACKS_BINARY_BYTES = 8194488
 SOURCE_REPOSITORY = "https://github.com/CosmaNeura/cosmaneura"
 MAX_SOURCE_BYTES = 256 * 1024 * 1024
 MAX_CANONICAL_PATHS = 20000
+MAX_SOURCE_COMPONENTS = 100000
 PUBLIC_KEYS = frozenset(
     {
         "NODE_ENV",
@@ -172,6 +173,52 @@ def canonical_name(name: str) -> str:
     return unicodedata.normalize("NFD", unicodedata.normalize("NFD", name).casefold())
 
 
+@dataclass
+class _PathNode:
+    spelling: str
+    children: dict[str, _PathNode] = field(default_factory=dict)
+    is_file: bool = False
+
+
+class SourcePathIndex:
+    """Bounded component trie; no repeated construction of cumulative prefixes."""
+
+    def __init__(self) -> None:
+        self.root = _PathNode("")
+        self.components: dict[str, str] = {}
+        self.observations = 0
+        self.nodes = 0
+
+    def observe(self, path: PurePosixPath, *, is_file: bool) -> str:
+        require(path.parts and type(is_file) is bool)
+        self.observations += len(path.parts)
+        require(self.observations <= MAX_SOURCE_COMPONENTS)
+        node = self.root
+        canonical_parts: list[str] = []
+        for part in path.parts:
+            require(not node.is_file)
+            canonical = self.components.get(part)
+            if canonical is None:
+                canonical = canonical_name(part)
+                self.components[part] = canonical
+            require(canonical not in {".", "..", ".git", ".nixpacks"})
+            require(canonical_parts or canonical != "public")
+            canonical_parts.append(canonical)
+            child = node.children.get(canonical)
+            if child is None:
+                self.nodes += 1
+                require(self.nodes <= MAX_CANONICAL_PATHS)
+                child = _PathNode(part)
+                node.children[canonical] = child
+            require(child.spelling == part)
+            node = child
+        require(not node.is_file)
+        if is_file:
+            require(not node.children)
+            node.is_file = True
+        return "/".join(canonical_parts)
+
+
 def source_member_name(raw: bytes, member: tarfile.TarInfo) -> str:
     """Check original POSIX Git-archive names before tarfile's slash rewriting."""
     require(member.type in {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE})
@@ -189,9 +236,8 @@ def source_member_name(raw: bytes, member: tarfile.TarInfo) -> str:
         require(not value.endswith("/"))
         return value
 
-    name = checked(header_name)
-    if "path" in member.pax_headers:
-        name = checked(member.pax_headers["path"])
+    # PAX path is authoritative; the legacy name may be truncated mid-component.
+    name = checked(member.pax_headers.get("path", header_name))
     require(name == member.name)
     return name
 
@@ -216,7 +262,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
             members = archive.getmembers()
             require(0 < len(members) <= 20000)
             names: set[str] = set()
-            prefixes: dict[str, str] = {}
+            paths = SourcePathIndex()
             files: list[tuple[str, bytes, bool]] = []
             size = 0
             for member in members:
@@ -224,23 +270,7 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
                 path = PurePosixPath(name)
                 require(len(name) <= 1024 and name.isprintable())
                 require(name == str(path) and not path.is_absolute())
-                canonical = canonical_name(name)
-                canonical_path = PurePosixPath(canonical)
-                for depth in range(1, len(path.parts) + 1):
-                    original_prefix = str(PurePosixPath(*path.parts[:depth]))
-                    canonical_prefix = canonical_name(original_prefix)
-                    require(
-                        prefixes.setdefault(canonical_prefix, original_prefix)
-                        == original_prefix
-                    )
-                    require(len(prefixes) <= MAX_CANONICAL_PATHS)
-                require(
-                    all(
-                        p not in {".", "..", ".git", ".nixpacks"}
-                        for p in canonical_path.parts
-                    )
-                )
-                require(canonical_path.parts and canonical_path.parts[0] != "public")
+                canonical = paths.observe(path, is_file=member.isfile())
                 require(canonical not in names and not member.linkname)
                 require(member.mode & 0o7000 == 0)
                 names.add(canonical)
@@ -259,7 +289,6 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
     except (tarfile.TarError, OSError, ValueError):
         raise BuildInputRefused("staging_build_input_refused") from None
     file_names = {name for name, _, _ in files}
-    canonical_file_names = {canonical_name(name) for name in file_names}
     require(
         {
             ".env",
@@ -272,13 +301,6 @@ def source_entries(raw: bytes, inputs: BuildInputs) -> list[tuple[str, bytes, bo
             "web/scripts/build-production.mjs",
         }
         <= file_names
-    )
-    require(
-        not any(
-            str(parent) in canonical_file_names
-            for name in names
-            for parent in PurePosixPath(name).parents
-        )
     )
     shared = next(contents for name, contents, _ in files if name == ".env")
     require(sha(shared) == SHARED_ENV_FILE_SHA256)

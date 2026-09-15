@@ -157,3 +157,21 @@ GNU/sparse representations refuse. Five focused raw/PAX marker cases now PASS
 in0.020s, including valid directory markers. The original failed test is retained.
 Ruff/Pyright/whitespace PASS; the actual proposed1,298-file Git archive also passes
 the corrected reader, without any build, credential, consumer or live operation.
+
+Review56 of `2a0ce37a62f323dd867d20e6993544d7ad1ae4e6` found one P2: repeated
+cumulative prefix construction permitted quadratic work for deep shared paths.
+The correction uses a component trie with cached per-component canonicalization,
+at most20,000nodes and100,000total component observations. It checks aliases and
+file-parent collisions during traversal, removing the second cumulative-parent
+scan too. A deep shared-prefix test instruments actual observation/canonicalizer
+counts; a separate exact/over-limit test checks refusal before workspace writes.
+Long PAX paths use their authoritative extended name instead of a legacy header
+placeholder truncated mid-component; effective path marker checks remain strict.
+Original reviewFAIL remains retained; the corrected exact source needs review.
+Six new/affected methods PASS0.018s (9656e8); original output recovered without
+test replay. Two affected PAX methods PASS0.011s (5406ff), and the additional
+both-order exact file-parent regression PASS0.008s (8c818f). Ruff/Pyright and
+whitespace checks PASS. The actual proposed1,298-file archive remains accepted:
+4,231component observations,1,421nodes,1,281distinct components (dc6a21), below
+the100,000/20,000bounds. Archive SHA remains2548cbecccc585aa87ac11d7ad6de03646272ac9e8b05cd126cc50a634b6f990.
+These are local source-input checks, not a build, live identity or release.

@@ -378,6 +378,60 @@ class WorkspaceTests(unittest.TestCase):
                 )
             self.assertEqual(list(self.parent.iterdir()), [])
 
+    def test_exact_file_parent_collisions_refuse_in_both_archive_orders(self):
+        for names in (
+            ("parent", "parent/file"),
+            ("parent/file", "parent"),
+            ("outer/parent", "outer/parent/file"),
+            ("outer/parent/file", "outer/parent"),
+        ):
+            raw = archive(
+                source_files()
+                + [(name, b"invented", tarfile.REGTYPE) for name in names]
+            )
+            with self.subTest(names=names), self.assertRaises(m.BuildInputRefused):
+                self.prepare(
+                    source_archive=raw,
+                    inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+                )
+            self.assertEqual(list(self.parent.iterdir()), [])
+
+    def test_deep_shared_prefix_work_is_linear_and_reuses_components(self):
+        parent = "/".join(["deep"] * 80)
+        entries = source_files() + [
+            (parent + "/file" + str(i), b"invented", tarfile.REGTYPE) for i in range(20)
+        ]
+        raw = archive(entries)
+        inputs = replace(self.inputs, source_archive_sha256=m.sha(raw))
+        index = m.SourcePathIndex()
+        parts = [part for name, _, _ in entries for part in Path(name).parts]
+        with (
+            patch.object(m, "SourcePathIndex", return_value=index),
+            patch.object(m, "canonical_name", wraps=m.canonical_name) as canonical,
+        ):
+            self.assertEqual(len(m.source_entries(raw, inputs)), len(entries))
+        self.assertEqual(index.observations, len(parts))
+        self.assertEqual(canonical.call_count, len(set(parts)))
+        self.assertEqual(
+            {call.args[0] for call in canonical.call_args_list}, set(parts)
+        )
+        self.assertTrue(
+            all("/" not in call.args[0] for call in canonical.call_args_list)
+        )
+        self.assertLess(index.nodes, len(parts))
+
+    def test_total_component_observation_bound_refuses_before_writes(self):
+        entries = source_files() + [("one/two/three", b"invented", tarfile.REGTYPE)]
+        count = sum(len(Path(name).parts) for name, _, _ in entries)
+        raw = archive(entries)
+        inputs = replace(self.inputs, source_archive_sha256=m.sha(raw))
+        with patch.object(m, "MAX_SOURCE_COMPONENTS", count):
+            self.assertEqual(len(m.source_entries(raw, inputs)), len(entries))
+        with patch.object(m, "MAX_SOURCE_COMPONENTS", count - 1):
+            with self.assertRaises(m.BuildInputRefused):
+                self.prepare(source_archive=raw, inputs=inputs)
+        self.assertEqual(list(self.parent.iterdir()), [])
+
     def test_canonical_prefix_count_bound_is_enforced_before_writes(self):
         entries = source_files() + [("new/one", b"invented", tarfile.REGTYPE)]
         prefixes = {
