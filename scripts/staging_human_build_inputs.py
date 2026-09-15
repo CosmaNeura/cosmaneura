@@ -1,7 +1,8 @@
 """Prepare public build inputs in an owned workspace; never build or publish.
 
-The reviewed human controller must authenticate candidate/configuration/archive
+The reviewed, explicitly authorized controller authenticates source/config/archive
 hashes before calling this module. Hash-shaped caller data is NOT provenance.
+Delegated agent execution must be recorded as such, never as human presence.
 No ambient environment, credentials, process runner, network, or CLI is used.
 """
 
@@ -329,7 +330,7 @@ def prepare_build_inputs(
     """Create a fresh owned scratch layout; never modify a checkout/container.
 
     No cleanup on failure. This is input preparation, not a build runner or a
-    host sandbox. OS/same-user integrity is trusted. The later reviewed human
+    host sandbox. OS/same-user integrity is trusted. The later authorized reviewed
     executor must bind tool/runtime/source identity and block credentials.
     """
     require(type(inputs) is BuildInputs)
