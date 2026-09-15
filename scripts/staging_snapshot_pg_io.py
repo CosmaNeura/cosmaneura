@@ -606,10 +606,11 @@ class BoundedChildren:
                     break
                 time.sleep(min(0.01, self.remaining()))
             self.remaining()
-            return size
         finally:
             # Even a successful leader cannot leave a hidden descendant behind.
             self.cancel_and_reap()
+        self.remaining()
+        return size
 
 
 @dataclass(frozen=True)

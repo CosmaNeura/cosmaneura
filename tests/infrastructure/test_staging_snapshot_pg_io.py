@@ -405,6 +405,26 @@ class ProcessTests(unittest.TestCase):
             children.run(["not-executed"], {}, 1, lambda _: None)
         spawn.assert_not_called()
 
+    def test_cleanup_cannot_extend_successful_command_deadline(self):
+        children = pg.BoundedChildren(time.monotonic() + 3, lambda: None)
+        cleanup = children.cancel_and_reap
+
+        def expire_after_cleanup():
+            cleanup()
+            children.deadline = time.monotonic() - 1
+
+        with (
+            patch.object(children, "cancel_and_reap", side_effect=expire_after_cleanup),
+            self.assertRaisesRegex(pg.PostgreSQLRefused, "capture_deadline"),
+        ):
+            children.run(
+                [sys.executable, "-I", "-S", "-c", "print('invented')"],
+                {"PATH": "/usr/bin:/bin"},
+                64,
+                lambda _chunk: None,
+            )
+        self.assertIsNone(children.child)
+
 
 @dedicated_process_tests
 class CleanupDenialTests(unittest.TestCase):
