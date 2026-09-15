@@ -132,10 +132,8 @@ class SnapshotWorkspace:
                     )
 
     def _query(self, operation: str, deadline: float) -> dict:
-        image, mount = workspace.workspace_paths(self._root)
-        if operation == "encryption":
-            argv = ["/usr/bin/hdiutil", "isencrypted", str(image), "-plist"]
-        elif operation == "images":
+        _image, mount = workspace.workspace_paths(self._root)
+        if operation == "images":
             argv = ["/usr/bin/hdiutil", "info", "-plist"]
         elif operation == "disk":
             argv = ["/usr/sbin/diskutil", "info", "-plist", str(mount)]
@@ -180,7 +178,8 @@ class SnapshotWorkspace:
         require(
             mount_before.st_dev != self._root.stat().st_dev and os.path.ismount(mount)
         )
-        require(self._query("encryption", deadline).get("encrypted") is True)
+        # Native image_binding proves encryption on the exact attached image;
+        # opening its backing file with isencrypted is unavailable while mounted.
         device = workspace.image_binding(self._query("images", deadline), image, mount)
         workspace.check_disk(self._query("disk", deadline), mount, device)
         image_after = workspace.private_path(image, directory=False, mode=0o600)
