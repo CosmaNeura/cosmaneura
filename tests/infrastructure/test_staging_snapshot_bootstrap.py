@@ -44,8 +44,8 @@ class FixtureTests(unittest.TestCase):
         self.sha = hashlib.sha256(self.raw).hexdigest()
 
     def test_exact_dependency_pins_match_current_source(self):
-        self.assertEqual(len(boot.SOURCE_PINS), 12)
-        self.assertEqual(len(dict(boot.SOURCE_PINS)), 12)
+        self.assertEqual(len(boot.SOURCE_PINS), 13)
+        self.assertEqual(len(dict(boot.SOURCE_PINS)), 13)
         for name, expected in boot.SOURCE_PINS:
             self.assertEqual(
                 hashlib.sha256((SCRIPTS / (name + ".py")).read_bytes()).hexdigest(),
@@ -456,11 +456,16 @@ class CompositionTests(unittest.TestCase):
                 owner.assertTrue(owner.active)
                 owner.events.append("runtime_recheck")
 
+        class PostgreSQLRuntime(Runtime):
+            def __init__(self, files):
+                super().__init__(files, boot.RUNTIME_ROOT, boot.EXPECTED_RUNTIME_SHA256)
+
         modules = {}
         for name in (
             "staging_snapshot_pg_io",
             "staging_snapshot_native_files",
             "staging_snapshot_runtime",
+            "staging_snapshot_postgresql_runtime",
         ):
             module = ModuleType(name)
             module.__file__ = str(root / (name + ".py"))
@@ -475,6 +480,9 @@ class CompositionTests(unittest.TestCase):
         modules["staging_snapshot_pg_io"].capture_deadline = guard
         modules["staging_snapshot_native_files"].NativeFiles = Files
         modules["staging_snapshot_runtime"].SnapshotRuntime = Runtime
+        modules[
+            "staging_snapshot_postgresql_runtime"
+        ].PostgreSQLRuntime = PostgreSQLRuntime
         self.modules = modules
         pins = tuple(
             (name, hashlib.sha256(self.content[Path(module.__file__)]).hexdigest())

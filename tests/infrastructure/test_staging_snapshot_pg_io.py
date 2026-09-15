@@ -153,8 +153,36 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(environment["PGSSLROOTCERT"], pg.CA_FILE)
         self.assertEqual(environment["PGPASSFILE"], "/dev/null")
         self.assertIn("default_transaction_read_only=on", environment["PGOPTIONS"])
-        for name in ("HOME", "PGSERVICE", "DYLD_INSERT_LIBRARIES", "HTTPS_PROXY"):
+        self.assertEqual(environment["HOME"], "/dev/null")
+        self.assertEqual(environment["OPENSSL_CONF"], "/dev/null")
+        self.assertEqual(environment["OPENSSL_MODULES"], "/dev/null")
+        self.assertEqual(environment["PGREQUIREAUTH"], "password,md5,scram-sha-256")
+        self.assertEqual(environment["PGSSLCERTMODE"], "disable")
+        self.assertEqual(environment["PGSYSCONFDIR"], "/dev/null")
+        self.assertEqual(environment["DYLD_LIBRARY_PATH"], str(pg.CLIENT_LIBRARIES))
+        for name in ("PGSERVICE", "DYLD_INSERT_LIBRARIES", "HTTPS_PROXY"):
             self.assertNotIn(name, environment)
+
+    def test_local_client_environment_has_no_credentials_or_user_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "PGPASSWORD": "invented",
+                "OPENSSL_CONF": "/unbound/config",
+                "KRB5_CONFIG": "/unbound/kerberos",
+                "KRB5CCNAME": "unbound-cache",
+                "DYLD_LIBRARY_PATH": "/unbound/libraries",
+            },
+        ):
+            environment = pg.client_environment()
+        self.assertEqual(environment["HOME"], "/dev/null")
+        self.assertEqual(environment["OPENSSL_CONF"], "/dev/null")
+        self.assertEqual(environment["OPENSSL_MODULES"], "/dev/null")
+        self.assertEqual(environment["KRB5_CONFIG"], "/dev/null")
+        self.assertEqual(environment["KRB5CCNAME"], "FILE:/dev/null")
+        self.assertEqual(environment["KRB5_CLIENT_KTNAME"], "FILE:/dev/null")
+        self.assertEqual(environment["DYLD_LIBRARY_PATH"], str(pg.CLIENT_LIBRARIES))
+        self.assertFalse(any(name.startswith("PG") for name in environment))
 
     def test_default_tls_material_is_refused_not_read_or_deleted(self):
         with (

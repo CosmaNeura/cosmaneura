@@ -41,7 +41,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_pg_io",
-        "34d7787fdc32829b4d2ccc4ec54a15040dd2d0a339829742c79e119c1c742f43",
+        "83957b4aa2e5d2d8bbbf70453a4e6f7d8ce3678bc3f1df4f4211431c9f504134",
     ),
     (
         "staging_snapshot_native_files",
@@ -50,6 +50,10 @@ SOURCE_PINS = (
     (
         "staging_snapshot_runtime",
         "2ec8a9168b65fd5db04227b65acc3e58db17c39a2a644af607970795e8d9d28e",
+    ),
+    (
+        "staging_snapshot_postgresql_runtime",
+        "41f7c8b34136e53bc812c8412cb6689bc3fc530b4e8a4ecfd96b196644a34c50",
     ),
     (
         "staging_encrypted_workspace",
@@ -415,6 +419,7 @@ class SourceRuntimeBinding:
     origins: tuple
     bindings: tuple
     runtime: Any
+    postgresql: Any
 
     def revalidate(self) -> None:
         try:
@@ -436,6 +441,11 @@ class SourceRuntimeBinding:
                 is self.modules["staging_snapshot_runtime"].SnapshotRuntime
             )
             require(type(self.native) is NativeImages)
+            require(
+                type(self.postgresql)
+                is self.modules["staging_snapshot_postgresql_runtime"].PostgreSQLRuntime
+            )
+            require(self.postgresql._files is self.files)
             require(
                 self.runtime._files is self.files and self.runtime._root == RUNTIME_ROOT
             )
@@ -459,6 +469,7 @@ class SourceRuntimeBinding:
                 == self.loader_source
             )
             self.runtime.revalidate()
+            self.postgresql.revalidate()
             require(self.native.observe() == self.images)
         except BaseException:
             raise SnapshotBootstrapRefused("snapshot_bootstrap_refused") from None
@@ -525,6 +536,10 @@ def bind_process(*, loader_sha256: str, deadline: float) -> SourceRuntimeBinding
             files, RUNTIME_ROOT, EXPECTED_RUNTIME_SHA256
         )
         binding.runtime.bind(deadline=deadline)
+        binding.postgresql = modules[
+            "staging_snapshot_postgresql_runtime"
+        ].PostgreSQLRuntime(files)
+        binding.postgresql.bind(deadline=deadline)
         with pg.capture_deadline(deadline):
             binding.revalidate()
         return binding
