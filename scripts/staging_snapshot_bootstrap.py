@@ -95,6 +95,10 @@ SOURCE_PINS = (
         "staging_snapshot_operations",
         "ed86698bfacfcef4c52933f0188aa7d5cc554cb98e1be4e67ef79b266d62d26a",
     ),
+    (
+        "staging_snapshot_artifacts",
+        "7592d4949116bf498c713c34cd3091cd68240d24a4336c2e9d97219b8104ce71",
+    ),
 )
 PRELOAD = (
     "argparse",
