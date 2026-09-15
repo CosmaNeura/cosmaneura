@@ -41,7 +41,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_pg_io",
-        "1b8fc3cb4d840595794c022c01141841c692d7e0792a13f848fd4862574f4c8a",
+        "34d7787fdc32829b4d2ccc4ec54a15040dd2d0a339829742c79e119c1c742f43",
     ),
     (
         "staging_snapshot_native_files",
