@@ -9,6 +9,7 @@ tests replace process creation and native encrypted-volume verification.
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import math
@@ -96,12 +97,44 @@ def native_single_thread() -> None:
         raise PostgreSQLRefused("capture_single_thread_required")
 
 
+def _prebound_native_calls() -> tuple[object | None, frozenset[int]]:
+    """Python 3.14 audits calls as well as loading; permit a CLOSED OS set.
+
+    Resolve addresses ourselves before the seal, never accept caller-provided
+    pointers or later registration. These are only the already used ACL reads,
+    ACL-memory release, thread-local errno and read-only dyld image inventory.
+    NativeFiles/NativeImages supply fixed prototypes. This remains a trusted
+    pinned-code invariant, not a sandbox for arbitrary malicious native calls.
+    """
+    if sys.platform != "darwin":
+        return None, frozenset()
+    library = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
+    addresses = []
+    for name in (
+        "acl_get_fd_np",
+        "acl_get_entry",
+        "acl_get_tag_type",
+        "acl_free",
+        "__error",
+        "_dyld_image_count",
+        "_dyld_get_image_name",
+    ):
+        address = ctypes.cast(getattr(library, name), ctypes.c_void_p).value
+        if type(address) is not int or address <= 0:
+            raise PostgreSQLRefused("capture_native_binding")
+        addresses.append(address)
+    require(len(set(addresses)) == 7, "capture_native_binding")
+    return library, frozenset(addresses)
+
+
 def seal_capture_process() -> None:
     """Once, at startup of the reviewed fresh -I -S human process.
 
     Preload the complete pinned standard-library/source closure first. This
     permanent audit guard prohibits Python workers, subinterpreters, fork and
     later native-library loading. Existing native threads are also refused.
+    Only the closed prebound system-function set may emit ctypes.call_function;
+    all later dynamic loading/symbol resolution and other ctypes events refuse.
     It is an interface invariant for TRUSTED pinned code, not a sandbox for
     malicious code already loaded in this process. Never use in a shared host.
     """
@@ -122,10 +155,20 @@ def seal_capture_process() -> None:
         "capture_single_thread_required",
     )
 
+    native_binding = _prebound_native_calls()
+
     def guard(event: str, args: tuple[object, ...]) -> None:
+        allowed_native_call = (
+            event == "ctypes.call_function"
+            and len(args) == 2
+            and native_binding[0] is not None
+            and type(args[0]) is int
+            and args[0] in native_binding[1]
+            and type(args[1]) is tuple
+        )
         if (
             event.startswith("_thread.")
-            or event.startswith("ctypes.")
+            or (event.startswith("ctypes.") and not allowed_native_call)
             or event
             in {
                 "cpython.PyInterpreterState_New",
