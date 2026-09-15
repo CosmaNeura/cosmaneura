@@ -42,6 +42,8 @@ ownership, capacity, no-shadow, unique image/mount/device and native filesystem
 identity checks. Missing metadata is not proof of safety. The snapshot session's
 bounded native transport now permits only the required `images` and `disk`
 queries; the unavailable backing-file query is not silently ignored.
+The bootstrap's two exact dependency hashes are updated atomically with those
+files. Its existing source-closure test must pass; no stale loader pin is waived.
 
 New `complete-empty` is HUMAN-ONLY and is NOT an automatic retry. Before any
 workspace modification it requires all three real TTYs, exact source hash,
@@ -79,6 +81,10 @@ these checks are not a hostile-same-user or dynamic-library attestation claim.
   manifest cases passed (`da72d6`, 0.001s + 0.003s).
 - Ruff and Pyright on all six affected Python files pass (`da72d6`); whitespace
   and final change-budget validation must be recorded against the pushed head.
+- A final integration inspection found the bootstrap's two affected source pins
+  also required updating. The prior b5982c3a review request and evidence remain
+  historical, not final-head coverage. Run the one affected exact dependency-pin
+  test and bootstrap static checks; do not replay the 22 passing cases above.
 
 Previously passing unaffected tests are reused, not rerun. Frontend/application
 tests do not apply to this isolated helper/parser change. No GitHub Actions,
@@ -101,8 +107,8 @@ Native parser compatibility is evidence, not successful human completion.
    no automatic repeat/cleanup or success inference from a shell exit alone.
 5. Actual snapshot still needs fresh source composition review, explicit account/
    ARM-token identity evidence, current plan, independent exact plan/handoff
-   review and the approved human-managed firewall/snapshot controls. Three
-   runtime files change here, so old review58's bundle is NOT a review of the
+   review and the approved human-managed firewall/snapshot controls. Four
+   source modules change here, so old review58's bundle is NOT a review of the
    new bundle. Cursor PR review cannot be relabeled as an Azure ReviewRecord.
 
 No ten-minute capture clock starts during empty setup/completion. Never retime or
