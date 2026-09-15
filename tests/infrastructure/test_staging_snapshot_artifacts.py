@@ -134,7 +134,7 @@ class ArtifactTests(unittest.TestCase):
         for attribute, name, raw in (
             (
                 "MANUAL_APPROVAL_SHA",
-                "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json",
+                "STAGING-SUPERVISED-PORTAL-TIMING-APPROVAL-20260915.json",
                 b"invented manual permission",
             ),
             (
@@ -558,7 +558,7 @@ class ArtifactTests(unittest.TestCase):
 
     def test_legacy_approval_file_cannot_replace_supervised_portal_approval(self):
         current = (
-            self.approvals / "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json"
+            self.approvals / "STAGING-SUPERVISED-PORTAL-TIMING-APPROVAL-20260915.json"
         )
         current.rename(
             self.approvals / "STAGING-HUMAN-FIREWALL-WINDOW-APPROVAL-20260914.json"

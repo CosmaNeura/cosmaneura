@@ -97,7 +97,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_artifacts",
-        "86b4467f5db88ed2d6a668084964fdeeda1f4efe556519efda4cd51ce21ec307",
+        "2bddd805e2f1a44b837e0d8864291cd6b72bcc69df79c8e1108d285a58672513",
     ),
     (
         "staging_snapshot_human",

@@ -31,7 +31,7 @@ from staging_snapshot_review_record import (
 from staging_snapshot_source_provenance import SOURCE_NAMES, SourceCollection
 
 IMAGE = "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:475908dbb4c6820f91ca6ccd626312ef4f7591c8555923f02949520fcd4208d7"
-MANUAL_APPROVAL = "989fd8d45c5cfebf71c16dc89c2604133fea038f8f5daa72a6fc616fd81cdea0"
+MANUAL_APPROVAL = "e96b4ab0175bb06e387f0eecd5422894e9b936f9c0ecc4751ca09fc0bcd8bed7"
 IP_APPROVAL = "2a8bdf2eb217c3ad9fee21bfdb3dd00b34efee160de6d77f82e6f43f23b023aa"
 USERNAME_SHA = "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
 # Retain the session's35min floor plus the loader90s and human preparation240s.

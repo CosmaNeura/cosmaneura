@@ -23,8 +23,8 @@ from staging_snapshot_source_provenance import SOURCE_NAMES, SourceCollection
 
 # Corrected exact composition; its NEW independent review is still required.
 # Historical reviews47/48/58 bind older bytes, never derive trust at launch.
-BUNDLE_SHA256 = "b6f07cf51fb13e553220b8c860b62ab116391c6b18a04e70bb317860fa43fe93"
-LOADER_SHA256 = "cb5650073eb147493a518d491b8380f5d21d77663a68fb649e06623ff942dd19"
+BUNDLE_SHA256 = "468f937c1c878a7fb5d117b8e14d742a8234eeddd4dfad15cbbe018cb0ed8693"
+LOADER_SHA256 = "5e0f502b84b01e0d53dcf7473ac2811ec40ac0f9ef29bf7f4c798f29b3df9d0c"
 RUNTIME_ROOT = Path(
     "/private/tmp/cosmaneura-private-foundation-preflight.J40HZoi7/"
     ".trusted-runtime-bin/homebrew"

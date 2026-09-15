@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 POLICY = "cosmaneura-staging-human-snapshot-v1"
 ENDPOINT = "https://cosmascode.openai.azure.com/openai/v1/responses"
 PACKET_PARENT = Path("/private/tmp/cosmaneura-staging-baseline-20260914.adNnmt")
-MANUAL_APPROVAL_SHA = "989fd8d45c5cfebf71c16dc89c2604133fea038f8f5daa72a6fc616fd81cdea0"
+MANUAL_APPROVAL_SHA = "e96b4ab0175bb06e387f0eecd5422894e9b936f9c0ecc4751ca09fc0bcd8bed7"
 IP_APPROVAL_SHA = "2a8bdf2eb217c3ad9fee21bfdb3dd00b34efee160de6d77f82e6f43f23b023aa"
 APPROVAL_ROOT = Path(
     "/Users/jw/Desktop/Cosmas/staging-private-foundation-command-checkpoint-20260911"
@@ -272,7 +272,7 @@ class ReviewedArtifacts:
         self.identity = self._identity(h)
         self.plan = p
         self._approval(
-            "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json",
+            "STAGING-SUPERVISED-PORTAL-TIMING-APPROVAL-20260915.json",
             MANUAL_APPROVAL_SHA,
         )
         self._approval("STAGING-IPIFY-APPROVAL-20260914.json", IP_APPROVAL_SHA)
