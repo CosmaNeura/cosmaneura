@@ -22,8 +22,9 @@ on:
         description: "Attest that a real provider-signed non-PHI Recall callback passed immediately before production deploy"
         required: true
         default: false
-  push:
-    branches: [master, staging]
+
+# Deployment validation belongs only to explicit manual promotions, not pushes.
+# Repository Actions remains disabled until the user authorizes re-enabling it.
 
 concurrency:
   # Match historical Build & Publish runs during the short registration
@@ -31,7 +32,7 @@ concurrency:
   group: Build & Publish-${{ github.ref }}
   # Neither release branch may cancel an in-flight run: migrations or Azure
   # revision reconciliation can outlive GitHub's cancellation signal. Queue a
-  # newer push behind the current release instead of creating partial state.
+  # newer dispatch behind the current release instead of creating partial state.
   cancel-in-progress: false
 
 # Long-lived credentials are scoped to the protected deploy jobs below. Pull
