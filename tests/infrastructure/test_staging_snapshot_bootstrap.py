@@ -44,8 +44,8 @@ class FixtureTests(unittest.TestCase):
         self.sha = hashlib.sha256(self.raw).hexdigest()
 
     def test_exact_dependency_pins_match_current_source(self):
-        self.assertEqual(len(boot.SOURCE_PINS), 15)
-        self.assertEqual(len(dict(boot.SOURCE_PINS)), 15)
+        self.assertEqual(len(boot.SOURCE_PINS), 16)
+        self.assertEqual(len(dict(boot.SOURCE_PINS)), 16)
         for name, expected in boot.SOURCE_PINS:
             self.assertEqual(
                 hashlib.sha256((SCRIPTS / (name + ".py")).read_bytes()).hexdigest(),
