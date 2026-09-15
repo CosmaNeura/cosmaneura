@@ -2,12 +2,10 @@
 
 ## Outcome and scope
 
-Dormant fixed PostgreSQL16 capture for the approved bounded snapshot route,
-reusing installed16.15 clients and staging. No new resources or application change.
-No CLI or credential discovery: direct execution refuses. Only the complete human
-launcher supplies authenticated credentials, verified encrypted descriptor, exact
-runtime/native callbacks and original deadline. Inputs are not authorization.
-Agent tests use invented bytes, mock clients and credentialless Python children.
+Dormant PostgreSQL16 capture reuses installed16.15 clients/staging; no new resources.
+No CLI/discovery: direct execution refuses. Only the complete human launcher
+supplies authenticated credentials, encrypted descriptor, exact runtime callbacks
+and deadline. Tests use invented bytes/mocks/credentialless children, not authority.
 
 ## Exact read-only source and output
 
@@ -32,12 +30,10 @@ through a held descriptor, exclusive/no-follow, at most1GiB. Verify payload
 device/inode/owner/mode and archive name/inode/device/owner/single link/size.
 No source writes, app import/start, migration or restoration occurs.
 
-Native pg_restore fully decodes the archive to /dev/null without a database
-connection or credentials, then extracts the archived Alembic row into a bounded
-memory pipe. This is archive validation, NOT an isolated restoration rehearsal.
-Final native encrypted-binding checks and descriptor rehash reject replacement
-or same-size content changes. Protect the completed archive0400. Retain partial
-encrypted files for exact inspection; no overwrite, automatic deletion or retry.
+Credentialless native pg_restore decodes to /dev/null and extracts the Alembic row
+into bounded memory: archive validation, NOT restore rehearsal. Native encrypted
+binding/descriptor rehash reject replacement or same-size changes. Completed
+archive0400; retain partial encrypted files without overwrite, deletion or retry.
 
 ## Time and child process handling
 
@@ -68,36 +64,23 @@ extending the original plan/handoff or access-window deadline.
 Review32 teardown correction: make handler record-only, mask SIGALRM, disarm and
 drain its pending one-shot, restore previous handler/mask in nested finally, THEN
 propagate expiry. An already-pending caller alarm refuses before installation.
-Eight injected teardown steps and a real pending-signal fixture passed; historical
-review FAIL remains separate from later correction evidence and local tests.
+Historical FAIL/results remain distinct in the exact review ledger.
 
-Review44 runtime correction (September15): an empty/duplicate/missing-leader
-pre-reap process list is never evidence of retirement. Every accepted pre-reap
-inspection must include the still-unreaped leader with unique PIDs. Initial or
-later ambiguity permanently fails cleanup, even if a later observation is valid.
-Unless exactly one zombie leader is proven, cancellation is attempted at most
-once before reaping. Successful cleanup requires that exact lone-zombie state,
-then reaping, then an empty post-reap group. An already-reaped child cannot be
-signalled. The complete final bundle and its new pins require independent review;
-review44's FAIL is preserved, not converted into acceptance by local tests.
+Review44–46 corrections: every pre-reap read must have unique PIDs including the
+unreaped leader. Empty/duplicate/missing-leader/denied evidence permanently fails
+acceptance, retains the child/pipe and refuses before wait. Cancel the owned group
+at most once unless it is exactly a lone zombie; never signal a reaped PID.
+Only proven lone-zombie state can reach wait, followed by an empty post-reap read.
+One stored five-second deadline covers ALL cleanup calls for that child. Retry
+may only inspect/reap in its original remaining time, never signal or gain a
+positive timeout floor. Every native read, including the final empty read, has
+a post-call absolute-deadline check. Later recovery cannot erase earlier failure.
+Original44–46 FAIL reviews remain; fresh exact independent review is required.
 
-Review45 found that later ambiguity still fell through to wait, and retries
-reset the cleanup deadline. Corrected control flow retains the unreaped handle
-and pipe on ambiguous evidence; only a proven lone zombie can reach wait. The
-first cleanup stores one five-second deadline for that registered child. Retry
-can inspect/reap only within its original remaining time and cannot signal again.
-No positive timeout floor extends the deadline. Any prior ambiguity permanently
-refuses capture acceptance even if later cleanup succeeds. The exact changed
-runtime and downstream pins need fresh independent review; review45 remains FAIL.
-
-Stream output in bounded chunks, with no shell and discarded native diagnostic
-stderr. Each child has its own session/process group. Non-reaping wait keeps the
-leader PID allocated until group cancellation. Native exact process-group
-readback treats denial/unknown state as failure, not absence. Exactly one zombie
-leader can be reaped without signalling; other/unknown groups get at most one
-SIGKILL attempt before reaping. No later cleanup signals a potentially reaped
-PID. Interrupt/denied inspection still attempts owned-child cleanup; uncertain
-wait state cannot become success.
+Output is streamed in bounded chunks, without shell or native stderr. A private
+session/group plus non-reaping wait retains leader ownership until retirement.
+Interrupted/denied inspection still attempts owned-child cancellation; it does
+not turn uncertain cleanup into success or release an unproved child handle.
 
 Ctrl-C/alarm delivery is deferred only across trusted spawn/handle registration
 and short cleanup, to avoid losing child ownership between a native return and
@@ -119,30 +102,23 @@ runtime or encrypted-binding callback is valid for live use. Native verification
 must bind the original PR394 image, mount, manifest and held directory inode;
 the ordinary empty directory left by a detach must not pass.
 
-PR396's separately approved HUMAN-managed single-current-IP30minute window
-owns the sequencing. This module has no firewall calls or Azure client. The
-human creates/removes the rule, attests all mutations terminal/removal completed,
-and a read-only adapter checks absence/baseline. No atomic ownership, automatic
-TTL or crash-proof closure claim. Capture failure does not authorize opening a
-new window, changing a plan, renewing a receipt or retrying a live operation.
+PR396's approved HUMAN-managed single-current-IP30minute window owns sequencing.
+No firewall/Azure calls here: human creates/removes, attests mutations terminal
+and removal complete; adapter verifies absence/baseline. No atomic ownership,
+TTL/crash-proof claim or failure-authorized new window/plan/receipt/live retry.
 
-Source PASS and CI do not approve the missing live integration or execution.
-Exact4h plan timestamp and10min handoff expiry remain; no claims or gate bypass.
-After actual capture, independently scoped isolated restore, credential/session/
-provider treatment and exact four-migration rehearsal must pass before release.
-No copied credentials may activate an app/provider. No live migration,
-deployment, resource cleanup or additional merge authority is inferred.
+Source/check PASS is not execution authority. Exact4h plan/10min handoff gates
+remain. After capture, isolated restore, credential/session/provider treatment
+and actual four-migration rehearsal must pass. No copied credentials may activate
+an app/provider; no live migration, deployment, cleanup or merge is authorized.
 
 ## Validation and recovery
 
-Review45 correction:16affected cases PASS0.200s (initial sandbox ps denial ran
-zero tests). Coverage includes ambiguous ownership/retained handle, same-deadline
-retry, sub-10ms wait without floor, expired retry without read/reap, post-reap
-survivors and actual credentialless-child streaming/timeout/limit/nonzero exit.
-Historical counts/failures remain in commits and ledger. No unchanged suite or
-paid CI replay, credentials, PG/Azure call or human-consumer execution occurred.
+Prior45 correction:17affected methods passed (16in0.200s, signals0.100s); initial
+sandbox ps denial ran zero tests. Review46's3affected methods PASS0.019s include
+final-read before/at/after expiry. Historical results are not current acceptance.
+No unchanged suite, paid CI, credential, PG/Azure or human-consumer execution.
 
-Recovery for this dormant source is to stop using it; no deployed state changed.
-If future live capture fails, preserve its protected partial artifact and remove
-only the human-managed exact temporary rule under the reviewed fallback. Do not
-delete existing snapshots, images, resources or QA data as rollback.
+Recovery: stop using this dormant source; no deployed state changed. Live failure
+preserves protected partial artifacts; human removes only the exact temporary
+rule under reviewed fallback. Never delete snapshots/images/resources/QA data.
