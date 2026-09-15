@@ -721,24 +721,46 @@ class CleanupDenialTests(unittest.TestCase):
         child.wait.assert_not_called()
         self.assertIs(children.child, child)
 
-    def test_post_reap_survivor_cannot_signal_again(self):
-        children = pg.BoundedChildren(time.monotonic() + 2, lambda: None)
-        child = SimpleNamespace(pid=12345, returncode=None, stdout=Mock(), wait=Mock())
-        children.child, children.may_signal_child = child, True
-        with (
-            patch.object(
-                children,
-                "group_members",
-                side_effect=[((12345, "Z"),), ((12346, "S"),)],
-            ),
-            patch.object(pg.os, "killpg") as kill,
+    def test_post_reap_evidence_must_be_empty_and_within_original_deadline(self):
+        for final, at, accepted in (
+            (((12346, "S"),), 104.999, False),
+            ((), 104.999, True),
+            ((), 105.0, False),
+            ((), 105.001, False),
         ):
-            for _attempt in range(2):
-                with self.assertRaises(pg.PostgreSQLRefused):
-                    children.cancel_and_reap()
-        kill.assert_not_called()
-        child.wait.assert_called_once()
-        self.assertIsNone(children.child)
+            children = pg.BoundedChildren(time.monotonic() + 20, lambda: None)
+            child = SimpleNamespace(
+                pid=12345, returncode=None, stdout=Mock(), wait=Mock()
+            )
+            children.child, children.may_signal_child = child, True
+            with patch.object(pg.time, "monotonic", return_value=100.0) as clock:
+
+                def observe(_pid, *, deadline):
+                    self.assertEqual(deadline, 105.0)
+                    if children.child is not None:
+                        return ((12345, "Z"),)
+                    clock.return_value = at
+                    return final
+
+                with (
+                    patch.object(
+                        children, "group_members", side_effect=observe
+                    ) as read,
+                    patch.object(pg.os, "killpg") as kill,
+                ):
+                    for _attempt in range(2):
+                        if accepted:
+                            children.cancel_and_reap()
+                        else:
+                            with self.assertRaisesRegex(
+                                pg.PostgreSQLRefused, "capture_group_not_gone"
+                            ):
+                                children.cancel_and_reap()
+                    self.assertEqual(read.call_count, 2)
+                kill.assert_not_called()
+                child.wait.assert_called_once()
+                self.assertIsNone(children.child)
+                self.assertEqual(children.cleanup_failed, not accepted)
 
     def test_already_reaped_child_is_never_signalled(self):
         children = pg.BoundedChildren(time.monotonic() + 2, lambda: None)
