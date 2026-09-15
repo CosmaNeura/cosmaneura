@@ -396,7 +396,7 @@ class SnapshotOperations(Operations):
             "identity_evidence_sha256": inputs.identity_evidence_sha256,
             "workspace_manifest_sha256": inputs.workspace_manifest_sha256,
             "manual_window_approval_sha256": inputs.manual_window_approval_sha256,
-            "firewall_management": "human_only",
+            "firewall_management": "operator_supervised_portal",
             "operator_reports_all_mutations_terminal": True,
             "operator_reports_rule_removal_completed": True,
             "atomic_rule_ownership_proved": False,

@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 POLICY = "cosmaneura-staging-human-snapshot-v1"
 ENDPOINT = "https://cosmascode.openai.azure.com/openai/v1/responses"
 PACKET_PARENT = Path("/private/tmp/cosmaneura-staging-baseline-20260914.adNnmt")
-MANUAL_APPROVAL_SHA = "80c0a64759b887b172d3ab7187836dcc251c265c48a614f554728265451735e7"
+MANUAL_APPROVAL_SHA = "989fd8d45c5cfebf71c16dc89c2604133fea038f8f5daa72a6fc616fd81cdea0"
 IP_APPROVAL_SHA = "2a8bdf2eb217c3ad9fee21bfdb3dd00b34efee160de6d77f82e6f43f23b023aa"
 APPROVAL_ROOT = Path(
     "/Users/jw/Desktop/Cosmas/staging-private-foundation-command-checkpoint-20260911"
@@ -223,7 +223,7 @@ class ReviewedArtifacts:
                 "credentials_and_workforce_data_remain_sensitive": True,
                 "privileged_database_role_risk_disclosed": True,
                 "concurrent_firewall_edit_risk_accepted": True,
-                "firewall_management": "human_only",
+                "firewall_management": "operator_supervised_portal",
                 "native_firewall_expiry_proved": False,
                 "execution_authorized": False,
                 "deployment_authorized": False,
@@ -272,7 +272,8 @@ class ReviewedArtifacts:
         self.identity = self._identity(h)
         self.plan = p
         self._approval(
-            "STAGING-HUMAN-FIREWALL-WINDOW-APPROVAL-20260914.json", MANUAL_APPROVAL_SHA
+            "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json",
+            MANUAL_APPROVAL_SHA,
         )
         self._approval("STAGING-IPIFY-APPROVAL-20260914.json", IP_APPROVAL_SHA)
         self._review(
