@@ -375,6 +375,92 @@ def rules(value: object) -> list[dict[str, str]]:
     return sorted(rows, key=lambda item: item["name"].casefold())
 
 
+@content_free
+def preparation_files(
+    source: SourceCollection,
+    source_review: ReviewRecord,
+    workspace_manifest: bytes,
+    *,
+    expected_source_sha256: str,
+    expected_source_review_sha256: str,
+    expected_workspace_manifest_sha256: str,
+    hdiutil_sha256: str,
+    diskutil_sha256: str,
+    operator_uid: int,
+    observation_root: str,
+    human_presence_confirmed_at: datetime,
+) -> tuple[tuple[str, bytes], ...]:
+    """Public six-file READ-ONLY preparation packet, not a capture plan/receipt.
+
+    Actual Terminal presence and original authenticated source/review/workspace
+    anchors are caller prerequisites. Returned bytes still need exclusive
+    publication and exact independent human-command review; no command is run.
+    """
+    created = now_utc()
+    value = source_record(source, expected_source_sha256, created)
+    bundle = sha(canonical(value["files"]))
+    checked_review(
+        source_review,
+        expected_source_review_sha256,
+        "source",
+        bundle,
+        bundle,
+        datetime(2026, 9, 14, tzinfo=UTC),
+        created,
+    )
+    manifest = workspace_record(
+        workspace_manifest,
+        expected_workspace_manifest_sha256,
+        value["files"]["staging_encrypted_workspace.py"],
+        created,
+    )
+    require(type(operator_uid) is int and operator_uid > 0)
+    require(valid_sha(hdiutil_sha256) and valid_sha(diskutil_sha256))
+    require(
+        type(observation_root) is str
+        and re.fullmatch(
+            r"/private/tmp/cosmaneura-staging-baseline-20260914\.adNnmt/human-observation-[0-9a-f]{32}",
+            observation_root,
+        )
+    )
+    presence = timestamp(encoded_time(human_presence_confirmed_at))
+    require(created - timedelta(minutes=5) <= presence <= created)
+    preparation = canonical(
+        {
+            "schema_version": 1,
+            "policy_id": POLICY,
+            "source_commit": value["source_commit"],
+            "source_bundle_sha256": bundle,
+            "source_provenance_sha256": expected_source_sha256,
+            "source_review_summary_sha256": expected_source_review_sha256,
+            "created_at": encoded_time(created),
+            "expires_at": encoded_time(created + timedelta(minutes=30)),
+            "human_presence_confirmed_at": encoded_time(presence),
+            "operator_uid": operator_uid,
+            "workspace_root": manifest["workspace"],
+            "workspace_manifest_sha256": expected_workspace_manifest_sha256,
+            "workspace_source_sha256": manifest["source_sha256"],
+            "hdiutil_sha256": hdiutil_sha256,
+            "diskutil_sha256": diskutil_sha256,
+            "observation_root": observation_root,
+            "public_ip_approval_sha256": IP_APPROVAL,
+            "preparation_only": True,
+            "database_credentials_read": False,
+            "firewall_mutated": False,
+            "execution_authorized": False,
+            "deployment_authorized": False,
+        }
+    )
+    return (
+        ("preparation.json", preparation),
+        ("source-provenance.json", source.provenance),
+        ("source-review-summary.json", source_review.summary),
+        ("source-review-request.json", source_review.request),
+        ("source-review-response.json", source_review.response),
+        ("source-review-text.md", source_review.text),
+    )
+
+
 @dataclass(frozen=True)
 class PlanDraft:
     plan: bytes

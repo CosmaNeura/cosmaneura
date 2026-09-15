@@ -96,6 +96,8 @@ def exact(value: dict[str, Any], expected: dict[str, Any]) -> None:
 class ReviewedArtifacts:
     """Caller owns one active absolute timer. Retained checks never renew it."""
 
+    catalog = CATALOG
+
     def __init__(
         self,
         source: SourceRuntimeBinding,
@@ -127,9 +129,9 @@ class ReviewedArtifacts:
         require(type(self._source.files) is NativeFiles)
 
     def _read(self, name: str, expected: str) -> bytes:
-        require(name in CATALOG)
+        require(name in self.catalog)
         observed = self._source.files.read(
-            self._root / name, mode=0o400, maximum=CATALOG[name]
+            self._root / name, mode=0o400, maximum=self.catalog[name]
         )
         require(hashlib.sha256(observed.content).hexdigest() == sha(expected))
         previous = self._retained.setdefault(self._root / name, observed)
@@ -137,7 +139,16 @@ class ReviewedArtifacts:
         return observed.content
 
     def _json(self, name: str, expected: str) -> dict[str, Any]:
-        return read_object(self._read(name, expected), CATALOG[name])
+        return read_object(self._read(name, expected), self.catalog[name])
+
+    def _source_files(self) -> dict[str, str]:
+        return {
+            "staging_snapshot_bootstrap.py": self._source.loader_sha256,
+            **{
+                name + ".py": hashlib.sha256(observation.content).hexdigest()
+                for name, observation in self._source.sources.items()
+            },
+        }
 
     def _load(self) -> None:
         h = record(
@@ -171,16 +182,12 @@ class ReviewedArtifacts:
             <= self.handoff_created
         )
         self.source_commit = commit(h["source_commit"])
-        files = {
-            "staging_snapshot_bootstrap.py": self._source.loader_sha256,
-            **{
-                name + ".py": hashlib.sha256(observation.content).hexdigest()
-                for name, observation in self._source.sources.items()
-            },
-        }
+        files = self._source_files()
         self.source_bundle_sha256 = hashlib.sha256(canonical(files)).hexdigest()
         require(h["source_bundle_sha256"] == self.source_bundle_sha256)
-        self.provenance = self._provenance(h["source_provenance_sha256"], files)
+        self.provenance = self._provenance(
+            h["source_provenance_sha256"], files, self.handoff_created
+        )
         p = record(
             self._json("plan.json", h["plan_sha256"]),
             "schema_version policy_id source_commit source_bundle_sha256 "
@@ -290,7 +297,9 @@ class ReviewedArtifacts:
             self.handoff_expires,
         )
 
-    def _provenance(self, expected: str, files: dict[str, str]) -> dict[str, Any]:
+    def _provenance(
+        self, expected: str, files: dict[str, str], at: datetime
+    ) -> dict[str, Any]:
         value = record(
             self._json("source-provenance.json", expected),
             "schema_version repository protected_branch source_commit observed_at "
@@ -312,11 +321,7 @@ class ReviewedArtifacts:
             },
         )
         observed = utc(value["observed_at"])
-        require(
-            self.handoff_created - timedelta(minutes=10)
-            <= observed
-            <= self.handoff_created
-        )
+        require(at - timedelta(minutes=10) <= observed <= at)
         require(
             type(value["pull_requests"]) is list
             and 1 <= len(value["pull_requests"]) <= 30
@@ -487,7 +492,7 @@ class ReviewedArtifacts:
         self._types()
         self._source.revalidate()
         for path, previous in self._retained.items():
-            maximum = CATALOG[path.name] if path.parent == self._root else 16384
+            maximum = self.catalog[path.name] if path.parent == self._root else 16384
             require(
                 self._source.files.read(path, mode=0o400, maximum=maximum) == previous
             )
@@ -499,6 +504,113 @@ class ReviewedArtifacts:
         self._types()
         self.inputs.validate(datetime.now(UTC))
         require(self.identity["token_expires_epoch"] > int(time.time()) + 1830)
+
+
+class PreparationArtifacts(ReviewedArtifacts):
+    """Source-only READ-ONLY preparation. Never fabricate a capture plan/handoff.
+
+    The externally reviewed human command pins preparation and source-review
+    hashes. The original independent source review and normally protected merge
+    evidence remain mandatory. No CaptureInputs or capture authority is exposed.
+    """
+
+    catalog = {
+        "preparation.json": 16384,
+        **{name: size for name, size in CATALOG.items() if name.startswith("source-")},
+    }
+
+    def __init__(
+        self,
+        source: SourceRuntimeBinding,
+        root: Path,
+        expected_preparation_sha256: str,
+        expected_source_review_sha256: str,
+    ):
+        self._source, self._root = source, root
+        self._retained = {}
+        self._start_utc, self._start_monotonic = datetime.now(UTC), time.monotonic()
+        self._types()
+        require(
+            root.parent == PACKET_PARENT
+            and re.fullmatch(r"human-preparation-[0-9a-f]{32}", root.name)
+        )
+        self.preparation_sha256 = sha(expected_preparation_sha256)
+        self.review_sha256 = sha(expected_source_review_sha256)
+        p = record(
+            self._json("preparation.json", self.preparation_sha256),
+            "schema_version policy_id source_commit source_bundle_sha256 "
+            "source_provenance_sha256 source_review_summary_sha256 created_at expires_at "
+            "human_presence_confirmed_at operator_uid workspace_root workspace_manifest_sha256 "
+            "workspace_source_sha256 hdiutil_sha256 diskutil_sha256 observation_root "
+            "public_ip_approval_sha256 preparation_only database_credentials_read "
+            "firewall_mutated execution_authorized deployment_authorized",
+        )
+        files = self._source_files()
+        self.source_commit = commit(p["source_commit"])
+        self.source_bundle_sha256 = hashlib.sha256(canonical(files)).hexdigest()
+        exact(
+            p,
+            {
+                "schema_version": 1,
+                "policy_id": POLICY,
+                "source_bundle_sha256": self.source_bundle_sha256,
+                "source_review_summary_sha256": self.review_sha256,
+                "operator_uid": source.loader_source.file_identity[2],
+                "workspace_source_sha256": files["staging_encrypted_workspace.py"],
+                "public_ip_approval_sha256": IP_APPROVAL_SHA,
+                "preparation_only": True,
+                "database_credentials_read": False,
+                "firewall_mutated": False,
+                "execution_authorized": False,
+                "deployment_authorized": False,
+            },
+        )
+        self.created, self.expires = utc(p["created_at"]), utc(p["expires_at"])
+        require(self.expires == self.created + timedelta(minutes=30))
+        require(
+            self.created - timedelta(minutes=5)
+            <= utc(p["human_presence_confirmed_at"])
+            <= self.created
+        )
+        self.provenance = self._provenance(
+            p["source_provenance_sha256"], files, self.created
+        )
+        self._review(
+            "source",
+            self.review_sha256,
+            self.source_bundle_sha256,
+            datetime(2026, 9, 14, tzinfo=UTC),
+            self.created,
+        )
+        for field in ("workspace_manifest_sha256", "hdiutil_sha256", "diskutil_sha256"):
+            sha(p[field])
+        require(type(p["workspace_root"]) is str and type(p["observation_root"]) is str)
+        self.workspace_root, self.observation_root = (
+            Path(p["workspace_root"]),
+            Path(p["observation_root"]),
+        )
+        require(
+            self.workspace_root.parent == Path("/private/tmp")
+            and re.fullmatch(
+                r"cosmaneura-staging-snapshot-[a-z0-9_]{8}", self.workspace_root.name
+            )
+            and self.observation_root.parent == PACKET_PARENT
+            and re.fullmatch(
+                r"human-observation-[0-9a-f]{32}", self.observation_root.name
+            )
+        )
+        self.preparation = p
+        self._approval("STAGING-IPIFY-APPROVAL-20260914.json", IP_APPROVAL_SHA)
+        self.revalidate()
+        self.require_start()
+
+    def require_start(self) -> None:
+        self._types()
+        now = datetime.now(UTC)
+        require(self.created <= now < self.expires)
+        require(
+            now - timedelta(minutes=10) <= utc(self.provenance["observed_at"]) <= now
+        )
 
 
 if __name__ == "__main__":
