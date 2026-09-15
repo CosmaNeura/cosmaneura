@@ -5,7 +5,10 @@ explicit current identity, two foreground confirmations, exact independent
 plan/handoff review and start-time expiry BEFORE calling this core. This module
 does not implement, mint, renew, or substitute for any of those authority gates.
 Tests supply in-memory operations only. There is deliberately no live CLI here.
-Firewall changes are HUMAN-MANAGED: this protocol has no mutation operation.
+Firewall changes are OPERATOR-SUPERVISED through Portal, with explicit delegation
+permitted by the separately pinned approval. This protocol has no mutation
+operation. Human closure describes the operator's Terminal confirmation, not
+the identity of the person or assistant performing the Portal operation.
 Readbacks plus operator attestations do not prove atomic resource ownership.
 """
 
@@ -449,7 +452,7 @@ def _execute_after_human_gate(
         "identity_evidence_sha256": inputs.identity_evidence_sha256,
         "workspace_manifest_sha256": inputs.workspace_manifest_sha256,
         "manual_window_approval_sha256": inputs.manual_window_approval_sha256,
-        "firewall_management": "human_only",
+        "firewall_management": "operator_supervised_portal",
         "operator_reports_all_mutations_terminal": True,
         "operator_reports_rule_removal_completed": True,
         "atomic_rule_ownership_proved": False,

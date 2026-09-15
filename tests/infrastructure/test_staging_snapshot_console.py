@@ -207,6 +207,9 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn(self.scope.identity_evidence_sha256.encode(), self.output)
         self.assertIn(self.scope.workspace_manifest_sha256.encode(), self.output)
         self.assertIn(b"Do not create any firewall rule yet", self.output)
+        self.assertIn(b"explicitly delegate them to an assistant", self.output)
+        self.assertIn(b"Only you may enter these Terminal confirmations", self.output)
+        self.assertIn(b"responsible for removal within 30 minutes", self.output)
         with self.assertRaises(console.HumanConsoleRefused):
             self.instance.confirm_start()
 
@@ -220,10 +223,15 @@ class ConsoleTests(unittest.TestCase):
     def test_complete_removal_fallback_precedes_any_creation_instruction(self):
         self.present()
         text = self.output.decode()
-        self.assertLess(text.index("REMOVE BY"), text.index("YOU may create"))
-        self.assertLess(text.index("REMOVE ONLY"), text.index("YOU may create"))
         self.assertLess(
-            text.index("uncertain or pending"), text.index("YOU may create")
+            text.index("REMOVE BY"), text.index("may create and save exactly")
+        )
+        self.assertLess(
+            text.index("REMOVE ONLY"), text.index("may create and save exactly")
+        )
+        self.assertLess(
+            text.index("uncertain or pending"),
+            text.index("may create and save exactly"),
         )
         self.assertIn(self.scope.rule.name, text)
         self.assertIn("Start IPv4: 8.8.8.8\nEnd IPv4: 8.8.8.8", text)
@@ -247,7 +255,7 @@ class ConsoleTests(unittest.TestCase):
                     datetime.now(UTC) + timedelta(minutes=29),
                     15,
                 )
-        self.assertNotIn(b"YOU may create", self.output)
+        self.assertNotIn(b"may create and save exactly", self.output)
         self.assertIn(b"REMOVE BY", self.output)
         self.answers = [b"ALL FINISHED AND REMOVED\n"]
         result = self.instance.await_human_rule_removal(self.scope.rule, 15)
@@ -291,7 +299,7 @@ class ConsoleTests(unittest.TestCase):
         result = self.instance.await_human_rule_removal(self.scope.rule, 240)
         self.assertEqual(result, core.HumanClosure(True, True))
         self.assertIn(b"HUMAN REMOVAL REQUIRED NOW", self.output)
-        self.assertNotIn(b"YOU may create", self.output)
+        self.assertNotIn(b"may create and save exactly", self.output)
 
     def test_absence_or_pending_mutation_answer_never_attests_closure(self):
         self.answers = [b"RULE ABSENT BUT CREATE PENDING\n"]

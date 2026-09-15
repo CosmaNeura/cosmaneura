@@ -134,7 +134,7 @@ class ArtifactTests(unittest.TestCase):
         for attribute, name, raw in (
             (
                 "MANUAL_APPROVAL_SHA",
-                "STAGING-HUMAN-FIREWALL-WINDOW-APPROVAL-20260914.json",
+                "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json",
                 b"invented manual permission",
             ),
             (
@@ -324,7 +324,7 @@ class ArtifactTests(unittest.TestCase):
             "credentials_and_workforce_data_remain_sensitive": True,
             "privileged_database_role_risk_disclosed": True,
             "concurrent_firewall_edit_risk_accepted": True,
-            "firewall_management": "human_only",
+            "firewall_management": "operator_supervised_portal",
             "native_firewall_expiry_proved": False,
             "execution_authorized": False,
             "deployment_authorized": False,
@@ -550,6 +550,19 @@ class ArtifactTests(unittest.TestCase):
 
     def test_missing_risk_disclosure_refused(self):
         self.plan_changes["privileged_database_role_risk_disclosed"] = False
+        self.rejected()
+
+    def test_legacy_human_only_plan_cannot_authorize_delegated_portal_steps(self):
+        self.plan_changes["firewall_management"] = "human_only"
+        self.rejected()
+
+    def test_legacy_approval_file_cannot_replace_supervised_portal_approval(self):
+        current = (
+            self.approvals / "STAGING-SUPERVISED-PORTAL-WINDOW-APPROVAL-20260915.json"
+        )
+        current.rename(
+            self.approvals / "STAGING-HUMAN-FIREWALL-WINDOW-APPROVAL-20260914.json"
+        )
         self.rejected()
 
     def test_rule_already_in_baseline_refused(self):

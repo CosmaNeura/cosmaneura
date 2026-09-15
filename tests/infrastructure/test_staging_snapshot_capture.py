@@ -175,7 +175,7 @@ class SnapshotCoreTests(unittest.TestCase):
         self.assertTrue(result["new_rule_absent"])
         self.assertFalse(result["deployment_authorized"])
         self.assertFalse(result["restore_or_migration_accepted"])
-        self.assertEqual(result["firewall_management"], "human_only")
+        self.assertEqual(result["firewall_management"], "operator_supervised_portal")
         self.assertFalse(result["atomic_rule_ownership_proved"])
         self.assertFalse(result["native_firewall_expiry_proved"])
         self.assertFalse(result["crash_proof_cleanup_proved"])
