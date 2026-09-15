@@ -92,3 +92,17 @@ Independent final source review and current-head validation evidence are require
 on the PR. No actual native builder/image/registry operation or staging release has
 been performed. Recovery before activation is to leave this additive library
 unused; do not delete data, existing containers or staging resources.
+
+## First Cursor review dispositions
+
+Bugbot reviewed06ac0db6 and found two medium-severity issues (PR417 discussions
+4016980471 and4016980483). No PASS is claimed for that head. Creation stdout now
+retains a valid observed container ID in a finally block BEFORE post-command
+validation, including a child cleanup/deadline failure. Failure evidence also
+retains the intended unique name; neither is ownership proof or removal authority.
+Missing/malformed output preserves that uncertainty, not a guessed ID.
+
+Failure-evidence writes are best-effort and cannot replace the canonical refusal.
+The raised refusal exposes whether that write succeeded; absent evidence is never
+success. Preserve partial files, no write retry/overwrite. These fixes need a new
+independent exact-head review; the first review and its findings remain recorded.

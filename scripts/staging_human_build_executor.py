@@ -53,6 +53,8 @@ MAX_LOG = 64 * 1024**2
 class BuildExecutionRefused(RuntimeError):
     """Fixed public code; inspect only the private bounded logs for diagnostics."""
 
+    failure_evidence_written: bool = False
+
 
 def require(value: object) -> None:
     if not value:
@@ -420,13 +422,22 @@ class Builder:
 
     def command(self, args: list[str], maximum: int = 1024**2) -> bytes:
         chunks: list[bytes] = []
-        self.processes.run(
-            [str(DOCKER), *args],
-            self.environment,
-            maximum,
-            chunks.append,
-            cwd=self.prepared.root / "source",
-        )
+        try:
+            self.processes.run(
+                [str(DOCKER), *args],
+                self.environment,
+                maximum,
+                chunks.append,
+                cwd=self.prepared.root / "source",
+            )
+        finally:
+            if args[:2] == ["container", "create"]:
+                # Retain observed ID even if child cleanup/deadline or the next
+                # authority check fails. This is recovery evidence, NOT proof
+                # of ownership or permission to remove the named container.
+                observed = b"".join(chunks).strip()
+                if re.fullmatch(rb"[0-9a-f]{64}", observed):
+                    self.container_id = observed.decode("ascii")
         self.local_check()
         return b"".join(chunks)
 
@@ -690,22 +701,31 @@ def build_candidate(
             tick()
         return result
     except BaseException:
+        refusal = BuildExecutionRefused("staging_build_execution_refused")
         if builder is not None:
             # Evidence only, not an attempt token, permission or cleanup action.
             failure = {
                 "phase": builder.phase,
                 "build_accepted": False,
                 "container_id": builder.container_id,
+                "container_name": prepared.extraction_container,
+                "container_id_requires_fresh_ownership_verification": True,
                 "container_removed": builder.container_removed,
                 "daemon_build_state_may_be_unknown": True,
                 "automatic_retry_allowed": False,
             }
-            inputs.write_exclusive(
-                prepared.root / "artifacts/build-failure.json",
-                canonical(failure) + b"\n",
-                0o400,
-            )
-        raise BuildExecutionRefused("staging_build_execution_refused") from None
+            try:
+                inputs.write_exclusive(
+                    prepared.root / "artifacts/build-failure.json",
+                    canonical(failure) + b"\n",
+                    0o400,
+                )
+                refusal.failure_evidence_written = True
+            except BaseException:
+                # A full disk, changed path or interruption cannot replace the
+                # canonical refusal. Missing failure evidence is never success.
+                pass
+        raise refusal from None
 
 
 if __name__ == "__main__":

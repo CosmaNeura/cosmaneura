@@ -209,6 +209,79 @@ class FakeProcesses:
 
 
 class BuildTests(unittest.TestCase):
+    def test_created_container_id_survives_post_command_failures(self):
+        original = FakeProcesses.run
+        for mode in ("source", "deadline", "malformed"):
+            with self.subTest(mode=mode):
+                self.setUp()
+
+                def run(owner, argv, environment, maximum, sink, **kwargs):
+                    creating = argv[1:3] == ["container", "create"]
+                    receiver = (
+                        (lambda _: sink(b"not-an-image-id\n"))
+                        if creating and mode == "malformed"
+                        else sink
+                    )
+                    result = original(
+                        owner, argv, environment, maximum, receiver, **kwargs
+                    )
+                    if creating and mode == "source":
+                        (self.prepared.root / "source/web/package.json").write_bytes(
+                            b"changed"
+                        )
+                    if creating and mode == "deadline":
+                        raise process.BuildProcessRefused(
+                            "invented deadline after stdout"
+                        )
+                    return result
+
+                with patch.object(FakeProcesses, "run", run):
+                    with self.assertRaises(m.BuildExecutionRefused) as caught:
+                        self.build()
+                record = json.loads(
+                    (self.prepared.root / "artifacts/build-failure.json").read_bytes()
+                )
+                self.assertEqual(
+                    record["container_id"], None if mode == "malformed" else CONTAINER
+                )
+                self.assertEqual(
+                    record["container_name"], self.prepared.extraction_container
+                )
+                self.assertTrue(
+                    record["container_id_requires_fresh_ownership_verification"]
+                )
+                self.assertTrue(caught.exception.failure_evidence_written)
+                self.assertTrue(self.container_exists)
+                self.assertFalse(
+                    any(row[0][1:3] == ["container", "rm"] for row in self.calls)
+                )
+
+    def test_failure_evidence_write_failure_cannot_hide_canonical_refusal(self):
+        for error in (
+            OSError("invented full disk"),
+            FileExistsError("invented collision"),
+            KeyboardInterrupt(),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.setUp()
+                self.failure = "build"
+                with patch.object(
+                    m.inputs, "write_exclusive", side_effect=error
+                ) as writer:
+                    with self.assertRaises(m.BuildExecutionRefused) as caught:
+                        self.build()
+                self.assertEqual(
+                    str(caught.exception), "staging_build_execution_refused"
+                )
+                self.assertFalse(caught.exception.failure_evidence_written)
+                self.assertEqual(writer.call_count, 1)
+                self.assertFalse(
+                    (self.prepared.root / "artifacts/build-failure.json").exists()
+                )
+                self.assertFalse(
+                    (self.prepared.root / "artifacts/build-result.json").exists()
+                )
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="cosmaneura-build-unit-")
         self.addCleanup(self.temp.cleanup)
