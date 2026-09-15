@@ -26,12 +26,14 @@ for name in (
     "staging_snapshot_pg_io",
     "staging_snapshot_native_files",
     "staging_snapshot_runtime",
+    "staging_snapshot_postgresql_runtime",
     "staging_snapshot_workspace",
     "staging_snapshot_configuration",
     "staging_snapshot_cli",
     "staging_snapshot_session",
     "staging_snapshot_azure",
     "staging_snapshot_public_ip",
+    "staging_snapshot_bootstrap",
 ):
     if name in sys.modules:
         continue
@@ -45,6 +47,25 @@ for name in (
 public = sys.modules["staging_snapshot_public_ip"]
 pg = sys.modules["staging_snapshot_pg_io"]
 native = sys.modules["staging_snapshot_native_files"]
+boot = sys.modules["staging_snapshot_bootstrap"]
+# Later stacked launchers pin additional inert modules. Load their definitions
+# before this fixture seals, without invoking their startup or human entrypoint.
+for name, _ in boot.SOURCE_PINS:
+    if name in sys.modules:
+        continue
+    spec = importlib.util.spec_from_file_location(
+        name, Path(__file__).resolve().parents[2] / "scripts" / (name + ".py")
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+PUBLIC_SOURCES = {
+    name: (
+        Path(__file__).resolve().parents[2] / "scripts" / (name + ".py")
+    ).read_bytes()
+    for name in [*(name for name, _ in boot.SOURCE_PINS), "staging_snapshot_bootstrap"]
+}
 FILES = None
 
 
@@ -189,6 +210,78 @@ class PublicIPTests(unittest.TestCase):
         with self.assertRaises(public.PublicIPRefused):
             public.SnapshotPublicIP(FILES, self.revalidate).current_ipv4(2)
         self.assertEqual(self.opener.open.call_count, 3)
+
+    def binding_callback(self):
+        """Actual SourceRuntimeBinding checks; native/runtime evidence is FAKE.
+
+        Do not call bind_process/main or any human consumer. The existing real
+        process seal and source_bindings logic remain active. Only unrelated
+        interpreter/native/file/runtime observations are mocked for this test.
+        """
+        modules = {name: sys.modules[name] for name, _ in boot.SOURCE_PINS}
+        runtime_type = modules["staging_snapshot_runtime"].SnapshotRuntime
+        postgres_type = modules["staging_snapshot_postgresql_runtime"].PostgreSQLRuntime
+        for owner, method, result in (
+            (boot, "parent_interpreter", None),
+            (boot, "module_origins", ()),
+            (boot.NativeImages, "observe", ()),
+            (runtime_type, "revalidate", None),
+            (postgres_type, "revalidate", None),
+        ):
+            self.stack.enter_context(patch.object(owner, method, return_value=result))
+        binding = boot.SourceRuntimeBinding()
+        binding.modules, binding.pg, binding.files = modules, pg, FILES
+        binding.integrity_modules = {**modules, "staging_snapshot_bootstrap": boot}
+        binding.root = Path(__file__).resolve().parents[2] / "scripts"
+        binding.loader = binding.root / "staging_snapshot_bootstrap.py"
+        binding.sources = {
+            name: native.FileObservation(PUBLIC_SOURCES[name], (1,), (2,))
+            for name in modules
+        }
+        binding.loader_source = native.FileObservation(
+            PUBLIC_SOURCES["staging_snapshot_bootstrap"], (3,), (4,)
+        )
+        observations = {
+            binding.root / (name + ".py"): item
+            for name, item in binding.sources.items()
+        }
+        observations[binding.loader] = binding.loader_source
+        observations[public.APPROVAL] = self.approval
+        self.permission.side_effect = lambda path, **_kwargs: observations[path]
+        binding.runtime = object.__new__(runtime_type)
+        binding.runtime._files = FILES
+        binding.runtime._root = boot.RUNTIME_ROOT
+        binding.runtime._expected = boot.EXPECTED_RUNTIME_SHA256
+        binding.postgresql = object.__new__(postgres_type)
+        binding.postgresql._files = FILES
+        binding.native = object.__new__(boot.NativeImages)
+        binding.images, binding.origins, binding.environment = (), (), dict(os.environ)
+        binding.bindings = boot.source_bindings(binding.integrity_modules)
+        return binding
+
+    def test_three_attempts_preserve_actual_source_binding_in_sealed_process(self):
+        binding = self.binding_callback()
+        with pg.capture_deadline(time.monotonic() + 2):
+            binding.revalidate()
+        counter = public._attempts
+        for _ in range(3):
+            self.adapter = public.SnapshotPublicIP(FILES, binding.revalidate)
+            self.assertEqual(self.read(), "8.8.8.8")
+            self.assertIs(public._attempts, counter)
+            self.assertEqual(
+                boot.source_bindings(binding.integrity_modules), binding.bindings
+            )
+        with self.assertRaises(public.PublicIPRefused):
+            public.SnapshotPublicIP(FILES, binding.revalidate).current_ipv4(2)
+        self.assertEqual(self.opener.open.call_count, 3)
+
+    def test_binding_guard_still_refuses_replaced_counter_before_http(self):
+        binding = self.binding_callback()
+        self.adapter = public.SnapshotPublicIP(FILES, binding.revalidate)
+        with patch.object(public, "_attempts", [0]):
+            with self.assertRaises(public.PublicIPRefused):
+                self.read()
+        self.opener.open.assert_not_called()
 
     def test_failed_attempts_consume_limit_and_never_retry(self):
         self.opener.open.side_effect = OSError("invented provider detail")
