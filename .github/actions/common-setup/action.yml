@@ -12,9 +12,6 @@ inputs:
   enable_cache:
     description: Restore and save shared tool and dependency caches.
     default: "true"
-  enable_dependency_cache:
-    description: Opt in to lock-keyed uv and package-download caches in secretless CI.
-    default: "false"
 runs:
   using: 'composite'
   steps:
@@ -24,28 +21,6 @@ runs:
       with:
         version: 2025.3.6
         cache: ${{ inputs.enable_cache }}
-    - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
-      if: inputs.enable_cache == 'true' && inputs.enable_dependency_cache == 'true'
-      with:
-        version: '0.7.15' # Keep aligned with .tool-versions.
-        enable-cache: ${{ inputs.enable_cache }}
-        cache-dependency-glob: |
-          uv.lock
-          pyproject.toml
-          .tool-versions
-    - name: Resolve pnpm package store
-      if: inputs.enable_cache == 'true' && inputs.enable_dependency_cache == 'true'
-      id: pnpm-store
-      shell: bash
-      run: echo "path=$(cd web && pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-    - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
-      if: inputs.enable_cache == 'true' && inputs.enable_dependency_cache == 'true'
-      with:
-        path: |
-          ${{ steps.pnpm-store.outputs.path }}
-          ~/.npm
-          ~/.cache/pip
-        key: ${{ runner.os }}-${{ runner.arch }}-package-downloads-${{ hashFiles('uv.lock', 'web/pnpm-lock.yaml', '.tool-versions') }}
     # Inlined apt install to avoid `iloveitaly/actions-use-apt-tools` (Node 20
     # via actions/cache@v4). Caching /var/cache/apt/archives is skipped: the
     # dir's root-owned `partial/` subdir made cache@v5 emit a tar-exit-2
@@ -81,4 +56,6 @@ runs:
       if: inputs.enable_cache == 'true'
       with:
         path: web/node_modules
-        key: ${{ runner.os }}-${{ runner.arch }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml', '.tool-versions') }}
+        key: ${{ runner.os }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-node-modules

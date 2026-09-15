@@ -23,8 +23,8 @@ on:
         required: true
         default: false
 
-# Full merge-time verification now runs in pull_request_checks.yml. Deployment
-# validation belongs only to explicit manual promotions, not every branch push.
+# Deployment validation belongs only to explicit manual promotions, not pushes.
+# Repository Actions remains disabled until the user authorizes re-enabling it.
 
 concurrency:
   # Match historical Build & Publish runs during the short registration

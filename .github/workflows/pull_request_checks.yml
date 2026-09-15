@@ -4,9 +4,6 @@ name: Pull Request Checks
 # cloud identity, write-capable token, or production-state access.
 on:
   pull_request: {}
-  push:
-    branches: [master]
-  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -27,51 +24,8 @@ env:
   COLUMNS: 120
 
 jobs:
-  changes:
-    name: Detect relevant changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      backend: ${{ steps.scope.outputs.backend }}
-      frontend: ${{ steps.scope.outputs.frontend }}
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        if: ${{ github.event_name == 'pull_request' }}
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
-        if: ${{ github.event_name == 'pull_request' }}
-        id: filter
-        with:
-          # Local diff against the PR base and checked-out merge commit. No
-          # pull-requests:read permission, credential persistence or API cap.
-          token: ''
-          filters: .github/ci-paths.yml
-      - name: Require valid filters or select the full merge/manual suite
-        id: scope
-        env:
-          EVENT: ${{ github.event_name }}
-          BACKEND: ${{ steps.filter.outputs.backend }}
-          FRONTEND: ${{ steps.filter.outputs.frontend }}
-        run: |
-          set -euo pipefail
-          if [[ "$EVENT" == "push" || "$EVENT" == "workflow_dispatch" ]]; then
-            BACKEND=true
-            FRONTEND=true
-          elif [[ "$EVENT" != "pull_request" ]]; then
-            exit 1
-          fi
-          for result in "$BACKEND" "$FRONTEND"; do
-            [[ "$result" == "true" || "$result" == "false" ]] || exit 1
-          done
-          echo "backend=$BACKEND" >> "$GITHUB_OUTPUT"
-          echo "frontend=$FRONTEND" >> "$GITHUB_OUTPUT"
-
   backend-quality:
     name: Backend quality
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -83,7 +37,6 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: zsh
-          enable_dependency_cache: "true"
       - run: just up --fast
       - run: just py_setup
       - run: just py_lint
@@ -92,8 +45,6 @@ jobs:
 
   backend-tests:
     name: Backend tests (${{ matrix.shard }})
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -102,9 +53,63 @@ jobs:
         include:
           - shard: application
             apt-packages: zsh
-          - shard: infrastructure-1
+          - shard: infrastructure-general
             apt-packages: zsh
-          - shard: infrastructure-2
+          - shard: infrastructure-controller
+            apt-packages: zsh
+          - shard: infrastructure-receipt-io
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-foundation
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-authority
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-context
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-runtime
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-contract
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-digest
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-duplicate
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-tamper
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-failure
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-data-contract-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-snapshot
+            apt-packages: zsh
+          - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration
             apt-packages: zsh libnss3-tools
@@ -117,12 +122,10 @@ jobs:
         timeout-minutes: 10
         with:
           apt-packages: ${{ matrix.apt-packages }}
-          enable_dependency_cache: "true"
       - name: Install SHA-verified Localias
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
       - run: just up --fast
-        if: ${{ !startsWith(matrix.shard, 'infrastructure-') }}
       - run: just py_setup
       - name: Install integration Chromium headless shell
         if: ${{ matrix.shard == 'integration' }}
@@ -131,7 +134,6 @@ jobs:
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/start_pinned_localias_ci.sh
       - run: just db_migrate
-        if: ${{ !startsWith(matrix.shard, 'infrastructure-') }}
       - id: py_test
         run: just py_test-ci-${{ matrix.shard }}
       - name: Upload shard test artifacts
@@ -145,34 +147,23 @@ jobs:
 
   app:
     name: Backend
-    needs: [changes, backend-quality, backend-tests]
+    needs: [backend-quality, backend-tests]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require every backend prerequisite to succeed
         env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          BACKEND_CHANGED: ${{ needs.changes.outputs.backend }}
           BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
           BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
         run: |
-          set -euo pipefail
-          [[ "$CHANGES_RESULT" == "success" ]] || exit 1
-          if [[ "$BACKEND_CHANGED" == "false" ]]; then
-            [[ "$BACKEND_QUALITY_RESULT" == "skipped" && "$BACKEND_TESTS_RESULT" == "skipped" ]]
-            exit $?
-          fi
-          [[ "$BACKEND_CHANGED" == "true" ]] || exit 1
           if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
             echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
             exit 1
           fi
 
-  frontend-tests:
-    name: Frontend tests
-    needs: changes
-    if: ${{ needs.changes.outputs.frontend == 'true' }}
+  web:
+    name: Frontend
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -181,33 +172,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
-        with:
-          enable_dependency_cache: "true"
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi
       - run: just js_lint
       - run: just js_test
-
-  web:
-    name: Frontend
-    needs: [changes, frontend-tests]
-    if: ${{ always() }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Require frontend success or an intentional path skip
-        env:
-          CHANGES_RESULT: ${{ needs.changes.result }}
-          FRONTEND_CHANGED: ${{ needs.changes.outputs.frontend }}
-          FRONTEND_RESULT: ${{ needs.frontend-tests.result }}
-        run: |
-          set -euo pipefail
-          [[ "$CHANGES_RESULT" == "success" ]] || exit 1
-          if [[ "$FRONTEND_CHANGED" == "false" ]]; then
-            [[ "$FRONTEND_RESULT" == "skipped" ]]
-          elif [[ "$FRONTEND_CHANGED" == "true" ]]; then
-            [[ "$FRONTEND_RESULT" == "success" ]]
-          else
-            exit 1
-          fi

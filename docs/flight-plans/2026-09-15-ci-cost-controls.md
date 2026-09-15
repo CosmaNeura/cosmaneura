@@ -1,138 +1,100 @@
-# CI cost controls and runner-independent validation
+# Actions-off operating policy and bounded manual workflows
 
-Tier 2: changes CI execution and, separately, the status-provider trust boundary.
-User requested this work and then explicitly requested changing GitHub
-requirements after enabling an Actions spending stop. Do not merge this PR
-without the user's merge instruction. No deployment or infrastructure changes.
+Tier 2: CI/deployment workflow controls and the status-provider trust boundary.
+The user explicitly requested Actions-off operation and runner-independent PR
+validation. The user then chose to defer the inactive test-shard optimization
+and return to staging sooner. Do not merge without the user's merge instruction.
+This change neither deploys nor authorizes infrastructure or database mutation.
 
-## Code change
+## Narrow source change
 
-- PR backend workers: 31 -> 4 (application, integration, infrastructure 1/2).
-- Infrastructure files use a stable SHA-256 partition, cover new files
-  automatically, and run under their own fixture boundary with pytest-xdist.
-  Application/DB/browser fixtures and serial recipes are unchanged.
-- Required Backend/Frontend aggregators always report, accept only a validated
-  intentional path skip or successful prerequisites, and fail on filter errors.
-- Pinned dorny paths-filter uses checked-out Git without a PR-read token.
-  Relevant infrastructure/scripts/contracts, build inputs and policy documents
-  are included. Ordinary flight plans and README-only changes skip heavy jobs.
-- The complete suite remains selected on every master push and manual dispatch,
-  independent of paths. Actual execution still requires available compute.
-- Build & Publish (manual) becomes dispatch-only; production gates are untouched.
-- New uv/download caches are opt-in for secretless checks, respect the existing
-  cache-off switch, and do not add caching to protected deployment jobs.
-- Every workflow job has a finite timeout. The three excluded production
-  workflow files were already bounded and remain byte-for-byte unchanged.
-- Collection-only hooks no longer start DB cleanup/migrations or a JS build.
-- No Docker layer cache: `just up --fast` pulls images, it does not build them.
+- Remove the `master`/`staging` push trigger from Build & Publish (manual).
+  Keep manual dispatch, founder/ref/environment gates and deployment steps.
+- Cap change-budget at five minutes; restore authorization at five minutes and
+  restore cleanup at fifteen minutes. The disabled provision job stays at one.
+- Add regression coverage for dispatch-only registration and finite job limits.
+- Record the independently reviewed, user-authorized GitHub operating policy.
 
-## Evidence and cost expectations
+PR checks, all test recipes/selectors, application and integration conftests,
+common setup, dependencies and lockfile are identical to protected-master base
+`16ad15538b218f9e5bfd9cb4a5970cbfaef90a82`. Existing test cases are retained;
+only the obsolete push-trigger assertion is changed, with timeout coverage added.
+The excluded `infra_apply.yml`, `infra_production_plan.yml` and
+`deploy_staging_candidate.yml` remain byte-for-byte unchanged.
 
-GitHub metadata for September 1-15: all 144 runs of the nominally manual
-workflow were first attempts: 143 master pushes and one staging dispatch.
-There is no workflow_call/workflow_run/repository_dispatch caller. Pushes ran
-validation; they did not authorize production deployment.
+Review 38 of the former head `b0075b4254050a1f2e95b0953805f522dd54952f`
+returned CODE FAIL / POLICY PASS. Its P1 required full execution of both new
+infrastructure shards, or separately reviewed deferral. This PR removes that
+execution change; it does not waive the finding or claim the shards passed.
+The complete optimization is preserved on local branch
+`codex/ci-cost-optimization-deferred-20260915` at that former head. Path filters,
+cache changes, pytest-xdist, collection-hook changes and shard regrouping are
+all deferred. Future adoption requires exact review and full runtime validation.
 
-Successful run 34910531582 had 34 jobs, 370.02 aggregate job-runtime minutes
-(386 if each job is rounded up). Its setup steps were usually about a minute,
-not ten. The user's earlier period-wide estimate was approximately 160 minutes
-per PR push; it is not interchangeable with this recent sample.
+## Live Actions-off policy
 
-| Checks workflow | Before | After |
-| --- | ---: | ---: |
-| Full/relevant PR | 34 jobs | 9 jobs |
-| Backend-only inputs | 34 jobs | 8 jobs |
-| Frontend-only inputs | 34 jobs | 4 jobs |
-| README/ordinary flight plan only | 34 jobs | 3 jobs |
-| Backend test workers | 31 | 4 |
+Repository Actions is disabled (`enabled: false`), read back through GitHub's
+API. This already prevents new hosted workflow runs independently of PR merge.
+It remains off until explicit user authorization after platform stabilization
+and major feature rollout, not merely until a spending-limit reset.
 
-The separate change-budget job adds one to each PR total. Infrastructure-specific
-OpenTofu checks are unchanged and additional where applicable. Web changes also
-run backend tests because those recipes build/use web assets.
+Before disabling, no workflow was running and the latest five scheduled restore
+cleanup runs were skipped. The cleanup-enable variable was absent from repository
+variables; organization-variable access was denied and no extra scope requested.
+This is NOT proof that all Azure resources have been cleaned up. Any cleanup
+need must be separately inspected and handled under existing human-only gates.
 
-Docs-only work should take about 3-5 rounded runner-minutes instead of 160-386.
-For full runs, 20-80 minutes is a target range, not a measured result or an 80%
-savings claim. Consolidation amortizes repeated module fixtures, omits unrelated
-DB initialization in offline checks, and adds local CPU parallelism. Actual
-full-run cost and the 30-minute worker bound must be measured before acceptance.
+GitHub remains the source/PR host. Existing running Azure applications are not
+changed. Actions-based CI, deployments, attestations and scheduled cleanup cannot
+be relied on while Actions is off. No alternate paid runner, budget increase,
+deployment mechanism or new permission is authorized by this correction.
 
-Actual `pytest --collect-only -q` comparison: 29 old infrastructure selectors
-and the two new selectors have identical 3,913-node unions, zero loss or
-duplication. This includes 3,824 pre-existing cases and 89 new cost guards.
-Application (1,399) and integration (10) selections/recipes are unchanged.
-Their IDs were collected with normal conftests and parametrization, sockets
-disabled, a collection-only service-version adapter, inert configuration and
-empty static-asset directories; this is NOT runtime acceptance of either suite.
-No production settings or test-execution workflow loads that adapter.
+## Required checks without an Actions-only issuer
 
-All 14 workflow/action/filter YAML documents parse. Actionlint passes changed
-workflows and all workflow structural checks. Full actionlint also reports 11
-pre-existing ShellCheck diagnostics in untouched deploy_staging_candidate.yml
-and infra_apply.yml; do not silently change excluded deployment files to hide them.
-Local cost guards, existing sharding/host-package guards and static checks are
-recorded in PR evidence. No unchanged application/frontend suite is replayed.
+The approved live configuration removes only the Actions issuer binding
+(`app_id`/`integration_id` 15368) from classic master protection and its active
+required-status-check ruleset. Backend, Frontend and change-budget remain
+required, strict and up to date. Before/after API evidence verifies unchanged
+PR review settings, stale-review dismissal, admin enforcement, conversation
+resolution, no force push/deletion, ruleset scope and empty bypass list.
 
-## Approved direction: remove the paid-runner dependency, not validation
+Already-authorized status writers may now publish genuine local results. No
+token, app, role or scope is added. This intentionally broadens trusted reporter
+identity; it does not cryptographically attest local execution. Never fabricate
+success, overwrite a genuine failure with unrelated evidence, or count agent
+review as test execution. Same-name check-run/status collisions must be checked;
+an existing pending or failing Actions check may still prevent a merge.
 
-Current master requires Backend, Frontend and change-budget from GitHub Actions
-app 15368 only. The active force-push ruleset also requires change-budget from
-that app. An exhausted Actions budget therefore blocks otherwise valid PRs.
+For every local report, record the clean exact head, current protected base,
+changed scope, commands, exit codes, results and limitations in durable PR
+evidence. Use proportionate affected-scope tests. Reuse a previous passing test
+only after proving relevant source/dependencies unchanged and linking its exact
+run/head. Report pending or failure if evidence is missing. Recheck source before
+publishing statuses. Compute change-budget from the actual PR diff, retaining
+the existing 2,000-changed-line and 50-file thresholds.
 
-Applied live configuration change (exact before/after readback retained): keep all
-three contexts and strict/up-to-date enforcement, but remove only the Actions
-issuer binding in both classic branch protection and the applicable ruleset.
-Keep PR-only merges, stale-review dismissal, existing human approval count,
-conversation resolution, admin enforcement, no deletion, no force push, ruleset
-scope/enforcement and its empty bypass list unchanged. Grant no new credentials.
+Use `codex-auto-review` for independent review after the final substantive push.
+Record exact source, findings and dispositions. Review is neither test execution
+nor GitHub approval, merge authorization or deployment authorization.
 
-This permits identities ALREADY authorized to write commit statuses to report
-local results. It does not cryptographically attest local execution and is a
-deliberate change in reporter trust. Never publish a fabricated green result.
-GitHub Actions remains a valid reporter when budget permits; the spending stop
-must not be disabled, bypassed or shifted to an unapproved paid service.
+## Verification, rollout and recovery
 
-Before reporting local success, record the exact clean head, current master/base,
-changed scope, commands and exit codes, applicable test results and limitations
-in the PR. Reuse earlier passing tests only with verified unchanged relevant
-source/dependencies and explicit provenance. Report failure/pending where actual
-evidence is missing. Check the source again before publishing; changes invalidate
-the result. Enforce the existing 2,000-line/50-file budget from the actual PR diff.
+Run the changed dispatch/timeout regression tests, affected existing workflow
+guards and actionlint on changed workflows. Prove deferred execution/configuration
+files match the protected base. Do not rerun unchanged passing full suites.
+The final PR evidence records the exact commands, results and reuse provenance.
 
-Use the established codex-auto-review endpoint for independent review after the
-final substantive source push. Record the exact reviewed head and findings;
-review is not a substitute for executing tests or human merge authorization.
-Do not make hosted execution a prerequisite for submitting that review.
+Historical metadata showed 143 master-push runs and one staging dispatch of the
+nominally manual workflow during September 1-15. Removing its push trigger avoids
+that duplicate validation if Actions is later re-enabled. No measured 80-percent
+runtime-efficiency improvement is claimed; the optimization is deferred.
 
-## Rollout and recovery
+The live settings apply to other PRs immediately. Source changes reach other
+branches through normal incorporation of merged master; no cross-task messages
+or automatic rewriting of other worktrees are authorized.
 
-Keep work local while spending is stopped. A feature-branch push does not start
-these workflows; PR creation may enqueue jobs even for a draft. Do not start
-paid runs or publish false statuses to get this change merged. Existing runs
-do not adopt new workflow YAML. Other workstreams must incorporate the merged
-master commit before their next PR push; no cross-task messages are authorized.
-
-The provider-only rules change affects all PRs targeting master immediately.
-Its independent policy review and exact-source review remain separate from
-actual test evidence; no passing status was fabricated when applying it.
-
-The user subsequently directed that GitHub Actions remain unused until platform
-stabilization and major feature rollout, not merely until a budget reset.
-Repository Actions is now disabled (`enabled: false`), read back through the
-GitHub API. No workflow was running; the latest five scheduled restore-cleanup
-runs were skipped. The cleanup-enable variable was absent from repository vars;
-organization-var access was denied and no additional scope was requested.
-This is not a claim that all Azure resources have been cleaned up.
-
-GitHub remains the source/PR host; use local validation and codex-auto-review.
-Actions-based CI, deployment and security workflows cannot be relied on during
-this pause. Existing running Azure applications are not changed by this setting.
-No budget increase, new paid runner or new deployment path is authorized.
-Re-enabling Actions requires explicit user instruction; first reconcile current
-workflow/source, cost bounds and any safety/deployment dependencies. The retained
-master/manual full-suite fallback is dormant until then. Optimized workflow
-savings require merge, branch synchronization AND an authorized future re-enable.
-
-Rollback the source through a normal revert PR. Restore app/integration ID 15368
-on the same required contexts if reverting the status-provider policy, preserving
-every other protection. That reinstates the hosted-check dependency and may block
-merges until budget is available. Source/reporter changes are not deployment.
+Recover source through a normal revert PR. Restoring issuer ID 15368 on the same
+required contexts restores the Actions-only dependency and may block merges
+while Actions is disabled; preserve every other protection. Re-enabling Actions
+requires explicit user instruction and prior review of source, cost controls and
+deployment/cleanup dependencies. A source revert does not re-enable Actions.
