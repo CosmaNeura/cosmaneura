@@ -85,7 +85,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_public_ip",
-        "57db1bdbde8ad034297016471d0644dd328f45d9f68980fa033734f78f577a51",
+        "05dac0cbcb6fc2c9922162298698886c5a9642efa3d2b7ab5fb199b93d47ad66",
     ),
     (
         "staging_snapshot_console",

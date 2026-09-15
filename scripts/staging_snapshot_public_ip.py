@@ -29,7 +29,9 @@ APPROVAL = Path(
     "STAGING-IPIFY-APPROVAL-20260914.json"
 )
 APPROVAL_SHA256 = "2a8bdf2eb217c3ad9fee21bfdb3dd00b34efee160de6d77f82e6f43f23b023aa"
-_attempts = 0
+# Preserve the source module's retained global-object identity across attempts.
+# This is trusted process-local bookkeeping, not a same-UID/native-code sandbox.
+_attempts = [0]
 
 
 class PublicIPRefused(RuntimeError):
@@ -69,13 +71,14 @@ class SnapshotPublicIP:
         return value
 
     def _read(self, timeout: float) -> str:
-        global _attempts
         require_capture_process()
         require(type(timeout) in {int, float} and math.isfinite(timeout))
-        require(0 < timeout <= 15 and _attempts < 3)
+        require(type(_attempts) is list and len(_attempts) == 1)
+        require(type(_attempts[0]) is int and 0 <= _attempts[0] < 3)
+        require(0 < timeout <= 15)
         # Count before any I/O; failed requests consume budget as well. A new
         # instance cannot reset the process-wide limit. There is no reset API.
-        _attempts += 1
+        _attempts[0] += 1
         deadline = time.monotonic() + timeout
         with capture_deadline(deadline):
             reject_ambient_transport()
