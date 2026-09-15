@@ -225,7 +225,19 @@ class PreparationArtifactTests(unittest.TestCase):
         self.generation += 1
         with self.assertRaises(art.SnapshotArtifactsRefused):
             result.revalidate()
-        Clock.value = NOW + timedelta(minutes=11)
+        Clock.value = NOW + timedelta(minutes=30)
+        with self.assertRaises(art.SnapshotArtifactsRefused):
+            result.require_start()
+
+    def test_preparation_runtime_accepts_later_start_without_extending_artifact(self):
+        result = self.read()
+        original = dict(self.packet)
+        Clock.value = NOW + timedelta(minutes=20)
+        result.require_start()
+        Clock.value = NOW + timedelta(minutes=29, seconds=59)
+        result.require_start()
+        self.assertEqual(self.packet, original)
+        Clock.value = NOW + timedelta(minutes=30)
         with self.assertRaises(art.SnapshotArtifactsRefused):
             result.require_start()
 
@@ -443,7 +455,7 @@ class PreparationOrchestrationTests(unittest.TestCase):
     def timer(self, deadline):
         self.assertFalse(self.active)
         self.assertGreater(deadline, self.clock)
-        self.assertLessEqual(deadline, 340)
+        self.assertLessEqual(deadline, 700)
         self.active = True
         try:
             yield
@@ -502,11 +514,20 @@ class PreparationOrchestrationTests(unittest.TestCase):
         self.assertNotIn("configured", self.events)
 
     def test_slow_preparation_cannot_reset_total_deadline(self):
-        self.advance_at["session"] = 241
+        self.advance_at["session"] = 601
         with self.assertRaises(human.SnapshotHumanRefused):
             self.run_preparation()
         self.assertNotIn("app", self.events)
         self.assertNotIn("publish", self.events)
+
+    def test_multiple_read_only_stages_may_exceed_four_minutes_within_ten(self):
+        self.advance_at.update(confirm=100, copy_open=50, session=100, app=40)
+        self.assertEqual(
+            self.run_preparation()["status"], "read_only_preparation_observed"
+        )
+        self.assertGreater(self.clock, 340)
+        self.assertLess(self.clock, 700)
+        self.capture.assert_not_called()
 
     def test_server_or_close_failure_never_publishes_success(self):
         self.fail_at.add("copy_close")

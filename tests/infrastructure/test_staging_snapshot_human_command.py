@@ -317,7 +317,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(plan.sha(first.command), first.command_sha256)
         self.assertTrue(first.independent_exact_command_review_required)
         self.assertEqual(
-            first.not_after, plan.encoded_time(NOW + timedelta(seconds=345))
+            first.not_after, plan.encoded_time(NOW + timedelta(seconds=1245))
         )
         argv = shlex.split(first.command.decode())
         self.assertEqual(
@@ -378,7 +378,7 @@ class CommandTests(unittest.TestCase):
         for changes in (
             {"expected_preparation_sha256": "0" * 64},
             {"expected_source_review_sha256": "0" * 64},
-            {"human_presence_confirmed_at": NOW - timedelta(minutes=6)},
+            {"human_presence_confirmed_at": NOW - timedelta(minutes=21)},
             {"human_presence_confirmed_at": self.base.now + timedelta(seconds=1)},
         ):
             with (
@@ -389,7 +389,7 @@ class CommandTests(unittest.TestCase):
 
     def test_no_late_or_expired_draft_even_with_new_presence(self):
         self.preparation()
-        self.base.now = NOW + timedelta(seconds=320)
+        self.base.now = NOW + timedelta(seconds=1215)
         with self.assertRaises(module.HumanCommandRefused):
             self.preparation_command()
         self.base.now = NOW + timedelta(minutes=31)
@@ -404,10 +404,33 @@ class CommandTests(unittest.TestCase):
         newer = self.preparation_command(human_presence_confirmed_at=self.base.now)
         self.assertEqual(dict(self.base.preparation.files), original_files)
         self.assertEqual(
-            newer.not_after, plan.encoded_time(NOW + timedelta(minutes=10))
+            newer.not_after, plan.encoded_time(NOW + timedelta(minutes=26))
         )
         self.assertNotEqual(newer.command_sha256, original.command_sha256)
         self.assertTrue(newer.independent_exact_command_review_required)
+
+    def test_preparation_review_delay_preserves_exact_command_for_twenty_minutes(self):
+        self.preparation()
+        original = self.preparation_command()
+        original_files = dict(self.base.preparation.files)
+        self.base.now = NOW + timedelta(minutes=15)
+        self.assertEqual(self.preparation_command(), original)
+        self.assertEqual(dict(self.base.preparation.files), original_files)
+        self.base.now = NOW + timedelta(minutes=21)
+        with self.assertRaises(module.HumanCommandRefused):
+            self.preparation_command()
+
+    def test_longer_preparation_source_window_cannot_publish_new_source(self):
+        self.base.now = NOW + timedelta(minutes=15)
+        with self.assertRaises(module.HumanCommandRefused):
+            self.publish_source(preparation=True)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_capture_presence_window_remains_five_minutes(self):
+        self.capture()
+        self.base.now = NOW + timedelta(minutes=6)
+        with self.assertRaises(module.HumanCommandRefused):
+            self.capture_command()
 
     def test_plan_change_or_token_expiry_cannot_get_capture_command(self):
         self.capture()

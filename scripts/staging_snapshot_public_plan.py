@@ -100,8 +100,11 @@ def commit(value: object) -> str:
 
 
 def source_record(
-    source: SourceCollection, expected: str, at: datetime
+    source: SourceCollection, expected: str, at: datetime, *, preparation: bool = False
 ) -> dict[str, Any]:
+    # Only read-only preparation may retain source evidence through its longer
+    # launch/runtime window. Plan and capture callers keep ten-minute freshness.
+    require(type(preparation) is bool)
     require(type(source) is SourceCollection and valid_sha(expected))
     require(sha(source.provenance) == expected)
     value = obj(
@@ -124,7 +127,7 @@ def source_record(
     )
     commit(value["source_commit"])
     observed = timestamp(value["observed_at"])
-    require(at - timedelta(minutes=10) <= observed <= at)
+    require(at - timedelta(minutes=30 if preparation else 10) <= observed <= at)
     require(
         type(source.source_files) is tuple
         and len(source.source_files) == len(SOURCE_NAMES)
