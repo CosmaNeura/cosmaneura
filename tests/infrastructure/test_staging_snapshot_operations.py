@@ -305,6 +305,7 @@ class OperationsTests(unittest.TestCase):
             console=self.console,
             identity_evidence=self.identity,
             application_binding_sha256=self.application_sha,
+            preexisting_rules=self.baseline,
             artifact_revalidate=self.artifact_check,
         )
         values.update(changes)
@@ -342,6 +343,17 @@ class OperationsTests(unittest.TestCase):
         with self.assertRaises(ops.SnapshotOperationsRefused):
             self.make_adapter()
         self.assertEqual(self.events, [])
+
+    def test_live_baseline_must_match_the_reviewed_plan_before_instructions(self):
+        self.current_rules = (core.Rule("Unreviewed", "0.0.0.0", "0.0.0.0"),)
+        with self.assertRaises(core.CaptureRefused):
+            self.execute()
+        self.assertNotIn("instructions", self.events)
+        self.assertNotIn("credentials", self.events)
+
+    def test_planned_new_rule_cannot_already_exist_in_reviewed_baseline(self):
+        with self.assertRaises(ops.SnapshotOperationsRefused):
+            self.make_adapter(preexisting_rules=(self.inputs.rule,))
 
     def test_identity_digest_and_authenticated_linkage_required(self):
         changed = {**self.identity, "exact_arm_token_sha256": "9" * 64}

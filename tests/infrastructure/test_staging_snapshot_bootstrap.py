@@ -9,6 +9,7 @@ import functools
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import os
 import signal
 import ssl
@@ -44,8 +45,8 @@ class FixtureTests(unittest.TestCase):
         self.sha = hashlib.sha256(self.raw).hexdigest()
 
     def test_exact_dependency_pins_match_current_source(self):
-        self.assertEqual(len(boot.SOURCE_PINS), 16)
-        self.assertEqual(len(dict(boot.SOURCE_PINS)), 16)
+        self.assertEqual(len(boot.SOURCE_PINS), 17)
+        self.assertEqual(len(dict(boot.SOURCE_PINS)), 17)
         for name, expected in boot.SOURCE_PINS:
             self.assertEqual(
                 hashlib.sha256((SCRIPTS / (name + ".py")).read_bytes()).hexdigest(),
@@ -602,6 +603,116 @@ class CompositionTests(unittest.TestCase):
             self.assertRaises(boot.SnapshotBootstrapRefused),
         ):
             bound.revalidate()
+
+
+class HumanMainFixtureTests(unittest.TestCase):
+    """Main is exercised with BOTH binder and entire human consumer replaced."""
+
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.arguments = [
+            "invented-loader",
+            "a" * 64,
+            "/private/tmp/invented",
+            "b" * 64,
+            "c" * 64,
+        ]
+        self.stack.enter_context(patch.object(sys, "argv", self.arguments))
+        self.stdout, self.stderr = io.StringIO(), io.StringIO()
+        self.stack.enter_context(patch.object(sys, "stdout", self.stdout))
+        self.stack.enter_context(patch.object(sys, "stderr", self.stderr))
+        self.umask = self.stack.enter_context(patch.object(boot.os, "umask"))
+        self.result = {
+            "status": "captured_human_closure_observed",
+            "archive_sha256": "d" * 64,
+            "archive_bytes": 123,
+            "new_rule_absent": True,
+            "preexisting_rules_unchanged": True,
+            "deployment_authorized": False,
+            "restore_or_migration_accepted": False,
+            "arbitrary_extra": "INVENTED_SECRET_CANARY",
+        }
+        self.consumer = Mock(return_value=self.result)
+        self.human = SimpleNamespace(
+            run_human_snapshot=self.consumer,
+            SnapshotHumanRefused=type("InventedHumanRefused", (RuntimeError,), {}),
+            REFUSAL_CODES={"cleanup_failed_human_action_required"},
+        )
+        self.binding = SimpleNamespace(modules={"staging_snapshot_human": self.human})
+        self.binder = self.stack.enter_context(
+            patch.object(boot, "bind_process", return_value=self.binding)
+        )
+        # The real bootstrap preloads json before invoking its consumer. This
+        # fixture supplies that standard-library prerequisite, no real binding.
+        import json
+
+        self.assertIs(sys.modules["json"], json)
+
+    def test_exact_arguments_and_private_process_mask_then_public_result_only(self):
+        self.assertEqual(boot.main(), 0)
+        self.umask.assert_called_once_with(0o077)
+        self.assertEqual(self.binder.call_args.kwargs["loader_sha256"], "a" * 64)
+        self.consumer.assert_called_once_with(
+            self.binding, Path("/private/tmp/invented"), "b" * 64, "c" * 64
+        )
+        self.assertIn("staging_snapshot_captured", self.stdout.getvalue())
+        self.assertNotIn(
+            "INVENTED_SECRET_CANARY", self.stdout.getvalue() + self.stderr.getvalue()
+        )
+
+    def test_missing_arguments_never_bind_or_call_consumer(self):
+        self.arguments.pop()
+        self.assertEqual(boot.main(), 2)
+        self.binder.assert_not_called()
+        self.consumer.assert_not_called()
+
+    def test_invalid_hash_never_binds(self):
+        self.arguments[3] = "not-a-hash"
+        self.assertEqual(boot.main(), 2)
+        self.binder.assert_not_called()
+
+    def test_relative_packet_never_binds(self):
+        self.arguments[2] = "relative/packet"
+        self.assertEqual(boot.main(), 2)
+        self.binder.assert_not_called()
+
+    def test_binder_error_is_redacted_and_never_calls_consumer(self):
+        self.binder.side_effect = RuntimeError("INVENTED_SECRET_CANARY")
+        self.assertEqual(boot.main(), 2)
+        self.consumer.assert_not_called()
+        self.assertNotIn("INVENTED_SECRET_CANARY", self.stderr.getvalue())
+
+    def test_required_human_cleanup_code_is_preserved(self):
+        self.consumer.side_effect = self.human.SnapshotHumanRefused(
+            "cleanup_failed_human_action_required"
+        )
+        self.assertEqual(boot.main(), 2)
+        self.assertIn("cleanup_failed_human_action_required", self.stderr.getvalue())
+
+    def test_unallowlisted_exception_text_is_never_printed(self):
+        self.consumer.side_effect = self.human.SnapshotHumanRefused(
+            "INVENTED_SECRET_CANARY"
+        )
+        self.assertEqual(boot.main(), 2)
+        self.assertNotIn("INVENTED_SECRET_CANARY", self.stderr.getvalue())
+
+    def test_incomplete_closure_cannot_be_printed_as_success(self):
+        self.result["new_rule_absent"] = False
+        self.assertEqual(boot.main(), 2)
+        self.assertEqual(self.stdout.getvalue(), "")
+
+    def test_result_cannot_claim_deployment_or_restore_acceptance(self):
+        self.result["deployment_authorized"] = True
+        self.assertEqual(boot.main(), 2)
+        self.assertEqual(self.stdout.getvalue(), "")
+
+    def test_invalid_archive_digest_is_not_printed(self):
+        self.result["archive_sha256"] = "INVENTED_SECRET_CANARY"
+        self.assertEqual(boot.main(), 2)
+        self.assertNotIn(
+            "INVENTED_SECRET_CANARY", self.stdout.getvalue() + self.stderr.getvalue()
+        )
 
 
 if __name__ == "__main__":

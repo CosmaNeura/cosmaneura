@@ -101,6 +101,7 @@ class SnapshotOperations(Operations):
         console: SnapshotConsole,
         identity_evidence: dict[str, object],
         application_binding_sha256: str,
+        preexisting_rules: tuple[Rule, ...],
         artifact_revalidate: Callable[[], None],
     ):
         require_capture_process()
@@ -130,6 +131,8 @@ class SnapshotOperations(Operations):
         self._session, self._console = session, console
         self._identity = {key: identity_evidence[key] for key in IDENTITY_KEYS}
         self._application_sha = application_binding_sha256
+        self._reviewed_baseline = rules_by_name(preexisting_rules)
+        require(inputs.rule.name.casefold() not in self._reviewed_baseline)
         self._artifact_revalidate = artifact_revalidate
         self._children: BoundedChildren | None = None
         self._archive: Archive | None = None
@@ -271,6 +274,7 @@ class SnapshotOperations(Operations):
         indexed = rules_by_name(result)
         if self._window is None:
             require(self._inputs.rule.name.casefold() not in indexed)
+            require(indexed == self._reviewed_baseline)
             require(self._baseline is None or self._baseline == indexed)
             self._baseline = indexed
         if cleanup:
