@@ -364,7 +364,9 @@ class SnapshotAzure:
             require(len({item["name"] for item in environment}) == len(environment))
             matches = [item for item in environment if item["name"] == "DATABASE_URL"]
             require(len(matches) == 1 and matches[0].get("secretRef") == SECRET_NAME)
-            require(matches[0].get("value") is None)
+            # ARM may serialize an unused inline value as an empty string even
+            # when the exact secret reference is present. Preserve raw hashing.
+            require(matches[0].get("value") in (None, ""))
         return digest(
             canonical(
                 {

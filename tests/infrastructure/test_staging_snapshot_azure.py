@@ -307,6 +307,50 @@ class AzureTests(unittest.TestCase):
             Response(revision_after or revision),
         ]
 
+    def test_secret_reference_accepts_empty_value_in_app_or_revision(self):
+        for side in (0, 1):
+            with self.subTest(side=side):
+                app, revision = self.source()
+                original = self.client._source_binding(app, revision, IMAGE)
+                (app, revision)[side]["properties"]["template"]["containers"][0]["env"][
+                    0
+                ]["value"] = ""
+                binding = self.client._source_binding(app, revision, IMAGE)
+                self.assertNotEqual(binding, original)
+
+    def test_secret_reference_accepts_null_value(self):
+        app, revision = self.source()
+        for item in (app, revision):
+            item["properties"]["template"]["containers"][0]["env"][0]["value"] = None
+        self.assertEqual(len(self.client._source_binding(app, revision, IMAGE)), 64)
+
+    def test_secret_reference_rejects_nonempty_or_nonstring_values(self):
+        for side in (0, 1):
+            for value in ("invented-value", " ", False, 0, [], {}):
+                with self.subTest(side=side, value=value):
+                    app, revision = self.source()
+                    (app, revision)[side]["properties"]["template"]["containers"][0][
+                        "env"
+                    ][0]["value"] = value
+                    with self.assertRaises(azure.AzureReadRefused):
+                        self.client._source_binding(app, revision, IMAGE)
+
+    def test_empty_value_still_requires_exact_secret_reference(self):
+        for side in (0, 1):
+            for reference in (None, "different-secret"):
+                with self.subTest(side=side, reference=reference):
+                    app, revision = self.source()
+                    entry = (app, revision)[side]["properties"]["template"][
+                        "containers"
+                    ][0]["env"][0]
+                    entry["value"] = ""
+                    if reference is None:
+                        del entry["secretRef"]
+                    else:
+                        entry["secretRef"] = reference
+                    with self.assertRaises(azure.AzureReadRefused):
+                        self.client._source_binding(app, revision, IMAGE)
+
     def test_same_token_read_authenticates_and_revalidates_both_sides(self):
         self.opener.responses = [Response(self.server())]
         result = self.client.observe_server(5)

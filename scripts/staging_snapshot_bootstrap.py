@@ -81,7 +81,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_azure",
-        "c49a81825ce04f8aeeee657a257f6a233c2f9f9fba4a08c59d5d12a3ea0c97cc",
+        "55ff71e2d739e07f7704cfbfb53fd39110ed5602649d4b0a424cff62f92f37f3",
     ),
     (
         "staging_snapshot_public_ip",
