@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.util
+import json
 import os
 import plistlib
 import tempfile
@@ -9,6 +10,7 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/staging_encrypted_workspace.py"
@@ -47,12 +49,233 @@ def disk_info():
         "MountPoint": str(MOUNT),
         "DeviceNode": DEVICE,
         "FilesystemType": "apfs",
-        "ReadOnlyVolume": False,
+        "Writable": True,
+        "WritableMedia": True,
+        "WritableVolume": True,
         "GlobalPermissionsEnabled": True,
     }
 
 
 class EncryptedWorkspaceTests(unittest.TestCase):
+    def test_existing_binding_rejects_missing_duplicate_and_wrong_types(self):
+        value = {
+            "workspace": str(ROOT),
+            "device": DEVICE,
+            "root_device": 4,
+            "root_inode": 5,
+            "image_device": 4,
+            "image_inode": 123,
+            "mount_device": 8,
+            "mount_inode": 20,
+        }
+        self.assertEqual(workspace.existing_binding(json.dumps(value)), value)
+        for key in value:
+            changed = dict(value)
+            del changed[key]
+            with self.subTest(key=key), self.assertRaises(workspace.WorkspaceError):
+                workspace.existing_binding(json.dumps(changed))
+        for value_type in (True, 0, -1, "8", None):
+            with (
+                self.subTest(value=value_type),
+                self.assertRaises(workspace.WorkspaceError),
+            ):
+                workspace.existing_binding(
+                    json.dumps(value | {"mount_device": value_type})
+                )
+        with self.assertRaises(workspace.WorkspaceError):
+            workspace.existing_binding('{"workspace":"one","workspace":"two"}')
+
+    def test_existing_observation_requires_exact_empty_root_and_live_binding(self):
+        binding = {
+            "workspace": str(ROOT),
+            "device": DEVICE,
+            "root_device": 4,
+            "root_inode": 5,
+            "image_device": 4,
+            "image_inode": 123,
+            "mount_device": 8,
+            "mount_inode": 20,
+        }
+        metadata = {
+            ROOT: SimpleNamespace(st_dev=4, st_ino=5),
+            IMAGE: SimpleNamespace(st_dev=4, st_ino=123),
+            MOUNT: SimpleNamespace(st_dev=8, st_ino=20),
+        }
+
+        def native(argv):
+            if argv == [workspace.HDIUTIL, "info", "-plist"]:
+                return plistlib.dumps(image_info())
+            if argv == [workspace.DISKUTIL, "info", "-plist", str(MOUNT)]:
+                return plistlib.dumps(disk_info())
+            self.fail("unexpected native operation")
+
+        with (
+            patch.object(workspace, "workspace_paths", return_value=(IMAGE, MOUNT)),
+            patch.object(
+                workspace, "private_path", side_effect=lambda path, **kw: metadata[path]
+            ),
+            patch.object(workspace.os.path, "ismount", return_value=True),
+            patch.object(
+                workspace.os,
+                "listdir",
+                return_value=[workspace.IMAGE_NAME, workspace.MOUNT_NAME],
+            ) as listing,
+            patch.object(workspace, "run_native", side_effect=native),
+        ):
+            self.assertIs(
+                workspace.observe_existing_empty(ROOT, binding), metadata[MOUNT]
+            )
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.observe_existing_empty(ROOT, binding | {"image_inode": 124})
+            listing.return_value.append(workspace.MANIFEST_NAME)
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.observe_existing_empty(ROOT, binding)
+
+    def test_complete_empty_is_human_only_before_any_read_or_write(self):
+        with (
+            patch.object(workspace.os, "isatty", return_value=False),
+            patch.object(workspace, "checked_source") as source,
+            patch.object(workspace, "observe_existing_empty") as observe,
+        ):
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.complete_empty(ROOT, "a" * 64, {})
+            source.assert_not_called()
+            observe.assert_not_called()
+
+    def test_complete_empty_reuses_held_fixture_mount_and_publishes_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            mount, image = root / workspace.MOUNT_NAME, root / workspace.IMAGE_NAME
+            mount.mkdir(mode=0o755)
+            mount.chmod(0o755)
+            image.write_bytes(b"INVENTED NOT ENCRYPTED")
+            image.chmod(0o600)
+            binding: dict[str, Any] = {"workspace": str(root), "device": DEVICE}
+            for name, path in (("root", root), ("image", image), ("mount", mount)):
+                binding[name + "_device"], binding[name + "_inode"] = (
+                    path.stat().st_dev,
+                    path.stat().st_ino,
+                )
+            observed = mount.stat()
+            evidence = {
+                **binding,
+                "image": str(image),
+                "mount": str(mount),
+                "capacity_bytes": workspace.SIZE_BYTES,
+            }
+            with (
+                patch.object(workspace.os, "isatty", return_value=True),
+                patch.object(workspace, "checked_source", return_value="a" * 64),
+                patch.object(
+                    workspace, "observe_existing_empty", return_value=observed
+                ),
+                patch.object(workspace, "workspace_paths", return_value=(image, mount)),
+                patch.object(
+                    workspace, "initialize_empty_area", return_value=evidence
+                ) as initialize,
+                patch.object(workspace, "run_native") as native,
+            ):
+                result = workspace.complete_empty(root, "a" * 64, binding)
+            native.assert_not_called()
+            initialize.assert_called_once_with(root, expected_binding=binding)
+            self.assertEqual(mount.stat().st_mode & 0o777, 0o700)
+            self.assertTrue(result["empty_workspace_prepared"])
+            self.assertFalse(result["image_created_in_this_process"])
+            self.assertEqual(result["setup_operation"], "complete-empty")
+            self.assertFalse(result["live_data_copied"])
+            manifest = root / workspace.MANIFEST_NAME
+            self.assertEqual(manifest.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(json.loads(manifest.read_bytes()), result)
+
+    def test_complete_empty_refuses_nonempty_changed_inode_or_source_before_write(self):
+        for failure in ("nonempty", "inode", "source"):
+            with (
+                self.subTest(failure=failure),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary).resolve()
+                mount = root / workspace.MOUNT_NAME
+                mount.mkdir(mode=0o755)
+                mount.chmod(0o755)
+                image = root / workspace.IMAGE_NAME
+                observed = mount.stat()
+                binding = {
+                    "workspace": str(root),
+                    "device": DEVICE,
+                    "root_device": 1,
+                    "root_inode": 2,
+                    "image_device": 1,
+                    "image_inode": 3,
+                    "mount_device": observed.st_dev,
+                    "mount_inode": observed.st_ino,
+                }
+                if failure == "nonempty":
+                    (mount / "keep").write_bytes(b"INVENTED DATA MUST REMAIN")
+                if failure == "inode":
+                    observed = SimpleNamespace(
+                        st_dev=observed.st_dev, st_ino=observed.st_ino + 1
+                    )
+                checks = (
+                    ["a" * 64, "b" * 64]
+                    if failure == "source"
+                    else ["a" * 64, "a" * 64]
+                )
+                with (
+                    patch.object(workspace.os, "isatty", return_value=True),
+                    patch.object(workspace, "checked_source", side_effect=checks),
+                    patch.object(
+                        workspace, "observe_existing_empty", return_value=observed
+                    ),
+                    patch.object(
+                        workspace, "workspace_paths", return_value=(image, mount)
+                    ),
+                    patch.object(workspace.os, "fchmod") as chmod,
+                    patch.object(workspace, "initialize_empty_area") as initialize,
+                ):
+                    with self.assertRaises(workspace.WorkspaceError):
+                        workspace.complete_empty(root, "a" * 64, binding)
+                chmod.assert_not_called()
+                initialize.assert_not_called()
+                self.assertEqual(mount.stat().st_mode & 0o777, 0o755)
+                self.assertFalse((root / workspace.MANIFEST_NAME).exists())
+
+    def test_expected_binding_checked_before_empty_area_write(self):
+        with (
+            patch.object(workspace, "verify_mounted", return_value={"image_device": 1}),
+            patch.object(workspace, "open_bound_mount") as opening,
+        ):
+            with self.assertRaises(workspace.WorkspaceError):
+                workspace.initialize_empty_area(
+                    ROOT, expected_binding={"image_device": 2}
+                )
+            opening.assert_not_called()
+
+    def test_completion_initialization_rechecks_empty_held_mount_before_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            mount = Path(temporary)
+            (mount / "keep").write_bytes(b"INVENTED DATA MUST REMAIN")
+            binding = dict.fromkeys(
+                (
+                    "image_device",
+                    "image_inode",
+                    "mount_device",
+                    "mount_inode",
+                    "device",
+                ),
+                1,
+            )
+            fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+            with (
+                patch.object(workspace, "verify_mounted", return_value=binding),
+                patch.object(workspace, "open_bound_mount", return_value=fd),
+            ):
+                with self.assertRaises(workspace.WorkspaceError):
+                    workspace.initialize_empty_area(ROOT, expected_binding=binding)
+            self.assertEqual(list(mount.iterdir()), [mount / "keep"])
+            self.assertEqual(
+                (mount / "keep").read_bytes(), b"INVENTED DATA MUST REMAIN"
+            )
+
     def test_native_metadata_collections_have_required_shapes(self):
         for value in (None, "images", {}, [None], ["image"]):
             with self.subTest(value=value), self.assertRaises(workspace.WorkspaceError):
@@ -172,6 +395,48 @@ class EncryptedWorkspaceTests(unittest.TestCase):
             del info[key]
             with self.assertRaises(workspace.WorkspaceError):
                 workspace.check_disk(info, MOUNT, DEVICE)
+
+    def test_observed_macos_positive_writability_and_conflicts(self):
+        workspace.check_disk(disk_info(), MOUNT, DEVICE)
+        for key in ("Writable", "WritableMedia", "WritableVolume"):
+            for value in (False, None, 1, "true"):
+                with (
+                    self.subTest(key=key, value=value),
+                    self.assertRaises(workspace.WorkspaceError),
+                ):
+                    workspace.check_disk(disk_info() | {key: value}, MOUNT, DEVICE)
+        for key in ("ReadOnly", "ReadOnlyMedia", "ReadOnlyVolume"):
+            workspace.check_disk(disk_info() | {key: False}, MOUNT, DEVICE)
+            for value in (True, None, 0, "false"):
+                with (
+                    self.subTest(key=key, value=value),
+                    self.assertRaises(workspace.WorkspaceError),
+                ):
+                    workspace.check_disk(disk_info() | {key: value}, MOUNT, DEVICE)
+
+    def test_mounted_verification_uses_bound_native_encryption_not_backing_open(self):
+        def native(argv):
+            if argv == [workspace.HDIUTIL, "info", "-plist"]:
+                return plistlib.dumps(image_info())
+            if argv == [workspace.DISKUTIL, "info", "-plist", str(MOUNT)]:
+                return plistlib.dumps(disk_info())
+            self.fail("unexpected native operation: " + repr(argv))
+
+        def metadata(path, **kwargs):
+            return SimpleNamespace(
+                st_dev=8 if path == MOUNT else 4, st_ino=20 if path == MOUNT else 123
+            )
+
+        with (
+            patch.object(workspace, "workspace_paths", return_value=(IMAGE, MOUNT)),
+            patch.object(workspace, "private_path", side_effect=metadata),
+            patch.object(Path, "stat", return_value=SimpleNamespace(st_dev=4)),
+            patch.object(workspace.os.path, "ismount", return_value=True),
+            patch.object(workspace, "run_native", side_effect=native) as run,
+        ):
+            result = workspace.verify_mounted(ROOT)
+        self.assertTrue(result["encrypted_image_bound_to_mounted_apfs"])
+        self.assertEqual(len(run.call_args_list), 2)
 
     def test_native_plist_has_mapping_root(self):
         self.assertEqual(

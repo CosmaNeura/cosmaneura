@@ -295,14 +295,25 @@ def workspace_record(
     raw: bytes, expected: str, source_sha: str, at: datetime
 ) -> dict[str, Any]:
     require(valid_sha(expected) and sha(raw) == expected)
-    value = obj(
-        raw,
-        "workspace image mount device image_inode image_device mount_device mount_inode "
-        "capacity_bytes encrypted_image_bound_to_mounted_apfs observed_at capture_authorized "
-        "live_action_authorized payload_device payload_inode noindex_marker_inode empty_payload_verified "
-        "noindex_marker_verified schema_version empty_workspace_prepared source_sha256 "
-        "creation_command_sha256 requested_encryption live_data_copied not_a_receipt_or_permanent_readiness_proof",
+    require(type(raw) is bytes and 0 < len(raw) <= 32768)
+    value = record(raw)
+    fields = set(
+        (
+            "workspace image mount device image_inode image_device mount_device mount_inode "
+            "capacity_bytes encrypted_image_bound_to_mounted_apfs observed_at capture_authorized "
+            "live_action_authorized payload_device payload_inode noindex_marker_inode empty_payload_verified "
+            "noindex_marker_verified schema_version empty_workspace_prepared source_sha256 "
+            "creation_command_sha256 requested_encryption live_data_copied not_a_receipt_or_permanent_readiness_proof"
+        ).split()
     )
+    setup_fields = {"setup_operation", "image_created_in_this_process"}
+    require(set(value) in (fields, fields | setup_fields))
+    if setup_fields <= set(value):
+        require(value["setup_operation"] in ("prepare-empty", "complete-empty"))
+        require(
+            value["image_created_in_this_process"]
+            is (value["setup_operation"] == "prepare-empty")
+        )
     exact(
         value,
         {

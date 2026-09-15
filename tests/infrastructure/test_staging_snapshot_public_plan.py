@@ -366,6 +366,51 @@ class PublicPlanTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(module.PublicPlanRefused):
                 self.plan()
 
+    def test_workspace_operation_records_preserve_legacy_and_completed_manifests(self):
+        original = json.loads(self.workspace)
+        for extra in (
+            {},
+            {"setup_operation": "prepare-empty", "image_created_in_this_process": True},
+            {
+                "setup_operation": "complete-empty",
+                "image_created_in_this_process": False,
+            },
+        ):
+            raw = encoded(original | extra)
+            result = module.workspace_record(
+                raw, module.sha(raw), self.files["staging_encrypted_workspace.py"], NOW
+            )
+            self.assertEqual(result, original | extra)
+            self.assertFalse(result["capture_authorized"])
+
+    def test_workspace_operation_records_reject_partial_contradictory_or_extra_fields(
+        self,
+    ):
+        original = json.loads(self.workspace)
+        for extra in (
+            {"setup_operation": "complete-empty"},
+            {"image_created_in_this_process": False},
+            {
+                "setup_operation": "complete-empty",
+                "image_created_in_this_process": True,
+            },
+            {
+                "setup_operation": "prepare-empty",
+                "image_created_in_this_process": False,
+            },
+            {"setup_operation": "complete-empty", "image_created_in_this_process": 0},
+            {"setup_operation": "retry", "image_created_in_this_process": False},
+            {"approval": True},
+        ):
+            raw = encoded(original | extra)
+            with self.subTest(extra=extra), self.assertRaises(module.PublicPlanRefused):
+                module.workspace_record(
+                    raw,
+                    module.sha(raw),
+                    self.files["staging_encrypted_workspace.py"],
+                    NOW,
+                )
+
     def test_workspace_exact_manifest_binding_and_paths(self):
         original = json.loads(self.workspace)
         for key, value in (

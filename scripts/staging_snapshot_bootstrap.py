@@ -57,7 +57,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_encrypted_workspace",
-        "eaa2d745dcb3bad28452d5db3854e96b6a3c9f37da614c7201d5e6faca267960",
+        "d549f96bf0af7dc520d74b89feba809f6dd1034806f14bef283f92afa83473e1",
     ),
     (
         "staging_snapshot_identity",
@@ -65,7 +65,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_workspace",
-        "a6476f3b35efe3e9e92d7087fa3ef12ed6943bfc71603ff9bac2fa55c9a68912",
+        "dca8c7168000f91df1c4636dcdb84997e9489a487ae24dae03fe5a8db0e732a0",
     ),
     (
         "staging_snapshot_configuration",

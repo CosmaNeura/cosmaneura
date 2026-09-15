@@ -182,7 +182,9 @@ class SessionFixture(unittest.TestCase):
                 "MountPoint": str(self.mount),
                 "DeviceNode": "/dev/disk99s1",
                 "FilesystemType": "apfs",
-                "ReadOnlyVolume": False,
+                "Writable": True,
+                "WritableMedia": True,
+                "WritableVolume": True,
                 "GlobalPermissionsEnabled": True,
             },
         }
@@ -309,7 +311,7 @@ class WorkspaceTests(SessionFixture):
         for kind in ("encryption", "disk", "images"):
             saved = copy.deepcopy(self.responses)
             if kind == "encryption":
-                self.responses[kind]["encrypted"] = False
+                self.responses["images"]["images"][0]["image-encrypted"] = False
             elif kind == "disk":
                 self.responses[kind]["FilesystemType"] = "hfs"
             else:
@@ -358,14 +360,14 @@ class WorkspaceTests(SessionFixture):
             patch.object(pg.BoundedChildren, "run", run),
         ):
             with pg.capture_deadline(time.monotonic() + 5):
-                for operation in ("encryption", "images", "disk"):
+                for operation in ("images", "disk"):
                     self.scope._query(operation, time.monotonic() + 4)
-                with self.assertRaises(workspace.SnapshotWorkspaceRefused):
-                    self.scope._query("attach", time.monotonic() + 4)
+                for operation in ("encryption", "attach"):
+                    with self.assertRaises(workspace.SnapshotWorkspaceRefused):
+                        self.scope._query(operation, time.monotonic() + 4)
         self.assertEqual(
             calls,
             [
-                ["/usr/bin/hdiutil", "isencrypted", str(self.image), "-plist"],
                 ["/usr/bin/hdiutil", "info", "-plist"],
                 ["/usr/sbin/diskutil", "info", "-plist", str(self.mount)],
             ],

@@ -21,9 +21,10 @@ import staging_snapshot_public_plan as plan
 from staging_snapshot_review_record import ReviewRecord, canonical, record, sha
 from staging_snapshot_source_provenance import SOURCE_NAMES, SourceCollection
 
-# Exact runtime independently passed reviews47/48; never derive trust at launch.
-BUNDLE_SHA256 = "0c79667e6e7088c926b609afb6991ff093098ea725bcd8f7842bfc1760711d50"
-LOADER_SHA256 = "2f69e3a66c6ce9339bcb86586b8a59b32a2734215d537d3cdc8276b46cbc3d9a"
+# Corrected exact composition; its NEW independent review is still required.
+# Historical reviews47/48/58 bind older bytes, never derive trust at launch.
+BUNDLE_SHA256 = "4b917eb366475a6a52817c499c4262a2e31c4d3cb7a4164d4b41660d9fe79ac3"
+LOADER_SHA256 = "d08b0809ba6f1806503012a456ba924b42d759dc3b0e0ccaba517999b93765a5"
 RUNTIME_ROOT = Path(
     "/private/tmp/cosmaneura-private-foundation-preflight.J40HZoi7/"
     ".trusted-runtime-bin/homebrew"

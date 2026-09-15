@@ -20,7 +20,7 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 HDIUTIL = "/usr/bin/hdiutil"
 DISKUTIL = "/usr/sbin/diskutil"
@@ -174,7 +174,20 @@ def check_disk(info: dict[str, Any], mount: Path, device: str) -> None:
     require(info.get("MountPoint") == str(mount), "disk_mount")
     require(info.get("DeviceNode") == device, "disk_device")
     require(info.get("FilesystemType") == "apfs", "disk_filesystem")
-    require(info.get("ReadOnlyVolume") is False, "disk_readonly")
+    # The pinned macOS diskutil reports positive Writable* booleans. Missing
+    # metadata is not false/safe; require all three, and reject contradictory
+    # legacy ReadOnly* fields if a later utility supplies them as well.
+    require(
+        all(
+            info.get(key) is True
+            for key in ("Writable", "WritableMedia", "WritableVolume")
+        )
+        and all(
+            key not in info or info[key] is False
+            for key in ("ReadOnly", "ReadOnlyMedia", "ReadOnlyVolume")
+        ),
+        "disk_readonly",
+    )
     require(info.get("GlobalPermissionsEnabled") is True, "disk_ownership_disabled")
 
 
@@ -185,8 +198,9 @@ def verify_mounted(root: Path) -> dict[str, Any]:
     require(
         mount_stat.st_dev != root.stat().st_dev and os.path.ismount(mount), "not_mount"
     )
-    encryption = parse_plist(run_native([HDIUTIL, "isencrypted", str(image), "-plist"]))
-    require(encryption.get("encrypted") is True, "encryption_check_failed")
+    # isencrypted opens the backing image and refuses while that image is
+    # attached on this macOS version. image_binding verifies the live native
+    # image-encrypted flag AND exact image/owner/capacity/mount/device binding.
     device = image_binding(
         parse_plist(run_native([HDIUTIL, "info", "-plist"])), image, mount
     )
@@ -309,13 +323,26 @@ def verify_empty(root: Path) -> dict[str, Any]:
         os.close(fd)
 
 
-def initialize_empty_area(root: Path) -> dict[str, Any]:
+def initialize_empty_area(
+    root: Path, expected_binding: dict[str, Any] | None = None
+) -> dict[str, Any]:
     mounted = verify_mounted(root)
+    if expected_binding is not None:
+        for key in (
+            "image_device",
+            "image_inode",
+            "mount_device",
+            "mount_inode",
+            "device",
+        ):
+            require(mounted[key] == expected_binding[key], "existing_workspace_changed")
     # If detach races the open, the device/inode comparison refuses before any
     # write. Once opened, relative writes stay on that encrypted filesystem,
     # never on a plaintext directory that later replaces the mount path.
     fd = open_bound_mount(mounted)
     try:
+        if expected_binding is not None:
+            require(not os.listdir(fd), "existing_mount_not_empty")
         marker_fd = os.open(
             MARKER_NAME,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -358,6 +385,14 @@ def prepare_empty(expected_source_sha256: str) -> dict[str, Any]:
     require(mount.lstat().st_uid == os.geteuid(), "mount_owner")
     mount.chmod(0o700)
     evidence = initialize_empty_area(root)
+    return publish_preparation(root, source_sha256, evidence, "prepare-empty")
+
+
+def publish_preparation(
+    root: Path, source_sha256: str, evidence: dict[str, Any], operation: str
+) -> dict[str, Any]:
+    image, _mount = workspace_paths(root)
+    require(operation in {"prepare-empty", "complete-empty"}, "setup_operation")
     evidence.update(
         {
             "schema_version": 1,
@@ -369,9 +404,11 @@ def prepare_empty(expected_source_sha256: str) -> dict[str, Any]:
             "requested_encryption": "AES-256",
             "live_data_copied": False,
             "not_a_receipt_or_permanent_readiness_proof": True,
+            "setup_operation": operation,
+            "image_created_in_this_process": operation == "prepare-empty",
         }
     )
-    require(checked_source(expected_source_sha256) == source_sha256, "source_changed")
+    require(checked_source(source_sha256) == source_sha256, "source_changed")
     manifest = root / MANIFEST_NAME
     fd = os.open(manifest, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
     with os.fdopen(fd, "wb") as stream:
@@ -379,6 +416,127 @@ def prepare_empty(expected_source_sha256: str) -> dict[str, Any]:
         stream.flush()
         os.fsync(stream.fileno())
     return evidence
+
+
+def existing_binding(raw: str) -> dict[str, Any]:
+    """Exact independently reviewed metadata, never self-authenticating authority."""
+    require(type(raw) is str and 0 < len(raw) <= 4096, "existing_binding_shape")
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "existing_binding_duplicate")
+            result[key] = value
+        return result
+
+    value = json.loads(raw, object_pairs_hook=unique)
+    integers = {
+        "root_device",
+        "root_inode",
+        "image_device",
+        "image_inode",
+        "mount_device",
+        "mount_inode",
+    }
+    require(
+        type(value) is dict and set(value) == integers | {"workspace", "device"},
+        "existing_binding_shape",
+    )
+    value = cast(dict[str, Any], value)
+    require(
+        all(type(value[key]) is int and value[key] > 0 for key in integers),
+        "existing_binding_shape",
+    )
+    require(
+        type(value["workspace"]) is str and type(value["device"]) is str,
+        "existing_binding_shape",
+    )
+    require(
+        re.fullmatch(r"/dev/disk[0-9]+s[0-9]+", value["device"]),
+        "existing_binding_shape",
+    )
+    return value
+
+
+def observe_existing_empty(root: Path, binding: dict[str, Any]) -> os.stat_result:
+    """Read-only proof of the precise pre-initialization state; no repair/retry."""
+    require(binding["workspace"] == str(root), "existing_workspace_changed")
+    image, mount = workspace_paths(root)
+    require(
+        set(os.listdir(root)) == {IMAGE_NAME, MOUNT_NAME}, "existing_workspace_contents"
+    )
+    values = {
+        "root": private_path(root, directory=True, mode=0o700),
+        "image": private_path(image, directory=False, mode=0o600),
+        "mount": private_path(mount, directory=True, mode=0o755),
+    }
+    for name, metadata in values.items():
+        require(
+            (metadata.st_dev, metadata.st_ino)
+            == (binding[name + "_device"], binding[name + "_inode"]),
+            "existing_workspace_changed",
+        )
+    require(
+        values["mount"].st_dev != values["root"].st_dev and os.path.ismount(mount),
+        "not_mount",
+    )
+    device = image_binding(
+        parse_plist(run_native([HDIUTIL, "info", "-plist"])), image, mount
+    )
+    require(device == binding["device"], "existing_workspace_changed")
+    check_disk(
+        parse_plist(run_native([DISKUTIL, "info", "-plist", str(mount)])), mount, device
+    )
+    return values["mount"]
+
+
+def complete_empty(
+    root: Path, expected_source_sha256: str, binding: dict[str, Any]
+) -> dict[str, Any]:
+    """Separately approved HUMAN completion of one already attached empty image.
+
+    No create/attach/detach/delete, password, retry or use of a different path.
+    The exact binding/command need independent review and explicit recovery scope.
+    This is not permission to resume an arbitrary partial or data-bearing image.
+    """
+    require(all(os.isatty(fd) for fd in (0, 1, 2)), "regular_terminal_required")
+    binding = existing_binding(json.dumps(binding))
+    source_sha = checked_source(expected_source_sha256)
+    os.umask(0o077)
+    before = observe_existing_empty(root, binding)
+    _image, mount = workspace_paths(root)
+    fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        metadata = os.fstat(fd)
+        require(
+            (metadata.st_dev, metadata.st_ino) == (before.st_dev, before.st_ino),
+            "mount_replaced",
+        )
+        require(
+            metadata.st_uid == os.geteuid() and stat.S_IMODE(metadata.st_mode) == 0o755,
+            "mount_permissions",
+        )
+        require(not os.listdir(fd), "existing_mount_not_empty")
+        repeated = observe_existing_empty(root, binding)
+        require(
+            (repeated.st_dev, repeated.st_ino) == (metadata.st_dev, metadata.st_ino),
+            "mount_replaced",
+        )
+        require(checked_source(expected_source_sha256) == source_sha, "source_changed")
+        require(not os.listdir(fd), "existing_mount_not_empty")
+        # The only permission change targets this held, verified encrypted mount.
+        # No pathname chmod may fall through to a plaintext replacement directory.
+        os.fchmod(fd, 0o700)
+        evidence = initialize_empty_area(root, expected_binding=binding)
+        current = os.fstat(fd)
+        require(
+            (current.st_dev, current.st_ino)
+            == (evidence["mount_device"], evidence["mount_inode"]),
+            "mount_replaced",
+        )
+        return publish_preparation(root, source_sha, evidence, "complete-empty")
+    finally:
+        os.close(fd)
 
 
 def stable_file(before: os.stat_result, after: os.stat_result) -> bool:
@@ -450,6 +608,10 @@ def main() -> None:
     subs = parser.add_subparsers(dest="operation", required=True)
     prepare = subs.add_parser("prepare-empty")
     prepare.add_argument("--expected-source-sha256", required=True)
+    complete = subs.add_parser("complete-empty")
+    complete.add_argument("--workspace", type=Path, required=True)
+    complete.add_argument("--expected-source-sha256", required=True)
+    complete.add_argument("--binding-json", required=True)
     verify = subs.add_parser("verify")
     verify.add_argument("--workspace", type=Path, required=True)
     verify.add_argument("--manifest-sha256", required=True)
@@ -460,9 +622,16 @@ def main() -> None:
         sys.flags.isolated and sys.flags.no_site and not sys.flags.optimize,
         "isolated_python_required",
     )
-    if args.operation == "prepare-empty":
+    if args.operation in {"prepare-empty", "complete-empty"}:
         require(all(os.isatty(fd) for fd in (0, 1, 2)), "regular_terminal_required")
-        result = prepare_empty(args.expected_source_sha256)
+        if args.operation == "prepare-empty":
+            result = prepare_empty(args.expected_source_sha256)
+        else:
+            result = complete_empty(
+                args.workspace,
+                args.expected_source_sha256,
+                existing_binding(args.binding_json),
+            )
         result["manifest_sha256"] = hashlib.sha256(
             (Path(result["workspace"]) / MANIFEST_NAME).read_bytes()
         ).hexdigest()
