@@ -327,7 +327,7 @@ def presence(at: datetime, *, preparation: bool = False) -> None:
     require(type(preparation) is bool)
     now = plan.now_utc()
     plan.encoded_time(at)
-    require(now - timedelta(minutes=20 if preparation else 5) <= at <= now)
+    require(now - timedelta(minutes=20) <= at <= now)
 
 
 def preparation_check(

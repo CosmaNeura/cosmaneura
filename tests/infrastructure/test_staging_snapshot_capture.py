@@ -31,7 +31,7 @@ def inputs():
         plan_created_at=NOW - timedelta(hours=1),
         plan_expires_at=NOW + timedelta(hours=3),
         handoff_created_at=NOW - timedelta(seconds=30),
-        handoff_expires_at=NOW + timedelta(seconds=570),
+        handoff_expires_at=NOW + timedelta(seconds=2670),
     )
 
 
@@ -234,7 +234,7 @@ class SnapshotCoreTests(unittest.TestCase):
             expires = NOW + timedelta(seconds=seconds)
             value = replace(
                 inputs(),
-                handoff_created_at=expires - timedelta(minutes=10),
+                handoff_created_at=expires - timedelta(minutes=45),
                 handoff_expires_at=expires,
             )
             with self.assertRaisesRegex(
@@ -461,10 +461,10 @@ class SnapshotCoreTests(unittest.TestCase):
     def test_human_waits_share_original_window_and_do_not_reset_clock(self):
         operations = MemoryOperations()
         operations.creation_seconds = 119
-        operations.capture_seconds = 1100
-        operations.removal_seconds = 240
+        operations.capture_seconds = 900
+        operations.removal_seconds = 600
         result = core.execute_after_human_gate(inputs(), operations)
-        self.assertGreater(result["elapsed_seconds"], 1459)
+        self.assertGreater(result["elapsed_seconds"], 1619)
         self.assertLess(result["elapsed_seconds"], 1800)
         operations = MemoryOperations()
         operations.removal_seconds = 1801
@@ -476,7 +476,7 @@ class SnapshotCoreTests(unittest.TestCase):
 
     def test_slow_creation_prevents_capture_but_not_removal(self):
         operations = MemoryOperations()
-        operations.creation_seconds = 600
+        operations.creation_seconds = 800
         with self.assertRaisesRegex(
             core.CaptureRefused, "capture_failed_access_closed"
         ):
@@ -484,12 +484,41 @@ class SnapshotCoreTests(unittest.TestCase):
         self.assertNotIn("capture", [name for name, _ in operations.calls])
         self.assertIn("human_remove", [name for name, _ in operations.calls])
 
+    def test_slow_portal_creation_and_removal_fit_original_access_window(self):
+        operations = MemoryOperations()
+        operations.creation_seconds = 599
+        operations.capture_seconds = 400
+        operations.removal_seconds = 599
+        result = core.execute_after_human_gate(inputs(), operations)
+        timeouts = dict(operations.calls)
+        self.assertEqual(timeouts["human_create"], 600)
+        self.assertEqual(timeouts["human_remove"], 600)
+        self.assertLess(timeouts["capture"], 511)
+        self.assertGreater(result["elapsed_seconds"], 1598)
+        self.assertLess(result["elapsed_seconds"], 1800)
+        self.assertEqual(operations.rules, operations.initial)
+
+    def test_capture_exhausting_its_budget_still_reserves_ten_minute_removal(self):
+        operations = MemoryOperations()
+        original = operations.capture_to_exclusive_encrypted_descriptor
+
+        def use_budget(scope, timeout, maximum):
+            operations.capture_seconds = timeout - 1
+            return original(scope, timeout, maximum)
+
+        operations.capture_to_exclusive_encrypted_descriptor = use_budget
+        operations.removal_seconds = 599
+        result = core.execute_after_human_gate(inputs(), operations)
+        self.assertEqual(dict(operations.calls)["human_remove"], 600)
+        self.assertLess(result["elapsed_seconds"], 1800)
+        self.assertEqual(operations.rules, operations.initial)
+
     def test_handoff_expires_during_creation_without_capture_or_renewal(self):
         operations = MemoryOperations()
         operations.creation_seconds = 120
         value = replace(
             inputs(),
-            handoff_created_at=NOW - timedelta(seconds=479),
+            handoff_created_at=NOW - timedelta(seconds=2579),
             handoff_expires_at=NOW + timedelta(seconds=121),
         )
         with self.assertRaisesRegex(

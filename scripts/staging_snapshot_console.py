@@ -14,9 +14,15 @@ import select
 import stat
 import termios
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
-from staging_snapshot_capture import CaptureInputs, HumanClosure, Rule
+from staging_snapshot_capture import (
+    MAX_CREATION_SECONDS,
+    MAX_REMOVAL_SECONDS,
+    CaptureInputs,
+    HumanClosure,
+    Rule,
+)
 from staging_snapshot_pg_io import (
     capture_deadline,
     defer_control_signals,
@@ -294,8 +300,19 @@ class SnapshotConsole(ForegroundConsole):
         require(datetime.now(UTC) < closes_at)
         require(datetime.now(UTC) < self._inputs.handoff_expires_at)
         self._creation_answered = True
-        with capture_deadline(deadline := self._deadline(timeout, 120)):
+        now = datetime.now(UTC)
+        deadline = min(
+            self._deadline(timeout, MAX_CREATION_SECONDS),
+            time.monotonic()
+            + (self._inputs.handoff_expires_at - now).total_seconds()
+            - 210,
+            time.monotonic() + (closes_at - now).total_seconds() - 690,
+        )
+        confirmation_until = now + timedelta(seconds=deadline - time.monotonic())
+        with capture_deadline(deadline):
             accepted = self._ask(
+                f"CREATED BY {confirmation_until.isoformat()} (UTC). "
+                "If this expires, do not create the rule; complete removal instead.\n"
                 "After the exact Portal creation operation has finished successfully, "
                 "type CREATED. Any other answer cancels capture: ",
                 b"CREATED",
@@ -310,9 +327,15 @@ class SnapshotConsole(ForegroundConsole):
         require(not self._removal_answered)
         self._removal_answered = True
         # Deliberately no plan/handoff expiry or capture-success prerequisite.
-        with capture_deadline(deadline := self._deadline(timeout, 240)):
+        with capture_deadline(deadline := self._deadline(timeout, MAX_REMOVAL_SECONDS)):
             self._write("HUMAN REMOVAL REQUIRED NOW.\n" + self._removal(), deadline)
+            confirmation_until = datetime.now(UTC) + timedelta(
+                seconds=deadline - time.monotonic()
+            )
             accepted = self._ask(
+                f"Confirm removal by {confirmation_until.isoformat()} (UTC). "
+                "The original REMOVE BY deadline still applies even after this "
+                "prompt expires.\n"
                 "ONLY after ALL mutation attempts are terminal AND the exact "
                 "rule is removed, type ALL FINISHED AND REMOVED: ",
                 b"ALL FINISHED AND REMOVED",

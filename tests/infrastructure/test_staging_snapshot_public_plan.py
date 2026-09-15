@@ -289,7 +289,7 @@ class PublicPlanTests(unittest.TestCase):
         )
         self.assertEqual(
             module.timestamp(h["expires_at"]) - module.timestamp(h["created_at"]),
-            timedelta(minutes=10),
+            timedelta(minutes=45),
         )
         self.assertEqual(files["plan.json"], plan.plan)
         self.assertEqual(len(files), 16)
@@ -471,7 +471,7 @@ class PublicPlanTests(unittest.TestCase):
             ):
                 self.handoff(at=at, presence=presence)
         with self.assertRaises(module.PublicPlanRefused):
-            self.handoff(fresh=source(at - timedelta(seconds=601)))
+            self.handoff(fresh=source(at - timedelta(seconds=1801)))
         fresh = source(at)
         value = json.loads(fresh.provenance)
         value["source_commit"] = "d" * 40
@@ -492,12 +492,14 @@ class PublicPlanTests(unittest.TestCase):
             self.handoff(plan, at=NOW + timedelta(hours=3, minutes=30))
 
     def test_packet_checks_start_lifetime_and_does_not_extend_handoff(self):
+        # Keep token expiry independent so this exercises the handoff boundary.
+        self.observation["identity"]["token_expires_epoch"] = int(NOW.timestamp()) + 7200
         handoff = self.handoff()
         original = handoff.handoff
-        self.packet(handoff, at=NOW + timedelta(seconds=509))
+        self.packet(handoff, at=NOW + timedelta(seconds=2609))
         self.assertEqual(original, handoff.handoff)
         with self.assertRaises(module.PublicPlanRefused):
-            self.packet(handoff, at=NOW + timedelta(seconds=510))
+            self.packet(handoff, at=NOW + timedelta(seconds=2610))
         h = json.loads(original)
         h["expires_at"] = module.encoded_time(NOW + timedelta(hours=1))
         with self.assertRaises(module.PublicPlanRefused):

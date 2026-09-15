@@ -50,7 +50,7 @@ def inputs():
         now - timedelta(minutes=5),
         now + timedelta(hours=3, minutes=55),
         now - timedelta(seconds=1),
-        now + timedelta(minutes=10, seconds=-1),
+        now + timedelta(minutes=45, seconds=-1),
     )
 
 
@@ -245,6 +245,7 @@ class ConsoleTests(unittest.TestCase):
             "in Azure Portal, may create and save exactly",
             text,
         )
+
         self.assertIn(
             "Delegated removal is permitted only while you actively observe "
             "and supervise the exact removal in Azure Portal",
@@ -263,6 +264,37 @@ class ConsoleTests(unittest.TestCase):
         self.assertIn(self.scope.rule.name, text)
         self.assertIn("Start IPv4: 8.8.8.8\nEnd IPv4: 8.8.8.8", text)
         self.assertIn("Azure does not auto-expire", text)
+
+    def test_creation_accepts_slow_portal_completion_and_displays_deadline(self):
+        self.present()
+        self.answers = [b"CREATED\n"]
+
+        def slow_answer(*_args):
+            self.now += 599
+            return [100], [], []
+
+        with patch.object(console.select, "select", slow_answer):
+            self.assertTrue(
+                self.instance.await_human_rule_creation(self.scope.rule, 600)
+            )
+        self.assertIn(b"CREATED BY ", self.output)
+        self.assertIn(b"If this expires, do not create the rule", self.output)
+
+    def test_late_created_is_refused_but_full_removal_wait_remains_available(self):
+        self.present()
+        self.answers = [b"CREATED\n"]
+
+        def late_answer(*_args):
+            self.now += 601
+            return [100], [], []
+
+        with patch.object(console.select, "select", late_answer):
+            with self.assertRaises(console.HumanConsoleRefused):
+                self.instance.await_human_rule_creation(self.scope.rule, 600)
+        self.answers = [b"ALL FINISHED AND REMOVED\n"]
+        result = self.instance.await_human_rule_removal(self.scope.rule, 600)
+        self.assertEqual(result, core.HumanClosure(True, True))
+        self.assertIn(b"Confirm removal by ", self.output)
 
     def test_partial_fallback_never_releases_creation_and_removal_still_works(self):
         self.confirm()
