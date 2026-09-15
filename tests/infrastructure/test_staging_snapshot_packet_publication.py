@@ -487,6 +487,77 @@ class PublicationTests(unittest.TestCase):
 
 
 class AlarmAndACLTests(unittest.TestCase):
+    def test_pending_caller_alarm_is_refused_before_handler_or_timer_change(self):
+        with (
+            patch.object(publisher.signal, "sigpending", return_value={signal.SIGALRM}),
+            patch.object(publisher.signal, "signal") as handler,
+            patch.object(publisher.signal, "setitimer") as timer,
+            self.assertRaises(publisher.PacketPublicationRefused),
+        ):
+            with publisher.operation():
+                self.fail("pending caller alarm must refuse")
+        handler.assert_not_called()
+        timer.assert_not_called()
+
+    def test_pending_teardown_alarm_never_reaches_ignored_or_sentinel_handler(self):
+        original = signal.getsignal(signal.SIGALRM)
+        original_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        previous_calls = []
+
+        def sentinel(*_args):
+            previous_calls.append(True)
+
+        for prior in (signal.SIG_IGN, sentinel):
+            with self.subTest(prior=prior):
+                real_timer = signal.setitimer
+                signal.signal(signal.SIGALRM, prior)
+
+                def timer(which, seconds, interval=0):
+                    result = real_timer(which, seconds, interval)
+                    if seconds == 0:
+                        os.kill(os.getpid(), signal.SIGALRM)
+                        self.assertIn(signal.SIGALRM, signal.sigpending())
+                    return result
+
+                returned = []
+                try:
+                    with (
+                        patch.object(publisher.signal, "setitimer", side_effect=timer),
+                        self.assertRaises(publisher.PacketPublicationRefused),
+                    ):
+                        with publisher.operation():
+                            pass
+                        returned.append("publication returned")
+                    self.assertFalse(returned or previous_calls)
+                    self.assertEqual(signal.getsignal(signal.SIGALRM), prior)
+                    self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+                    self.assertEqual(
+                        signal.pthread_sigmask(signal.SIG_BLOCK, set()), original_mask
+                    )
+                    self.assertNotIn(signal.SIGALRM, signal.sigpending())
+                finally:
+                    signal.signal(signal.SIGALRM, original)
+
+    def test_expiry_during_handler_restoration_cannot_return_success(self):
+        original = signal.getsignal(signal.SIGALRM)
+        real_signal = signal.signal
+        with patch.object(publisher.time, "monotonic", return_value=100.0) as clock:
+
+            def handler(number, value):
+                result = real_signal(number, value)
+                if value is original:
+                    clock.return_value = 130.0
+                return result
+
+            with (
+                patch.object(publisher.signal, "signal", side_effect=handler),
+                self.assertRaises(publisher.PacketPublicationRefused),
+            ):
+                with publisher.operation():
+                    pass
+        self.assertEqual(signal.getsignal(signal.SIGALRM), original)
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL), (0.0, 0.0))
+
     def test_existing_alarm_is_not_stolen(self):
         with (
             patch.object(publisher.signal, "getitimer", return_value=(5.0, 0.0)),
