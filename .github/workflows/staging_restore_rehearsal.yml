@@ -26,6 +26,7 @@ jobs:
        (inputs.action == 'cleanup' || inputs.action == 'provision')) ||
       (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require protected repository, ref, and action
         env:
@@ -99,6 +100,7 @@ jobs:
       ((github.event_name == 'workflow_dispatch' && inputs.action == 'cleanup') ||
        (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: staging-restore-cleanup
     permissions:
       attestations: write
