@@ -375,6 +375,33 @@ class SnapshotAzure:
             )
         )
 
+    def observe_application_binding(self, expected_image: str, timeout: float) -> str:
+        """Only the two fixed GETs; no listSecrets, database access or mutation."""
+        try:
+            require_capture_process()
+            require(
+                type(expected_image) is str
+                and re.fullmatch(
+                    r"cosmaneurastagingregistry\.azurecr\.io/cosmaneura/cosmaneura@sha256:[0-9a-f]{64}",
+                    expected_image,
+                )
+            )
+            require(type(timeout) in (int, float) and 0 < timeout <= 60)
+            deadline = time.monotonic() + timeout
+
+            def remaining():
+                value = min(30, deadline - time.monotonic())
+                require(value > 0)
+                return value
+
+            app = self._observe("app", remaining()).body
+            revision = self._observe("revision", remaining()).body
+            result = self._source_binding(app, revision, expected_image)
+            require(time.monotonic() < deadline)
+            return result
+        except BaseException:
+            raise AzureReadRefused("snapshot_azure_read_refused") from None
+
     def read_bound_database_credentials(self, expected_image: str, timeout: float):
         """Secret remains in memory only; no secret body or digest is published.
 

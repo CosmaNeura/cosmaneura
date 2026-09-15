@@ -37,37 +37,15 @@ def identity(value: os.stat_result) -> tuple[int, ...]:
     return value.st_dev, value.st_ino, value.st_rdev, value.st_uid, value.st_mode
 
 
-class SnapshotConsole:
-    """Retain actual standard-terminal descriptors; never accept supplied I/O.
+class ForegroundConsole:
+    """Only owned foreground public Terminal I/O, no capture authority."""
 
-    Caller closes this object in its outer finally AFTER the capture core has
-    requested human removal. Removal remains available after artifact expiry,
-    incomplete instruction output, failed capture, or interrupted confirmation.
-    This is not proof that the human's Portal operations really completed;
-    the core separately requires authenticated rule absence and baseline match.
-    """
+    __slots__ = ("_fds", "_identities")
 
-    __slots__ = (
-        "_inputs",
-        "_fds",
-        "_identities",
-        "_confirmed",
-        "_instructions",
-        "_creation_answered",
-        "_removal_answered",
-        "_closes_at",
-    )
-
-    def __init__(self, inputs: CaptureInputs):
+    def __init__(self):
         require_capture_process()
-        require(type(inputs) is CaptureInputs)
-        inputs.validate(datetime.now(UTC))
-        self._inputs = inputs
         self._fds: list[int] = []
         self._identities: tuple[tuple[int, ...], ...] = ()
-        self._confirmed = self._instructions = False
-        self._creation_answered = self._removal_answered = False
-        self._closes_at: datetime | None = None
         try:
             with capture_deadline(time.monotonic() + 5):
                 for descriptor in (0, 1, 2):
@@ -149,6 +127,62 @@ class SnapshotConsole:
         require(0 < len(raw) <= 256 and raw.endswith(b"\n"))
         require(all(32 <= value <= 126 for value in raw[:-1]))
         return raw == answer + b"\n"
+
+
+class PreparationConsole(ForegroundConsole):
+    """One READ-ONLY confirmation before even accessing configured credentials."""
+
+    __slots__ = ("_answered",)
+
+    def __init__(self):
+        self._answered = False
+        super().__init__()
+
+    def confirm_preparation(self, preparation_sha256: str, timeout: float) -> None:
+        require(not self._answered)
+        self._answered = True
+        require(
+            type(preparation_sha256) is str
+            and len(preparation_sha256) == 64
+            and all(value in "0123456789abcdef" for value in preparation_sha256)
+        )
+        with capture_deadline(deadline := self._deadline(timeout, 120)):
+            self._write(
+                "HUMAN READ-ONLY PREPARATION. No database credentials or capture.\n"
+                "No firewall changes, migrations or deployment.\n"
+                f"Preparation SHA256: {preparation_sha256}\n"
+                "Match the independently reviewed command. This reads your configured "
+                "Azure account/token using a private copy on the encrypted workspace, "
+                "observes fixed staging metadata, and checks api.ipify.org once.\n",
+                deadline,
+            )
+            require(self._ask("Type PREPARE to continue: ", b"PREPARE", deadline))
+
+
+class SnapshotConsole(ForegroundConsole):
+    """Retain Terminal until AFTER capture/removal, including on expiry/failure.
+
+    Answers alone never prove Portal completion; authenticated closure does.
+    """
+
+    __slots__ = (
+        "_inputs",
+        "_confirmed",
+        "_instructions",
+        "_creation_answered",
+        "_removal_answered",
+        "_closes_at",
+    )
+
+    def __init__(self, inputs: CaptureInputs):
+        require_capture_process()
+        require(type(inputs) is CaptureInputs)
+        inputs.validate(datetime.now(UTC))
+        self._inputs = inputs
+        self._confirmed = self._instructions = False
+        self._creation_answered = self._removal_answered = False
+        self._closes_at: datetime | None = None
+        super().__init__()
 
     def confirm_start(self, timeout: float = 120) -> None:
         require(not self._confirmed and not self._instructions)
