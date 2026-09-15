@@ -612,7 +612,9 @@ class BoundedChildren:
             if self.child is None and child.stdout is not None:
                 child.stdout.close()
         try:
-            if self.group_members(child.pid, deadline=cleanup_deadline):
+            members = self.group_members(child.pid, deadline=cleanup_deadline)
+            remaining_cleanup()
+            if members:
                 self.cleanup_failed = True
         except BaseException:
             self.cleanup_failed = True
