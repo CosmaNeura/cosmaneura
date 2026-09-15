@@ -323,10 +323,11 @@ def file_map(
     return result
 
 
-def presence(at: datetime) -> None:
+def presence(at: datetime, *, preparation: bool = False) -> None:
+    require(type(preparation) is bool)
     now = plan.now_utc()
     plan.encoded_time(at)
-    require(now - timedelta(minutes=5) <= at <= now)
+    require(now - timedelta(minutes=20 if preparation else 5) <= at <= now)
 
 
 def preparation_check(
@@ -343,7 +344,9 @@ def preparation_check(
     created, now = plan.timestamp(p["created_at"]), plan.now_utc()
     require(created <= now < plan.timestamp(p["expires_at"]))
     require(p["operator_uid"] == os.geteuid() and type(p["operator_uid"]) is int)
-    source = plan.source_record(packet.source, p["source_provenance_sha256"], now)
+    source = plan.source_record(
+        packet.source, p["source_provenance_sha256"], now, preparation=True
+    )
     require(
         sha(packet.source_review.summary)
         == expected_review
@@ -454,7 +457,7 @@ def publish(
 
     def check_presence() -> None:
         if confirmed_at is not None:
-            presence(confirmed_at)
+            presence(confirmed_at, preparation=kind == "preparation")
 
     require(type(token) is str and re.fullmatch(r"[0-9a-f]{32}", token))
     name = "human-" + kind + "-" + token

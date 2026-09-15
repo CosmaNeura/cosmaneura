@@ -192,7 +192,7 @@ class PublicationTests(unittest.TestCase):
             {"expected_preparation_sha256": "0" * 64},
             {"expected_source_review_sha256": "0" * 64},
             {"packet_token": "../unsafe"},
-            {"human_presence_confirmed_at": NOW - timedelta(minutes=6)},
+            {"human_presence_confirmed_at": NOW - timedelta(minutes=21)},
             {"human_presence_confirmed_at": self.now + timedelta(seconds=1)},
         ):
             with (
@@ -240,12 +240,40 @@ class PublicationTests(unittest.TestCase):
             self.assertEqual(list(self.root.iterdir()), [])
 
     def test_expired_preparation_and_handoff_are_not_published(self):
-        self.now = NOW + timedelta(minutes=11)
+        self.now = NOW + timedelta(minutes=31)
         with self.assertRaises(publisher.PacketPublicationRefused):
             self.preparation_publish()
+        self.now = NOW + timedelta(minutes=11)
         with self.assertRaises(publisher.PacketPublicationRefused):
             self.capture_publish()
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_preparation_revalidation_after_fifteen_minutes_does_not_renew_files(self):
+        result = self.preparation_publish(human_presence_confirmed_at=NOW)
+        original = {
+            name: (result.packet / name).read_bytes() for name in publisher.PREPARATION
+        }
+        self.now = NOW + timedelta(minutes=15)
+        self.assertEqual(
+            self.preparation_publish(
+                revalidate=result, human_presence_confirmed_at=NOW
+            ),
+            result,
+        )
+        self.assertEqual(
+            original, {name: (result.packet / name).read_bytes() for name in original}
+        )
+        self.now = NOW + timedelta(minutes=20, seconds=1)
+        with self.assertRaises(publisher.PacketPublicationRefused):
+            self.preparation_publish(revalidate=result, human_presence_confirmed_at=NOW)
+
+    def test_capture_source_freshness_remains_ten_minutes(self):
+        at = NOW + timedelta(minutes=15)
+        with self.assertRaises(plan.PublicPlanRefused):
+            plan.source_record(self.f.source, plan.sha(self.f.source.provenance), at)
+        plan.source_record(
+            self.f.source, plan.sha(self.f.source.provenance), at, preparation=True
+        )
 
     def test_changed_plan_or_handoff_review_is_not_published(self):
         original = self.handoff

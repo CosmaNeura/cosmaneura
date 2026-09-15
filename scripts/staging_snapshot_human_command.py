@@ -23,8 +23,8 @@ from staging_snapshot_source_provenance import SOURCE_NAMES, SourceCollection
 
 # Corrected exact composition; its NEW independent review is still required.
 # Historical reviews47/48/58 bind older bytes, never derive trust at launch.
-BUNDLE_SHA256 = "4b917eb366475a6a52817c499c4262a2e31c4d3cb7a4164d4b41660d9fe79ac3"
-LOADER_SHA256 = "d08b0809ba6f1806503012a456ba924b42d759dc3b0e0ccaba517999b93765a5"
+BUNDLE_SHA256 = "2dfa367a40fa3c8fb7bdcf5d9d957ecbe3599164a795e183280725243d22c33b"
+LOADER_SHA256 = "15092278a1ec6db6ea412bf9eafacff2c58061104f164cce40c7a83f2189e1b7"
 RUNTIME_ROOT = Path(
     "/private/tmp/cosmaneura-private-foundation-preflight.J40HZoi7/"
     ".trusted-runtime-bin/homebrew"
@@ -69,10 +69,14 @@ class CommandDraft:
     independent_exact_command_review_required: bool = True
 
 
-def source_check(packet: SourcePacket) -> dict[str, bytes]:
+def source_check(
+    packet: SourcePacket, *, preparation: bool = False
+) -> dict[str, bytes]:
     require(type(packet) is SourcePacket)
     now = plan.now_utc()
-    value = plan.source_record(packet.source, packet.expected_source_sha256, now)
+    value = plan.source_record(
+        packet.source, packet.expected_source_sha256, now, preparation=preparation
+    )
     files = publication.file_map(packet.source.source_files, SOURCE_LIMITS)
     require(sha(canonical(value["files"])) == BUNDLE_SHA256)
     require(sha(files["staging_snapshot_bootstrap.py"]) == LOADER_SHA256)
@@ -93,6 +97,7 @@ def publish_source(
     *,
     source_token: str,
     revalidate: publication.Publication | None = None,
+    preparation: bool = False,
 ) -> publication.Publication:
     """18 reviewed0400 files; bootstrap LAST; no execution packet/presence invented.
 
@@ -100,8 +105,15 @@ def publish_source(
     Refreshing that public evidence cannot renew a plan, handoff or receipt.
     """
     try:
+        require(
+            type(preparation) is bool and (not preparation or revalidate is not None)
+        )
         return publication.publish(
-            lambda: source_check(packet), "source", source_token, None, revalidate
+            lambda: source_check(packet, preparation=preparation),
+            "source",
+            source_token,
+            None,
+            revalidate,
         )
     except BaseException:
         raise HumanCommandRefused("snapshot_human_command_refused") from None
@@ -245,8 +257,8 @@ def draft_command(
     presence: datetime,
     preparing: bool,
 ) -> CommandDraft:
-    publication.presence(presence)
-    sources = source_check(source)
+    publication.presence(presence, preparation=preparing)
+    sources = source_check(source, preparation=preparing)
     require(files["source-provenance.json"] == source.source.provenance)
     require(files["source-review-summary.json"] == source.review.summary)
     now = plan.now_utc()
@@ -254,9 +266,9 @@ def draft_command(
     uid = artifact["operator_uid"]
     require(type(uid) is int and uid == os.geteuid())
     cutoffs = [
-        presence + timedelta(minutes=5),
+        presence + timedelta(minutes=20 if preparing else 5),
         plan.timestamp(record(source.source.provenance)["observed_at"])
-        + timedelta(minutes=10),
+        + timedelta(minutes=30 if preparing else 10),
         plan.timestamp(artifact["expires_at"])
         - timedelta(seconds=0 if preparing else 120),
     ]
@@ -323,11 +335,12 @@ def preparation_command(
 ) -> CommandDraft:
     """READ-ONLY revalidate both publications, then render an UNREVIEWED draft."""
     try:
-        publication.presence(human_presence_confirmed_at)
+        publication.presence(human_presence_confirmed_at, preparation=True)
         publish_source(
             source,
             source_token=token(source_publication, "source"),
             revalidate=source_publication,
+            preparation=True,
         )
         publication.publish_preparation(
             packet,

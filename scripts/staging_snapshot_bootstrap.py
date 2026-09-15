@@ -97,11 +97,11 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_artifacts",
-        "c2fd82b58605887eddbc8af0c31ac93e7ae59c89661c4da07b52ffec297e7ee0",
+        "dbaa942ca118df48cd200e4b18fa72328743f3e28ba2396b0b8cabe296830583",
     ),
     (
         "staging_snapshot_human",
-        "df2b9bf9984153467073327f75defef5e0cbf18db73f7d09f4896d26ef729858",
+        "540cc2ee50dc6c7ffc8517391e02fac4d8cef2bc4cf4eb44fe933a4c7497ac13",
     ),
 )
 PRELOAD = (

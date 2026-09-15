@@ -609,7 +609,7 @@ class PreparationArtifacts(ReviewedArtifacts):
         now = datetime.now(UTC)
         require(self.created <= now < self.expires)
         require(
-            now - timedelta(minutes=10) <= utc(self.provenance["observed_at"]) <= now
+            now - timedelta(minutes=30) <= utc(self.provenance["observed_at"]) <= now
         )
 
 

@@ -370,7 +370,9 @@ def run_human_preparation(
     require(not _attempted)
     _attempted.append(True)
     console = None
-    deadline = time.monotonic() + 240
+    # Read-only preparation may spend up to ten minutes across all phases.
+    # Individual operation limits and the separate capture clock are unchanged.
+    deadline = time.monotonic() + 600
 
     def phase(maximum):
         now = time.monotonic()
