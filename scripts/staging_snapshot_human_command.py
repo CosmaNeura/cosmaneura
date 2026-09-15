@@ -23,8 +23,8 @@ from staging_snapshot_source_provenance import SOURCE_NAMES, SourceCollection
 
 # Corrected exact composition; its NEW independent review is still required.
 # Historical reviews47/48/58 bind older bytes, never derive trust at launch.
-BUNDLE_SHA256 = "e7ed650cbd007715740fc900694b3666f570021370ae5eee5a166775fe70e874"
-LOADER_SHA256 = "65afb0daf61913e32d353e76c0b6aa1818945cd49b403ba6ceaa5f9acf68573b"
+BUNDLE_SHA256 = "b6f07cf51fb13e553220b8c860b62ab116391c6b18a04e70bb317860fa43fe93"
+LOADER_SHA256 = "cb5650073eb147493a518d491b8380f5d21d77663a68fb649e06623ff942dd19"
 RUNTIME_ROOT = Path(
     "/private/tmp/cosmaneura-private-foundation-preflight.J40HZoi7/"
     ".trusted-runtime-bin/homebrew"
@@ -266,11 +266,13 @@ def draft_command(
     uid = artifact["operator_uid"]
     require(type(uid) is int and uid == os.geteuid())
     cutoffs = [
-        presence + timedelta(minutes=20 if preparing else 5),
+        presence + timedelta(minutes=20),
         plan.timestamp(record(source.source.provenance)["observed_at"])
-        + timedelta(minutes=30 if preparing else 10),
+        + timedelta(minutes=30),
         plan.timestamp(artifact["expires_at"])
-        - timedelta(seconds=0 if preparing else 120),
+        # Reserve loader90 + preparation240 + prechecks120 + Portal600 +
+        # postchecks90 + remaining-handoff120. No rule is open during launch.
+        - timedelta(seconds=0 if preparing else 1260),
     ]
     if not preparing:
         cutoffs += [

@@ -37,7 +37,7 @@ EXPECTED_RUNTIME_SHA256 = (
 SOURCE_PINS = (
     (
         "staging_snapshot_capture",
-        "60a8851302d8999b9d6ec22ae93ba09cbfcd176efa2e3f42fbb7520e10231949",
+        "4e2d075dc4d0f01290d98101df74b4dbf68453bf24ccb0f31f001977957822ed",
     ),
     (
         "staging_snapshot_pg_io",
@@ -89,7 +89,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_console",
-        "9ee18cf36b63a762e85d6c6fcfe5afd8d79e61e2f569d936b5ab71a14afb91a8",
+        "842b46561e0718497488b0e4d9d2f85b7779b1f78d027ce0f3410e99bced4329",
     ),
     (
         "staging_snapshot_operations",
@@ -97,7 +97,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_artifacts",
-        "3c3912196b706fc17c5e89eb36fcbe7b569501722cb9b2692e2a962d4c9b405b",
+        "86b4467f5db88ed2d6a668084964fdeeda1f4efe556519efda4cd51ce21ec307",
     ),
     (
         "staging_snapshot_human",

@@ -253,7 +253,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(list(self.root.iterdir()), [])
 
     def test_source_staleness_at_entry_and_after_files_is_not_renewed(self):
-        self.base.now = NOW + timedelta(seconds=601)
+        self.base.now = NOW + timedelta(seconds=1801)
         with self.assertRaises(module.HumanCommandRefused):
             self.publish_source()
         self.assertEqual(list(self.root.iterdir()), [])
@@ -263,7 +263,7 @@ class CommandTests(unittest.TestCase):
         def advance(parent, name, *args):
             result = real(parent, name, *args)
             if name == "staging_snapshot_bootstrap.py":
-                self.base.now = NOW + timedelta(seconds=601)
+                self.base.now = NOW + timedelta(seconds=1801)
             return result
 
         with (
@@ -360,7 +360,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(script.count("\ncheck_file "), 35)
         self.assertNotIn(" prepare ", script.splitlines()[-1])
         self.assertEqual(
-            draft.not_after, plan.encoded_time(NOW + timedelta(seconds=345))
+            draft.not_after, plan.encoded_time(NOW + timedelta(seconds=1170))
         )
         original = self.base.handoff
         self.base.handoff = replace(
@@ -426,9 +426,12 @@ class CommandTests(unittest.TestCase):
             self.publish_source(preparation=True)
         self.assertEqual(list(self.root.iterdir()), [])
 
-    def test_capture_presence_window_remains_five_minutes(self):
+    def test_capture_review_delay_preserves_command_and_presence_expires(self):
         self.capture()
-        self.base.now = NOW + timedelta(minutes=6)
+        original = self.capture_command()
+        self.base.now = NOW + timedelta(minutes=15)
+        self.assertEqual(self.capture_command(), original)
+        self.base.now = NOW + timedelta(minutes=21)
         with self.assertRaises(module.HumanCommandRefused):
             self.capture_command()
 

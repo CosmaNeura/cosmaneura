@@ -28,7 +28,10 @@ HOST = SERVER + ".postgres.database.azure.com"
 SOURCE_REVISION = "89c31f0ae275"
 MAX_ACCESS_SECONDS = 1800
 MAX_CAPTURE_SECONDS = 1200
-CLEANUP_RESERVE_SECONDS = 300
+MAX_CREATION_SECONDS = 600
+MAX_REMOVAL_SECONDS = 600
+# Ten minutes for Portal removal, plus cancellation and final readback.
+CLEANUP_RESERVE_SECONDS = 660
 MAX_ARCHIVE_BYTES = 1024**3
 SAFE_REFUSAL_CODES = frozenset(
     {
@@ -166,7 +169,7 @@ class CaptureInputs:
             "plan_lifetime",
         )
         require(
-            self.handoff_expires_at == self.handoff_created_at + timedelta(minutes=10),
+            self.handoff_expires_at == self.handoff_created_at + timedelta(minutes=45),
             "handoff_lifetime",
         )
         require(
@@ -331,10 +334,12 @@ def observe_human_closure(
     try:
         # Leave time for the final readback; a broken/expired clock never hides
         # the operator's fallback. It still prevents later success publication.
-        timeout = max(1, min(240, MAX_ACCESS_SECONDS - clock.elapsed() - 30))
+        timeout = max(
+            1, min(MAX_REMOVAL_SECONDS, MAX_ACCESS_SECONDS - clock.elapsed() - 30)
+        )
     except BaseException:
         clock_failed = True
-        timeout = 240
+        timeout = MAX_REMOVAL_SECONDS
     closure = operations.await_human_rule_removal(rule, timeout=timeout)
     require(type(closure) is HumanClosure, "human_removal_not_confirmed")
     require(
@@ -389,11 +394,13 @@ def _execute_after_human_gate(
             clock.remaining(120, 15),
         )
         require(
-            operations.await_human_rule_creation(inputs.rule, clock.remaining(240, 120))
+            operations.await_human_rule_creation(
+                inputs.rule, clock.remaining(720, MAX_CREATION_SECONDS)
+            )
             is True,
             "human_creation_not_confirmed",
         )
-        observed = rules_by_name(operations.list_rules(clock.remaining(300, 30)))
+        observed = rules_by_name(operations.list_rules(clock.remaining(780, 30)))
         require(
             observed.get(inputs.rule.name.casefold()) == inputs.rule,
             "new_rule_not_exact",
@@ -403,13 +410,13 @@ def _execute_after_human_gate(
             "preexisting_rules_changed",
         )
         require(
-            operations.current_public_ipv4(clock.remaining(300, 15))
+            operations.current_public_ipv4(clock.remaining(780, 15))
             == inputs.rule.start,
             "public_ip_changed",
         )
-        operations.revalidate_runtime_identity(inputs, clock.remaining(330, 30))
-        operations.verify_empty_encrypted_payload(inputs, clock.remaining(330, 30))
-        operations.revalidate_human_gate(inputs, clock.remaining(330, 30))
+        operations.revalidate_runtime_identity(inputs, clock.remaining(810, 30))
+        operations.verify_empty_encrypted_payload(inputs, clock.remaining(810, 30))
+        operations.revalidate_human_gate(inputs, clock.remaining(810, 30))
         require(
             operations.utcnow() < inputs.handoff_expires_at,
             "handoff_expired_before_capture",
@@ -426,8 +433,11 @@ def _execute_after_human_gate(
         )
         require(type(archive) is Archive, "archive_type")
         archive.validate()
-        operations.revalidate_runtime_identity(inputs, clock.remaining(1500, 30))
-        clock.remaining(1500, 1)
+        active_deadline = MAX_ACCESS_SECONDS - CLEANUP_RESERVE_SECONDS
+        operations.revalidate_runtime_identity(
+            inputs, clock.remaining(active_deadline, 30)
+        )
+        clock.remaining(active_deadline, 1)
     except BaseException:
         failed = True
     finally:

@@ -127,7 +127,7 @@ def source_record(
     )
     commit(value["source_commit"])
     observed = timestamp(value["observed_at"])
-    require(at - timedelta(minutes=30 if preparation else 10) <= observed <= at)
+    require(at - timedelta(minutes=30) <= observed <= at)
     require(
         type(source.source_files) is tuple
         and len(source.source_files) == len(SOURCE_NAMES)
@@ -743,7 +743,7 @@ def handoff_content(
             "source_review_summary_sha256": sha(draft.source_review.summary),
             "plan_review_summary_sha256": expected_review,
             "created_at": encoded_time(created),
-            "expires_at": encoded_time(created + timedelta(minutes=10)),
+            "expires_at": encoded_time(created + timedelta(minutes=45)),
             "human_presence_confirmed_at": encoded_time(presence),
             "operator_uid": record(draft.observation)["operator_uid"],
             "execution_authorized": False,

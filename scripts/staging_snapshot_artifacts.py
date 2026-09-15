@@ -174,7 +174,7 @@ class ReviewedArtifacts:
             utc(h["created_at"]),
             utc(h["expires_at"]),
         )
-        require(self.handoff_expires == self.handoff_created + timedelta(minutes=10))
+        require(self.handoff_expires == self.handoff_created + timedelta(minutes=45))
         presence = utc(h["human_presence_confirmed_at"])
         require(
             self.handoff_created - timedelta(minutes=5)
@@ -322,7 +322,7 @@ class ReviewedArtifacts:
             },
         )
         observed = utc(value["observed_at"])
-        require(at - timedelta(minutes=10) <= observed <= at)
+        require(at - timedelta(minutes=30) <= observed <= at)
         require(
             type(value["pull_requests"]) is list
             and 1 <= len(value["pull_requests"]) <= 30

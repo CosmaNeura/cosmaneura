@@ -348,7 +348,7 @@ class ArtifactTests(unittest.TestCase):
             "source_review_summary_sha256": source_review,
             "plan_review_summary_sha256": plan_review,
             "created_at": timestamp(self.handoff_time),
-            "expires_at": timestamp(self.handoff_time + timedelta(minutes=10)),
+            "expires_at": timestamp(self.handoff_time + timedelta(minutes=45)),
             "human_presence_confirmed_at": timestamp(
                 self.handoff_time - timedelta(seconds=1)
             ),
@@ -532,7 +532,7 @@ class ArtifactTests(unittest.TestCase):
 
     def test_stale_protected_source_readback_refused(self):
         self.provenance_changes["observed_at"] = timestamp(
-            self.handoff_time - timedelta(minutes=11)
+            self.handoff_time - timedelta(minutes=31)
         )
         self.rejected()
 

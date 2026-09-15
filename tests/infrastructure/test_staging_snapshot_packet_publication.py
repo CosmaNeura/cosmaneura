@@ -243,7 +243,7 @@ class PublicationTests(unittest.TestCase):
         self.now = NOW + timedelta(minutes=31)
         with self.assertRaises(publisher.PacketPublicationRefused):
             self.preparation_publish()
-        self.now = NOW + timedelta(minutes=11)
+        self.now = NOW + timedelta(minutes=46)
         with self.assertRaises(publisher.PacketPublicationRefused):
             self.capture_publish()
         self.assertEqual(list(self.root.iterdir()), [])
@@ -267,12 +267,14 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaises(publisher.PacketPublicationRefused):
             self.preparation_publish(revalidate=result, human_presence_confirmed_at=NOW)
 
-    def test_capture_source_freshness_remains_ten_minutes(self):
-        at = NOW + timedelta(minutes=15)
+    def test_capture_source_freshness_expires_after_thirty_minutes(self):
+        at = NOW + timedelta(minutes=31)
         with self.assertRaises(plan.PublicPlanRefused):
             plan.source_record(self.f.source, plan.sha(self.f.source.provenance), at)
         plan.source_record(
-            self.f.source, plan.sha(self.f.source.provenance), at, preparation=True
+            self.f.source,
+            plan.sha(self.f.source.provenance),
+            NOW + timedelta(minutes=15),
         )
 
     def test_changed_plan_or_handoff_review_is_not_published(self):
@@ -445,7 +447,7 @@ class PublicationTests(unittest.TestCase):
         def files(*args, **kwargs):
             calls.append(True)
             if len(calls) == 3:
-                self.now = NOW + timedelta(minutes=11)
+                self.now = NOW + timedelta(minutes=46)
             return original(*args, **kwargs)
 
         with (
