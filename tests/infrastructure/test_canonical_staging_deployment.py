@@ -502,6 +502,11 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert deploy.index("AZURE_CLIENT_SECRET") < deploy.index("SCRIPT_DIR=")
     assert "PYTHON_BIN=/opt/homebrew/bin/python3" in deploy
     assert '"$PYTHON_BIN" -I -S -B' in deploy
+    flight_plan = (
+        ROOT / "docs/flight-plans/2026-09-02-canonical-staging-candidate.md"
+    ).read_text(encoding="utf-8")
+    assert "`DEPLOY_RUN_ID`" in flight_plan
+    assert "`DEPLOY_RUN_ATTEMPT=1`" in flight_plan
     assert deploy.count('git -C "$REPOSITORY_ROOT"') == 5
     assert deploy.index("founder-user) verify_founder_release_source") < deploy.index(
         'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'

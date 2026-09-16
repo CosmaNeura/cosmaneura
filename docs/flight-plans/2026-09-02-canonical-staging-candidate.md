@@ -222,6 +222,9 @@
   the clean protected-master controller, selected merged candidate PR and schema
   head before protected configuration and again immediately before mutation. It
   grants no production authority and does not weaken the workflow's default path.
+  A controlled local invocation must also supply a fresh positive
+  `DEPLOY_RUN_ID` and `DEPLOY_RUN_ATTEMPT=1`; these only derive the unique Azure
+  revision suffix and do not substitute for any source, identity, or review gate.
 - Candidate build and registry-credentialed publication run as separate fresh
   jobs. The build job receives no protected deployment or registry credential,
   exports a content-addressed image archive, and records its SHA-256. A fresh
