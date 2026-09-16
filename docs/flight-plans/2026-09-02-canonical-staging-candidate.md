@@ -238,6 +238,15 @@
   publication job executes no candidate code, downloads only that verified
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
+  With Actions unavailable, `infra-staging/publish-local.sh` preserves this
+  separation: it binds a closed-schema controller result and build metadata to
+  independently captured digests, revalidates the reviewed plan and founder
+  identities, and requires the authenticated source, plan, result, and metadata
+  to agree. It rechecks the files immediately before a durable attempt record
+  and the first registry mutation. Blobs and the manifest are uploaded only by
+  content digest; ACR `NoForce` import creates the candidate tag once. The tag is
+  then locked and reverified. The script cannot deploy, write `latest`, retry,
+  target production, or persist registry credentials.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,
@@ -401,8 +410,9 @@
    in the reviewed order, and prove incompatible revisions have drained before
    reopening synthetic traffic.
 4. During the separately confirmed canonical dispatch, require the candidate's
-   staging tag to be absent, publish the exact credentialless build archive,
-   resolve it to one immutable registry digest before persistent-staging
+   staging tag to be absent, upload the exact credentialless build archive by
+   content digest without a tag, create the candidate tag with ACR `NoForce`
+   import, and resolve it to one locked immutable registry digest before persistent-staging
    migration, and use that same digest for migration and every workload. Reject
    an existing candidate tag, a digest mismatch, `latest`, a production
    registry, or different digests among those steps. The post-deploy smoke is
