@@ -260,6 +260,17 @@ def test_non_staging_or_unapproved_commands_are_rejected(command: list[str]) -> 
             "--resource-g",
             "other",
         ],
+        [
+            "containerapp",
+            "update",
+            "-n",
+            "cosmaneura-staging-app",
+            "-g",
+            m.STAGING_RESOURCE_GROUP,
+            "--image",
+            "cosmaneurastagingregistryxazurecr.io/"
+            f"{m.STAGING_REPOSITORY}@sha256:{'a' * 64}",
+        ],
     ),
 )
 def test_ambiguous_or_attached_option_spellings_are_rejected(

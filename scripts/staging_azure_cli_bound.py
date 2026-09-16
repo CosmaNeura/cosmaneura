@@ -231,7 +231,8 @@ def validate_staging_scope(argv: list[str]) -> None:
         for image in flag_values(argv, {"-i", "--image"}):
             require(
                 re.fullmatch(
-                    rf"{STAGING_REGISTRY_HOST}/{STAGING_REPOSITORY}@sha256:[0-9a-f]{{64}}",
+                    rf"{re.escape(STAGING_REGISTRY_HOST)}/"
+                    rf"{re.escape(STAGING_REPOSITORY)}@sha256:[0-9a-f]{{64}}",
                     image,
                 )
                 is not None
@@ -250,7 +251,8 @@ def validate_staging_scope(argv: list[str]) -> None:
         require(
             len(names) == 1
             and re.fullmatch(
-                rf"{STAGING_REPOSITORY}(?::{CANDIDATE_SHA}|@sha256:[0-9a-f]{{64}})",
+                rf"{re.escape(STAGING_REPOSITORY)}"
+                rf"(?::{re.escape(CANDIDATE_SHA)}|@sha256:[0-9a-f]{{64}})",
                 names[0],
             )
             is not None
