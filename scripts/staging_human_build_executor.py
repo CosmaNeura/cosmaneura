@@ -407,14 +407,17 @@ class Builder:
             "LC_ALL": "C",
             "LANG": "C",
         }
-        self.processes = BuildProcesses(deadline, self.local_check)
+        # Every child remains bracketed by deterministic local integrity checks.
+        # Live provider authority is checked at the explicit build boundaries
+        # below, rather than multiplying five network reads around every local
+        # Docker subprocess.
+        self.processes = BuildProcesses(deadline, self.local_integrity_check)
         self.phase = "not_started"
         self.container_id: str | None = None
         self.container_removed = False
 
-    def local_check(self) -> None:
+    def local_integrity_check(self) -> None:
         self.tick()
-        self.validate_authority()
         tool_check(self.prepared, self.engine)
         source_check(self.prepared, self.source_archive, self.public_files)
         for relative, target in (
@@ -424,6 +427,12 @@ class Builder:
             path = self.prepared.root / relative
             require(path.is_symlink() and os.readlink(path) == str(target))
         self.tick()
+
+    def local_check(self) -> None:
+        """Bind live authority to a major phase and then recheck local inputs."""
+        self.tick()
+        self.validate_authority()
+        self.local_integrity_check()
 
     def command(self, args: list[str], maximum: int = 1024**2) -> bytes:
         chunks: list[bytes] = []
@@ -443,7 +452,7 @@ class Builder:
                 observed = b"".join(chunks).strip()
                 if re.fullmatch(rb"[0-9a-f]{64}", observed):
                     self.container_id = observed.decode("ascii")
-        self.local_check()
+        self.local_integrity_check()
         return b"".join(chunks)
 
     def engine_check(self) -> None:
