@@ -401,7 +401,7 @@ if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" || -n "${RECALL_WEBHOOK_SECRET:-}" || \
 	echo "Local publication refuses deployment or ambient registry credentials." >&2
 	exit 1
 fi
-unset GH_TOKEN GITHUB_TOKEN DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+unset GH_TOKEN GITHUB_TOKEN DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 [[ "$EXPECTED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid build-plan digest." >&2; exit 1; }
 [[ "$EXPECTED_CONTROLLER_RESULT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
 	echo "Invalid expected controller-result digest." >&2

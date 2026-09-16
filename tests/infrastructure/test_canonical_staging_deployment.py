@@ -592,6 +592,10 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
     assert "RECALL_WEBHOOK_SECRET" in publisher
     assert "DOCKER_AUTH_CONFIG" in publisher
+    assert (
+        "unset GH_TOKEN GITHUB_TOKEN DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH"
+        in publisher
+    )
     assert '"$DOCKER" image load --input "$IMAGE_ARCHIVE"' in publisher
     assert '"$DOCKER" push' not in publisher
     assert '"$AZ" acr login' not in publisher
