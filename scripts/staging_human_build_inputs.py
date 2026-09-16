@@ -348,7 +348,17 @@ def prepare_build_inputs(
     manifest: list[tuple[str, str]] = []
     for name, raw, executable in entries:
         target = root / "source" / name
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent = root / "source"
+        for component in PurePosixPath(name).parts[:-1]:
+            parent /= component
+            parent.mkdir(mode=0o700, exist_ok=True)
+            info = parent.lstat()
+            require(
+                parent.resolve() == parent
+                and stat.S_ISDIR(info.st_mode)
+                and info.st_uid == os.geteuid()
+                and stat.S_IMODE(info.st_mode) == 0o700
+            )
         write_exclusive(target, raw, 0o700 if executable else 0o600)
         manifest.append((name, sha(raw)))
     write_exclusive(root / "bin/nixpacks", binary, 0o500)

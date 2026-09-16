@@ -516,6 +516,19 @@ class WorkspaceTests(unittest.TestCase):
             first.extraction_container, r"^cosmaneura-assets-[0-9a-f]{32}$"
         )
 
+    def test_all_nested_source_directories_are_private(self):
+        raw = archive(
+            source_files() + [("outer/middle/inner/file", b"invented", tarfile.REGTYPE)]
+        )
+        prepared = self.prepare(
+            source_archive=raw,
+            inputs=replace(self.inputs, source_archive_sha256=m.sha(raw)),
+        )
+        for relative in ("outer", "outer/middle", "outer/middle/inner"):
+            directory = prepared.root / "source" / relative
+            self.assertTrue(directory.is_dir())
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+
     def test_unsafe_parent_and_collision_do_not_overwrite(self):
         self.parent.chmod(0o755)
         with self.assertRaises(m.BuildInputRefused):
