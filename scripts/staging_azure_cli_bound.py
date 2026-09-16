@@ -70,6 +70,45 @@ ALLOWED_CONTAINERAPP_COMMANDS = {
     ("containerapp", "secret", "remove"),
     ("containerapp", "secret", "set"),
 }
+ALLOWED_OPTION_TOKENS = {
+    "--args",
+    "--command",
+    "--container",
+    "--container-name",
+    "--cpu",
+    "--environment",
+    "--env-vars",
+    "--execution",
+    "--format",
+    "--image",
+    "--job-execution-name",
+    "--memory",
+    "--name",
+    "--only-show-errors",
+    "--output",
+    "--query",
+    "--registry",
+    "--registry-password",
+    "--registry-server",
+    "--registry-username",
+    "--remove-env-vars",
+    "--replica-retry-limit",
+    "--replica-timeout",
+    "--resource-group",
+    "--revision",
+    "--revision-suffix",
+    "--secret-names",
+    "--secrets",
+    "--set-env-vars",
+    "--subscription",
+    "--tail",
+    "--trigger-type",
+    "--yes",
+    "-g",
+    "-i",
+    "-n",
+    "-o",
+}
 
 
 class BoundAzureRefused(RuntimeError):
@@ -161,6 +200,23 @@ def command_matches(argv: list[str], allowed: set[tuple[str, ...]]) -> bool:
     return any(argv[: len(prefix)] == list(prefix) for prefix in allowed)
 
 
+def validate_option_spellings(argv: list[str]) -> None:
+    for index, argument in enumerate(argv):
+        if not argument.startswith("-"):
+            continue
+        if argument == "-c":
+            require(
+                argv[:3] == ["containerapp", "job", "start"]
+                and index > 0
+                and argv[index - 1] == "--args"
+                and argv.count("-c") == 1
+                and flag_values(argv, {"--command"}) == ["/opt/venv/bin/python"]
+            )
+            continue
+        require(argument in ALLOWED_OPTION_TOKENS)
+        require(argv.count(argument) == 1)
+
+
 def validate_staging_scope(argv: list[str]) -> None:
     if argv[0] == "containerapp":
         require(command_matches(argv, ALLOWED_CONTAINERAPP_COMMANDS))
@@ -208,15 +264,7 @@ def validate_argv(argv: list[str]) -> None:
     if argv == ["--verify-only"]:
         return
     require(argv and argv[0] in {"acr", "containerapp"})
-    require("-s" not in argv)
-    require(
-        not any(
-            argument.startswith(
-                ("--name=", "--resource-group=", "--subscription=", "--registry=")
-            )
-            for argument in argv
-        )
-    )
+    validate_option_spellings(argv)
     require(argv.count("--subscription") == 1)
     index = argv.index("--subscription")
     require(index + 1 < len(argv) and argv[index + 1] == SUBSCRIPTION)

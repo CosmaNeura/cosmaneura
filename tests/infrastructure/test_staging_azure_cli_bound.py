@@ -202,6 +202,73 @@ def test_non_staging_or_unapproved_commands_are_rejected(command: list[str]) -> 
         m.validate_argv([*command, "--subscription", m.SUBSCRIPTION])
 
 
+@pytest.mark.parametrize(
+    "command",
+    (
+        [
+            "containerapp",
+            "update",
+            "-n",
+            "cosmaneura-staging-app",
+            "-g",
+            m.STAGING_RESOURCE_GROUP,
+            "--image=other.invalid/image:latest",
+        ],
+        [
+            "containerapp",
+            "show",
+            "-ncosmaneura-prod-app",
+            "-n",
+            "cosmaneura-staging-app",
+            "-g",
+            m.STAGING_RESOURCE_GROUP,
+        ],
+        [
+            "containerapp",
+            "show",
+            "-n",
+            "cosmaneura-staging-app",
+            "-gother",
+            "-g",
+            m.STAGING_RESOURCE_GROUP,
+        ],
+        [
+            "acr",
+            "manifest",
+            "show-metadata",
+            "--registry",
+            m.STAGING_REGISTRY,
+            "--name",
+            f"{m.STAGING_REPOSITORY}:{m.CANDIDATE_SHA}",
+            "-nother",
+        ],
+        [
+            "acr",
+            "credential",
+            "show",
+            "-n",
+            m.STAGING_REGISTRY,
+            "-nother",
+        ],
+        [
+            "containerapp",
+            "show",
+            "-n",
+            "cosmaneura-staging-app",
+            "-g",
+            m.STAGING_RESOURCE_GROUP,
+            "--resource-g",
+            "other",
+        ],
+    ),
+)
+def test_ambiguous_or_attached_option_spellings_are_rejected(
+    command: list[str],
+) -> None:
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv([*command, "--subscription", m.SUBSCRIPTION])
+
+
 def test_scope_normalization_never_splits_a_string_into_characters() -> None:
     scope = "https://management.azure.com/.default"
     assert m.normalized_scopes(scope) == {scope}
