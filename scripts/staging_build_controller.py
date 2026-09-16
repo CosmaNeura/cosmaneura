@@ -14,12 +14,13 @@ import json
 import os
 import re
 import resource
+import signal
 import stat
 import sys
 import types
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 MODULE_ORDER = (
     "verify_staging_candidate.py",
@@ -31,6 +32,9 @@ MODULE_ORDER = (
 )
 SELF = "staging_build_controller.py"
 MODULES = frozenset((*MODULE_ORDER, SELF))
+CONTROL_SIGNALS = frozenset(
+    {signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGALRM}
+)
 CANDIDATE = "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
 REVISIONS = ("d0a4c8e2f611", "e7a9c3d5f102", "da6e199668a4", "9a2399212488")
 KEYS = {
@@ -64,6 +68,10 @@ KEYS = {
 
 class BuildControllerRefused(RuntimeError):
     """Content-free refusal; preserve partial artifacts and never retry silently."""
+
+
+class BuildControllerInterrupted(BaseException):
+    """Catchable control signal; SIGKILL and host loss remain uncatchable."""
 
 
 def require(condition: object) -> None:
@@ -128,6 +136,27 @@ def read_bound(path: Path, expected: str, maximum: int) -> bytes:
         return raw
     finally:
         os.close(fd)
+
+
+def sync_directory(path: Path) -> None:
+    """Make an already-atomic result rename durable before reporting success."""
+    require(path.is_absolute() and path.resolve() == path)
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(descriptor)
+        require(
+            stat.S_ISDIR(before.st_mode)
+            and before.st_uid == os.geteuid()
+            and stat.S_IMODE(before.st_mode) == 0o700
+        )
+        os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        require(
+            (before.st_dev, before.st_ino, before.st_uid, before.st_mode)
+            == (after.st_dev, after.st_ino, after.st_uid, after.st_mode)
+        )
+    finally:
+        os.close(descriptor)
 
 
 def bound_input(plan: dict[str, Any], name: str, maximum: int = 65536) -> bytes:
@@ -276,6 +305,8 @@ def run(
     *,
     check_only: bool,
     source_only: bool = False,
+    commit_state: dict[str, Any] | None = None,
+    emit_success: Callable[[dict[str, Any]], object] | None = None,
 ) -> dict[str, Any]:
     raw_plan = read_bound(plan_path, expected, 65536)
     plan = record(raw_plan)
@@ -346,9 +377,10 @@ def run(
             for row in rehearsal["actual_online_migrations"]
         )
     )
+    require(commit_state is None or (type(commit_state) is dict and not commit_state))
+    require(emit_success is None or callable(emit_success))
     parent = Path(plan["attempt_parent"])
     require(parent.resolve() == parent and not parent.exists())
-    parent.mkdir(mode=0o700)
     result: dict[str, Any] = {
         "complete": False,
         "actor": "delegated_assistant",
@@ -362,8 +394,18 @@ def run(
         "publication_authorized": False,
         "deployment_authorized": False,
     }
-    phase = "prepare_owned_inputs"
+    phase = "create_attempt"
+    attempt_created = False
+    success: dict[str, Any] | None = None
+    success_raw: bytes | None = None
+    success_renamed = False
+    committed = False
     try:
+        with process.defer_control_signals():
+            parent.mkdir(mode=0o700)
+            attempt_created = True
+
+        phase = "prepare_owned_inputs"
 
         def authority() -> None:
             clock_check(plan)
@@ -429,43 +471,70 @@ def run(
             public_assets_sha256=archive.public_assets_sha256,
             finished_at=datetime.now(UTC).isoformat(),
         )
+        phase = "prepare_success_record"
         success_raw = canonical(success)
         success_path = parent / "controller-result.success.tmp"
         inputs.write_exclusive(success_path, success_raw, 0o400)
         require(read_bound(success_path, sha(success_raw), 65536) == success_raw)
-    except BaseException as error:
-        result.update(
-            complete=False,
-            phase=phase,
-            error_class=type(error).__name__,
-            finished_at=datetime.now(UTC).isoformat(),
-        )
-        inputs.write_exclusive(
-            parent / "controller-result.json", canonical(result), 0o400
-        )
-        raise
 
-    phase = "commit_success_record"
-    committed = False
-    try:
+        phase = "commit_success_record"
         with process.defer_control_signals():
             require(not (parent / "controller-result.json").exists())
             os.rename(success_path, parent / "controller-result.json")
+            success_renamed = True
+            sync_directory(parent)
             committed = True
-            return success
+            if commit_state is not None:
+                commit_state["result"] = success
+            if emit_success is not None:
+                try:
+                    emit_success(success)
+                except BaseException:
+                    # The durable record is authoritative. Output failure after
+                    # commit cannot turn the exact invocation into a failure.
+                    pass
+        return success
     except BaseException as error:
         if committed:
-            return success
+            require(success is not None)
+            return cast(dict[str, Any], success)
         result.update(
             complete=False,
             phase=phase,
             error_class=type(error).__name__,
             finished_at=datetime.now(UTC).isoformat(),
         )
-        inputs.write_exclusive(
-            parent / "controller-result.json", canonical(result), 0o400
-        )
+        if attempt_created:
+            final_path = parent / "controller-result.json"
+            failure_raw = canonical(result)
+            with process.defer_control_signals():
+                if success_renamed:
+                    require(success_raw is not None)
+                    require(
+                        read_bound(final_path, sha(cast(bytes, success_raw)), 65536)
+                        == success_raw
+                    )
+                    failure_path = parent / "controller-result.failure.tmp"
+                    inputs.write_exclusive(failure_path, failure_raw, 0o400)
+                    os.replace(failure_path, final_path)
+                else:
+                    require(not final_path.exists())
+                    inputs.write_exclusive(final_path, failure_raw, 0o400)
+                sync_directory(parent)
         raise
+
+
+def emit_result(value: dict[str, Any]) -> None:
+    print(json.dumps(value, sort_keys=True), flush=True)
+
+
+def interrupt_build(signum: int, _frame: object) -> None:
+    raise BuildControllerInterrupted(signum)
+
+
+def block_control_signals_through_exit() -> None:
+    """A committed CLI result exits zero; SIGKILL/host loss are uncatchable."""
+    signal.pthread_sigmask(signal.SIG_BLOCK, CONTROL_SIGNALS)
 
 
 def main() -> int:
@@ -476,28 +545,42 @@ def main() -> int:
         len(sys.argv) == 4
         and sys.argv[1] in {"--check-only", "--verify-source", "--run"}
     )
+    run_mode = sys.argv[1] == "--run"
+    commit_state: dict[str, Any] = {}
     try:
+        if run_mode:
+            for signum in CONTROL_SIGNALS:
+                signal.signal(signum, interrupt_build)
         result = run(
             Path(sys.argv[2]),
             sys.argv[3],
             Path(__file__).resolve().parents[1],
             check_only=sys.argv[1] == "--check-only",
             source_only=sys.argv[1] == "--verify-source",
+            commit_state=commit_state if run_mode else None,
+            emit_success=emit_result if run_mode else None,
         )
+        if run_mode:
+            require(commit_state.get("result") == result and result["complete"] is True)
+            block_control_signals_through_exit()
+            return 0
+        emit_result(result)
+        return 0
     except BaseException as error:
-        print(
-            json.dumps(
+        if commit_state.get("result", {}).get("complete") is True:
+            block_control_signals_through_exit()
+            return 0
+        try:
+            emit_result(
                 {
                     "complete": False,
                     "error_class": type(error).__name__,
                     "code": "staging_build_controller_refused",
                 }
-            ),
-            flush=True,
-        )
+            )
+        except BaseException:
+            pass
         return 2
-    print(json.dumps(result, sort_keys=True), flush=True)
-    return 0
 
 
 if __name__ == "__main__":

@@ -22,6 +22,9 @@ from pathlib import Path
 
 MAX_BYTES = 16 * 1024**3
 CHUNK = 1024 * 1024
+CONTROL_SIGNALS = frozenset(
+    {signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGALRM}
+)
 
 
 class BuildProcessRefused(RuntimeError):
@@ -36,7 +39,7 @@ def require(condition: object, code: str) -> None:
 @contextmanager
 def defer_control_signals() -> Iterator[None]:
     require(threading.current_thread() is threading.main_thread(), "build_main_thread")
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGALRM})
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, CONTROL_SIGNALS)
     try:
         yield
     finally:
@@ -81,9 +84,7 @@ def build_deadline(seconds: int) -> Iterator[tuple[float, Callable[[], None]]]:
         finally:
             closing = True
             try:
-                signal.pthread_sigmask(
-                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGALRM}
-                )
+                signal.pthread_sigmask(signal.SIG_BLOCK, CONTROL_SIGNALS)
             finally:
                 try:
                     signal.setitimer(signal.ITIMER_REAL, 0)

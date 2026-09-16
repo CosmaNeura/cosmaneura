@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import resource
+import signal
 import sys
 import tempfile
 import unittest
@@ -24,6 +25,20 @@ os.write(2, b"invented-stderr-marker\\n")
 
 @unittest.skipUnless(sys.platform == "darwin", "reviewed Darwin process lifecycle")
 class NativeProcessTests(unittest.TestCase):
+    def test_defer_control_signals_blocks_and_restores_supported_set(self):
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        self.assertFalse(process.CONTROL_SIGNALS & before)
+        with process.defer_control_signals():
+            inside = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            self.assertTrue(process.CONTROL_SIGNALS <= inside)
+            self.assertEqual(
+                process.CONTROL_SIGNALS,
+                frozenset(
+                    {signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGALRM}
+                ),
+            )
+        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, set()), before)
+
     def check_stream(self, merged):
         # Only this test process and its own descendants; no host configuration.
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
