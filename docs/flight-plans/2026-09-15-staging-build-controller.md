@@ -96,3 +96,16 @@ Normal merge and an accepted exact runtime plan/command review remain required
 before using the launcher. No application build, image publication, live migration,
 deployment or QA login is established merely by creating/reviewing this PR.
 The successful retained-archive rehearsal is not a quiesced cutover recovery point.
+
+## Initial Cursor finding and regression
+
+Review5217485027 at5220cc7d found one high-severity integration issue, comment
+4021637270: the launcher emitted an ISO timestamp with a UTC offset, while the
+unchanged input validator requires whole-second UTC ending in Z. The launcher
+now emits that exact format. The first mocked fixture suite did not cover this
+boundary. A new fixture runs the actual public configuration validator, source
+archive reader and owned input preparation through the controller, mocking only
+source authentication, native binary bytes and final image execution. It fails
+at the real timestamp guard on the original source and passes with the fix.
+The original neutral review/finding remains recorded; the corrected exact head
+requires a new independent review before normal merge or use.

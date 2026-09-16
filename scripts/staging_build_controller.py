@@ -309,7 +309,10 @@ def run(
     observed = source.collect_build_source(root, request)
     source_archive = observed.source_archive
     build_inputs = inputs.BuildInputs(
-        CANDIDATE, sha(source_archive), sha(frontend), datetime.now(UTC).isoformat()
+        CANDIDATE,
+        sha(source_archive),
+        sha(frontend),
+        datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
     entries = inputs.source_entries(source_archive, build_inputs)
     migration_hashes = {

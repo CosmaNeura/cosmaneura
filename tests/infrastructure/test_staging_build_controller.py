@@ -356,6 +356,89 @@ class ControllerTests(unittest.TestCase):
             json.loads((self.parent / "controller-result.json").read_bytes()), value
         )
 
+    def test_real_input_validation_and_preparation_accept_controller_timestamp(self):
+        fixture_spec = importlib.util.spec_from_file_location(
+            "controller_real_input_fixture",
+            ROOT / "tests/infrastructure/test_staging_human_build_inputs.py",
+        )
+        assert fixture_spec and fixture_spec.loader
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        real_inputs = fixture.m
+        config = fixture.configuration() | {
+            "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED": "false"
+        }
+        self.put("frontend", config)
+        names = (
+            "VITE_CLERK_PUBLIC_KEY",
+            "VITE_SENTRY_DSN",
+            "VITE_POSTHOG_HOST",
+            "VITE_POSTHOG_KEY",
+        )
+        self.put(
+            "frontend_origin",
+            {
+                "complete": True,
+                "public_fields_only": True,
+                "configuration_sha256": self.plan["frontend"]["sha256"],
+                "fields": [
+                    {"name": name, "sha256": m.sha(config[name].encode())}
+                    for name in names
+                ],
+            },
+        )
+        archive = fixture.archive(
+            fixture.source_files()
+            + [
+                (
+                    "migrations/versions/" + revision + ".py",
+                    body,
+                    fixture.tarfile.REGTYPE,
+                )
+                for revision, body in zip(
+                    m.REVISIONS, self.migration_bodies, strict=True
+                )
+            ],
+            comment=m.CANDIDATE,
+        )
+        self.plan["source_archive_sha256"] = m.sha(archive)
+        modules = self.fake_modules()
+        modules["staging_human_build_inputs"] = real_inputs
+        modules[
+            "staging_build_source"
+        ].collect_build_source.return_value.source_archive = archive
+
+        def fake_build(prepared, source_archive, **kwargs):
+            self.assertEqual(source_archive, archive)
+            self.assertRegex(
+                prepared.inputs.created_at, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$"
+            )
+            self.assertEqual(
+                (prepared.root / "source/.env").read_bytes(),
+                (ROOT / ".env").read_bytes(),
+            )
+            kwargs["validate_authority"]()
+            image = prepared.root / "artifacts/image.tar"
+            image.write_bytes(b"invented image")
+            return types.SimpleNamespace(
+                path=image,
+                sha256=m.sha(image.read_bytes()),
+                size=image.stat().st_size,
+                image_id="sha256:" + "7" * 64,
+                metadata_path=prepared.root / "artifacts/build-result.json",
+                public_assets_sha256="8" * 64,
+            )
+
+        modules["staging_human_build_executor"].build_candidate.side_effect = fake_build
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            patch.object(
+                real_inputs, "native_builder_bytes", return_value=fixture.BINARY
+            ),
+        ):
+            value = self.invoke()
+        self.assertTrue(value["complete"])
+
 
 if __name__ == "__main__":
     unittest.main()
