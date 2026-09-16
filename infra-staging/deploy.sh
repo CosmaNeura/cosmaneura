@@ -45,16 +45,48 @@ STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
 PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
-PINNED_FOUNDER_GITHUB_LOGIN_SHA256="f315b07364650dce8146d41f95f3049cc0c8fe6a46b8bc3957ae50b937f730ce"
+PINNED_FOUNDER_GITHUB_IDENTITY_SHA256="a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5"
 PINNED_FOUNDER_AZURE_USERNAME_SHA256="acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
+PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
 
 hash_stdin() {
 	python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
+canonical_github_user_sha256() {
+	python3 -c '
+import hashlib
+import json
+import sys
+
+def unique(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate identity field")
+        value[key] = item
+    return value
+
+try:
+    user = json.load(sys.stdin, object_pairs_hook=unique)
+    if (
+        not isinstance(user, dict)
+        or user.get("login") != "JohnClem"
+        or user.get("type") != "User"
+        or type(user.get("id")) is not int
+        or user["id"] <= 0
+    ):
+        raise ValueError("invalid founder identity")
+    identity = {key: user[key] for key in ("id", "login", "type")}
+except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+    raise SystemExit(1)
+print(hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+'
+}
+
 verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
-	local founder_login founder_login_sha256 controller_sha canonical_origin dirty_checkout
+	local founder_identity_json founder_identity_sha256 controller_sha canonical_origin dirty_checkout
 	if [[ ! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
 		echo "Founder-user staging deployment requires an approval PR number."
 		return 1
@@ -69,15 +101,16 @@ verify_founder_release_source() {
 		echo "Founder-user staging deployment requires the clean canonical repository."
 		return 1
 	fi
-	if ! founder_login=$(gh api user --jq .login); then
+	if ! founder_identity_json=$(gh api --hostname github.com --method GET user); then
 		echo "Failed to authenticate the local GitHub operator."
 		return 1
 	fi
-	if ! founder_login_sha256=$(printf '%s' "$founder_login" | hash_stdin); then
+	if ! founder_identity_sha256=$(printf '%s' "$founder_identity_json" | canonical_github_user_sha256); then
 		echo "Failed to fingerprint the local GitHub operator."
 		return 1
 	fi
-	if [[ "$founder_login_sha256" != "$PINNED_FOUNDER_GITHUB_LOGIN_SHA256" ]]; then
+	unset founder_identity_json
+	if [[ "$founder_identity_sha256" != "$PINNED_FOUNDER_GITHUB_IDENTITY_SHA256" ]]; then
 		echo "The local GitHub operator is not the pinned founder."
 		return 1
 	fi
@@ -94,8 +127,8 @@ verify_founder_release_source() {
 		--event-name workflow_dispatch \
 		--ref refs/heads/master \
 		--ref-protected true \
-		--actor "$founder_login" \
-		--triggering-actor "$founder_login" >/dev/null; then
+		--actor JohnClem \
+		--triggering-actor JohnClem >/dev/null; then
 		echo "Founder-user staging candidate provenance verification failed."
 		return 1
 	fi
@@ -408,6 +441,7 @@ emit_github_output source_sha "$GIT_SHA" || exit 1
 
 verify_azure_deployment_identity() {
 	local azure_account_json founder_azure_username founder_azure_username_sha256
+	local founder_azure_object_id founder_azure_object_id_sha256
 	if ! azure_account_json=$(az account show \
 		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
 		-o json); then
@@ -453,6 +487,22 @@ verify_azure_deployment_identity() {
 		fi
 		if [[ "$founder_azure_username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
 			echo "The active Azure user is not the pinned founder."
+			return 1
+		fi
+		if ! founder_azure_object_id=$(az ad signed-in-user show --query id --output tsv); then
+			echo "Failed to authenticate the Azure directory user."
+			return 1
+		fi
+		if [[ ! "$founder_azure_object_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+			echo "The Azure directory user identity is invalid."
+			return 1
+		fi
+		if ! founder_azure_object_id_sha256=$(printf '%s' "$founder_azure_object_id" | hash_stdin); then
+			echo "Failed to fingerprint the Azure directory user."
+			return 1
+		fi
+		if [[ "$founder_azure_object_id_sha256" != "$PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256" ]]; then
+			echo "The Azure directory user is not the pinned founder."
 			return 1
 		fi
 		;;

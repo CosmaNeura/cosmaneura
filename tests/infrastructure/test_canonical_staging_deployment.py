@@ -481,7 +481,8 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert 'case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in' in deploy
     assert "service-principal)" in deploy
     assert "founder-user)" in deploy
-    assert "gh api user --jq .login" in deploy
+    assert "gh api --hostname github.com --method GET user" in deploy
+    assert "canonical_github_user_sha256" in deploy
     assert 'STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"' in deploy
     assert deploy.count("verify_founder_release_source") == 3
     assert deploy.count("verify_azure_deployment_identity") == 3
@@ -489,8 +490,10 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert '--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER"' in deploy
     assert '--workflow-sha "$controller_sha"' in deploy
     assert '--candidate-sha "$GIT_SHA"' in deploy
-    assert "f315b07364650dce8146d41f95f3049cc0c8fe6a46b8bc3957ae50b937f730ce" in deploy
+    assert "a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5" in deploy
     assert "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a" in deploy
+    assert "az ad signed-in-user show --query id --output tsv" in deploy
+    assert "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93" in deploy
     assert '.userType == "user"' in deploy
     assert "refuses configured service-principal inputs" in deploy
     assert 'echo "Unsupported staging deployment identity mode."' in deploy

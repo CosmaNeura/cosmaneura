@@ -216,8 +216,9 @@
 - The deploy script defaults to the pinned staging service principal. When
   Actions is unavailable, an explicit `STAGING_DEPLOYMENT_IDENTITY_MODE=founder-user`
   fallback accepts only the pinned founder's independently authenticated GitHub
-  and Azure user identities in the exact staging tenant and subscription, while
-  refusing any simultaneous service-principal inputs. The fallback revalidates
+  user object and Azure directory object plus username in the exact staging
+  tenant and subscription, while refusing any simultaneous service-principal
+  inputs. The fallback revalidates
   the clean protected-master controller, selected merged candidate PR and schema
   head before protected configuration and again immediately before mutation. It
   grants no production authority and does not weaken the workflow's default path.
