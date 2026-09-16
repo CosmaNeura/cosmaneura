@@ -395,6 +395,11 @@ class Builder:
         self.public_files: tuple[tuple[str, str], ...] = ()
         self.environment = {
             "HOME": str(prepared.root / "home"),
+            # Docker's containerd image store otherwise makes a single-platform
+            # build plus the default provenance attestation an OCI index. A
+            # docker-save archive contains the runnable image config, not that
+            # index, so retain one content identity across build and publish.
+            "BUILDX_NO_DEFAULT_ATTESTATIONS": "1",
             "DOCKER_CONFIG": str(prepared.root / "docker-config"),
             "DOCKER_HOST": "unix://" + str(SOCKET),
             "PATH": str(prepared.root / "bin") + ":/usr/bin:/bin",
