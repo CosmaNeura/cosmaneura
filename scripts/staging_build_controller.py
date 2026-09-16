@@ -398,6 +398,9 @@ def run(
             executor.file_sha(archive.path, executor.MAX_IMAGE)
             == (archive.sha256, archive.size)
         )
+        build_metadata_sha256, build_metadata_bytes = executor.file_sha(
+            archive.metadata_path, 65536
+        )
         result.update(
             complete=True,
             image_id=archive.image_id,
@@ -405,6 +408,8 @@ def run(
             image_archive_sha256=archive.sha256,
             image_archive_bytes=archive.size,
             build_metadata=str(archive.metadata_path),
+            build_metadata_sha256=build_metadata_sha256,
+            build_metadata_bytes=build_metadata_bytes,
             public_assets_sha256=archive.public_assets_sha256,
         )
     except BaseException as error:

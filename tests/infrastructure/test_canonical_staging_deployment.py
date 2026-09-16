@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -567,6 +571,17 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "staging_azure_cli_bound.py" in publisher
     assert ".source_archive_sha256 == $source" in publisher
     assert ".source_archive_sha256 == $source_sha256" in publisher
+    assert "secure_json_capture" in publisher
+    assert "RESULT_CAPTURE=$(secure_json_capture" in publisher
+    assert (
+        '"$CONTROLLER_RESULT" 65536 "$EXPECTED_CONTROLLER_RESULT_SHA256"' in publisher
+    )
+    assert "CONTROLLER_RESULT_JSON=$(printf" in publisher
+    assert "BUILD_METADATA_JSON=$(printf" in publisher
+    assert '--slurpfile result "$CONTROLLER_RESULT"' not in publisher
+    assert '--slurpfile plan "$BUILD_PLAN"' not in publisher
+    assert 'secure_file_fingerprint "$CONTROLLER_RESULT" 65536' in publisher
+    assert 'secure_file_fingerprint "$BUILD_METADATA" 65536' in publisher
     assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
     assert "RECALL_WEBHOOK_SECRET" in publisher
     assert "DOCKER_AUTH_CONFIG" in publisher
@@ -593,7 +608,7 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "publication-result.json" in publisher
     assert "automatic_retry_allowed:false" in publisher
     assert "deployment_performed:false" in publisher
-    assert publisher.count('"$PYTHON" -I -S -B') == 6
+    assert publisher.count('"$PYTHON" -I -S -B') == 7
     assert ":latest" not in publisher
     assert "infra-staging/deploy.sh" not in publisher
     assert "cosmaneuraprodregistry" not in publisher
@@ -602,6 +617,42 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "/manifests/{digest}" in uploader
     assert "tag_created" in uploader
     assert 'method in {"HEAD", "POST", "PUT"}' in uploader
+
+
+def test_local_publisher_captures_exact_verified_json_bytes(tmp_path: Path) -> None:
+    publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
+    function = publisher.index("secure_json_capture() {")
+    start = publisher.index("<<'PY'\n", function) + len("<<'PY'\n")
+    end = publisher.index("\nPY\n}", start)
+    program = publisher[start:end]
+    raw = b'{"nested":{"value":7},"text":"fixture"}\n'
+    path = (tmp_path / "record.json").resolve()
+    path.write_bytes(raw)
+    path.chmod(0o400)
+    digest = hashlib.sha256(raw).hexdigest()
+
+    accepted = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-", str(path), "65536", digest],
+        input=program,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert accepted.returncode == 0
+    assert json.loads(accepted.stdout) == {
+        "bytes": len(raw),
+        "sha256": digest,
+        "value": {"nested": {"value": 7}, "text": "fixture"},
+    }
+
+    refused = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-", str(path), "65536", "0" * 64],
+        input=program,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert refused.returncode != 0
 
 
 def test_staging_workflow_does_not_reference_production_controls() -> None:

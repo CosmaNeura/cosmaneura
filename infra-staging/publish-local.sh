@@ -48,6 +48,11 @@ METADATA_SHA256=""
 IMAGE_ID=""
 ARCHIVE_SHA256=""
 PLAN_SOURCE_ARCHIVE_SHA256=""
+PLAN_JSON=""
+CONTROLLER_RESULT_JSON=""
+BUILD_METADATA_JSON=""
+RESULT_BYTES=""
+METADATA_BYTES=""
 
 bound_az() {
 	local management_token_json registry_token_json status
@@ -143,7 +148,78 @@ try:
         getattr(before, field) != getattr(after, field) for field in fields
     ):
         raise SystemExit(1)
+    current = path.lstat()
+    if any(getattr(before, field) != getattr(current, field) for field in fields):
+        raise SystemExit(1)
     print(f"{digest.hexdigest()} {size}")
+finally:
+    os.close(fd)
+PY
+}
+
+secure_json_capture() {
+	"$PYTHON" -I -S -B - "$1" "$2" "$3" <<'PY'
+import hashlib
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+def unique(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate key")
+        value[key] = item
+    return value
+
+path = Path(sys.argv[1])
+maximum = int(sys.argv[2])
+expected = sys.argv[3]
+if not path.is_absolute() or path.resolve() != path:
+    raise SystemExit(1)
+fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+try:
+    before = os.fstat(fd)
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_nlink != 1
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) != 0o400
+        or not 0 < before.st_size <= maximum
+    ):
+        raise SystemExit(1)
+    chunks = []
+    size = 0
+    digest = hashlib.sha256()
+    while chunk := os.read(fd, min(65536, maximum - size + 1)):
+        size += len(chunk)
+        if size > maximum:
+            raise SystemExit(1)
+        chunks.append(chunk)
+        digest.update(chunk)
+    raw = b"".join(chunks)
+    fields = (
+        "st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink",
+        "st_size", "st_mtime_ns", "st_ctime_ns",
+    )
+    identity = tuple(getattr(before, field) for field in fields)
+    if size != before.st_size:
+        raise SystemExit(1)
+    if any(tuple(getattr(info, field) for field in fields) != identity
+           for info in (os.fstat(fd), path.lstat())):
+        raise SystemExit(1)
+    observed = digest.hexdigest()
+    if expected != "-" and observed != expected:
+        raise SystemExit(1)
+    value = json.loads(raw, object_pairs_hook=unique)
+    if type(value) is not dict:
+        raise SystemExit(1)
+    print(json.dumps(
+        {"bytes": size, "sha256": observed, "value": value},
+        sort_keys=True, separators=(",", ":"),
+    ))
 finally:
     os.close(fd)
 PY
@@ -164,7 +240,8 @@ verify_founder_source() {
 		echo "Local publication controller does not match the reviewed build plan." >&2
 		return 1
 	fi
-	expected_identity_sha256=$("$JQ" -er '.github_user_sha256 | select(test("^[0-9a-f]{64}$"))' "$BUILD_PLAN")
+	expected_identity_sha256=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
+		'.github_user_sha256 | select(test("^[0-9a-f]{64}$"))')
 	source_result=$(cd "$REPOSITORY_ROOT" && \
 		"$PYTHON" -I -S -B scripts/staging_build_controller.py \
 			--verify-source "$BUILD_PLAN" "$EXPECTED_PLAN_SHA256")
@@ -314,7 +391,7 @@ finally:
 cleanup() {
 	local status=$?
 	set +e
-	unset ACR_LOGIN_JSON
+	unset ACR_LOGIN_JSON PLAN_JSON CONTROLLER_RESULT_JSON BUILD_METADATA_JSON
 	if [[ $status -ne 0 ]]; then
 		write_evidence false failed
 	fi
@@ -341,58 +418,75 @@ unset GH_TOKEN GITHUB_TOKEN DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 	exit 1
 }
 
-read -r observed_plan_sha256 observed_plan_bytes < <(secure_file_fingerprint "$BUILD_PLAN" 65536)
-[[ "$observed_plan_sha256" == "$EXPECTED_PLAN_SHA256" && "$observed_plan_bytes" -gt 0 ]] || exit 1
-PLAN_CONTROLLER_SHA=$("$JQ" -er '.controller_sha | select(test("^[0-9a-f]{40}$"))' "$BUILD_PLAN")
-PLAN_SOURCE_ARCHIVE_SHA256=$("$JQ" -er \
-	'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))' "$BUILD_PLAN")
-[[ "$("$JQ" -er '.candidate_sha' "$BUILD_PLAN")" == "$CANDIDATE_SHA" ]] || exit 1
-[[ "$("$JQ" -er '.candidate_pr' "$BUILD_PLAN")" == "$APPROVAL_PR_NUMBER" ]] || exit 1
+PLAN_CAPTURE=$(secure_json_capture "$BUILD_PLAN" 65536 "$EXPECTED_PLAN_SHA256")
+printf '%s' "$PLAN_CAPTURE" | "$JQ" -e \
+	--arg expected "$EXPECTED_PLAN_SHA256" '
+	type == "object" and keys == ["bytes","sha256","value"] and
+	.sha256 == $expected and (.bytes | type == "number" and . > 0) and
+	(.value | type == "object")' >/dev/null
+PLAN_JSON=$(printf '%s' "$PLAN_CAPTURE" | "$JQ" -cer '.value')
+unset PLAN_CAPTURE
+PLAN_CONTROLLER_SHA=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
+	'.controller_sha | select(test("^[0-9a-f]{40}$"))')
+PLAN_SOURCE_ARCHIVE_SHA256=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
+	'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))')
+[[ "$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_sha')" == "$CANDIDATE_SHA" ]] || exit 1
+[[ "$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_pr')" == "$APPROVAL_PR_NUMBER" ]] || exit 1
 
-read -r RESULT_SHA256 result_bytes < <(secure_file_fingerprint "$CONTROLLER_RESULT" 65536)
-[[ "$RESULT_SHA256" == "$EXPECTED_CONTROLLER_RESULT_SHA256" && "$result_bytes" -gt 0 ]] || {
+RESULT_CAPTURE=$(secure_json_capture \
+	"$CONTROLLER_RESULT" 65536 "$EXPECTED_CONTROLLER_RESULT_SHA256")
+RESULT_SHA256=$(printf '%s' "$RESULT_CAPTURE" | "$JQ" -er '.sha256')
+RESULT_BYTES=$(printf '%s' "$RESULT_CAPTURE" | "$JQ" -er \
+	'.bytes | select(type == "number" and . > 0)')
+CONTROLLER_RESULT_JSON=$(printf '%s' "$RESULT_CAPTURE" | "$JQ" -cer '.value')
+unset RESULT_CAPTURE
+[[ "$RESULT_SHA256" == "$EXPECTED_CONTROLLER_RESULT_SHA256" ]] || {
 	echo "Controller result does not match the separately supplied expected digest." >&2
 	exit 1
 }
-"$JQ" -e --slurpfile plan "$BUILD_PLAN" \
+printf '%s\n%s\n' "$CONTROLLER_RESULT_JSON" "$PLAN_JSON" | "$JQ" -se \
 	--arg candidate "$CANDIDATE_SHA" \
 	--arg controller "$PLAN_CONTROLLER_SHA" \
 	--arg plan_sha256 "$EXPECTED_PLAN_SHA256" \
 	--arg source_sha256 "$PLAN_SOURCE_ARCHIVE_SHA256" '
-	type == "object" and keys == [
-	  "actor","build_metadata","build_root","candidate_sha","complete",
+	length == 2 and (.[0] as $result | .[1] as $plan |
+	$result | type == "object" and keys == [
+	  "actor","build_metadata","build_metadata_bytes","build_metadata_sha256",
+	  "build_root","candidate_sha","complete",
 	  "controller_sha","deployment_authorized","finished_at",
 	  "frontend_configuration_sha256","image_archive","image_archive_bytes",
 	  "image_archive_sha256","image_id","module_sha256s","plan_sha256",
 	  "public_assets_sha256","publication_authorized","source_archive_sha256",
 	  "started_at"
-	] and .complete == true and .actor == "delegated_assistant" and
-	.candidate_sha == $candidate and .controller_sha == $controller and
-	.plan_sha256 == $plan_sha256 and .module_sha256s == $plan[0].module_sha256s and
-	.publication_authorized == false and .deployment_authorized == false and
-	.source_archive_sha256 == $source_sha256 and
-	(.frontend_configuration_sha256 | test("^[0-9a-f]{64}$")) and
-	(.public_assets_sha256 | test("^[0-9a-f]{64}$")) and
-	(.image_id | test("^sha256:[0-9a-f]{64}$")) and
-	(.image_archive_sha256 | test("^[0-9a-f]{64}$")) and
-	(.image_archive_bytes | type == "number" and . > 0 and . <= 17179869184) and
-	(.started_at | type == "string") and (.finished_at | type == "string")' \
-	"$CONTROLLER_RESULT" >/dev/null
-BUILD_ROOT=$("$JQ" -er '.build_root' "$CONTROLLER_RESULT")
+	] and $result.complete == true and $result.actor == "delegated_assistant" and
+	$result.candidate_sha == $candidate and $result.controller_sha == $controller and
+	$result.plan_sha256 == $plan_sha256 and $result.module_sha256s == $plan.module_sha256s and
+	$result.publication_authorized == false and $result.deployment_authorized == false and
+	$result.source_archive_sha256 == $source_sha256 and
+	($result.frontend_configuration_sha256 | test("^[0-9a-f]{64}$")) and
+	($result.public_assets_sha256 | test("^[0-9a-f]{64}$")) and
+	($result.image_id | test("^sha256:[0-9a-f]{64}$")) and
+	($result.image_archive_sha256 | test("^[0-9a-f]{64}$")) and
+	($result.image_archive_bytes | type == "number" and . > 0 and . <= 17179869184) and
+	($result.build_metadata_sha256 | test("^[0-9a-f]{64}$")) and
+	($result.build_metadata_bytes | type == "number" and . > 0 and . <= 65536) and
+	($result.started_at | type == "string") and
+	($result.finished_at | type == "string"))' >/dev/null
+BUILD_ROOT=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er '.build_root')
 [[ "$BUILD_ROOT" =~ ^/private/tmp/cosmaneura-staging-build-[0-9a-f]{32}$ ]] || exit 1
 [[ "$CONTROLLER_RESULT" == "$BUILD_ROOT/controller-result.json" ]] || exit 1
-[[ "$("$JQ" -er '.complete' "$CONTROLLER_RESULT")" == true ]] || exit 1
-[[ "$("$JQ" -er '.candidate_sha' "$CONTROLLER_RESULT")" == "$CANDIDATE_SHA" ]] || exit 1
-[[ "$("$JQ" -er '.controller_sha' "$CONTROLLER_RESULT")" == "$PLAN_CONTROLLER_SHA" ]] || exit 1
-[[ "$("$JQ" -er '.plan_sha256' "$CONTROLLER_RESULT")" == "$EXPECTED_PLAN_SHA256" ]] || exit 1
-[[ "$("$JQ" -er '.publication_authorized' "$CONTROLLER_RESULT")" == false ]] || exit 1
-[[ "$("$JQ" -er '.deployment_authorized' "$CONTROLLER_RESULT")" == false ]] || exit 1
-
-IMAGE_ID=$("$JQ" -er '.image_id | select(test("^sha256:[0-9a-f]{64}$"))' "$CONTROLLER_RESULT")
-IMAGE_ARCHIVE=$("$JQ" -er '.image_archive' "$CONTROLLER_RESULT")
-ARCHIVE_SHA256=$("$JQ" -er '.image_archive_sha256 | select(test("^[0-9a-f]{64}$"))' "$CONTROLLER_RESULT")
-ARCHIVE_BYTES=$("$JQ" -er '.image_archive_bytes | select(type == "number" and . > 0 and . <= 17179869184)' "$CONTROLLER_RESULT")
-BUILD_METADATA=$("$JQ" -er '.build_metadata' "$CONTROLLER_RESULT")
+IMAGE_ID=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
+	'.image_id | select(test("^sha256:[0-9a-f]{64}$"))')
+IMAGE_ARCHIVE=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er '.image_archive')
+ARCHIVE_SHA256=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
+	'.image_archive_sha256 | select(test("^[0-9a-f]{64}$"))')
+ARCHIVE_BYTES=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
+	'.image_archive_bytes | select(type == "number" and . > 0 and . <= 17179869184)')
+BUILD_METADATA=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er '.build_metadata')
+METADATA_SHA256=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
+	'.build_metadata_sha256 | select(test("^[0-9a-f]{64}$"))')
+METADATA_BYTES=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
+	'.build_metadata_bytes | select(type == "number" and . > 0 and . <= 65536)')
 [[ "$IMAGE_ARCHIVE" == "$BUILD_ROOT/artifacts/application-image.tar" ]] || exit 1
 [[ "$BUILD_METADATA" == "$BUILD_ROOT/artifacts/build-result.json" ]] || exit 1
 EVIDENCE_PATH="$BUILD_ROOT/artifacts/publication-result.json"
@@ -402,28 +496,35 @@ ATTEMPT_PATH="$BUILD_ROOT/artifacts/publication-attempt.json"
 
 read -r observed_archive_sha256 observed_archive_bytes < <(secure_file_fingerprint "$IMAGE_ARCHIVE" 17179869184)
 [[ "$observed_archive_sha256" == "$ARCHIVE_SHA256" && "$observed_archive_bytes" == "$ARCHIVE_BYTES" ]] || exit 1
-read -r METADATA_SHA256 metadata_bytes < <(secure_file_fingerprint "$BUILD_METADATA" 65536)
-[[ "$metadata_bytes" -gt 0 ]] || exit 1
-"$JQ" -e --slurpfile result "$CONTROLLER_RESULT" --slurpfile plan "$BUILD_PLAN" '
-	type == "object" and keys == [
+METADATA_CAPTURE=$(secure_json_capture "$BUILD_METADATA" 65536 "$METADATA_SHA256")
+printf '%s' "$METADATA_CAPTURE" | "$JQ" -e \
+	--arg sha256 "$METADATA_SHA256" \
+	--argjson bytes "$METADATA_BYTES" '
+	.sha256 == $sha256 and .bytes == $bytes and (.value | type == "object")' >/dev/null
+BUILD_METADATA_JSON=$(printf '%s' "$METADATA_CAPTURE" | "$JQ" -cer '.value')
+unset METADATA_CAPTURE
+printf '%s\n%s\n%s\n' \
+	"$BUILD_METADATA_JSON" "$CONTROLLER_RESULT_JSON" "$PLAN_JSON" | "$JQ" -se '
+	length == 3 and (.[0] as $metadata | .[1] as $result | .[2] as $plan |
+	$metadata | type == "object" and keys == [
 	  "archive_bytes","archive_sha256","candidate_sha","deployment_authorized",
 	  "engine_id_sha256","frontend_configuration_sha256","image_id",
 	  "local_children_closed","owned_extraction_container_removed",
 	  "public_assets_sha256","publication_authorized","schema_version",
 	  "source_archive_sha256"
-	] and .schema_version == 1 and
-	.candidate_sha == $result[0].candidate_sha and
-	.source_archive_sha256 == $result[0].source_archive_sha256 and
-	.frontend_configuration_sha256 == $result[0].frontend_configuration_sha256 and
-	.image_id == $result[0].image_id and
-	.archive_sha256 == $result[0].image_archive_sha256 and
-	.archive_bytes == $result[0].image_archive_bytes and
-	.public_assets_sha256 == $result[0].public_assets_sha256 and
-	.engine_id_sha256 == $plan[0].engine.id_sha256 and
-	.local_children_closed == true and
-	.owned_extraction_container_removed == true and
-	.publication_authorized == false and .deployment_authorized == false' \
-	"$BUILD_METADATA" >/dev/null
+	] and $metadata.schema_version == 1 and
+	$metadata.candidate_sha == $result.candidate_sha and
+	$metadata.source_archive_sha256 == $result.source_archive_sha256 and
+	$metadata.frontend_configuration_sha256 == $result.frontend_configuration_sha256 and
+	$metadata.image_id == $result.image_id and
+	$metadata.archive_sha256 == $result.image_archive_sha256 and
+	$metadata.archive_bytes == $result.image_archive_bytes and
+	$metadata.public_assets_sha256 == $result.public_assets_sha256 and
+	$metadata.engine_id_sha256 == $plan.engine.id_sha256 and
+	$metadata.local_children_closed == true and
+	$metadata.owned_extraction_container_removed == true and
+	$metadata.publication_authorized == false and
+	$metadata.deployment_authorized == false)' >/dev/null
 
 PHASE=revalidate_build_plan
 revalidate_build_plan
@@ -449,6 +550,16 @@ PHASE=final_prepublication_verification
 revalidate_build_plan
 verify_founder_source
 verify_founder_azure_identity
+read -r final_result_sha256 final_result_bytes < <(
+	secure_file_fingerprint "$CONTROLLER_RESULT" 65536
+)
+[[ "$final_result_sha256" == "$RESULT_SHA256" && \
+	"$final_result_bytes" == "$RESULT_BYTES" ]] || exit 1
+read -r final_metadata_sha256 final_metadata_bytes < <(
+	secure_file_fingerprint "$BUILD_METADATA" 65536
+)
+[[ "$final_metadata_sha256" == "$METADATA_SHA256" && \
+	"$final_metadata_bytes" == "$METADATA_BYTES" ]] || exit 1
 read -r final_archive_sha256 final_archive_bytes < <(secure_file_fingerprint "$IMAGE_ARCHIVE" 17179869184)
 [[ "$final_archive_sha256" == "$ARCHIVE_SHA256" && "$final_archive_bytes" == "$ARCHIVE_BYTES" ]] || exit 1
 [[ "$("$DOCKER" image inspect --format '{{.Id}}' "$IMAGE_ID")" == "$IMAGE_ID" ]] || exit 1

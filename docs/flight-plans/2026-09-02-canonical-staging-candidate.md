@@ -242,8 +242,12 @@
   separation: it requires the independently captured SHA-256 of a closed-schema
   successful controller result, revalidates the reviewed build plan and founder
   GitHub/Azure identities, requires the live authenticated source archive, plan,
-  controller result, and build metadata to agree on one exact source digest, and
-  writes a durable exclusive attempt record before the first registry mutation.
+  controller result, and build metadata to agree on one exact source digest,
+  binds the metadata digest inside the independently digest-pinned controller
+  result, and parses all three JSON inputs only from bytes captured through the
+  same verified descriptors. It rechecks those file identities and digests
+  immediately before writing a durable exclusive attempt record and the first
+  registry mutation.
   It uploads blobs and a manifest only under their
   content digests, then creates the candidate SHA tag through ACR import in
   `NoForce` mode. That atomic service operation refuses an existing tag; the

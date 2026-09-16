@@ -212,12 +212,14 @@ class ControllerTests(unittest.TestCase):
                 raise RuntimeError("invented failure after output")
             if marker:
                 (build_root / "artifacts/build-failure.json").write_text("{}")
+            metadata = build_root / "artifacts/build-result.json"
+            metadata.write_bytes(b'{"invented":"metadata"}\n')
             return types.SimpleNamespace(
                 path=archive,
                 sha256=m.sha(archive.read_bytes()),
                 size=archive.stat().st_size,
                 image_id="sha256:" + "7" * 64,
-                metadata_path=build_root / "artifacts/build-result.json",
+                metadata_path=metadata,
                 public_assets_sha256="8" * 64,
             )
 
@@ -371,6 +373,13 @@ class ControllerTests(unittest.TestCase):
             value["image_archive_sha256"],
             m.sha(Path(value["image_archive"]).read_bytes()),
         )
+        self.assertEqual(
+            value["build_metadata_sha256"],
+            m.sha(Path(value["build_metadata"]).read_bytes()),
+        )
+        self.assertEqual(
+            value["build_metadata_bytes"], Path(value["build_metadata"]).stat().st_size
+        )
         self.assertGreaterEqual(
             modules[
                 "staging_build_source"
@@ -445,12 +454,14 @@ class ControllerTests(unittest.TestCase):
             kwargs["validate_authority"]()
             image = prepared.root / "artifacts/image.tar"
             image.write_bytes(b"invented image")
+            metadata = prepared.root / "artifacts/build-result.json"
+            metadata.write_bytes(b'{"invented":"metadata"}\n')
             return types.SimpleNamespace(
                 path=image,
                 sha256=m.sha(image.read_bytes()),
                 size=image.stat().st_size,
                 image_id="sha256:" + "7" * 64,
-                metadata_path=prepared.root / "artifacts/build-result.json",
+                metadata_path=metadata,
                 public_assets_sha256="8" * 64,
             )
 
