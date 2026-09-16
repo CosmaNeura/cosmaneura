@@ -29,6 +29,7 @@ import verify_staging_candidate as candidate
 MODULES = frozenset(
     {
         "staging_build_source.py",
+        "staging_build_controller.py",
         "staging_human_build_inputs.py",
         "staging_human_build_executor.py",
         "staging_human_build_process.py",
