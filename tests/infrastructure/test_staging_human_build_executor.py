@@ -360,7 +360,9 @@ class BuildTests(unittest.TestCase):
         self.assertFalse(metadata["publication_authorized"])
         self.assertFalse(metadata["deployment_authorized"])
         self.assertTrue(metadata["owned_extraction_container_removed"])
-        self.assertGreater(self.authority_calls, 15)
+        # One pre-builder check plus five explicit build phase boundaries.
+        # Deterministic local integrity is still checked around every child.
+        self.assertEqual(self.authority_calls, 6)
         native = [row for row in self.calls if row[0][0].endswith("/nixpacks")]
         self.assertEqual(len(native), 2)
         self.assertTrue(all("--no-cache" in row[0] for row in native))
