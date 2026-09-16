@@ -7,30 +7,22 @@
 set -euo pipefail
 umask 077
 
-if [[ $# -ne 3 ]]; then
-	echo "Usage: $0 BUILD_PLAN EXPECTED_PLAN_SHA256 CONTROLLER_RESULT" >&2
+if [[ $# -ne 4 ]]; then
+	echo "Usage: $0 BUILD_PLAN EXPECTED_PLAN_SHA256 CONTROLLER_RESULT EXPECTED_CONTROLLER_RESULT_SHA256" >&2
 	exit 2
 fi
 
 BUILD_PLAN=$1
 EXPECTED_PLAN_SHA256=$2
 CONTROLLER_RESULT=$3
+EXPECTED_CONTROLLER_RESULT_SHA256=$4
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 PYTHON=/opt/homebrew/bin/python3
-GH=/opt/homebrew/Cellar/gh/2.97.0/bin/gh
 AZ=/opt/homebrew/bin/az
 DOCKER=/opt/homebrew/Cellar/docker/29.7.2/bin/docker
 JQ=/usr/bin/jq
-SED=/usr/bin/sed
-TAIL=/usr/bin/tail
-MKTEMP=/usr/bin/mktemp
-RM=/bin/rm
-RMDIR=/bin/rmdir
-STAT=/usr/bin/stat
-ID=/usr/bin/id
-CHMOD=/bin/chmod
 export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
 
 CANDIDATE_SHA=866bd4bc01e0e7be32c59eccdaf9dac3f495c7de
@@ -39,22 +31,22 @@ EXPECTED_SCHEMA_AFTER=9a2399212488
 REGISTRY_NAME=cosmaneurastagingregistry
 REGISTRY_HOST=cosmaneurastagingregistry.azurecr.io
 REGISTRY_REPOSITORY=cosmaneura/cosmaneura
-CANDIDATE_IMAGE="$REGISTRY_HOST/$REGISTRY_REPOSITORY:$CANDIDATE_SHA"
+UNTAGGED_UPLOADER="$REPOSITORY_ROOT/scripts/staging_acr_untagged_upload.py"
 PINNED_SUBSCRIPTION_ID=bab2a709-1fcb-4c87-a9fc-802f7477ec13
 PINNED_TENANT_ID=d51754d0-bba5-4810-820e-afac542844d6
-PINNED_FOUNDER_GITHUB_IDENTITY_SHA256=a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5
 PINNED_FOUNDER_AZURE_USERNAME_SHA256=acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a
 PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256=0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93
 
-AUTH_DIR=""
 EVIDENCE_PATH=""
+ATTEMPT_PATH=""
 PHASE=validate_inputs
-PUSH_STARTED=false
+PUBLICATION_STARTED=false
 IMAGE_DIGEST=""
-
-hash_stdin() {
-	"$PYTHON" -I -S -B -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
-}
+PLAN_CONTROLLER_SHA=""
+RESULT_SHA256=""
+METADATA_SHA256=""
+IMAGE_ID=""
+ARCHIVE_SHA256=""
 
 secure_file_fingerprint() {
 	"$PYTHON" -I -S -B - "$1" "$2" <<'PY'
@@ -101,11 +93,71 @@ finally:
 PY
 }
 
-canonical_github_user_sha256() {
-	"$PYTHON" -I -S -B -c '
+verify_founder_source() {
+	local canonical_root origin dirty controller_sha source_result expected_identity_sha256
+	canonical_root=$(/usr/bin/git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel)
+	origin=$(/usr/bin/git -C "$REPOSITORY_ROOT" remote get-url origin)
+	dirty=$(/usr/bin/git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all)
+	if [[ "$canonical_root" != "$REPOSITORY_ROOT" || \
+		"$origin" != "https://github.com/CosmaNeura/cosmaneura.git" || -n "$dirty" ]]; then
+		echo "Local publication requires the clean canonical repository." >&2
+		return 1
+	fi
+	controller_sha=$(/usr/bin/git -C "$REPOSITORY_ROOT" rev-parse HEAD)
+	if [[ "$controller_sha" != "$PLAN_CONTROLLER_SHA" ]]; then
+		echo "Local publication controller does not match the reviewed build plan." >&2
+		return 1
+	fi
+	expected_identity_sha256=$("$JQ" -er '.github_user_sha256 | select(test("^[0-9a-f]{64}$"))' "$BUILD_PLAN")
+	source_result=$(cd "$REPOSITORY_ROOT" && \
+		"$PYTHON" -I -S -B scripts/staging_build_controller.py \
+			--verify-source "$BUILD_PLAN" "$EXPECTED_PLAN_SHA256")
+	printf '%s' "$source_result" | "$JQ" -e \
+		--arg candidate "$CANDIDATE_SHA" \
+		--argjson approval_pr "$APPROVAL_PR_NUMBER" \
+		--arg schema "$EXPECTED_SCHEMA_AFTER" \
+		--arg controller "$PLAN_CONTROLLER_SHA" \
+		--arg plan "$EXPECTED_PLAN_SHA256" \
+		--arg identity "$expected_identity_sha256" '
+		type == "object" and .local_bindings_passed == true and
+		.authenticated_source_checked == true and .build_started == false and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and
+		.schema_head == $schema and .controller_sha == $controller and
+		.plan_sha256 == $plan and .github_user_sha256 == $identity and
+		(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+		(.protection_sha256 | test("^[0-9a-f]{64}$"))' >/dev/null
+}
+
+verify_founder_azure_identity() {
+	local account_json token_json identity_hashes username_sha256 object_id_sha256
+	if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+		-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+		-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
+		echo "Local publication refuses configured service-principal inputs." >&2
+		return 1
+	fi
+	account_json=$("$AZ" account show --subscription "$PINNED_SUBSCRIPTION_ID" \
+		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
+		--output json)
+	printf '%s' "$account_json" | "$JQ" -e \
+		--arg subscription "$PINNED_SUBSCRIPTION_ID" \
+		--arg tenant "$PINNED_TENANT_ID" \
+		'if .subscriptionId == $subscription and .tenantId == $tenant and
+		 .userType == "user" and (.userName | type) == "string" and
+		 (.userName | length) > 0 then true else error("identity mismatch") end' >/dev/null
+	token_json=$("$AZ" account get-access-token \
+		--subscription "$PINNED_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json)
+	identity_hashes=$("$PYTHON" -I -S -B - \
+		"$PINNED_SUBSCRIPTION_ID" "$PINNED_TENANT_ID" \
+		3<<<"$token_json" 4<<<"$account_json" <<'PY'
+import base64
 import hashlib
 import json
+import os
 import sys
+import time
 
 def unique(pairs):
     value = {}
@@ -116,92 +168,53 @@ def unique(pairs):
     return value
 
 try:
-    user = json.load(sys.stdin, object_pairs_hook=unique)
+    with os.fdopen(3) as stream:
+        record = json.load(stream, object_pairs_hook=unique)
+    with os.fdopen(4) as stream:
+        account = json.load(stream, object_pairs_hook=unique)
+    if record.get("subscription") != sys.argv[1] or record.get("tenant") != sys.argv[2]:
+        raise ValueError("token scope mismatch")
+    token = record["accessToken"]
+    if record.get("tokenType") != "Bearer" or not isinstance(token, str):
+        raise ValueError("token shape")
+    pieces = token.split(".")
+    if len(pieces) != 3:
+        raise ValueError("token shape")
+    payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(payload), object_pairs_hook=unique)
+    if claims.get("tid") != sys.argv[2] or claims.get("aud") not in {
+        "https://management.azure.com/", "https://management.core.windows.net/"
+    }:
+        raise ValueError("token claims")
+    if type(claims.get("exp")) is not int or claims["exp"] <= int(time.time()) + 300:
+        raise ValueError("token expiry")
+    object_id = claims["oid"]
+    username = claims["email"]
+    if not isinstance(username, str) or not username:
+        raise ValueError("username claim")
+    if not isinstance(object_id, str):
+        raise ValueError("object claim")
     if (
-        not isinstance(user, dict)
-        or user.get("login") != "JohnClem"
-        or user.get("type") != "User"
-        or type(user.get("id")) is not int
-        or user["id"] <= 0
+        set(account) != {"subscriptionId", "tenantId", "userName", "userType"}
+        or account["subscriptionId"] != sys.argv[1]
+        or account["tenantId"] != sys.argv[2]
+        or account["userType"] != "user"
+        or account["userName"] != username
     ):
-        raise ValueError("invalid founder identity")
-    identity = {key: user[key] for key in ("id", "login", "type")}
+        raise ValueError("account and token identity mismatch")
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
-print(hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
-'
-}
-
-verify_founder_source() {
-	local origin dirty controller_sha identity_json identity_sha256 actions_json
-	origin=$(/usr/bin/git -C "$REPOSITORY_ROOT" remote get-url origin)
-	dirty=$(/usr/bin/git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all)
-	if [[ "$origin" != "https://github.com/CosmaNeura/cosmaneura.git" || -n "$dirty" ]]; then
-		echo "Local publication requires the clean canonical repository." >&2
-		return 1
-	fi
-	controller_sha=$(/usr/bin/git -C "$REPOSITORY_ROOT" rev-parse HEAD)
-	if [[ "$controller_sha" != "$PLAN_CONTROLLER_SHA" ]]; then
-		echo "Local publication controller does not match the reviewed build plan." >&2
-		return 1
-	fi
-	identity_json=$("$GH" api --hostname github.com --method GET user)
-	identity_sha256=$(printf '%s' "$identity_json" | canonical_github_user_sha256)
-	unset identity_json
-	if [[ "$identity_sha256" != "$PINNED_FOUNDER_GITHUB_IDENTITY_SHA256" ]]; then
-		echo "The local GitHub operator is not the pinned founder." >&2
-		return 1
-	fi
-	actions_json=$("$GH" api --hostname github.com --method GET \
-		repos/CosmaNeura/cosmaneura/actions/permissions)
-	if ! printf '%s' "$actions_json" | "$JQ" -e '.enabled == false' >/dev/null; then
-		echo "GitHub Actions must remain disabled during local publication." >&2
-		return 1
-	fi
-	"$PYTHON" -I -S -B "$REPOSITORY_ROOT/scripts/verify_staging_candidate.py" \
-		--candidate-sha "$CANDIDATE_SHA" \
-		--approval-pr-number "$APPROVAL_PR_NUMBER" \
-		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
-		--workflow-sha "$PLAN_CONTROLLER_SHA" \
-		--repository CosmaNeura/cosmaneura \
-		--event-name workflow_dispatch \
-		--ref refs/heads/master \
-		--ref-protected true \
-		--actor JohnClem \
-		--triggering-actor JohnClem >/dev/null
-}
-
-verify_founder_azure_identity() {
-	local account_json username username_sha256 object_id object_id_sha256
-	if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
-		-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
-		-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
-		echo "Local publication refuses configured service-principal inputs." >&2
-		return 1
-	fi
-	account_json=$("$AZ" account show --subscription "$PINNED_SUBSCRIPTION_ID" \
-		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
-		--output json)
-	username=$(printf '%s' "$account_json" | "$JQ" -er \
-		--arg subscription "$PINNED_SUBSCRIPTION_ID" \
-		--arg tenant "$PINNED_TENANT_ID" \
-		'if .subscriptionId == $subscription and .tenantId == $tenant and
-		 .userType == "user" and (.userName | type) == "string" and
-		 (.userName | length) > 0 then .userName else error("identity mismatch") end')
+print(hashlib.sha256(username.encode()).hexdigest(), hashlib.sha256(object_id.encode()).hexdigest())
+PY
+	)
+	unset token_json
 	unset account_json
-	username_sha256=$(printf '%s' "$username" | hash_stdin)
-	unset username
+	read -r username_sha256 object_id_sha256 <<<"$identity_hashes"
+	unset identity_hashes
 	if [[ "$username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
 		echo "The active Azure user is not the pinned founder." >&2
 		return 1
 	fi
-	object_id=$("$AZ" ad signed-in-user show --query id --output tsv)
-	if [[ ! "$object_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-		echo "The Azure directory user identity is invalid." >&2
-		return 1
-	fi
-	object_id_sha256=$(printf '%s' "$object_id" | hash_stdin)
-	unset object_id
 	if [[ "$object_id_sha256" != "$PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256" ]]; then
 		echo "The Azure directory user is not the pinned founder." >&2
 		return 1
@@ -243,18 +256,23 @@ write_evidence() {
 		--arg candidate_sha "$CANDIDATE_SHA" \
 		--arg controller_sha "$PLAN_CONTROLLER_SHA" \
 		--arg build_plan_sha256 "$EXPECTED_PLAN_SHA256" \
+		--arg controller_result_sha256 "$RESULT_SHA256" \
+		--arg build_metadata_sha256 "$METADATA_SHA256" \
 		--arg image_id "$IMAGE_ID" \
 		--arg archive_sha256 "$ARCHIVE_SHA256" \
 		--arg image_digest "$IMAGE_DIGEST" \
 		--arg image_reference "$REGISTRY_HOST/$REGISTRY_REPOSITORY${IMAGE_DIGEST:+@$IMAGE_DIGEST}" \
 		--argjson complete "$complete" \
-		--argjson push_started "$PUSH_STARTED" \
+		--argjson publication_started "$PUBLICATION_STARTED" \
 		'{schema_version:1,recorded_at:$recorded_at,complete:$complete,outcome:$outcome,
 		  phase:$phase,candidate_sha:$candidate_sha,controller_sha:$controller_sha,
-		  build_plan_sha256:$build_plan_sha256,image_id:$image_id,
-		  archive_sha256:$archive_sha256,push_started:$push_started,
+		  build_plan_sha256:$build_plan_sha256,
+		  controller_result_sha256:$controller_result_sha256,
+		  build_metadata_sha256:$build_metadata_sha256,image_id:$image_id,
+		  archive_sha256:$archive_sha256,publication_started:$publication_started,
 		  image_digest:(if $image_digest == "" then null else $image_digest end),
 		  image_reference:(if $image_digest == "" then null else $image_reference end),
+		  candidate_tag_creation_mode:"acr-import-no-force",
 		  automatic_retry_allowed:false,deployment_performed:false,production_operation:false}')
 	printf '%s\n' "$payload" | "$PYTHON" -I -S -B -c '
 import os
@@ -271,21 +289,56 @@ try:
         os.fsync(stream.fileno())
 finally:
     os.close(fd)
+directory = os.open(os.path.dirname(path), os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
 ' "$EVIDENCE_PATH"
+}
+
+write_attempt() {
+	[[ -n "$ATTEMPT_PATH" && ! -e "$ATTEMPT_PATH" ]] || return 1
+	"$JQ" -cn \
+		--arg started_at "$(/bin/date -u +%FT%TZ)" \
+		--arg candidate_sha "$CANDIDATE_SHA" \
+		--arg controller_sha "$PLAN_CONTROLLER_SHA" \
+		--arg build_plan_sha256 "$EXPECTED_PLAN_SHA256" \
+		--arg controller_result_sha256 "$RESULT_SHA256" \
+		--arg build_metadata_sha256 "$METADATA_SHA256" \
+		--arg archive_sha256 "$ARCHIVE_SHA256" \
+		'{schema_version:1,started_at:$started_at,candidate_sha:$candidate_sha,
+		  controller_sha:$controller_sha,build_plan_sha256:$build_plan_sha256,
+		  controller_result_sha256:$controller_result_sha256,
+		  build_metadata_sha256:$build_metadata_sha256,archive_sha256:$archive_sha256,
+		  candidate_tag_creation_mode:"acr-import-no-force",
+		  durable_before_first_registry_write:true,automatic_retry_allowed:false}' |
+		"$PYTHON" -I -S -B -c '
+import os
+import sys
+path = sys.argv[1]
+raw = sys.stdin.buffer.read()
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400)
+try:
+    with os.fdopen(fd, "wb", closefd=False) as stream:
+        if stream.write(raw) != len(raw):
+            raise OSError("short attempt write")
+        stream.flush()
+        os.fsync(stream.fileno())
+finally:
+    os.close(fd)
+directory = os.open(os.path.dirname(path), os.O_RDONLY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+' "$ATTEMPT_PATH"
 }
 
 cleanup() {
 	local status=$?
 	set +e
-	unset ACR_TOKEN ACR_LOGIN_JSON
-	if [[ -n "$AUTH_DIR" && "$AUTH_DIR" =~ ^/private/tmp/cosmaneura-staging-acr-auth\.[A-Za-z0-9]+$ && \
-		-d "$AUTH_DIR" && ! -L "$AUTH_DIR" && "$("$STAT" -f %u "$AUTH_DIR")" == "$("$ID" -u)" ]]; then
-		"$DOCKER" logout "$REGISTRY_HOST" >/dev/null 2>&1
-		if [[ -f "$AUTH_DIR/config.json" && ! -L "$AUTH_DIR/config.json" ]]; then
-			"$RM" -f -- "$AUTH_DIR/config.json"
-		fi
-		"$RMDIR" "$AUTH_DIR" >/dev/null 2>&1
-	fi
+	unset ACR_LOGIN_JSON
 	if [[ $status -ne 0 ]]; then
 		write_evidence false failed
 	fi
@@ -296,7 +349,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for tool in "$PYTHON" "$GH" "$AZ" "$DOCKER" "$JQ" "$SED" "$TAIL" "$MKTEMP" "$RM" "$RMDIR" "$STAT" "$ID" "$CHMOD"; do
+for tool in "$PYTHON" "$AZ" "$DOCKER" "$JQ" "$UNTAGGED_UPLOADER"; do
 	[[ -x "$tool" ]] || { echo "Required publication tool is unavailable." >&2; exit 1; }
 done
 if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" || -n "${RECALL_WEBHOOK_SECRET:-}" || \
@@ -306,6 +359,10 @@ if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" || -n "${RECALL_WEBHOOK_SECRET:-}" || \
 fi
 unset GH_TOKEN GITHUB_TOKEN DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 [[ "$EXPECTED_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid build-plan digest." >&2; exit 1; }
+[[ "$EXPECTED_CONTROLLER_RESULT_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+	echo "Invalid expected controller-result digest." >&2
+	exit 1
+}
 
 read -r observed_plan_sha256 observed_plan_bytes < <(secure_file_fingerprint "$BUILD_PLAN" 65536)
 [[ "$observed_plan_sha256" == "$EXPECTED_PLAN_SHA256" && "$observed_plan_bytes" -gt 0 ]] || exit 1
@@ -313,7 +370,34 @@ PLAN_CONTROLLER_SHA=$("$JQ" -er '.controller_sha | select(test("^[0-9a-f]{40}$")
 [[ "$("$JQ" -er '.candidate_sha' "$BUILD_PLAN")" == "$CANDIDATE_SHA" ]] || exit 1
 [[ "$("$JQ" -er '.candidate_pr' "$BUILD_PLAN")" == "$APPROVAL_PR_NUMBER" ]] || exit 1
 
-read -r _result_sha256 _result_bytes < <(secure_file_fingerprint "$CONTROLLER_RESULT" 65536)
+read -r RESULT_SHA256 result_bytes < <(secure_file_fingerprint "$CONTROLLER_RESULT" 65536)
+[[ "$RESULT_SHA256" == "$EXPECTED_CONTROLLER_RESULT_SHA256" && "$result_bytes" -gt 0 ]] || {
+	echo "Controller result does not match the separately supplied expected digest." >&2
+	exit 1
+}
+"$JQ" -e --slurpfile plan "$BUILD_PLAN" \
+	--arg candidate "$CANDIDATE_SHA" \
+	--arg controller "$PLAN_CONTROLLER_SHA" \
+	--arg plan_sha256 "$EXPECTED_PLAN_SHA256" '
+	type == "object" and keys == [
+	  "actor","build_metadata","build_root","candidate_sha","complete",
+	  "controller_sha","deployment_authorized","finished_at",
+	  "frontend_configuration_sha256","image_archive","image_archive_bytes",
+	  "image_archive_sha256","image_id","module_sha256s","plan_sha256",
+	  "public_assets_sha256","publication_authorized","source_archive_sha256",
+	  "started_at"
+	] and .complete == true and .actor == "delegated_assistant" and
+	.candidate_sha == $candidate and .controller_sha == $controller and
+	.plan_sha256 == $plan_sha256 and .module_sha256s == $plan[0].module_sha256s and
+	.publication_authorized == false and .deployment_authorized == false and
+	(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+	(.frontend_configuration_sha256 | test("^[0-9a-f]{64}$")) and
+	(.public_assets_sha256 | test("^[0-9a-f]{64}$")) and
+	(.image_id | test("^sha256:[0-9a-f]{64}$")) and
+	(.image_archive_sha256 | test("^[0-9a-f]{64}$")) and
+	(.image_archive_bytes | type == "number" and . > 0 and . <= 17179869184) and
+	(.started_at | type == "string") and (.finished_at | type == "string")' \
+	"$CONTROLLER_RESULT" >/dev/null
 BUILD_ROOT=$("$JQ" -er '.build_root' "$CONTROLLER_RESULT")
 [[ "$BUILD_ROOT" =~ ^/private/tmp/cosmaneura-staging-build-[0-9a-f]{32}$ ]] || exit 1
 [[ "$CONTROLLER_RESULT" == "$BUILD_ROOT/controller-result.json" ]] || exit 1
@@ -332,17 +416,34 @@ BUILD_METADATA=$("$JQ" -er '.build_metadata' "$CONTROLLER_RESULT")
 [[ "$IMAGE_ARCHIVE" == "$BUILD_ROOT/artifacts/application-image.tar" ]] || exit 1
 [[ "$BUILD_METADATA" == "$BUILD_ROOT/artifacts/build-result.json" ]] || exit 1
 EVIDENCE_PATH="$BUILD_ROOT/artifacts/publication-result.json"
+ATTEMPT_PATH="$BUILD_ROOT/artifacts/publication-attempt.json"
 [[ ! -e "$EVIDENCE_PATH" ]] || { echo "Publication evidence already exists; refusing a retry." >&2; exit 1; }
+[[ ! -e "$ATTEMPT_PATH" ]] || { echo "Publication attempt already exists; refusing a retry." >&2; exit 1; }
 
 read -r observed_archive_sha256 observed_archive_bytes < <(secure_file_fingerprint "$IMAGE_ARCHIVE" 17179869184)
 [[ "$observed_archive_sha256" == "$ARCHIVE_SHA256" && "$observed_archive_bytes" == "$ARCHIVE_BYTES" ]] || exit 1
-read -r _metadata_sha256 _metadata_bytes < <(secure_file_fingerprint "$BUILD_METADATA" 65536)
-[[ "$("$JQ" -er '.candidate_sha' "$BUILD_METADATA")" == "$CANDIDATE_SHA" ]] || exit 1
-[[ "$("$JQ" -er '.image_id' "$BUILD_METADATA")" == "$IMAGE_ID" ]] || exit 1
-[[ "$("$JQ" -er '.archive_sha256' "$BUILD_METADATA")" == "$ARCHIVE_SHA256" ]] || exit 1
-[[ "$("$JQ" -er '.archive_bytes' "$BUILD_METADATA")" == "$ARCHIVE_BYTES" ]] || exit 1
-[[ "$("$JQ" -er '.publication_authorized' "$BUILD_METADATA")" == false ]] || exit 1
-[[ "$("$JQ" -er '.deployment_authorized' "$BUILD_METADATA")" == false ]] || exit 1
+read -r METADATA_SHA256 metadata_bytes < <(secure_file_fingerprint "$BUILD_METADATA" 65536)
+[[ "$metadata_bytes" -gt 0 ]] || exit 1
+"$JQ" -e --slurpfile result "$CONTROLLER_RESULT" --slurpfile plan "$BUILD_PLAN" '
+	type == "object" and keys == [
+	  "archive_bytes","archive_sha256","candidate_sha","deployment_authorized",
+	  "engine_id_sha256","frontend_configuration_sha256","image_id",
+	  "local_children_closed","owned_extraction_container_removed",
+	  "public_assets_sha256","publication_authorized","schema_version",
+	  "source_archive_sha256"
+	] and .schema_version == 1 and
+	.candidate_sha == $result[0].candidate_sha and
+	.source_archive_sha256 == $result[0].source_archive_sha256 and
+	.frontend_configuration_sha256 == $result[0].frontend_configuration_sha256 and
+	.image_id == $result[0].image_id and
+	.archive_sha256 == $result[0].image_archive_sha256 and
+	.archive_bytes == $result[0].image_archive_bytes and
+	.public_assets_sha256 == $result[0].public_assets_sha256 and
+	.engine_id_sha256 == $plan[0].engine.id_sha256 and
+	.local_children_closed == true and
+	.owned_extraction_container_removed == true and
+	.publication_authorized == false and .deployment_authorized == false' \
+	"$BUILD_METADATA" >/dev/null
 
 PHASE=revalidate_build_plan
 revalidate_build_plan
@@ -352,11 +453,6 @@ verify_founder_source
 verify_founder_azure_identity
 
 PHASE=load_and_verify_archive
-AUTH_DIR=$("$MKTEMP" -d /private/tmp/cosmaneura-staging-acr-auth.XXXXXXXX)
-[[ "$AUTH_DIR" =~ ^/private/tmp/cosmaneura-staging-acr-auth\.[A-Za-z0-9]+$ && \
-	-d "$AUTH_DIR" && ! -L "$AUTH_DIR" ]] || exit 1
-"$CHMOD" 700 "$AUTH_DIR"
-export DOCKER_CONFIG="$AUTH_DIR"
 export DOCKER_HOST=unix:///Users/jw/.colima/default/docker.sock
 "$DOCKER" image load --input "$IMAGE_ARCHIVE" >/dev/null
 image_json=$("$DOCKER" image inspect "$IMAGE_ID")
@@ -367,21 +463,7 @@ printf '%s' "$image_json" | "$JQ" -e \
 	.[0].Config.Labels["org.opencontainers.image.revision"] == $candidate and
 	.[0].Config.Labels["org.opencontainers.image.source"] == "https://github.com/CosmaNeura/cosmaneura"' >/dev/null
 unset image_json
-[[ -z "$("$DOCKER" image ls --quiet --no-trunc --filter "reference=$CANDIDATE_IMAGE")" ]] || {
-	echo "The local immutable candidate tag already exists; refusing to replace it." >&2
-	exit 1
-}
 remote_tag_absent || { echo "The remote immutable candidate tag is not absent." >&2; exit 1; }
-
-PHASE=registry_login
-ACR_LOGIN_JSON=$("$AZ" acr login --name "$REGISTRY_NAME" \
-	--subscription "$PINNED_SUBSCRIPTION_ID" --expose-token --output json)
-[[ "$(printf '%s' "$ACR_LOGIN_JSON" | "$JQ" -er '.loginServer')" == "$REGISTRY_HOST" ]] || exit 1
-ACR_TOKEN=$(printf '%s' "$ACR_LOGIN_JSON" | "$JQ" -er '.accessToken | select(type == "string" and length > 0)')
-unset ACR_LOGIN_JSON
-printf '%s' "$ACR_TOKEN" | "$DOCKER" login "$REGISTRY_HOST" \
-	--username 00000000-0000-0000-0000-000000000000 --password-stdin >/dev/null
-unset ACR_TOKEN
 
 PHASE=final_prepublication_verification
 revalidate_build_plan
@@ -392,19 +474,36 @@ read -r final_archive_sha256 final_archive_bytes < <(secure_file_fingerprint "$I
 [[ "$("$DOCKER" image inspect --format '{{.Id}}' "$IMAGE_ID")" == "$IMAGE_ID" ]] || exit 1
 remote_tag_absent || { echo "The remote immutable candidate tag is not absent." >&2; exit 1; }
 
-PHASE=push_started
-PUSH_STARTED=true
-"$DOCKER" tag "$IMAGE_ID" "$CANDIDATE_IMAGE"
-[[ "$("$DOCKER" image inspect --format '{{.Id}}' "$CANDIDATE_IMAGE")" == "$IMAGE_ID" ]] || exit 1
-push_output=$("$DOCKER" push "$CANDIDATE_IMAGE" 2>&1)
-printf '%s\n' "$push_output"
-IMAGE_DIGEST=$(printf '%s\n' "$push_output" | "$SED" -nE \
-	's/^digest: (sha256:[0-9a-f]{64}) size: [0-9]+$/\1/p' | "$TAIL" -n 1)
-unset push_output
-[[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-	echo "The publication did not return an immutable digest." >&2
-	exit 1
-}
+PHASE=durable_publication_attempt
+write_attempt
+PUBLICATION_STARTED=true
+
+PHASE=content_addressed_upload
+ACR_LOGIN_JSON=$("$AZ" acr login --name "$REGISTRY_NAME" \
+	--subscription "$PINNED_SUBSCRIPTION_ID" --expose-token \
+	--only-show-errors --output json)
+UPLOAD_RESULT=$(printf '%s' "$ACR_LOGIN_JSON" | \
+	"$PYTHON" -I -S -B "$UNTAGGED_UPLOADER" \
+		"$IMAGE_ARCHIVE" "$ARCHIVE_SHA256" "$IMAGE_ID")
+unset ACR_LOGIN_JSON
+IMAGE_DIGEST=$(printf '%s' "$UPLOAD_RESULT" | "$JQ" -er \
+	--arg archive "$ARCHIVE_SHA256" \
+	--arg candidate "$CANDIDATE_SHA" '
+	if .schema_version == 1 and .archive_sha256 == $archive and
+	 .candidate_sha == $candidate and .registry_host == "cosmaneurastagingregistry.azurecr.io" and
+	 .repository == "cosmaneura/cosmaneura" and .tag_created == false and
+	 .tag_overwrite_possible == false and (.layer_count | type == "number" and . > 0) and
+	 (.manifest_digest | test("^sha256:[0-9a-f]{64}$"))
+	then .manifest_digest else error("untagged upload evidence mismatch") end')
+unset UPLOAD_RESULT
+
+PHASE=create_candidate_tag_no_force
+"$AZ" acr import --name "$REGISTRY_NAME" \
+	--registry "$REGISTRY_NAME" \
+	--source "$REGISTRY_REPOSITORY@$IMAGE_DIGEST" \
+	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
+	--subscription "$PINNED_SUBSCRIPTION_ID" \
+	--only-show-errors --output none
 
 PHASE=verify_remote_digest
 REMOTE_DIGEST=$("$AZ" acr manifest show-metadata \
@@ -416,6 +515,18 @@ REMOTE_DIGEST=$("$AZ" acr manifest show-metadata \
 	echo "The registry digest does not match the pushed candidate." >&2
 	exit 1
 }
+"$AZ" acr repository update --name "$REGISTRY_NAME" \
+	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
+	--write-enabled false --delete-enabled false \
+	--subscription "$PINNED_SUBSCRIPTION_ID" --only-show-errors --output none
+TAG_ATTRIBUTES=$("$AZ" acr repository show --name "$REGISTRY_NAME" \
+	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
+	--subscription "$PINNED_SUBSCRIPTION_ID" --output json)
+printf '%s' "$TAG_ATTRIBUTES" | "$JQ" -e \
+	'.changeableAttributes.writeEnabled == false and
+	 .changeableAttributes.deleteEnabled == false and
+	 .changeableAttributes.readEnabled == true' >/dev/null
+unset TAG_ATTRIBUTES
 
 PHASE=complete
 write_evidence true success

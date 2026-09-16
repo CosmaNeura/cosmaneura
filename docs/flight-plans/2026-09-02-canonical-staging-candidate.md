@@ -219,8 +219,11 @@
   user object and Azure directory object plus username in the exact staging
   tenant and subscription, while refusing any simultaneous service-principal
   inputs. The fallback revalidates
-  the clean protected-master controller, selected merged candidate PR and schema
-  head before protected configuration and again immediately before mutation. It
+  the clean protected-master controller, exact reviewed build plan, authenticated
+  human source transport, selected PR `385`, exact candidate merge SHA and schema
+  head before protected configuration and again immediately before mutation. Every
+  Azure read and mutation is explicitly scoped to the pinned subscription rather
+  than mutable Azure CLI defaults. It
   grants no production authority and does not weaken the workflow's default path.
   A controlled local invocation must also supply a fresh positive
   `DEPLOY_RUN_ID` and `DEPLOY_RUN_ATTEMPT=1`; these only derive the unique Azure
@@ -232,11 +235,15 @@
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
   With Actions unavailable, `infra-staging/publish-local.sh` preserves this
-  separation: it accepts only a successful exact controller result, revalidates
-  the reviewed build plan and founder GitHub/Azure identities, refuses an existing
-  candidate SHA tag, pushes once to the existing staging registry, and verifies
-  the immutable digest. It cannot invoke deployment, write `latest`, retry, or
-  target production, and it removes its temporary registry credential locally.
+  separation: it requires the independently captured SHA-256 of a closed-schema
+  successful controller result, revalidates the reviewed build plan and founder
+  GitHub/Azure identities, and writes a durable exclusive attempt record before
+  the first registry mutation. It uploads blobs and a manifest only under their
+  content digests, then creates the candidate SHA tag through ACR import in
+  `NoForce` mode. That atomic service operation refuses an existing tag; the
+  resulting tag is verified against the uploaded digest and locked against writes
+  and deletion. It cannot invoke deployment, write `latest`, retry, or target
+  production, and no registry credential is persisted.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,
@@ -400,8 +407,9 @@
    in the reviewed order, and prove incompatible revisions have drained before
    reopening synthetic traffic.
 4. During the separately confirmed canonical dispatch, require the candidate's
-   staging tag to be absent, publish the exact credentialless build archive,
-   resolve it to one immutable registry digest before persistent-staging
+   staging tag to be absent, upload the exact credentialless build archive by
+   content digest without a tag, create the candidate tag with ACR `NoForce`
+   import, and resolve it to one locked immutable registry digest before persistent-staging
    migration, and use that same digest for migration and every workload. Reject
    an existing candidate tag, a digest mismatch, `latest`, a production
    registry, or different digests among those steps. The post-deploy smoke is

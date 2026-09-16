@@ -19,6 +19,8 @@ EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
+STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
+EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
 	( -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
@@ -52,9 +54,11 @@ STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
 PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
-PINNED_FOUNDER_GITHUB_IDENTITY_SHA256="a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5"
 PINNED_FOUNDER_AZURE_USERNAME_SHA256="acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
 PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
+FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
+FOUNDER_APPROVAL_PR_NUMBER="385"
+FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"
 PYTHON_BIN=python
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
@@ -63,7 +67,8 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 		"$PYTHON_BIN" \
 		/opt/homebrew/Cellar/gh/2.97.0/bin/gh \
 		/opt/homebrew/bin/az \
-		/usr/bin/git; do
+		/usr/bin/git \
+		/usr/bin/jq; do
 		[[ -x "$founder_tool" ]] || {
 			echo "Required founder-user staging tool is unavailable."
 			exit 1
@@ -73,15 +78,22 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
 fi
 
-hash_stdin() {
-	"$PYTHON_BIN" -I -S -B -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+AZ_EXECUTABLE=$(command -v az) || {
+	echo "Azure CLI is unavailable."
+	exit 1
+}
+az() {
+	"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"
 }
 
-canonical_github_user_sha256() {
+azure_token_identity_hashes() {
 	"$PYTHON_BIN" -I -S -B -c '
+import base64
 import hashlib
 import json
+import os
 import sys
+import time
 
 def unique(pairs):
     value = {}
@@ -92,27 +104,50 @@ def unique(pairs):
     return value
 
 try:
-    user = json.load(sys.stdin, object_pairs_hook=unique)
+    record = json.load(sys.stdin, object_pairs_hook=unique)
+    with os.fdopen(3) as stream:
+        account = json.load(stream, object_pairs_hook=unique)
+    if record.get("subscription") != sys.argv[1] or record.get("tenant") != sys.argv[2]:
+        raise ValueError("token scope mismatch")
+    token = record["accessToken"]
+    if record.get("tokenType") != "Bearer" or not isinstance(token, str):
+        raise ValueError("token shape")
+    pieces = token.split(".")
+    if len(pieces) != 3:
+        raise ValueError("token shape")
+    payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(payload), object_pairs_hook=unique)
+    if claims.get("tid") != sys.argv[2] or claims.get("aud") not in {
+        "https://management.azure.com/", "https://management.core.windows.net/"
+    }:
+        raise ValueError("token claims")
+    if type(claims.get("exp")) is not int or claims["exp"] <= int(time.time()) + 300:
+        raise ValueError("token expiry")
+    username = claims["email"]
+    object_id = claims["oid"]
+    if not isinstance(username, str) or not username or not isinstance(object_id, str):
+        raise ValueError("identity claims")
     if (
-        not isinstance(user, dict)
-        or user.get("login") != "JohnClem"
-        or user.get("type") != "User"
-        or type(user.get("id")) is not int
-        or user["id"] <= 0
+        set(account) != {"subscriptionId", "tenantId", "userName", "userType"}
+        or account["subscriptionId"] != sys.argv[1]
+        or account["tenantId"] != sys.argv[2]
+        or account["userType"] != "user"
+        or account["userName"] != username
     ):
-        raise ValueError("invalid founder identity")
-    identity = {key: user[key] for key in ("id", "login", "type")}
+        raise ValueError("account and token identity mismatch")
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
-print(hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest())
-'
+print(hashlib.sha256(username.encode()).hexdigest(), hashlib.sha256(object_id.encode()).hexdigest())
+' "$PINNED_STAGING_SUBSCRIPTION_ID" "$PINNED_STAGING_TENANT_ID"
 }
 
 verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
-	local founder_identity_json founder_identity_sha256 controller_sha canonical_root canonical_origin dirty_checkout
-	if [[ ! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-		echo "Founder-user staging deployment requires an approval PR number."
+	local controller_sha canonical_root canonical_origin dirty_checkout source_result expected_identity_sha256
+	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
+		"$STAGING_APPROVAL_PR_NUMBER" != "$FOUNDER_APPROVAL_PR_NUMBER" || \
+		"$EXPECTED_SCHEMA_AFTER" != "$FOUNDER_EXPECTED_SCHEMA_AFTER" ]]; then
+		echo "Founder-user staging deployment is restricted to the reviewed PR #385 candidate and schema."
 		return 1
 	fi
 	if ! canonical_root=$(git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel) || \
@@ -127,36 +162,38 @@ verify_founder_release_source() {
 		echo "Founder-user staging deployment requires the clean canonical repository."
 		return 1
 	fi
-	if ! founder_identity_json=$(gh api --hostname github.com --method GET user); then
-		echo "Failed to authenticate the local GitHub operator."
-		return 1
-	fi
-	if ! founder_identity_sha256=$(printf '%s' "$founder_identity_json" | canonical_github_user_sha256); then
-		echo "Failed to fingerprint the local GitHub operator."
-		return 1
-	fi
-	unset founder_identity_json
-	if [[ "$founder_identity_sha256" != "$PINNED_FOUNDER_GITHUB_IDENTITY_SHA256" ]]; then
-		echo "The local GitHub operator is not the pinned founder."
-		return 1
-	fi
 	if ! controller_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD); then
 		echo "Failed to resolve the local staging controller."
 		return 1
 	fi
-	if ! (cd "$REPOSITORY_ROOT" && \
-		"$PYTHON_BIN" -I -S -B scripts/verify_staging_candidate.py \
-		--candidate-sha "$GIT_SHA" \
-		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" \
-		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
-		--workflow-sha "$controller_sha" \
-		--repository CosmaNeura/cosmaneura \
-		--event-name workflow_dispatch \
-		--ref refs/heads/master \
-		--ref-protected true \
-		--actor JohnClem \
-		--triggering-actor JohnClem >/dev/null); then
+	if [[ ! "$EXPECTED_STAGING_BUILD_PLAN_SHA256" =~ ^[0-9a-f]{64}$ || \
+		-z "$STAGING_BUILD_PLAN" || "$STAGING_BUILD_PLAN" != /private/tmp/* ]]; then
+		echo "Founder-user staging deployment requires the exact reviewed build plan."
+		return 1
+	fi
+	if ! expected_identity_sha256=$(/usr/bin/jq -er \
+		'.github_user_sha256 | select(test("^[0-9a-f]{64}$"))' "$STAGING_BUILD_PLAN") || \
+		! source_result=$(cd "$REPOSITORY_ROOT" && \
+		"$PYTHON_BIN" -I -S -B scripts/staging_build_controller.py \
+			--verify-source "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256"); then
 		echo "Founder-user staging candidate provenance verification failed."
+		return 1
+	fi
+	if ! printf '%s' "$source_result" | /usr/bin/jq -e \
+		--arg candidate "$FOUNDER_CANDIDATE_SHA" \
+		--argjson approval_pr "$FOUNDER_APPROVAL_PR_NUMBER" \
+		--arg schema "$FOUNDER_EXPECTED_SCHEMA_AFTER" \
+		--arg controller "$controller_sha" \
+		--arg plan "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+		--arg identity "$expected_identity_sha256" '
+		type == "object" and .local_bindings_passed == true and
+		.authenticated_source_checked == true and .build_started == false and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and
+		.schema_head == $schema and .controller_sha == $controller and
+		.plan_sha256 == $plan and .github_user_sha256 == $identity and
+		(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+		(.protection_sha256 | test("^[0-9a-f]{64}$"))' >/dev/null; then
+		echo "Founder-user staging source evidence is invalid."
 		return 1
 	fi
 }
@@ -469,8 +506,8 @@ echo "Revision string: $REVISION_STRING"
 emit_github_output source_sha "$GIT_SHA" || exit 1
 
 verify_azure_deployment_identity() {
-	local azure_account_json founder_azure_username founder_azure_username_sha256
-	local founder_azure_object_id founder_azure_object_id_sha256
+	local azure_account_json founder_token_json founder_identity_hashes
+	local founder_azure_username_sha256 founder_azure_object_id_sha256
 	if ! azure_account_json=$(az account show \
 		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
 		-o json); then
@@ -502,33 +539,29 @@ verify_azure_deployment_identity() {
 			echo "Founder-user staging deployment refuses configured service-principal inputs."
 			return 1
 		fi
-		if ! founder_azure_username=$(printf '%s' "$azure_account_json" | jq -er \
+		if ! printf '%s' "$azure_account_json" | jq -e \
 			--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			--arg tenant "$PINNED_STAGING_TENANT_ID" \
 			'if .subscriptionId == $subscription and .tenantId == $tenant and
 			 .userType == "user" and (.userName | type) == "string" and
-			 (.userName | length) > 0 then .userName else error("identity mismatch") end'); then
+			 (.userName | length) > 0 then true else error("identity mismatch") end' >/dev/null; then
 			echo "Active Azure user is outside the pinned staging scope."
 			return 1
 		fi
-		if ! founder_azure_username_sha256=$(printf '%s' "$founder_azure_username" | hash_stdin); then
-			echo "Failed to fingerprint the active Azure user."
+		if ! founder_token_json=$(az account get-access-token \
+			--resource https://management.azure.com/ --only-show-errors --output json) || \
+			! founder_identity_hashes=$(printf '%s' "$founder_token_json" | \
+				azure_token_identity_hashes 3<<<"$azure_account_json"); then
+			unset founder_token_json
+			echo "Failed to bind the Azure user to the staging-scoped access token."
 			return 1
 		fi
+		unset founder_token_json
+		read -r founder_azure_username_sha256 founder_azure_object_id_sha256 \
+			<<<"$founder_identity_hashes"
+		unset founder_identity_hashes
 		if [[ "$founder_azure_username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
 			echo "The active Azure user is not the pinned founder."
-			return 1
-		fi
-		if ! founder_azure_object_id=$(az ad signed-in-user show --query id --output tsv); then
-			echo "Failed to authenticate the Azure directory user."
-			return 1
-		fi
-		if [[ ! "$founder_azure_object_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
-			echo "The Azure directory user identity is invalid."
-			return 1
-		fi
-		if ! founder_azure_object_id_sha256=$(printf '%s' "$founder_azure_object_id" | hash_stdin); then
-			echo "Failed to fingerprint the Azure directory user."
 			return 1
 		fi
 		if [[ "$founder_azure_object_id_sha256" != "$PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256" ]]; then

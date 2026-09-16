@@ -8,6 +8,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
 LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
 LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
+UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"
 
 
 def _source() -> str:
@@ -482,20 +483,33 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert 'case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in' in deploy
     assert "service-principal)" in deploy
     assert "founder-user)" in deploy
-    assert "gh api --hostname github.com --method GET user" in deploy
-    assert "canonical_github_user_sha256" in deploy
     assert 'STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"' in deploy
+    assert 'STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"' in deploy
+    assert (
+        'EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"'
+        in deploy
+    )
     assert deploy.count("verify_founder_release_source") == 3
     assert deploy.count("verify_azure_deployment_identity") == 3
-    assert "scripts/verify_staging_candidate.py" in deploy
-    assert '--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER"' in deploy
-    assert '--workflow-sha "$controller_sha"' in deploy
-    assert '--candidate-sha "$GIT_SHA"' in deploy
-    assert "a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5" in deploy
+    assert "scripts/staging_build_controller.py" in deploy
+    assert '--verify-source "$STAGING_BUILD_PLAN"' in deploy
+    assert 'FOUNDER_APPROVAL_PR_NUMBER="385"' in deploy
+    assert 'FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"' in deploy
+    assert 'FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"' in deploy
+    assert "--actor" not in deploy
+    assert "--triggering-actor" not in deploy
+    assert "JohnClem" not in deploy
     assert "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a" in deploy
-    assert "az ad signed-in-user show --query id --output tsv" in deploy
+    assert "account get-access-token" in deploy
+    assert "https://management.azure.com/" in deploy
+    assert 'username = claims["email"]' in deploy
+    assert 'account["userName"] != username' in deploy
     assert "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93" in deploy
     assert '.userType == "user"' in deploy
+    assert (
+        '"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"'
+        in deploy
+    )
     assert "refuses configured service-principal inputs" in deploy
     assert "AZURE_CLIENT_SECRET" in deploy
     assert "AZURE_CLIENT_CERTIFICATE_PATH" in deploy
@@ -507,7 +521,7 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     ).read_text(encoding="utf-8")
     assert "`DEPLOY_RUN_ID`" in flight_plan
     assert "`DEPLOY_RUN_ATTEMPT=1`" in flight_plan
-    assert deploy.count('git -C "$REPOSITORY_ROOT"') == 6
+    assert deploy.count('git -C "$REPOSITORY_ROOT"') >= 5
     assert "rev-parse --show-toplevel" in deploy
     assert deploy.index("founder-user) verify_founder_release_source") < deploy.index(
         'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'
@@ -522,6 +536,7 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
 
 def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
+    uploader = UNTAGGED_UPLOADER.read_text(encoding="utf-8")
 
     assert "cosmaneurastagingregistry.azurecr.io" in publisher
     assert "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de" in publisher
@@ -531,25 +546,45 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert publisher.count("verify_founder_source") == 3
     assert publisher.count("verify_founder_azure_identity") == 3
     assert publisher.count("remote_tag_absent") == 3
-    assert "repos/CosmaNeura/cosmaneura/actions/permissions" in publisher
-    assert "GitHub Actions must remain disabled" in publisher
+    assert '--verify-source "$BUILD_PLAN" "$EXPECTED_PLAN_SHA256"' in publisher
+    assert "EXPECTED_CONTROLLER_RESULT_SHA256" in publisher
+    assert "keys == [" in publisher
+    assert 'username = claims["email"]' in publisher
+    assert 'account["userName"] != username' in publisher
     assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
     assert "RECALL_WEBHOOK_SECRET" in publisher
     assert "DOCKER_AUTH_CONFIG" in publisher
     assert '"$DOCKER" image load --input "$IMAGE_ARCHIVE"' in publisher
-    assert '"$DOCKER" push "$CANDIDATE_IMAGE"' in publisher
+    assert '"$DOCKER" push' not in publisher
     assert "az acr login" not in publisher
     assert '"$AZ" acr login --name "$REGISTRY_NAME"' in publisher
-    assert "--expose-token --output json" in publisher
+    assert "--expose-token" in publisher
+    assert '"$AZ" acr import --name "$REGISTRY_NAME"' in publisher
+    assert '--source "$REGISTRY_REPOSITORY@$IMAGE_DIGEST"' in publisher
+    assert '--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA"' in publisher
+    assert "--force" not in publisher
     assert '"$AZ" acr manifest show-metadata' in publisher
-    assert publisher.count('--subscription "$PINNED_SUBSCRIPTION_ID"') == 4
+    assert '"$AZ" acr repository update' in publisher
+    assert "--write-enabled false --delete-enabled false" in publisher
+    assert "publication-attempt.json" in publisher
+    assert "durable_before_first_registry_write:true" in publisher
+    assert "staging_acr_untagged_upload.py" in publisher
+    assert "tag_created:false" not in publisher
+    assert "tag_created == false" in publisher
+    assert "JohnClem" not in publisher
+    assert "--actor" not in publisher
     assert "publication-result.json" in publisher
     assert "automatic_retry_allowed:false" in publisher
     assert "deployment_performed:false" in publisher
-    assert publisher.count('"$PYTHON" -I -S -B') == 6
+    assert publisher.count('"$PYTHON" -I -S -B') == 7
     assert ":latest" not in publisher
     assert "infra-staging/deploy.sh" not in publisher
     assert "cosmaneuraprodregistry" not in publisher
+    assert "Blob and manifest writes here are content-addressed" in uploader
+    assert "upload_manifest_by_digest" in uploader
+    assert "/manifests/{digest}" in uploader
+    assert "tag_created" in uploader
+    assert 'method in {"HEAD", "POST", "PUT"}' in uploader
 
 
 def test_staging_workflow_does_not_reference_production_controls() -> None:

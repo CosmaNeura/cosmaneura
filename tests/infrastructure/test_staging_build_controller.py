@@ -149,11 +149,17 @@ class ControllerTests(unittest.TestCase):
         path.chmod(0o600)
         self.plan[name] = {"path": str(path), "sha256": m.sha(body)}
 
-    def invoke(self, *, check_only=False):
+    def invoke(self, *, check_only=False, source_only=False):
         raw = m.canonical(self.plan)
         path = self.root / "plan.json"
         path.write_bytes(raw)
-        return m.run(path, m.sha(raw), self.root, check_only=check_only)
+        return m.run(
+            path,
+            m.sha(raw),
+            self.root,
+            check_only=check_only,
+            source_only=source_only,
+        )
 
     def fake_modules(
         self,
@@ -165,7 +171,10 @@ class ControllerTests(unittest.TestCase):
     ):
         source = Mock()
         source.collect_build_source.return_value = types.SimpleNamespace(
-            source_archive=b"invented-source", protection_sha256="policy"
+            source_archive=b"invented-source",
+            source_archive_sha256=m.sha(b"invented-source"),
+            github_user_sha256=self.plan["github_user_sha256"],
+            protection_sha256="policy",
         )
         source.BuildSourceReader.return_value.protections.return_value = "policy"
         if changed_source:
@@ -230,6 +239,22 @@ class ControllerTests(unittest.TestCase):
         self.assertTrue(value["local_bindings_passed"])
         self.assertFalse(value["authenticated_source_checked"])
         load.assert_not_called()
+        self.assertFalse(self.parent.exists())
+
+    def test_authenticated_source_only_mode_never_prepares_or_builds(self):
+        modules = self.fake_modules()
+        with patch.object(m, "load_modules", return_value=modules):
+            value = self.invoke(source_only=True)
+        self.assertTrue(value["local_bindings_passed"])
+        self.assertTrue(value["authenticated_source_checked"])
+        self.assertFalse(value["build_started"])
+        self.assertEqual(value["candidate_sha"], m.CANDIDATE)
+        self.assertEqual(value["approval_pr_number"], 385)
+        self.assertEqual(value["schema_head"], m.REVISIONS[-1])
+        self.assertEqual(value["controller_sha"], self.plan["controller_sha"])
+        self.assertEqual(value["github_user_sha256"], self.plan["github_user_sha256"])
+        modules["staging_human_build_inputs"].prepare_build_inputs.assert_not_called()
+        modules["staging_human_build_executor"].build_candidate.assert_not_called()
         self.assertFalse(self.parent.exists())
 
     def test_changed_helper_refuses_before_any_import(self):
