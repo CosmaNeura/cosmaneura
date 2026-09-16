@@ -94,8 +94,7 @@ az() {
 		--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 		--resource https://management.azure.com/ \
 		--only-show-errors --output json) || return
-	if [[ "${1:-}" == "acr" && \
-		( "${2:-}" == "login" || "${2:-}" == "manifest" || "${2:-}" == "repository" ) ]]; then
+	if [[ "${1:-}" == "acr" && "${2:-}" == "manifest" ]]; then
 		registry_token_json=$("$AZ_EXECUTABLE" account get-access-token \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			--resource https://containerregistry.azure.net \

@@ -44,6 +44,7 @@ STAGING_ENVIRONMENT = "cosmaneura-staging-app-environment"
 STAGING_REGISTRY = "cosmaneurastagingregistry"
 STAGING_REGISTRY_HOST = "cosmaneurastagingregistry.azurecr.io"
 STAGING_REPOSITORY = "cosmaneura/cosmaneura"
+CANDIDATE_SHA = "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
 STAGING_CONTAINER_NAMES = {
     "cosmaneura-staging-app",
     "cosmaneura-staging-migrate",
@@ -51,13 +52,8 @@ STAGING_CONTAINER_NAMES = {
     "cosmaneura-staging-worker",
 }
 ALLOWED_ACR_COMMANDS = {
-    ("acr", "login"),
-    ("acr", "import"),
     ("acr", "credential", "show"),
     ("acr", "manifest", "show-metadata"),
-    ("acr", "repository", "show"),
-    ("acr", "repository", "show-tags"),
-    ("acr", "repository", "update"),
 }
 ALLOWED_CONTAINERAPP_COMMANDS = {
     ("containerapp", "show"),
@@ -191,44 +187,25 @@ def validate_staging_scope(argv: list[str]) -> None:
         return
 
     require(command_matches(argv, ALLOWED_ACR_COMMANDS))
-    require(
-        all(
-            registry == STAGING_REGISTRY
-            for registry in flag_values(argv, {"--registry"})
-        )
-    )
     if argv[:3] == ["acr", "manifest", "show-metadata"]:
         require(not flag_values(argv, {"-n"}))
         require(flag_values(argv, {"--registry"}) == [STAGING_REGISTRY])
-    elif argv[:2] == ["acr", "login"]:
-        require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
-    else:
-        require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
-    for repository in flag_values(argv, {"--repository"}):
-        require(repository == STAGING_REPOSITORY)
-    for image in flag_values(argv, {"--image"}):
-        require(
-            re.fullmatch(rf"{STAGING_REPOSITORY}:[0-9a-f]{{40}}", image) is not None
-        )
-    for source in flag_values(argv, {"--source"}):
-        require(
-            re.fullmatch(rf"{STAGING_REPOSITORY}@sha256:[0-9a-f]{{64}}", source)
-            is not None
-        )
-    if argv[:3] == ["acr", "manifest", "show-metadata"]:
         names = flag_values(argv, {"--name"})
         require(
             len(names) == 1
             and re.fullmatch(
-                rf"{STAGING_REPOSITORY}(?::[0-9a-f]{{40}}|@sha256:[0-9a-f]{{64}})",
+                rf"{STAGING_REPOSITORY}(?::{CANDIDATE_SHA}|@sha256:[0-9a-f]{{64}})",
                 names[0],
             )
             is not None
         )
+    else:
+        require(not flag_values(argv, {"--registry"}))
+        require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
 
 
 def validate_argv(argv: list[str]) -> None:
-    if argv in (["--verify-only"], ["--verify-registry-only"]):
+    if argv == ["--verify-only"]:
         return
     require(argv and argv[0] in {"acr", "containerapp"})
     require("-s" not in argv)
@@ -240,8 +217,6 @@ def validate_argv(argv: list[str]) -> None:
             for argument in argv
         )
     )
-    if argv[:2] == ["acr", "login"]:
-        require("--expose-token" in argv)
     require(argv.count("--subscription") == 1)
     index = argv.index("--subscription")
     require(index + 1 < len(argv) and argv[index + 1] == SUBSCRIPTION)
@@ -280,27 +255,7 @@ def main() -> int:
             )
         )
         return 0
-    if argv == ["--verify-registry-only"]:
-        token_record(4, {REGISTRY_AUDIENCE})
-        print(
-            json.dumps(
-                {
-                    "azure_principal_bound": True,
-                    "registry_token_verified": True,
-                    "subscription": SUBSCRIPTION,
-                    "tenant": TENANT,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        )
-        return 0
-    registry_required = argv[:2] == ["acr", "login"] or argv[:3] in (
-        ["acr", "manifest", "show-metadata"],
-        ["acr", "repository", "show"],
-        ["acr", "repository", "show-tags"],
-        ["acr", "repository", "update"],
-    )
+    registry_required = argv[:3] == ["acr", "manifest", "show-metadata"]
     registry_token = registry_expiry = None
     if registry_required:
         registry_token, registry_expiry = token_record(4, {REGISTRY_AUDIENCE})

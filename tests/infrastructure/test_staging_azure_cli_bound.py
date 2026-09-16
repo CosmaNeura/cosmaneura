@@ -121,22 +121,8 @@ def test_token_record_rejects_wrong_signed_claim(claim: str, value: object) -> N
 
 def test_exact_staging_acr_commands_are_accepted() -> None:
     digest = "sha256:" + "a" * 64
-    candidate = "b" * 40
     subscription = ["--subscription", m.SUBSCRIPTION]
     commands = (
-        ["acr", "login", "--name", m.STAGING_REGISTRY, "--expose-token"],
-        [
-            "acr",
-            "import",
-            "--name",
-            m.STAGING_REGISTRY,
-            "--registry",
-            m.STAGING_REGISTRY,
-            "--source",
-            f"{m.STAGING_REPOSITORY}@{digest}",
-            "--image",
-            f"{m.STAGING_REPOSITORY}:{candidate}",
-        ],
         ["acr", "credential", "show", "-n", m.STAGING_REGISTRY],
         [
             "acr",
@@ -145,25 +131,16 @@ def test_exact_staging_acr_commands_are_accepted() -> None:
             "--registry",
             m.STAGING_REGISTRY,
             "--name",
-            f"{m.STAGING_REPOSITORY}:{candidate}",
+            f"{m.STAGING_REPOSITORY}:{m.CANDIDATE_SHA}",
         ],
         [
             "acr",
-            "repository",
-            "show-tags",
-            "--name",
+            "manifest",
+            "show-metadata",
+            "--registry",
             m.STAGING_REGISTRY,
-            "--repository",
-            m.STAGING_REPOSITORY,
-        ],
-        [
-            "acr",
-            "repository",
-            "update",
             "--name",
-            m.STAGING_REGISTRY,
-            "--image",
-            f"{m.STAGING_REPOSITORY}:{candidate}",
+            f"{m.STAGING_REPOSITORY}@{digest}",
         ],
     )
     for command in commands:
@@ -207,6 +184,17 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
         ["containerapp", "show", "-n", "cosmaneura-staging-app", "-g", "production"],
         ["acr", "login", "--name", "cosmaneuraprodregistry", "--expose-token"],
         ["acr", "login", "--name", "cosmaneurastagingregistry"],
+        ["acr", "import", "--name", "cosmaneurastagingregistry"],
+        ["acr", "repository", "update", "--name", "cosmaneurastagingregistry"],
+        [
+            "acr",
+            "manifest",
+            "show-metadata",
+            "--registry",
+            "cosmaneurastagingregistry",
+            "--name",
+            f"{m.STAGING_REPOSITORY}:{'b' * 40}",
+        ],
     ),
 )
 def test_non_staging_or_unapproved_commands_are_rejected(command: list[str]) -> None:
