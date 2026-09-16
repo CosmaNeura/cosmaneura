@@ -286,7 +286,7 @@ class ControllerProofTests(unittest.TestCase):
                 (name, m.sha(raw)) for name, raw in sorted(blobs.items())
             ),
         )
-        head = "5" * 40
+        head = REVIEWED
         commit = (
             "tree "
             + "6" * 40
@@ -312,7 +312,11 @@ class ControllerProofTests(unittest.TestCase):
             "commit_id": REVIEWED,
             "user": {"login": "cursor[bot]", "type": "Bot"},
             "state": "COMMENTED",
-            "body": "Invented independently accepted source review, not live evidence.",
+            "body": (
+                "<!-- BUGBOT_REVIEW -->\n"
+                "Bugbot reviewed your changes and found no new issues!\n"
+                f"Reviewed by Cursor Bugbot for commit {REVIEWED}."
+            ),
         }
         obj.request = replace(
             obj.request, controller_review_sha256=m.sha(m.source.canonical(review))
@@ -320,6 +324,7 @@ class ControllerProofTests(unittest.TestCase):
         check = {
             "id": 102,
             "head_sha": REVIEWED,
+            "name": "Cursor Bugbot",
             "app": {"slug": "cursor", "id": 1210556},
             "status": "completed",
             "conclusion": "success",
@@ -385,6 +390,7 @@ class ControllerProofTests(unittest.TestCase):
             ("pulls/419/reviews/101", "user", {"login": "cursor[bot]", "type": "User"}),
             ("check-runs/102", "app", {"slug": "other"}),
             ("check-runs/102", "app", {"slug": "cursor", "id": 7}),
+            ("check-runs/102", "name", "Other check"),
             ("check-runs/102", "status", "in_progress"),
             ("check-runs/102", "conclusion", "neutral"),
             ("check-runs/102", "head_sha", "f" * 40),
@@ -404,6 +410,40 @@ class ControllerProofTests(unittest.TestCase):
                 self.assertRaises(m.BuildSourceRefused),
             ):
                 obj.controller()
+
+    def test_hash_bound_finding_review_and_nonexact_pr_head_refuse(self):
+        obj, values, blobs = self.fixture()
+        review = values["pulls/419/reviews/101"]
+        review["body"] = "<!-- BUGBOT_REVIEW -->\nBugbot found a high severity issue."
+        obj.request = replace(
+            obj.request,
+            controller_review_sha256=m.sha(m.source.canonical(review)),
+        )
+        with (
+            patch.object(m.source, "statuses"),
+            patch.object(
+                Path,
+                "read_bytes",
+                autospec=True,
+                side_effect=lambda path: blobs[path.name],
+            ),
+            self.assertRaises(m.BuildSourceRefused),
+        ):
+            obj.controller()
+
+        obj, values, blobs = self.fixture()
+        values["pulls/419"]["head"]["sha"] = "5" * 40
+        with (
+            patch.object(m.source, "statuses"),
+            patch.object(
+                Path,
+                "read_bytes",
+                autospec=True,
+                side_effect=lambda path: blobs[path.name],
+            ),
+            self.assertRaises(m.BuildSourceRefused),
+        ):
+            obj.controller()
 
     def test_changed_local_closure_and_failed_required_statuses_refuse(self):
         obj, _, _ = self.fixture()

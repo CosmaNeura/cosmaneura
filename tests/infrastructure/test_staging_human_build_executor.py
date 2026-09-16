@@ -307,9 +307,14 @@ class BuildTests(unittest.TestCase):
         self.failure = None
         self.container_exists = self.engine_changed = False
         self.authority_calls = 0
+        self.finalized = False
 
     def authority(self):
         self.authority_calls += 1
+
+    def finalize(self, _archive):
+        self.assertGreater(signal.getitimer(signal.ITIMER_REAL)[0], 0)
+        self.finalized = True
 
     def build(self):
         with (
@@ -339,6 +344,7 @@ class BuildTests(unittest.TestCase):
                 self.source,
                 engine=self.engine,
                 validate_authority=self.authority,
+                finalize_archive=self.finalize,
                 seconds=60,
             )
 
@@ -349,6 +355,7 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(result.image_id, APP_ID)
         self.assertEqual(result.sha256, m.sha(result.path.read_bytes()))
         self.assertEqual(result.candidate_sha, "a" * 40)
+        self.assertTrue(self.finalized)
         metadata = json.loads(result.metadata_path.read_bytes())
         self.assertFalse(metadata["publication_authorized"])
         self.assertFalse(metadata["deployment_authorized"])
@@ -486,6 +493,7 @@ class BuildTests(unittest.TestCase):
                 validate_authority=lambda: (_ for _ in ()).throw(
                     RuntimeError("invented refusal")
                 ),
+                finalize_archive=lambda _archive: None,
                 seconds=60,
             )
         self.assertFalse((self.prepared.root / "tmp").exists())

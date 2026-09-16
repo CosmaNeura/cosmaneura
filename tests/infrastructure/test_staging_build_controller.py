@@ -214,7 +214,7 @@ class ControllerTests(unittest.TestCase):
                 (build_root / "artifacts/build-failure.json").write_text("{}")
             metadata = build_root / "artifacts/build-result.json"
             metadata.write_bytes(b'{"invented":"metadata"}\n')
-            return types.SimpleNamespace(
+            result = types.SimpleNamespace(
                 path=archive,
                 sha256=m.sha(archive.read_bytes()),
                 size=archive.stat().st_size,
@@ -222,6 +222,8 @@ class ControllerTests(unittest.TestCase):
                 metadata_path=metadata,
                 public_assets_sha256="8" * 64,
             )
+            kwargs["finalize_archive"](result)
+            return result
 
         executor.build_candidate.side_effect = build
         executor.file_sha.side_effect = lambda path, maximum: (
@@ -358,6 +360,45 @@ class ControllerTests(unittest.TestCase):
             ]
         )
 
+    def test_executor_must_invoke_final_verification_before_return(self):
+        modules = self.fake_modules()
+        build = modules["staging_human_build_executor"].build_candidate.side_effect
+
+        def skip_finalization(*args, **kwargs):
+            kwargs["finalize_archive"] = lambda _archive: None
+            return build(*args, **kwargs)
+
+        modules[
+            "staging_human_build_executor"
+        ].build_candidate.side_effect = skip_finalization
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            self.assertRaises(m.BuildControllerRefused),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+
+    def test_late_executor_refusal_cannot_persist_completion(self):
+        modules = self.fake_modules()
+        build = modules["staging_human_build_executor"].build_candidate.side_effect
+
+        def refuse_after_finalization(*args, **kwargs):
+            build(*args, **kwargs)
+            raise RuntimeError("invented deadline refusal after finalization")
+
+        modules[
+            "staging_human_build_executor"
+        ].build_candidate.side_effect = refuse_after_finalization
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            self.assertRaises(RuntimeError),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertNotIn("image_id", value)
+
     def test_success_preserves_actor_source_artifact_and_false_publish_authority(self):
         modules = self.fake_modules()
         with patch.object(m, "load_modules", return_value=modules):
@@ -456,7 +497,7 @@ class ControllerTests(unittest.TestCase):
             image.write_bytes(b"invented image")
             metadata = prepared.root / "artifacts/build-result.json"
             metadata.write_bytes(b'{"invented":"metadata"}\n')
-            return types.SimpleNamespace(
+            result = types.SimpleNamespace(
                 path=image,
                 sha256=m.sha(image.read_bytes()),
                 size=image.stat().st_size,
@@ -464,6 +505,8 @@ class ControllerTests(unittest.TestCase):
                 metadata_path=metadata,
                 public_assets_sha256="8" * 64,
             )
+            kwargs["finalize_archive"](result)
+            return result
 
         modules["staging_human_build_executor"].build_candidate.side_effect = fake_build
         with (

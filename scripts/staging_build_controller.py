@@ -384,23 +384,38 @@ def run(
         )
         result["build_root"] = str(prepared.root)
         phase = "build"
+
+        finalized_archive: list[tuple[Any, str, int]] = []
+
+        def finalize_archive(archive: Any) -> None:
+            nonlocal phase
+            require(phase == "build" and result["complete"] is False)
+            phase = "verify_successful_call"
+            authority()
+            require(not (prepared.root / "artifacts/build-failure.json").exists())
+            require(
+                executor.file_sha(archive.path, executor.MAX_IMAGE)
+                == (archive.sha256, archive.size)
+            )
+            build_metadata_sha256, build_metadata_bytes = executor.file_sha(
+                archive.metadata_path, 65536
+            )
+            clock_check(plan)
+            finalized_archive.append(
+                (archive, build_metadata_sha256, build_metadata_bytes)
+            )
+
         archive = executor.build_candidate(
             prepared,
             source_archive,
             engine=executor.EngineBinding(**plan["engine"]),
             validate_authority=authority,
+            finalize_archive=finalize_archive,
             seconds=plan["build_seconds"],
         )
-        phase = "verify_successful_call"
-        authority()
-        require(not (prepared.root / "artifacts/build-failure.json").exists())
-        require(
-            executor.file_sha(archive.path, executor.MAX_IMAGE)
-            == (archive.sha256, archive.size)
-        )
-        build_metadata_sha256, build_metadata_bytes = executor.file_sha(
-            archive.metadata_path, 65536
-        )
+        require(len(finalized_archive) == 1 and archive is finalized_archive[0][0])
+        _, build_metadata_sha256, build_metadata_bytes = finalized_archive[0]
+        clock_check(plan)
         result.update(
             complete=True,
             image_id=archive.image_id,
