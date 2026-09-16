@@ -238,6 +238,23 @@
   publication job executes no candidate code, downloads only that verified
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
+  With Actions unavailable, `infra-staging/publish-local.sh` preserves this
+  separation: it requires the independently captured SHA-256 of a closed-schema
+  successful controller result, revalidates the reviewed build plan and founder
+  GitHub/Azure identities, requires the live authenticated source archive, plan,
+  controller result, and build metadata to agree on one exact source digest,
+  binds the metadata digest inside the independently digest-pinned controller
+  result, and parses all three JSON inputs only from bytes captured through the
+  same verified descriptors. It rechecks those file identities and digests
+  immediately before writing a durable exclusive attempt record and the first
+  registry mutation.
+  It uploads blobs and a manifest only under their
+  content digests, then creates the candidate SHA tag through ACR import in
+  `NoForce` mode. That atomic service operation refuses an existing tag; the
+  resulting tag is locked against writes and deletion, then read back once more
+  with both its digest and immutable attributes required in the same response.
+  It cannot invoke deployment, write `latest`, retry, or target
+  production, and no registry credential is persisted.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,
@@ -401,8 +418,9 @@
    in the reviewed order, and prove incompatible revisions have drained before
    reopening synthetic traffic.
 4. During the separately confirmed canonical dispatch, require the candidate's
-   staging tag to be absent, publish the exact credentialless build archive,
-   resolve it to one immutable registry digest before persistent-staging
+   staging tag to be absent, upload the exact credentialless build archive by
+   content digest without a tag, create the candidate tag with ACR `NoForce`
+   import, and resolve it to one locked immutable registry digest before persistent-staging
    migration, and use that same digest for migration and every workload. Reject
    an existing candidate tag, a digest mismatch, `latest`, a production
    registry, or different digests among those steps. The post-deploy smoke is

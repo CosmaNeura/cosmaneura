@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
 LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
+LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
+UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"
+BOUND_ACR = ROOT / "scripts" / "staging_acr_cli_bound.py"
 BOUND_AZURE_CLI = ROOT / "scripts" / "staging_azure_cli_bound.py"
 
 
@@ -543,6 +550,116 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     )
     assert 'echo "Unsupported staging deployment identity mode."' in deploy
     assert "STAGING_DEPLOYMENT_IDENTITY_MODE" not in workflow
+
+
+def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
+    publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
+    uploader = UNTAGGED_UPLOADER.read_text(encoding="utf-8")
+    bound_acr = BOUND_ACR.read_text(encoding="utf-8")
+    bound_azure = BOUND_AZURE_CLI.read_text(encoding="utf-8")
+
+    assert "cosmaneurastagingregistry.azurecr.io" in publisher
+    assert "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de" in publisher
+    assert "9a2399212488" in publisher
+    assert "staging_build_controller.py" in publisher
+    assert publisher.count("revalidate_build_plan") == 4
+    assert publisher.count("verify_founder_source") == 3
+    assert publisher.count("verify_founder_azure_identity") == 3
+    assert publisher.count("remote_tag_absent") == 3
+    assert '--verify-source "$BUILD_PLAN" "$EXPECTED_PLAN_SHA256"' in publisher
+    assert "EXPECTED_CONTROLLER_RESULT_SHA256" in publisher
+    assert "keys == [" in publisher
+    assert 'username = claims.get("email")' in bound_azure
+    assert "staging_azure_cli_bound.py" in publisher
+    assert "staging_acr_cli_bound.py" in publisher
+    assert "containerapp" not in bound_acr
+    assert '"acr", "credential", "show"' not in bound_acr
+    assert ".source_archive_sha256 == $source" in publisher
+    assert ".source_archive_sha256 == $source_sha256" in publisher
+    assert "secure_json_capture" in publisher
+    assert "RESULT_CAPTURE=$(secure_json_capture" in publisher
+    assert (
+        '"$CONTROLLER_RESULT" 65536 "$EXPECTED_CONTROLLER_RESULT_SHA256"' in publisher
+    )
+    assert "CONTROLLER_RESULT_JSON=$(printf" in publisher
+    assert "BUILD_METADATA_JSON=$(printf" in publisher
+    assert '--slurpfile result "$CONTROLLER_RESULT"' not in publisher
+    assert '--slurpfile plan "$BUILD_PLAN"' not in publisher
+    assert 'secure_file_fingerprint "$CONTROLLER_RESULT" 65536' in publisher
+    assert 'secure_file_fingerprint "$BUILD_METADATA" 65536' in publisher
+    assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
+    assert "RECALL_WEBHOOK_SECRET" in publisher
+    assert "DOCKER_AUTH_CONFIG" in publisher
+    assert '"$DOCKER" image load --input "$IMAGE_ARCHIVE"' in publisher
+    assert '"$DOCKER" push' not in publisher
+    assert '"$AZ" acr login' not in publisher
+    assert 'bound_acr acr login --name "$REGISTRY_NAME"' in publisher
+    assert "--expose-token" in publisher
+    assert 'bound_acr acr import --name "$REGISTRY_NAME"' in publisher
+    assert '--source "$REGISTRY_REPOSITORY@$IMAGE_DIGEST"' in publisher
+    assert '--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA"' in publisher
+    assert "--force" not in publisher
+    assert "bound_acr acr manifest show-metadata" in publisher
+    assert "bound_acr acr repository update" in publisher
+    assert ".digest == $digest" in publisher
+    assert "--write-enabled false --delete-enabled false" in publisher
+    assert "publication-attempt.json" in publisher
+    assert "durable_before_first_registry_write:true" in publisher
+    assert "staging_acr_untagged_upload.py" in publisher
+    assert "tag_created:false" not in publisher
+    assert "tag_created == false" in publisher
+    assert "JohnClem" not in publisher
+    assert "--actor" not in publisher
+    assert "publication-result.json" in publisher
+    assert "automatic_retry_allowed:false" in publisher
+    assert "deployment_performed:false" in publisher
+    assert publisher.count('"$PYTHON" -I -S -B') == 7
+    assert ":latest" not in publisher
+    assert "infra-staging/deploy.sh" not in publisher
+    assert "cosmaneuraprodregistry" not in publisher
+    assert "Blob and manifest writes here are content-addressed" in uploader
+    assert '"/oauth2/token"' in uploader
+    assert 'authorization = "Bearer " + access_token' in uploader
+    assert "upload_manifest_by_digest" in uploader
+    assert "/manifests/{digest}" in uploader
+    assert "tag_created" in uploader
+    assert 'method in {"HEAD", "POST", "PUT"}' in uploader
+
+
+def test_local_publisher_captures_exact_verified_json_bytes(tmp_path: Path) -> None:
+    publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
+    function = publisher.index("secure_json_capture() {")
+    start = publisher.index("<<'PY'\n", function) + len("<<'PY'\n")
+    end = publisher.index("\nPY\n}", start)
+    program = publisher[start:end]
+    raw = b'{"nested":{"value":7},"text":"fixture"}\n'
+    path = (tmp_path / "record.json").resolve()
+    path.write_bytes(raw)
+    path.chmod(0o400)
+    digest = hashlib.sha256(raw).hexdigest()
+
+    accepted = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-", str(path), "65536", digest],
+        input=program,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert accepted.returncode == 0
+    assert json.loads(accepted.stdout) == {
+        "bytes": len(raw),
+        "sha256": digest,
+        "value": {"nested": {"value": 7}, "text": "fixture"},
+    }
+
+    refused = subprocess.run(
+        [sys.executable, "-I", "-S", "-B", "-", str(path), "65536", "0" * 64],
+        input=program,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert refused.returncode != 0
 
 
 def test_staging_workflow_does_not_reference_production_controls() -> None:
