@@ -507,7 +507,8 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     ).read_text(encoding="utf-8")
     assert "`DEPLOY_RUN_ID`" in flight_plan
     assert "`DEPLOY_RUN_ATTEMPT=1`" in flight_plan
-    assert deploy.count('git -C "$REPOSITORY_ROOT"') == 5
+    assert deploy.count('git -C "$REPOSITORY_ROOT"') == 6
+    assert "rev-parse --show-toplevel" in deploy
     assert deploy.index("founder-user) verify_founder_release_source") < deploy.index(
         'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'
     )

@@ -110,17 +110,19 @@ print(hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":"))
 
 verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
-	local founder_identity_json founder_identity_sha256 controller_sha canonical_origin dirty_checkout
+	local founder_identity_json founder_identity_sha256 controller_sha canonical_root canonical_origin dirty_checkout
 	if [[ ! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
 		echo "Founder-user staging deployment requires an approval PR number."
 		return 1
 	fi
-	if ! canonical_origin=$(git -C "$REPOSITORY_ROOT" remote get-url origin) || \
+	if ! canonical_root=$(git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel) || \
+		! canonical_origin=$(git -C "$REPOSITORY_ROOT" remote get-url origin) || \
 		! dirty_checkout=$(git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all); then
 		echo "Failed to inspect the local staging controller repository."
 		return 1
 	fi
-	if [[ "$canonical_origin" != "https://github.com/CosmaNeura/cosmaneura.git" || \
+	if [[ "$canonical_root" != "$REPOSITORY_ROOT" || \
+		"$canonical_origin" != "https://github.com/CosmaNeura/cosmaneura.git" || \
 		-n "$dirty_checkout" ]]; then
 		echo "Founder-user staging deployment requires the clean canonical repository."
 		return 1
