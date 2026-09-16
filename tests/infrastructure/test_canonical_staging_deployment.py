@@ -583,6 +583,8 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     )
     assert "CONTROLLER_RESULT_JSON=$(printf" in publisher
     assert "BUILD_METADATA_JSON=$(printf" in publisher
+    assert "ATTEMPT_PARENT=$(printf" in publisher
+    assert '"$ATTEMPT_PARENT/controller-result.json"' in publisher
     assert '--slurpfile result "$CONTROLLER_RESULT"' not in publisher
     assert '--slurpfile plan "$BUILD_PLAN"' not in publisher
     assert 'secure_file_fingerprint "$CONTROLLER_RESULT" 65536' in publisher

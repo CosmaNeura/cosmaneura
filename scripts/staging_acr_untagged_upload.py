@@ -134,12 +134,14 @@ def hash_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str:
     return digest.hexdigest()
 
 
-def safe_member_name(value: object) -> str:
+def safe_member_name(value: object, *, directory: bool = False) -> str:
     require(type(value) is str and 0 < len(value) <= 1024)
     exact = cast(str, value)
-    path = PurePosixPath(exact)
-    require(not path.is_absolute() and ".." not in path.parts and exact == str(path))
-    return exact
+    canonical = exact[:-1] if directory and exact.endswith("/") else exact
+    path = PurePosixPath(canonical)
+    require(not path.is_absolute() and ".." not in path.parts)
+    require(canonical == str(path) and exact in {canonical, canonical + "/"})
+    return canonical
 
 
 def exchange_refresh_token(refresh_token: str) -> str:
@@ -315,7 +317,7 @@ def build_and_upload(
             require(0 < len(members) <= 2048)
             names: dict[str, tarfile.TarInfo] = {}
             for member in members:
-                name = safe_member_name(member.name)
+                name = safe_member_name(member.name, directory=member.isdir())
                 require(name not in names)
                 names[name] = member
             require("manifest.json" in names)

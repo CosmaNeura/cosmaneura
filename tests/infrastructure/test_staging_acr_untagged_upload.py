@@ -84,17 +84,20 @@ class UntaggedUploadTests(unittest.TestCase):
                 {
                     "Config": "config.json",
                     "RepoTags": [],
-                    "Layers": ["layer.tar"],
+                    "Layers": ["layers/layer.tar"],
                 }
             ],
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
         with tarfile.open(self.archive, "w") as archive:
+            directory = tarfile.TarInfo("layers/")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
             for name, raw in (
                 ("manifest.json", manifest),
                 ("config.json", config),
-                ("layer.tar", layer),
+                ("layers/layer.tar", layer),
             ):
                 info = tarfile.TarInfo(name)
                 info.size = len(raw)

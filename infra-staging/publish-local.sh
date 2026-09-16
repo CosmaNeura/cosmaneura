@@ -44,6 +44,7 @@ PHASE=validate_inputs
 PUBLICATION_STARTED=false
 IMAGE_DIGEST=""
 PLAN_CONTROLLER_SHA=""
+ATTEMPT_PARENT=""
 RESULT_SHA256=""
 METADATA_SHA256=""
 IMAGE_ID=""
@@ -419,6 +420,8 @@ PLAN_CONTROLLER_SHA=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
 	'.controller_sha | select(test("^[0-9a-f]{40}$"))')
 PLAN_SOURCE_ARCHIVE_SHA256=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
 	'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))')
+ATTEMPT_PARENT=$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.attempt_parent')
+[[ "$ATTEMPT_PARENT" =~ ^/private/tmp/cosmaneura-staging-build-[0-9a-f]{32}$ ]] || exit 1
 [[ "$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_sha')" == "$CANDIDATE_SHA" ]] || exit 1
 [[ "$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_pr')" == "$APPROVAL_PR_NUMBER" ]] || exit 1
 
@@ -462,8 +465,8 @@ printf '%s\n%s\n' "$CONTROLLER_RESULT_JSON" "$PLAN_JSON" | "$JQ" -se \
 	($result.started_at | type == "string") and
 	($result.finished_at | type == "string"))' >/dev/null
 BUILD_ROOT=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er '.build_root')
-[[ "$BUILD_ROOT" =~ ^/private/tmp/cosmaneura-staging-build-[0-9a-f]{32}$ ]] || exit 1
-[[ "$CONTROLLER_RESULT" == "$BUILD_ROOT/controller-result.json" ]] || exit 1
+[[ "$BUILD_ROOT" =~ ^${ATTEMPT_PARENT}/staging-build-[0-9a-f]{32}$ ]] || exit 1
+[[ "$CONTROLLER_RESULT" == "$ATTEMPT_PARENT/controller-result.json" ]] || exit 1
 IMAGE_ID=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er \
 	'.image_id | select(test("^sha256:[0-9a-f]{64}$"))')
 IMAGE_ARCHIVE=$(printf '%s' "$CONTROLLER_RESULT_JSON" | "$JQ" -er '.image_archive')

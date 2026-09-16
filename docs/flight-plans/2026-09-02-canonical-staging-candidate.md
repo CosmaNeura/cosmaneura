@@ -239,22 +239,14 @@
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
   With Actions unavailable, `infra-staging/publish-local.sh` preserves this
-  separation: it requires the independently captured SHA-256 of a closed-schema
-  successful controller result, revalidates the reviewed build plan and founder
-  GitHub/Azure identities, requires the live authenticated source archive, plan,
-  controller result, and build metadata to agree on one exact source digest,
-  binds the metadata digest inside the independently digest-pinned controller
-  result, and parses all three JSON inputs only from bytes captured through the
-  same verified descriptors. It rechecks those file identities and digests
-  immediately before writing a durable exclusive attempt record and the first
-  registry mutation.
-  It uploads blobs and a manifest only under their
-  content digests, then creates the candidate SHA tag through ACR import in
-  `NoForce` mode. That atomic service operation refuses an existing tag; the
-  resulting tag is locked against writes and deletion, then read back once more
-  with both its digest and immutable attributes required in the same response.
-  It cannot invoke deployment, write `latest`, retry, or target
-  production, and no registry credential is persisted.
+  separation: it binds a closed-schema controller result and build metadata to
+  independently captured digests, revalidates the reviewed plan and founder
+  identities, and requires the authenticated source, plan, result, and metadata
+  to agree. It rechecks the files immediately before a durable attempt record
+  and the first registry mutation. Blobs and the manifest are uploaded only by
+  content digest; ACR `NoForce` import creates the candidate tag once. The tag is
+  then locked and reverified. The script cannot deploy, write `latest`, retry,
+  target production, or persist registry credentials.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,
