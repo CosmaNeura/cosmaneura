@@ -370,6 +370,7 @@ class BuildTests(unittest.TestCase):
                 set(environment),
                 {
                     "HOME",
+                    "BUILDX_NO_DEFAULT_ATTESTATIONS",
                     "DOCKER_CONFIG",
                     "DOCKER_HOST",
                     "PATH",
@@ -383,6 +384,7 @@ class BuildTests(unittest.TestCase):
             self.assertNotIn("BASH_ENV", environment)
             self.assertEqual(cwd, self.prepared.root / "source")
             self.assertTrue(environment["HOME"].startswith(str(self.prepared.root)))
+            self.assertEqual(environment["BUILDX_NO_DEFAULT_ATTESTATIONS"], "1")
             self.assertNotIn("push", argv)
             self.assertNotIn("login", argv)
             self.assertNotIn("start", argv)
