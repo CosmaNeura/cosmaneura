@@ -384,34 +384,45 @@ def run(
         )
         result["build_root"] = str(prepared.root)
         phase = "build"
+
+        finalized_archive: list[Any] = []
+
+        def finalize_archive(archive: Any) -> None:
+            nonlocal phase
+            require(phase == "build" and result["complete"] is False)
+            phase = "verify_successful_call"
+            authority()
+            require(not (prepared.root / "artifacts/build-failure.json").exists())
+            require(
+                executor.file_sha(archive.path, executor.MAX_IMAGE)
+                == (archive.sha256, archive.size)
+            )
+            build_metadata_sha256, build_metadata_bytes = executor.file_sha(
+                archive.metadata_path, 65536
+            )
+            clock_check(plan)
+            result.update(
+                complete=True,
+                image_id=archive.image_id,
+                image_archive=str(archive.path),
+                image_archive_sha256=archive.sha256,
+                image_archive_bytes=archive.size,
+                build_metadata=str(archive.metadata_path),
+                build_metadata_sha256=build_metadata_sha256,
+                build_metadata_bytes=build_metadata_bytes,
+                public_assets_sha256=archive.public_assets_sha256,
+            )
+            finalized_archive.append(archive)
+
         archive = executor.build_candidate(
             prepared,
             source_archive,
             engine=executor.EngineBinding(**plan["engine"]),
             validate_authority=authority,
+            finalize_archive=finalize_archive,
             seconds=plan["build_seconds"],
         )
-        phase = "verify_successful_call"
-        authority()
-        require(not (prepared.root / "artifacts/build-failure.json").exists())
-        require(
-            executor.file_sha(archive.path, executor.MAX_IMAGE)
-            == (archive.sha256, archive.size)
-        )
-        build_metadata_sha256, build_metadata_bytes = executor.file_sha(
-            archive.metadata_path, 65536
-        )
-        result.update(
-            complete=True,
-            image_id=archive.image_id,
-            image_archive=str(archive.path),
-            image_archive_sha256=archive.sha256,
-            image_archive_bytes=archive.size,
-            build_metadata=str(archive.metadata_path),
-            build_metadata_sha256=build_metadata_sha256,
-            build_metadata_bytes=build_metadata_bytes,
-            public_assets_sha256=archive.public_assets_sha256,
-        )
+        require(len(finalized_archive) == 1 and archive is finalized_archive[0])
     except BaseException as error:
         result.update(phase=phase, error_class=type(error).__name__)
         raise

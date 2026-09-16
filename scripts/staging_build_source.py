@@ -388,7 +388,11 @@ class BuildSourceReader(source.ReadOnlySource):
             for v in raw.split(b"\n\n", 1)[0].splitlines()
             if v.startswith(b"parent ")
         ]
-        require(len(parents) == 2 and parents[1] == head)
+        require(
+            len(parents) == 2
+            and parents[1] == head
+            and head == request.controller_reviewed_head
+        )
         self.is_ancestor(merged, context.controller_sha)
         review = self.gh(
             source.API
@@ -407,7 +411,14 @@ class BuildSourceReader(source.ReadOnlySource):
             and review.get("user", {}).get("type") == "Bot"
             and review.get("state") == "COMMENTED"
         )
-        require(type(review.get("body")) is str and review["body"].strip())
+        body = review.get("body")
+        require(
+            type(body) is str
+            and "<!-- BUGBOT_REVIEW -->" in body
+            and "<!-- BUGBOT_REVIEW_STALE -->" not in body
+            and "Bugbot reviewed your changes and found no new issues!" in body
+            and f"for commit {request.controller_reviewed_head}" in body
+        )
         require(sha(source.canonical(review)) == request.controller_review_sha256)
         require(
             check.get("id") == request.controller_check_id
@@ -416,6 +427,7 @@ class BuildSourceReader(source.ReadOnlySource):
         require(
             check.get("app", {}).get("slug") == "cursor"
             and check.get("app", {}).get("id") == 1210556
+            and check.get("name") == "Cursor Bugbot"
             and check.get("status") == "completed"
             and check.get("conclusion") == "success"
         )

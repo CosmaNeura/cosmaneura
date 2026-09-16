@@ -669,6 +669,7 @@ def build_candidate(
     *,
     engine: EngineBinding,
     validate_authority: Callable[[], None],
+    finalize_archive: Callable[[BuildArchive], None],
     seconds: int,
 ) -> BuildArchive:
     """Called only by an authenticated, reviewed, explicitly authorized controller.
@@ -680,7 +681,10 @@ def build_candidate(
     A killed Docker client does not prove that a daemon-side build was cancelled.
     """
     require(
-        callable(validate_authority) and type(seconds) is int and 0 < seconds <= 3600
+        callable(validate_authority)
+        and callable(finalize_archive)
+        and type(seconds) is int
+        and 0 < seconds <= 3600
     )
     builder: Builder | None = None
     try:
@@ -698,6 +702,8 @@ def build_candidate(
                 prepared, source_archive, engine, validate_authority, deadline, tick
             )
             result = builder.execute()
+            tick()
+            finalize_archive(result)
             tick()
         return result
     except BaseException:
