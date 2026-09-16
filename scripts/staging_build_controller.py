@@ -294,6 +294,7 @@ def run(
     modules = load_modules(raw_modules, root)
     source = modules["staging_build_source"]
     inputs = modules["staging_human_build_inputs"]
+    process = modules["staging_human_build_process"]
     executor = modules["staging_human_build_executor"]
     inputs.public_configuration(frontend, sha(frontend))
     inputs.native_builder_bytes(native)
@@ -416,7 +417,7 @@ def run(
         require(len(finalized_archive) == 1 and archive is finalized_archive[0][0])
         _, build_metadata_sha256, build_metadata_bytes = finalized_archive[0]
         clock_check(plan)
-        result.update(
+        success = result | dict(
             complete=True,
             image_id=archive.image_id,
             image_archive=str(archive.path),
@@ -426,16 +427,45 @@ def run(
             build_metadata_sha256=build_metadata_sha256,
             build_metadata_bytes=build_metadata_bytes,
             public_assets_sha256=archive.public_assets_sha256,
+            finished_at=datetime.now(UTC).isoformat(),
         )
+        success_raw = canonical(success)
+        success_path = parent / "controller-result.success.tmp"
+        inputs.write_exclusive(success_path, success_raw, 0o400)
+        require(read_bound(success_path, sha(success_raw), 65536) == success_raw)
     except BaseException as error:
-        result.update(phase=phase, error_class=type(error).__name__)
-        raise
-    finally:
-        result["finished_at"] = datetime.now(UTC).isoformat()
+        result.update(
+            complete=False,
+            phase=phase,
+            error_class=type(error).__name__,
+            finished_at=datetime.now(UTC).isoformat(),
+        )
         inputs.write_exclusive(
             parent / "controller-result.json", canonical(result), 0o400
         )
-    return result
+        raise
+
+    phase = "commit_success_record"
+    committed = False
+    try:
+        with process.defer_control_signals():
+            require(not (parent / "controller-result.json").exists())
+            os.rename(success_path, parent / "controller-result.json")
+            committed = True
+            return success
+    except BaseException as error:
+        if committed:
+            return success
+        result.update(
+            complete=False,
+            phase=phase,
+            error_class=type(error).__name__,
+            finished_at=datetime.now(UTC).isoformat(),
+        )
+        inputs.write_exclusive(
+            parent / "controller-result.json", canonical(result), 0o400
+        )
+        raise
 
 
 def main() -> int:

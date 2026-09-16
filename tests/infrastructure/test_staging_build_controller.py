@@ -9,6 +9,7 @@ import tempfile
 import types
 import unittest
 import uuid
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -230,9 +231,12 @@ class ControllerTests(unittest.TestCase):
             m.sha(path.read_bytes()),
             path.stat().st_size,
         )
+        process = Mock()
+        process.defer_control_signals.side_effect = nullcontext
         return {
             "staging_build_source": source,
             "staging_human_build_inputs": inputs,
+            "staging_human_build_process": process,
             "staging_human_build_executor": executor,
             "verify_staging_candidate": Mock(),
         }
@@ -398,6 +402,37 @@ class ControllerTests(unittest.TestCase):
         value = json.loads((self.parent / "controller-result.json").read_bytes())
         self.assertFalse(value["complete"])
         self.assertNotIn("image_id", value)
+
+    def test_success_record_commit_failure_persists_only_incomplete_result(self):
+        modules = self.fake_modules()
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            patch.object(m.os, "rename", side_effect=OSError("invented refusal")),
+            self.assertRaises(OSError),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["phase"], "commit_success_record")
+        self.assertNotIn("image_id", value)
+
+    def test_interrupt_after_atomic_success_commit_remains_success(self):
+        modules = self.fake_modules()
+
+        @contextmanager
+        def interrupted_exit():
+            yield
+            raise KeyboardInterrupt()
+
+        modules[
+            "staging_human_build_process"
+        ].defer_control_signals.side_effect = interrupted_exit
+        with patch.object(m, "load_modules", return_value=modules):
+            value = self.invoke()
+        self.assertTrue(value["complete"])
+        self.assertEqual(
+            json.loads((self.parent / "controller-result.json").read_bytes()), value
+        )
 
     def test_success_preserves_actor_source_artifact_and_false_publish_authority(self):
         modules = self.fake_modules()
