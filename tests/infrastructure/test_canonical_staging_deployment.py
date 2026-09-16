@@ -559,6 +559,11 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     bound_azure = BOUND_AZURE_CLI.read_text(encoding="utf-8")
 
     assert "cosmaneurastagingregistry.azurecr.io" in publisher
+    assert (
+        "export DOCKER_HOST=unix:///Users/jw/.colima/staging-release/docker.sock"
+        in publisher
+    )
+    assert "/Users/jw/.colima/default/docker.sock" not in publisher
     assert "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de" in publisher
     assert "9a2399212488" in publisher
     assert "staging_build_controller.py" in publisher

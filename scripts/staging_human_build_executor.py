@@ -30,7 +30,8 @@ from staging_human_build_process import BuildProcesses, build_deadline
 
 DOCKER = Path("/opt/homebrew/Cellar/docker/29.7.2/bin/docker")
 BUILDX = Path("/opt/homebrew/Cellar/docker-buildx/0.37.0/bin/docker-buildx")
-SOCKET = Path("/Users/jw/.colima/default/docker.sock")
+# Keep the AMD64 release build isolated from long-lived development workloads.
+SOCKET = Path("/Users/jw/.colima/staging-release/docker.sock")
 TOOLS = {
     DOCKER: (
         27924322,

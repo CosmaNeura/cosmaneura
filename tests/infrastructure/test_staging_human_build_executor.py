@@ -209,6 +209,11 @@ class FakeProcesses:
 
 
 class BuildTests(unittest.TestCase):
+    def test_builder_uses_dedicated_staging_release_engine(self):
+        self.assertEqual(
+            m.SOCKET, Path("/Users/jw/.colima/staging-release/docker.sock")
+        )
+
     def test_created_container_id_survives_post_command_failures(self):
         original = FakeProcesses.run
         for mode in ("source", "deadline", "malformed"):
