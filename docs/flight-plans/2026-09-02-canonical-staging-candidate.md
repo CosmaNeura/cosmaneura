@@ -222,8 +222,12 @@
   the clean protected-master controller, exact reviewed build plan, authenticated
   human source transport, selected PR `385`, exact candidate merge SHA and schema
   head before protected configuration and again immediately before mutation. Every
-  Azure read and mutation is explicitly scoped to the pinned subscription rather
-  than mutable Azure CLI defaults. It
+  Azure read and mutation is executed in-process with the exact freshly verified
+  founder access token supplied on a private descriptor; the Azure CLI profile's
+  SDK and raw-token credential acquisition are replaced before command loading so
+  a later shared-cache lookup cannot switch principals. The wrapper permits only
+  the staging ACR, staging resource group, named staging workloads, and pinned
+  subscription. It
   grants no production authority and does not weaken the workflow's default path.
   A controlled local invocation must also supply a fresh positive
   `DEPLOY_RUN_ID` and `DEPLOY_RUN_ATTEMPT=1`; these only derive the unique Azure
@@ -237,12 +241,15 @@
   With Actions unavailable, `infra-staging/publish-local.sh` preserves this
   separation: it requires the independently captured SHA-256 of a closed-schema
   successful controller result, revalidates the reviewed build plan and founder
-  GitHub/Azure identities, and writes a durable exclusive attempt record before
-  the first registry mutation. It uploads blobs and a manifest only under their
+  GitHub/Azure identities, requires the live authenticated source archive, plan,
+  controller result, and build metadata to agree on one exact source digest, and
+  writes a durable exclusive attempt record before the first registry mutation.
+  It uploads blobs and a manifest only under their
   content digests, then creates the candidate SHA tag through ACR import in
   `NoForce` mode. That atomic service operation refuses an existing tag; the
-  resulting tag is verified against the uploaded digest and locked against writes
-  and deletion. It cannot invoke deployment, write `latest`, retry, or target
+  resulting tag is locked against writes and deletion, then read back once more
+  with both its digest and immutable attributes required in the same response.
+  It cannot invoke deployment, write `latest`, retry, or target
   production, and no registry credential is persisted.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already

@@ -21,6 +21,7 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 PYTHON=/opt/homebrew/bin/python3
 AZ=/opt/homebrew/bin/az
+AZURE_CLI_PYTHON=/opt/homebrew/Cellar/azure-cli/2.89.1/libexec/bin/python
 DOCKER=/opt/homebrew/Cellar/docker/29.7.2/bin/docker
 JQ=/usr/bin/jq
 export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
@@ -32,10 +33,9 @@ REGISTRY_NAME=cosmaneurastagingregistry
 REGISTRY_HOST=cosmaneurastagingregistry.azurecr.io
 REGISTRY_REPOSITORY=cosmaneura/cosmaneura
 UNTAGGED_UPLOADER="$REPOSITORY_ROOT/scripts/staging_acr_untagged_upload.py"
+BOUND_AZURE_CLI="$REPOSITORY_ROOT/scripts/staging_azure_cli_bound.py"
 PINNED_SUBSCRIPTION_ID=bab2a709-1fcb-4c87-a9fc-802f7477ec13
 PINNED_TENANT_ID=d51754d0-bba5-4810-820e-afac542844d6
-PINNED_FOUNDER_AZURE_USERNAME_SHA256=acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a
-PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256=0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93
 
 EVIDENCE_PATH=""
 ATTEMPT_PATH=""
@@ -47,6 +47,62 @@ RESULT_SHA256=""
 METADATA_SHA256=""
 IMAGE_ID=""
 ARCHIVE_SHA256=""
+PLAN_SOURCE_ARCHIVE_SHA256=""
+
+bound_az() {
+	local management_token_json registry_token_json status
+	management_token_json=$("$AZ" account get-access-token \
+		--subscription "$PINNED_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if [[ "${1:-}" == "acr" && \
+		( "${2:-}" == "login" || "${2:-}" == "manifest" || "${2:-}" == "repository" ) ]]; then
+		registry_token_json=$("$AZ" account get-access-token \
+			--subscription "$PINNED_SUBSCRIPTION_ID" \
+			--resource https://containerregistry.azure.net \
+			--only-show-errors --output json) || return
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json") \
+			4< <(printf '%s' "$registry_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+		unset registry_token_json
+	else
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+	fi
+	unset management_token_json
+	return "$status"
+}
+
+verify_bound_azure_identity() {
+	local management_token_json result
+	management_token_json=$("$AZ" account get-access-token \
+		--subscription "$PINNED_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if result=$("$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --verify-only \
+		3< <(printf '%s' "$management_token_json")); then
+		unset management_token_json
+	else
+		unset management_token_json
+		return 1
+	fi
+	printf '%s' "$result" | "$JQ" -e \
+		--arg subscription "$PINNED_SUBSCRIPTION_ID" \
+		--arg tenant "$PINNED_TENANT_ID" '
+		type == "object" and .azure_principal_bound == true and
+		.management_token_used_for_mutation == false and
+		.subscription == $subscription and .tenant == $tenant' >/dev/null
+}
 
 secure_file_fingerprint() {
 	"$PYTHON" -I -S -B - "$1" "$2" <<'PY'
@@ -118,115 +174,35 @@ verify_founder_source() {
 		--arg schema "$EXPECTED_SCHEMA_AFTER" \
 		--arg controller "$PLAN_CONTROLLER_SHA" \
 		--arg plan "$EXPECTED_PLAN_SHA256" \
-		--arg identity "$expected_identity_sha256" '
+		--arg identity "$expected_identity_sha256" \
+		--arg source "$PLAN_SOURCE_ARCHIVE_SHA256" '
 		type == "object" and .local_bindings_passed == true and
 		.authenticated_source_checked == true and .build_started == false and
 		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and
 		.schema_head == $schema and .controller_sha == $controller and
 		.plan_sha256 == $plan and .github_user_sha256 == $identity and
-		(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+		.source_archive_sha256 == $source and
 		(.protection_sha256 | test("^[0-9a-f]{64}$"))' >/dev/null
 }
 
 verify_founder_azure_identity() {
-	local account_json token_json identity_hashes username_sha256 object_id_sha256
 	if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
 		-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
 		-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
 		echo "Local publication refuses configured service-principal inputs." >&2
 		return 1
 	fi
-	account_json=$("$AZ" account show --subscription "$PINNED_SUBSCRIPTION_ID" \
-		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
-		--output json)
-	printf '%s' "$account_json" | "$JQ" -e \
-		--arg subscription "$PINNED_SUBSCRIPTION_ID" \
-		--arg tenant "$PINNED_TENANT_ID" \
-		'if .subscriptionId == $subscription and .tenantId == $tenant and
-		 .userType == "user" and (.userName | type) == "string" and
-		 (.userName | length) > 0 then true else error("identity mismatch") end' >/dev/null
-	token_json=$("$AZ" account get-access-token \
-		--subscription "$PINNED_SUBSCRIPTION_ID" \
-		--resource https://management.azure.com/ \
-		--only-show-errors --output json)
-	identity_hashes=$("$PYTHON" -I -S -B - \
-		"$PINNED_SUBSCRIPTION_ID" "$PINNED_TENANT_ID" \
-		3<<<"$token_json" 4<<<"$account_json" <<'PY'
-import base64
-import hashlib
-import json
-import os
-import sys
-import time
-
-def unique(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate identity field")
-        value[key] = item
-    return value
-
-try:
-    with os.fdopen(3) as stream:
-        record = json.load(stream, object_pairs_hook=unique)
-    with os.fdopen(4) as stream:
-        account = json.load(stream, object_pairs_hook=unique)
-    if record.get("subscription") != sys.argv[1] or record.get("tenant") != sys.argv[2]:
-        raise ValueError("token scope mismatch")
-    token = record["accessToken"]
-    if record.get("tokenType") != "Bearer" or not isinstance(token, str):
-        raise ValueError("token shape")
-    pieces = token.split(".")
-    if len(pieces) != 3:
-        raise ValueError("token shape")
-    payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
-    claims = json.loads(base64.urlsafe_b64decode(payload), object_pairs_hook=unique)
-    if claims.get("tid") != sys.argv[2] or claims.get("aud") not in {
-        "https://management.azure.com/", "https://management.core.windows.net/"
-    }:
-        raise ValueError("token claims")
-    if type(claims.get("exp")) is not int or claims["exp"] <= int(time.time()) + 300:
-        raise ValueError("token expiry")
-    object_id = claims["oid"]
-    username = claims["email"]
-    if not isinstance(username, str) or not username:
-        raise ValueError("username claim")
-    if not isinstance(object_id, str):
-        raise ValueError("object claim")
-    if (
-        set(account) != {"subscriptionId", "tenantId", "userName", "userType"}
-        or account["subscriptionId"] != sys.argv[1]
-        or account["tenantId"] != sys.argv[2]
-        or account["userType"] != "user"
-        or account["userName"] != username
-    ):
-        raise ValueError("account and token identity mismatch")
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-print(hashlib.sha256(username.encode()).hexdigest(), hashlib.sha256(object_id.encode()).hexdigest())
-PY
-	)
-	unset token_json
-	unset account_json
-	read -r username_sha256 object_id_sha256 <<<"$identity_hashes"
-	unset identity_hashes
-	if [[ "$username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
-		echo "The active Azure user is not the pinned founder." >&2
-		return 1
-	fi
-	if [[ "$object_id_sha256" != "$PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256" ]]; then
-		echo "The Azure directory user is not the pinned founder." >&2
+	if ! verify_bound_azure_identity; then
+		echo "Failed to bind the exact founder token for staging publication." >&2
 		return 1
 	fi
 }
 
 remote_tag_absent() {
 	local tags
-	tags=$("$AZ" acr repository show-tags \
+	tags=$(bound_az acr repository show-tags \
 		--name "$REGISTRY_NAME" \
 		--repository "$REGISTRY_REPOSITORY" \
-		--subscription "$PINNED_SUBSCRIPTION_ID" \
 		--query "[?@=='$CANDIDATE_SHA']" \
 		--output json)
 	printf '%s' "$tags" | "$JQ" -e 'type == "array" and length == 0' >/dev/null
@@ -349,7 +325,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for tool in "$PYTHON" "$AZ" "$DOCKER" "$JQ" "$UNTAGGED_UPLOADER"; do
+for tool in "$PYTHON" "$AZ" "$AZURE_CLI_PYTHON" "$DOCKER" "$JQ" \
+	"$UNTAGGED_UPLOADER" "$BOUND_AZURE_CLI"; do
 	[[ -x "$tool" ]] || { echo "Required publication tool is unavailable." >&2; exit 1; }
 done
 if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN:-}" || -n "${RECALL_WEBHOOK_SECRET:-}" || \
@@ -367,6 +344,8 @@ unset GH_TOKEN GITHUB_TOKEN DOCKER_TLS_VERIFY DOCKER_CERT_PATH
 read -r observed_plan_sha256 observed_plan_bytes < <(secure_file_fingerprint "$BUILD_PLAN" 65536)
 [[ "$observed_plan_sha256" == "$EXPECTED_PLAN_SHA256" && "$observed_plan_bytes" -gt 0 ]] || exit 1
 PLAN_CONTROLLER_SHA=$("$JQ" -er '.controller_sha | select(test("^[0-9a-f]{40}$"))' "$BUILD_PLAN")
+PLAN_SOURCE_ARCHIVE_SHA256=$("$JQ" -er \
+	'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))' "$BUILD_PLAN")
 [[ "$("$JQ" -er '.candidate_sha' "$BUILD_PLAN")" == "$CANDIDATE_SHA" ]] || exit 1
 [[ "$("$JQ" -er '.candidate_pr' "$BUILD_PLAN")" == "$APPROVAL_PR_NUMBER" ]] || exit 1
 
@@ -378,7 +357,8 @@ read -r RESULT_SHA256 result_bytes < <(secure_file_fingerprint "$CONTROLLER_RESU
 "$JQ" -e --slurpfile plan "$BUILD_PLAN" \
 	--arg candidate "$CANDIDATE_SHA" \
 	--arg controller "$PLAN_CONTROLLER_SHA" \
-	--arg plan_sha256 "$EXPECTED_PLAN_SHA256" '
+	--arg plan_sha256 "$EXPECTED_PLAN_SHA256" \
+	--arg source_sha256 "$PLAN_SOURCE_ARCHIVE_SHA256" '
 	type == "object" and keys == [
 	  "actor","build_metadata","build_root","candidate_sha","complete",
 	  "controller_sha","deployment_authorized","finished_at",
@@ -390,7 +370,7 @@ read -r RESULT_SHA256 result_bytes < <(secure_file_fingerprint "$CONTROLLER_RESU
 	.candidate_sha == $candidate and .controller_sha == $controller and
 	.plan_sha256 == $plan_sha256 and .module_sha256s == $plan[0].module_sha256s and
 	.publication_authorized == false and .deployment_authorized == false and
-	(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+	.source_archive_sha256 == $source_sha256 and
 	(.frontend_configuration_sha256 | test("^[0-9a-f]{64}$")) and
 	(.public_assets_sha256 | test("^[0-9a-f]{64}$")) and
 	(.image_id | test("^sha256:[0-9a-f]{64}$")) and
@@ -479,8 +459,8 @@ write_attempt
 PUBLICATION_STARTED=true
 
 PHASE=content_addressed_upload
-ACR_LOGIN_JSON=$("$AZ" acr login --name "$REGISTRY_NAME" \
-	--subscription "$PINNED_SUBSCRIPTION_ID" --expose-token \
+ACR_LOGIN_JSON=$(bound_az acr login --name "$REGISTRY_NAME" \
+	--expose-token \
 	--only-show-errors --output json)
 UPLOAD_RESULT=$(printf '%s' "$ACR_LOGIN_JSON" | \
 	"$PYTHON" -I -S -B "$UNTAGGED_UPLOADER" \
@@ -498,32 +478,32 @@ IMAGE_DIGEST=$(printf '%s' "$UPLOAD_RESULT" | "$JQ" -er \
 unset UPLOAD_RESULT
 
 PHASE=create_candidate_tag_no_force
-"$AZ" acr import --name "$REGISTRY_NAME" \
+bound_az acr import --name "$REGISTRY_NAME" \
 	--registry "$REGISTRY_NAME" \
 	--source "$REGISTRY_REPOSITORY@$IMAGE_DIGEST" \
 	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
-	--subscription "$PINNED_SUBSCRIPTION_ID" \
 	--only-show-errors --output none
 
 PHASE=verify_remote_digest
-REMOTE_DIGEST=$("$AZ" acr manifest show-metadata \
+REMOTE_DIGEST=$(bound_az acr manifest show-metadata \
 	--registry "$REGISTRY_NAME" \
 	--name "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
-	--subscription "$PINNED_SUBSCRIPTION_ID" \
 	--query digest --output tsv)
 [[ "$REMOTE_DIGEST" == "$IMAGE_DIGEST" ]] || {
 	echo "The registry digest does not match the pushed candidate." >&2
 	exit 1
 }
-"$AZ" acr repository update --name "$REGISTRY_NAME" \
+PHASE=lock_and_reverify_candidate_tag
+bound_az acr repository update --name "$REGISTRY_NAME" \
 	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
 	--write-enabled false --delete-enabled false \
-	--subscription "$PINNED_SUBSCRIPTION_ID" --only-show-errors --output none
-TAG_ATTRIBUTES=$("$AZ" acr repository show --name "$REGISTRY_NAME" \
+	--only-show-errors --output none
+TAG_ATTRIBUTES=$(bound_az acr repository show --name "$REGISTRY_NAME" \
 	--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA" \
-	--subscription "$PINNED_SUBSCRIPTION_ID" --output json)
-printf '%s' "$TAG_ATTRIBUTES" | "$JQ" -e \
-	'.changeableAttributes.writeEnabled == false and
+	--output json)
+printf '%s' "$TAG_ATTRIBUTES" | "$JQ" -e --arg digest "$IMAGE_DIGEST" \
+	'.digest == $digest and
+	 .changeableAttributes.writeEnabled == false and
 	 .changeableAttributes.deleteEnabled == false and
 	 .changeableAttributes.readEnabled == true' >/dev/null
 unset TAG_ATTRIBUTES

@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+"""Run one staging Azure CLI command with the exact verified user token.
+
+The token arrives on descriptor 3 and is never placed in argv or the
+environment. Azure CLI credential acquisition is replaced in-process so the
+requested operation cannot switch to a different principal through its shared
+credential cache after verification.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import os
+import re
+import resource
+import sys
+import time
+from typing import Any
+
+SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+TENANT = "d51754d0-bba5-4810-820e-afac542844d6"
+USERNAME_SHA256 = "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
+OBJECT_ID_SHA256 = "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
+MANAGEMENT_AUDIENCES = {
+    "https://management.azure.com/",
+    "https://management.core.windows.net/",
+}
+MANAGEMENT_SCOPES = {
+    "https://management.azure.com/.default",
+    "https://management.azure.com//.default",
+    "https://management.core.windows.net/.default",
+    "https://management.core.windows.net//.default",
+}
+REGISTRY_AUDIENCE = "https://containerregistry.azure.net"
+REGISTRY_SCOPES = {
+    "https://containerregistry.azure.net/.default",
+    "https://containerregistry.azure.net//.default",
+}
+STAGING_RESOURCE_GROUP = "cosmaneura-staging"
+STAGING_ENVIRONMENT = "cosmaneura-staging-app-environment"
+STAGING_REGISTRY = "cosmaneurastagingregistry"
+STAGING_REGISTRY_HOST = "cosmaneurastagingregistry.azurecr.io"
+STAGING_REPOSITORY = "cosmaneura/cosmaneura"
+STAGING_CONTAINER_NAMES = {
+    "cosmaneura-staging-app",
+    "cosmaneura-staging-migrate",
+    "cosmaneura-staging-scheduler",
+    "cosmaneura-staging-worker",
+}
+ALLOWED_ACR_COMMANDS = {
+    ("acr", "login"),
+    ("acr", "import"),
+    ("acr", "credential", "show"),
+    ("acr", "manifest", "show-metadata"),
+    ("acr", "repository", "show"),
+    ("acr", "repository", "show-tags"),
+    ("acr", "repository", "update"),
+}
+ALLOWED_CONTAINERAPP_COMMANDS = {
+    ("containerapp", "show"),
+    ("containerapp", "update"),
+    ("containerapp", "job", "create"),
+    ("containerapp", "job", "delete"),
+    ("containerapp", "job", "execution", "show"),
+    ("containerapp", "job", "logs", "show"),
+    ("containerapp", "job", "show"),
+    ("containerapp", "job", "start"),
+    ("containerapp", "replica", "list"),
+    ("containerapp", "revision", "list"),
+    ("containerapp", "revision", "show"),
+    ("containerapp", "secret", "remove"),
+    ("containerapp", "secret", "set"),
+}
+
+
+class BoundAzureRefused(RuntimeError):
+    """Fixed-message refusal for an invalid token or command."""
+
+
+def require(condition: object) -> None:
+    if not condition:
+        raise BoundAzureRefused("staging_azure_cli_bound_refused")
+
+
+def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        require(key not in value)
+        value[key] = item
+    return value
+
+
+def sha(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def validate_token_record(
+    record: object, audiences: set[str], *, now: int | None = None
+) -> tuple[str, int]:
+    require(type(record) is dict)
+    exact_record = record
+    require(exact_record.get("subscription") == SUBSCRIPTION)
+    require(exact_record.get("tenant") == TENANT)
+    require(exact_record.get("tokenType") == "Bearer")
+    token = exact_record.get("accessToken")
+    require(type(token) is str and 100 < len(token) < 64 * 1024)
+    pieces = token.split(".")
+    require(len(pieces) == 3)
+    payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(payload), object_pairs_hook=unique)
+    except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        raise BoundAzureRefused("staging_azure_cli_bound_refused") from None
+    require(type(claims) is dict)
+    require(claims.get("tid") == TENANT and claims.get("aud") in audiences)
+    require(claims.get("idtyp") == "user")
+    expiry = claims.get("exp")
+    not_before = claims.get("nbf")
+    current_time = int(time.time()) if now is None else now
+    require(type(current_time) is int)
+    require(type(expiry) is int and expiry > current_time + 300)
+    require(type(not_before) is int and not_before <= current_time + 30)
+    expires_on = exact_record.get("expires_on")
+    require(type(expires_on) in {int, str} and not isinstance(expires_on, bool))
+    try:
+        record_expiry = int(expires_on)
+    except ValueError:
+        raise BoundAzureRefused("staging_azure_cli_bound_refused") from None
+    require(abs(record_expiry - expiry) <= 5)
+    username = claims.get("email")
+    object_id = claims.get("oid")
+    require(type(username) is str and sha(username) == USERNAME_SHA256)
+    require(type(object_id) is str and sha(object_id) == OBJECT_ID_SHA256)
+    return token, expiry
+
+
+def token_record(descriptor: int, audiences: set[str]) -> tuple[str, int]:
+    record: object = None
+    try:
+        with os.fdopen(descriptor) as stream:
+            record = json.load(stream, object_pairs_hook=unique)
+        return validate_token_record(record, audiences)
+    except BoundAzureRefused:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise BoundAzureRefused("staging_azure_cli_bound_refused") from None
+    finally:
+        if type(record) is dict:
+            record.clear()
+
+
+def flag_values(argv: list[str], names: set[str]) -> list[str]:
+    values: list[str] = []
+    for index, argument in enumerate(argv):
+        if argument in names:
+            require(index + 1 < len(argv))
+            values.append(argv[index + 1])
+    return values
+
+
+def command_matches(argv: list[str], allowed: set[tuple[str, ...]]) -> bool:
+    return any(argv[: len(prefix)] == list(prefix) for prefix in allowed)
+
+
+def validate_staging_scope(argv: list[str]) -> None:
+    if argv[0] == "containerapp":
+        require(command_matches(argv, ALLOWED_CONTAINERAPP_COMMANDS))
+        require(
+            flag_values(argv, {"-g", "--resource-group"}) == [STAGING_RESOURCE_GROUP]
+        )
+        require(
+            flag_values(argv, {"-n", "--name"})
+            in [[name] for name in STAGING_CONTAINER_NAMES]
+        )
+        require("--ids" not in argv)
+        for image in flag_values(argv, {"-i", "--image"}):
+            require(
+                re.fullmatch(
+                    rf"{STAGING_REGISTRY_HOST}/{STAGING_REPOSITORY}@sha256:[0-9a-f]{{64}}",
+                    image,
+                )
+                is not None
+            )
+        for server in flag_values(argv, {"--registry-server"}):
+            require(server == STAGING_REGISTRY_HOST)
+        for environment in flag_values(argv, {"--environment"}):
+            require(environment == STAGING_ENVIRONMENT)
+        return
+
+    require(command_matches(argv, ALLOWED_ACR_COMMANDS))
+    require(
+        all(
+            registry == STAGING_REGISTRY
+            for registry in flag_values(argv, {"--registry"})
+        )
+    )
+    if argv[:3] == ["acr", "manifest", "show-metadata"]:
+        require(not flag_values(argv, {"-n"}))
+        require(flag_values(argv, {"--registry"}) == [STAGING_REGISTRY])
+    elif argv[:2] == ["acr", "login"]:
+        require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
+    else:
+        require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
+    for repository in flag_values(argv, {"--repository"}):
+        require(repository == STAGING_REPOSITORY)
+    for image in flag_values(argv, {"--image"}):
+        require(
+            re.fullmatch(rf"{STAGING_REPOSITORY}:[0-9a-f]{{40}}", image) is not None
+        )
+    for source in flag_values(argv, {"--source"}):
+        require(
+            re.fullmatch(rf"{STAGING_REPOSITORY}@sha256:[0-9a-f]{{64}}", source)
+            is not None
+        )
+    if argv[:3] == ["acr", "manifest", "show-metadata"]:
+        names = flag_values(argv, {"--name"})
+        require(
+            len(names) == 1
+            and re.fullmatch(
+                rf"{STAGING_REPOSITORY}(?::[0-9a-f]{{40}}|@sha256:[0-9a-f]{{64}})",
+                names[0],
+            )
+            is not None
+        )
+
+
+def validate_argv(argv: list[str]) -> None:
+    if argv in (["--verify-only"], ["--verify-registry-only"]):
+        return
+    require(argv and argv[0] in {"acr", "containerapp"})
+    require("-s" not in argv)
+    require(
+        not any(
+            argument.startswith(
+                ("--name=", "--resource-group=", "--subscription=", "--registry=")
+            )
+            for argument in argv
+        )
+    )
+    if argv[:2] == ["acr", "login"]:
+        require("--expose-token" in argv)
+    require(argv.count("--subscription") == 1)
+    index = argv.index("--subscription")
+    require(index + 1 < len(argv) and argv[index + 1] == SUBSCRIPTION)
+    require(not any("cosmaneuraprod" in value.lower() for value in argv))
+    validate_staging_scope(argv)
+
+
+def normalized_scopes(scopes: object) -> set[str]:
+    if scopes is None:
+        return set()
+    if isinstance(scopes, str):
+        return {scopes}
+    require(isinstance(scopes, (list, tuple, set)))
+    require(all(type(scope) is str for scope in scopes))
+    return set(scopes)
+
+
+def main() -> int:
+    require(sys.flags.isolated and not sys.flags.optimize)
+    require(os.getuid() == os.geteuid() != 0)
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    argv = sys.argv[1:]
+    validate_argv(argv)
+    token, expiry = token_record(3, MANAGEMENT_AUDIENCES)
+    if argv == ["--verify-only"]:
+        print(
+            json.dumps(
+                {
+                    "azure_principal_bound": True,
+                    "subscription": SUBSCRIPTION,
+                    "tenant": TENANT,
+                    "management_token_used_for_mutation": False,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    if argv == ["--verify-registry-only"]:
+        token_record(4, {REGISTRY_AUDIENCE})
+        print(
+            json.dumps(
+                {
+                    "azure_principal_bound": True,
+                    "registry_token_verified": True,
+                    "subscription": SUBSCRIPTION,
+                    "tenant": TENANT,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
+    registry_required = argv[:2] == ["acr", "login"] or argv[:3] in (
+        ["acr", "manifest", "show-metadata"],
+        ["acr", "repository", "show"],
+        ["acr", "repository", "show-tags"],
+        ["acr", "repository", "update"],
+    )
+    registry_token = registry_expiry = None
+    if registry_required:
+        registry_token, registry_expiry = token_record(4, {REGISTRY_AUDIENCE})
+
+    from azure.cli.core import get_default_cli
+    from azure.cli.core._profile import Profile
+    from azure.core.credentials import AccessToken, AccessTokenInfo
+
+    class StaticCredential:
+        def get_token(self, *scopes: str, **_kwargs: Any) -> AccessToken:
+            requested = normalized_scopes(scopes)
+            if requested and requested.issubset(MANAGEMENT_SCOPES):
+                return AccessToken(token, expiry)
+            require(
+                registry_token is not None
+                and registry_expiry is not None
+                and requested
+                and requested.issubset(REGISTRY_SCOPES)
+            )
+            return AccessToken(registry_token, registry_expiry)
+
+        def get_token_info(
+            self, *scopes: str, options: dict[str, Any] | None = None
+        ) -> AccessTokenInfo:
+            del options
+            requested = normalized_scopes(scopes)
+            if requested and requested.issubset(MANAGEMENT_SCOPES):
+                return AccessTokenInfo(token, expiry)
+            require(
+                registry_token is not None
+                and registry_expiry is not None
+                and requested
+                and requested.issubset(REGISTRY_SCOPES)
+            )
+            return AccessTokenInfo(registry_token, registry_expiry)
+
+    credential = StaticCredential()
+
+    def get_login_credentials(
+        _profile,
+        subscription_id=None,
+        aux_subscriptions=None,
+        aux_tenants=None,
+        sdk_credential=True,
+    ):
+        require(subscription_id in {None, SUBSCRIPTION})
+        require(not aux_subscriptions and not aux_tenants and sdk_credential is True)
+        return credential, SUBSCRIPTION, TENANT
+
+    def get_raw_token(
+        _profile,
+        resource=None,
+        scopes=None,
+        subscription=None,
+        tenant=None,
+        credential_out=None,
+    ):
+        requested_scopes = normalized_scopes(scopes)
+        require(subscription in {None, SUBSCRIPTION})
+        require(tenant in {None, TENANT})
+        require(credential_out is None)
+        if resource == REGISTRY_AUDIENCE or (
+            requested_scopes and requested_scopes.issubset(REGISTRY_SCOPES)
+        ):
+            require(registry_token is not None and registry_expiry is not None)
+            selected_token, selected_expiry = registry_token, registry_expiry
+        else:
+            require(resource in {None, *MANAGEMENT_AUDIENCES})
+            require(
+                not requested_scopes or requested_scopes.issubset(MANAGEMENT_SCOPES)
+            )
+            selected_token, selected_expiry = token, expiry
+        entry = {"accessToken": selected_token, "expires_on": selected_expiry}
+        return ("Bearer", selected_token, entry), SUBSCRIPTION, TENANT
+
+    Profile.get_login_credentials = get_login_credentials
+    Profile.get_raw_token = get_raw_token
+    return int(get_default_cli().invoke(argv) or 0)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BoundAzureRefused:
+        print("staging Azure command binding refused", file=sys.stderr)
+        raise SystemExit(2) from None

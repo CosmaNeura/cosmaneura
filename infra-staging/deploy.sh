@@ -54,12 +54,12 @@ STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
 PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
-PINNED_FOUNDER_AZURE_USERNAME_SHA256="acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
-PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
 FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
 FOUNDER_APPROVAL_PR_NUMBER="385"
 FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"
 PYTHON_BIN=python
+AZURE_CLI_PYTHON=/opt/homebrew/Cellar/azure-cli/2.89.1/libexec/bin/python
+BOUND_AZURE_CLI="$REPOSITORY_ROOT/scripts/staging_azure_cli_bound.py"
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	PYTHON_BIN=/opt/homebrew/bin/python3
@@ -67,6 +67,8 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 		"$PYTHON_BIN" \
 		/opt/homebrew/Cellar/gh/2.97.0/bin/gh \
 		/opt/homebrew/bin/az \
+		"$AZURE_CLI_PYTHON" \
+		"$BOUND_AZURE_CLI" \
 		/usr/bin/git \
 		/usr/bin/jq; do
 		[[ -x "$founder_tool" ]] || {
@@ -83,67 +85,68 @@ AZ_EXECUTABLE=$(command -v az) || {
 	exit 1
 }
 az() {
-	"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" != "founder-user" ]]; then
+		"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"
+		return
+	fi
+	local management_token_json registry_token_json status
+	management_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+		--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if [[ "${1:-}" == "acr" && \
+		( "${2:-}" == "login" || "${2:-}" == "manifest" || "${2:-}" == "repository" ) ]]; then
+		registry_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			--resource https://containerregistry.azure.net \
+			--only-show-errors --output json) || return
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json") \
+			4< <(printf '%s' "$registry_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+		unset registry_token_json
+	else
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+	fi
+	unset management_token_json
+	return "$status"
 }
 
-azure_token_identity_hashes() {
-	"$PYTHON_BIN" -I -S -B -c '
-import base64
-import hashlib
-import json
-import os
-import sys
-import time
-
-def unique(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate identity field")
-        value[key] = item
-    return value
-
-try:
-    record = json.load(sys.stdin, object_pairs_hook=unique)
-    with os.fdopen(3) as stream:
-        account = json.load(stream, object_pairs_hook=unique)
-    if record.get("subscription") != sys.argv[1] or record.get("tenant") != sys.argv[2]:
-        raise ValueError("token scope mismatch")
-    token = record["accessToken"]
-    if record.get("tokenType") != "Bearer" or not isinstance(token, str):
-        raise ValueError("token shape")
-    pieces = token.split(".")
-    if len(pieces) != 3:
-        raise ValueError("token shape")
-    payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
-    claims = json.loads(base64.urlsafe_b64decode(payload), object_pairs_hook=unique)
-    if claims.get("tid") != sys.argv[2] or claims.get("aud") not in {
-        "https://management.azure.com/", "https://management.core.windows.net/"
-    }:
-        raise ValueError("token claims")
-    if type(claims.get("exp")) is not int or claims["exp"] <= int(time.time()) + 300:
-        raise ValueError("token expiry")
-    username = claims["email"]
-    object_id = claims["oid"]
-    if not isinstance(username, str) or not username or not isinstance(object_id, str):
-        raise ValueError("identity claims")
-    if (
-        set(account) != {"subscriptionId", "tenantId", "userName", "userType"}
-        or account["subscriptionId"] != sys.argv[1]
-        or account["tenantId"] != sys.argv[2]
-        or account["userType"] != "user"
-        or account["userName"] != username
-    ):
-        raise ValueError("account and token identity mismatch")
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-print(hashlib.sha256(username.encode()).hexdigest(), hashlib.sha256(object_id.encode()).hexdigest())
-' "$PINNED_STAGING_SUBSCRIPTION_ID" "$PINNED_STAGING_TENANT_ID"
+verify_bound_founder_azure_identity() {
+	local management_token_json result
+	management_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+		--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if result=$("$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --verify-only \
+		3< <(printf '%s' "$management_token_json")); then
+		unset management_token_json
+	else
+		unset management_token_json
+		return 1
+	fi
+	printf '%s' "$result" | /usr/bin/jq -e \
+		--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--arg tenant "$PINNED_STAGING_TENANT_ID" '
+		type == "object" and .azure_principal_bound == true and
+		.management_token_used_for_mutation == false and
+		.subscription == $subscription and .tenant == $tenant' >/dev/null
 }
 
 verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
-	local controller_sha canonical_root canonical_origin dirty_checkout source_result expected_identity_sha256
+	local controller_sha canonical_root canonical_origin dirty_checkout source_result
+	local expected_identity_sha256 expected_source_archive_sha256
 	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
 		"$STAGING_APPROVAL_PR_NUMBER" != "$FOUNDER_APPROVAL_PR_NUMBER" || \
 		"$EXPECTED_SCHEMA_AFTER" != "$FOUNDER_EXPECTED_SCHEMA_AFTER" ]]; then
@@ -173,6 +176,8 @@ verify_founder_release_source() {
 	fi
 	if ! expected_identity_sha256=$(/usr/bin/jq -er \
 		'.github_user_sha256 | select(test("^[0-9a-f]{64}$"))' "$STAGING_BUILD_PLAN") || \
+		! expected_source_archive_sha256=$(/usr/bin/jq -er \
+			'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))' "$STAGING_BUILD_PLAN") || \
 		! source_result=$(cd "$REPOSITORY_ROOT" && \
 		"$PYTHON_BIN" -I -S -B scripts/staging_build_controller.py \
 			--verify-source "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256"); then
@@ -185,13 +190,14 @@ verify_founder_release_source() {
 		--arg schema "$FOUNDER_EXPECTED_SCHEMA_AFTER" \
 		--arg controller "$controller_sha" \
 		--arg plan "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
-		--arg identity "$expected_identity_sha256" '
+		--arg identity "$expected_identity_sha256" \
+		--arg source "$expected_source_archive_sha256" '
 		type == "object" and .local_bindings_passed == true and
 		.authenticated_source_checked == true and .build_started == false and
 		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and
 		.schema_head == $schema and .controller_sha == $controller and
 		.plan_sha256 == $plan and .github_user_sha256 == $identity and
-		(.source_archive_sha256 | test("^[0-9a-f]{64}$")) and
+		.source_archive_sha256 == $source and
 		(.protection_sha256 | test("^[0-9a-f]{64}$"))' >/dev/null; then
 		echo "Founder-user staging source evidence is invalid."
 		return 1
@@ -506,16 +512,15 @@ echo "Revision string: $REVISION_STRING"
 emit_github_output source_sha "$GIT_SHA" || exit 1
 
 verify_azure_deployment_identity() {
-	local azure_account_json founder_token_json founder_identity_hashes
-	local founder_azure_username_sha256 founder_azure_object_id_sha256
-	if ! azure_account_json=$(az account show \
-		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
-		-o json); then
-		echo "Failed to inspect the active Azure identity."
-		return 1
-	fi
+	local azure_account_json
 	case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
 	service-principal)
+		if ! azure_account_json=$(az account show \
+			--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
+			-o json); then
+			echo "Failed to inspect the active Azure identity."
+			return 1
+		fi
 		if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
 			"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
 			"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
@@ -539,33 +544,8 @@ verify_azure_deployment_identity() {
 			echo "Founder-user staging deployment refuses configured service-principal inputs."
 			return 1
 		fi
-		if ! printf '%s' "$azure_account_json" | jq -e \
-			--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
-			--arg tenant "$PINNED_STAGING_TENANT_ID" \
-			'if .subscriptionId == $subscription and .tenantId == $tenant and
-			 .userType == "user" and (.userName | type) == "string" and
-			 (.userName | length) > 0 then true else error("identity mismatch") end' >/dev/null; then
-			echo "Active Azure user is outside the pinned staging scope."
-			return 1
-		fi
-		if ! founder_token_json=$(az account get-access-token \
-			--resource https://management.azure.com/ --only-show-errors --output json) || \
-			! founder_identity_hashes=$(printf '%s' "$founder_token_json" | \
-				azure_token_identity_hashes 3<<<"$azure_account_json"); then
-			unset founder_token_json
-			echo "Failed to bind the Azure user to the staging-scoped access token."
-			return 1
-		fi
-		unset founder_token_json
-		read -r founder_azure_username_sha256 founder_azure_object_id_sha256 \
-			<<<"$founder_identity_hashes"
-		unset founder_identity_hashes
-		if [[ "$founder_azure_username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
-			echo "The active Azure user is not the pinned founder."
-			return 1
-		fi
-		if [[ "$founder_azure_object_id_sha256" != "$PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256" ]]; then
-			echo "The Azure directory user is not the pinned founder."
+		if ! verify_bound_founder_azure_identity; then
+			echo "Failed to bind the exact founder token for Azure staging operations."
 			return 1
 		fi
 		;;

@@ -9,6 +9,7 @@ LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
 LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
 UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"
+BOUND_AZURE_CLI = ROOT / "scripts" / "staging_azure_cli_bound.py"
 
 
 def _source() -> str:
@@ -475,6 +476,7 @@ def test_azure_identity_is_pinned_and_legacy_branch_trust_is_rejected() -> None:
 def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     workflow = _source()
     deploy = (ROOT / "infra-staging" / "deploy.sh").read_text(encoding="utf-8")
+    bound_azure = BOUND_AZURE_CLI.read_text(encoding="utf-8")
 
     assert (
         'STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"'
@@ -499,13 +501,24 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert "--actor" not in deploy
     assert "--triggering-actor" not in deploy
     assert "JohnClem" not in deploy
-    assert "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a" in deploy
+    assert "staging_azure_cli_bound.py" in deploy
     assert "account get-access-token" in deploy
     assert "https://management.azure.com/" in deploy
-    assert 'username = claims["email"]' in deploy
-    assert 'account["userName"] != username' in deploy
-    assert "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93" in deploy
-    assert '.userType == "user"' in deploy
+    assert (
+        "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
+        in bound_azure
+    )
+    assert (
+        "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
+        in bound_azure
+    )
+    assert 'username = claims.get("email")' in bound_azure
+    assert 'claims.get("idtyp") == "user"' in bound_azure
+    assert "Profile.get_login_credentials = get_login_credentials" in bound_azure
+    assert "Profile.get_raw_token = get_raw_token" in bound_azure
+    assert "token_record(3, MANAGEMENT_AUDIENCES)" in bound_azure
+    assert "token_record(4, {REGISTRY_AUDIENCE})" in bound_azure
+    assert ".source_archive_sha256 == $source" in deploy
     assert (
         '"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"'
         in deploy
@@ -537,6 +550,7 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
 def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
     uploader = UNTAGGED_UPLOADER.read_text(encoding="utf-8")
+    bound_azure = BOUND_AZURE_CLI.read_text(encoding="utf-8")
 
     assert "cosmaneurastagingregistry.azurecr.io" in publisher
     assert "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de" in publisher
@@ -549,22 +563,25 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert '--verify-source "$BUILD_PLAN" "$EXPECTED_PLAN_SHA256"' in publisher
     assert "EXPECTED_CONTROLLER_RESULT_SHA256" in publisher
     assert "keys == [" in publisher
-    assert 'username = claims["email"]' in publisher
-    assert 'account["userName"] != username' in publisher
+    assert 'username = claims.get("email")' in bound_azure
+    assert "staging_azure_cli_bound.py" in publisher
+    assert ".source_archive_sha256 == $source" in publisher
+    assert ".source_archive_sha256 == $source_sha256" in publisher
     assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
     assert "RECALL_WEBHOOK_SECRET" in publisher
     assert "DOCKER_AUTH_CONFIG" in publisher
     assert '"$DOCKER" image load --input "$IMAGE_ARCHIVE"' in publisher
     assert '"$DOCKER" push' not in publisher
-    assert "az acr login" not in publisher
-    assert '"$AZ" acr login --name "$REGISTRY_NAME"' in publisher
+    assert '"$AZ" acr login' not in publisher
+    assert 'bound_az acr login --name "$REGISTRY_NAME"' in publisher
     assert "--expose-token" in publisher
-    assert '"$AZ" acr import --name "$REGISTRY_NAME"' in publisher
+    assert 'bound_az acr import --name "$REGISTRY_NAME"' in publisher
     assert '--source "$REGISTRY_REPOSITORY@$IMAGE_DIGEST"' in publisher
     assert '--image "$REGISTRY_REPOSITORY:$CANDIDATE_SHA"' in publisher
     assert "--force" not in publisher
-    assert '"$AZ" acr manifest show-metadata' in publisher
-    assert '"$AZ" acr repository update' in publisher
+    assert "bound_az acr manifest show-metadata" in publisher
+    assert "bound_az acr repository update" in publisher
+    assert ".digest == $digest" in publisher
     assert "--write-enabled false --delete-enabled false" in publisher
     assert "publication-attempt.json" in publisher
     assert "durable_before_first_registry_write:true" in publisher
@@ -576,7 +593,7 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "publication-result.json" in publisher
     assert "automatic_retry_allowed:false" in publisher
     assert "deployment_performed:false" in publisher
-    assert publisher.count('"$PYTHON" -I -S -B') == 7
+    assert publisher.count('"$PYTHON" -I -S -B') == 6
     assert ":latest" not in publisher
     assert "infra-staging/deploy.sh" not in publisher
     assert "cosmaneuraprodregistry" not in publisher
