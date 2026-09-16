@@ -294,18 +294,18 @@ def build_and_upload(
     expected_image_id: str,
     token_record: dict[str, Any],
 ) -> dict[str, Any]:
-    require(
-        set(token_record) == {"accessToken", "loginServer", "refreshToken", "username"}
-    )
+    keys = set(token_record)
+    required = {"accessToken", "loginServer"}
+    require(keys in (required, required | {"refreshToken", "username"}))
     require(token_record["loginServer"] == REGISTRY_HOST)
-    require(token_record["username"] == USERNAME)
     require(re.fullmatch(r"sha256:[0-9a-f]{64}", expected_image_id) is not None)
-    refresh_token = token_record["refreshToken"]
-    require(
-        type(refresh_token) is str
-        and refresh_token == token_record["accessToken"]
-        and 100 < len(refresh_token) < 128 * 1024
-    )
+    refresh_token = token_record["accessToken"]
+    require(type(refresh_token) is str and 100 < len(refresh_token) < 128 * 1024)
+    if keys != required:
+        require(
+            token_record["refreshToken"] == refresh_token
+            and token_record["username"] == USERNAME
+        )
     token_record.clear()
     authorization = ""
     stream, before = open_archive(archive_path, expected_archive_sha256)

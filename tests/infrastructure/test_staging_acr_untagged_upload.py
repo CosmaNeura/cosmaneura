@@ -156,18 +156,22 @@ class UntaggedUploadTests(unittest.TestCase):
 
     def test_uploads_blobs_and_manifest_only_by_digest(self) -> None:
         raw = self.write_archive()
-        token = self.token()
+        tokens = (
+            self.token(),
+            {key: self.token()[key] for key in ("accessToken", "loginServer")},
+        )
         with (
             patch.object(m, "Registry", FakeRegistry),
             patch.object(
                 m, "exchange_refresh_token", return_value="y" * 256
             ) as exchange,
         ):
-            result = m.build_and_upload(
-                self.archive, digest(raw), "sha256:" + self.config_digest, token
-            )
-        exchange.assert_called_once_with("x" * 256)
-        self.assertEqual(token, {})
+            for token in tokens:
+                result = m.build_and_upload(
+                    self.archive, digest(raw), "sha256:" + self.config_digest, token
+                )
+        self.assertEqual(exchange.call_count, 2)
+        self.assertEqual(tokens, ({}, {}))
         self.assertFalse(result["tag_created"])
         self.assertFalse(result["tag_overwrite_possible"])
         self.assertRegex(result["manifest_digest"], r"^sha256:[0-9a-f]{64}$")
