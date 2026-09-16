@@ -21,6 +21,8 @@ EXPECTED_SCHEMA_BEFORE="${EXPECTED_SCHEMA_BEFORE:-}"
 EXPECTED_SCHEMA_AFTER="${EXPECTED_SCHEMA_AFTER:-}"
 EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
+STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
+STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -43,6 +45,67 @@ STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
 PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+PINNED_FOUNDER_GITHUB_LOGIN_SHA256="f315b07364650dce8146d41f95f3049cc0c8fe6a46b8bc3957ae50b937f730ce"
+PINNED_FOUNDER_AZURE_USERNAME_SHA256="acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
+
+hash_stdin() {
+	python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+}
+
+verify_founder_release_source() {
+	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
+	local founder_login founder_login_sha256 controller_sha canonical_origin dirty_checkout
+	if [[ ! "$STAGING_APPROVAL_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Founder-user staging deployment requires an approval PR number."
+		return 1
+	fi
+	if ! canonical_origin=$(git remote get-url origin) || \
+		! dirty_checkout=$(git status --porcelain=v1 --untracked-files=all); then
+		echo "Failed to inspect the local staging controller repository."
+		return 1
+	fi
+	if [[ "$canonical_origin" != "https://github.com/CosmaNeura/cosmaneura.git" || \
+		-n "$dirty_checkout" ]]; then
+		echo "Founder-user staging deployment requires the clean canonical repository."
+		return 1
+	fi
+	if ! founder_login=$(gh api user --jq .login); then
+		echo "Failed to authenticate the local GitHub operator."
+		return 1
+	fi
+	if ! founder_login_sha256=$(printf '%s' "$founder_login" | hash_stdin); then
+		echo "Failed to fingerprint the local GitHub operator."
+		return 1
+	fi
+	if [[ "$founder_login_sha256" != "$PINNED_FOUNDER_GITHUB_LOGIN_SHA256" ]]; then
+		echo "The local GitHub operator is not the pinned founder."
+		return 1
+	fi
+	if ! controller_sha=$(git rev-parse HEAD); then
+		echo "Failed to resolve the local staging controller."
+		return 1
+	fi
+	if ! python3 "$SCRIPT_DIR/../scripts/verify_staging_candidate.py" \
+		--candidate-sha "$GIT_SHA" \
+		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" \
+		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
+		--workflow-sha "$controller_sha" \
+		--repository CosmaNeura/cosmaneura \
+		--event-name workflow_dispatch \
+		--ref refs/heads/master \
+		--ref-protected true \
+		--actor "$founder_login" \
+		--triggering-actor "$founder_login" >/dev/null; then
+		echo "Founder-user staging candidate provenance verification failed."
+		return 1
+	fi
+}
+
+case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
+service-principal) ;;
+founder-user) verify_founder_release_source || exit 1 ;;
+*) echo "Unsupported staging deployment identity mode."; exit 1 ;;
+esac
 
 # Preserve explicit deployment controls before direnv renders the secret
 # bundle. `direnv export` emits a delta, so values inherited unchanged by the
@@ -343,28 +406,64 @@ fi
 echo "Revision string: $REVISION_STRING"
 emit_github_output source_sha "$GIT_SHA" || exit 1
 
-if ! AZURE_ACCOUNT_JSON=$(az account show \
-	--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
-	-o json); then
-	echo "Failed to inspect the active Azure identity."
-	exit 1
-fi
-if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
-	"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
-	"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
-	echo "Configured Azure identity inputs are not the pinned staging identity."
-	exit 1
-fi
-if ! printf '%s' "$AZURE_ACCOUNT_JSON" | jq -e \
-	--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
-	--arg tenant "$PINNED_STAGING_TENANT_ID" \
-	--arg client "$PINNED_STAGING_CLIENT_ID" \
-	'.subscriptionId == $subscription and .tenantId == $tenant and
-	 .userType == "servicePrincipal" and .userName == $client' >/dev/null; then
-	echo "Active Azure identity is not the exact staging deployment identity."
-	exit 1
-fi
-echo "Azure staging identity verified."
+verify_azure_deployment_identity() {
+	local azure_account_json founder_azure_username founder_azure_username_sha256
+	if ! azure_account_json=$(az account show \
+		--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
+		-o json); then
+		echo "Failed to inspect the active Azure identity."
+		return 1
+	fi
+	case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
+	service-principal)
+		if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
+			"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
+			"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
+			echo "Configured Azure identity inputs are not the pinned staging identity."
+			return 1
+		fi
+		if ! printf '%s' "$azure_account_json" | jq -e \
+			--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			--arg tenant "$PINNED_STAGING_TENANT_ID" \
+			--arg client "$PINNED_STAGING_CLIENT_ID" \
+			'.subscriptionId == $subscription and .tenantId == $tenant and
+			 .userType == "servicePrincipal" and .userName == $client' >/dev/null; then
+			echo "Active Azure identity is not the exact staging deployment identity."
+			return 1
+		fi
+		;;
+	founder-user)
+		if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+			-n "${AZURE_SUBSCRIPTION_ID:-}" ]]; then
+			echo "Founder-user staging deployment refuses configured service-principal inputs."
+			return 1
+		fi
+		if ! founder_azure_username=$(printf '%s' "$azure_account_json" | jq -er \
+			--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			--arg tenant "$PINNED_STAGING_TENANT_ID" \
+			'if .subscriptionId == $subscription and .tenantId == $tenant and
+			 .userType == "user" and (.userName | type) == "string" and
+			 (.userName | length) > 0 then .userName else error("identity mismatch") end'); then
+			echo "Active Azure user is outside the pinned staging scope."
+			return 1
+		fi
+		if ! founder_azure_username_sha256=$(printf '%s' "$founder_azure_username" | hash_stdin); then
+			echo "Failed to fingerprint the active Azure user."
+			return 1
+		fi
+		if [[ "$founder_azure_username_sha256" != "$PINNED_FOUNDER_AZURE_USERNAME_SHA256" ]]; then
+			echo "The active Azure user is not the pinned founder."
+			return 1
+		fi
+		;;
+	*)
+		echo "Unsupported staging deployment identity mode."
+		return 1
+		;;
+	esac
+	echo "Azure staging identity verified for $STAGING_DEPLOYMENT_IDENTITY_MODE mode."
+}
+verify_azure_deployment_identity || exit 1
 
 ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
 if ! PUBLISHED_DIGEST=$(az acr manifest show-metadata \
@@ -1227,6 +1326,8 @@ wait_for_incompatible_worker_replicas_to_drain() {
 }
 
 # Run migrations before deploying new containers
+verify_founder_release_source || exit 1
+verify_azure_deployment_identity || exit 1
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."

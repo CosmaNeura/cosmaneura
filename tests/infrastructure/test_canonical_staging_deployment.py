@@ -470,6 +470,33 @@ def test_azure_identity_is_pinned_and_legacy_branch_trust_is_rejected() -> None:
     assert "az account list" in identity
 
 
+def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
+    workflow = _source()
+    deploy = (ROOT / "infra-staging" / "deploy.sh").read_text(encoding="utf-8")
+
+    assert (
+        'STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"'
+        in deploy
+    )
+    assert 'case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in' in deploy
+    assert "service-principal)" in deploy
+    assert "founder-user)" in deploy
+    assert "gh api user --jq .login" in deploy
+    assert 'STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"' in deploy
+    assert deploy.count("verify_founder_release_source") == 3
+    assert deploy.count("verify_azure_deployment_identity") == 3
+    assert "scripts/verify_staging_candidate.py" in deploy
+    assert '--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER"' in deploy
+    assert '--workflow-sha "$controller_sha"' in deploy
+    assert '--candidate-sha "$GIT_SHA"' in deploy
+    assert "f315b07364650dce8146d41f95f3049cc0c8fe6a46b8bc3957ae50b937f730ce" in deploy
+    assert "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a" in deploy
+    assert '.userType == "user"' in deploy
+    assert "refuses configured service-principal inputs" in deploy
+    assert 'echo "Unsupported staging deployment identity mode."' in deploy
+    assert "STAGING_DEPLOYMENT_IDENTITY_MODE" not in workflow
+
+
 def test_staging_workflow_does_not_reference_production_controls() -> None:
     source = _source()
     for forbidden in (
