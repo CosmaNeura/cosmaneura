@@ -18,7 +18,7 @@ import re
 import resource
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 TENANT = "d51754d0-bba5-4810-820e-afac542844d6"
@@ -136,12 +136,13 @@ def validate_token_record(
     record: object, audiences: set[str], *, now: int | None = None
 ) -> tuple[str, int]:
     require(type(record) is dict)
-    exact_record = record
+    exact_record = cast(dict[str, Any], record)
     require(exact_record.get("subscription") == SUBSCRIPTION)
     require(exact_record.get("tenant") == TENANT)
     require(exact_record.get("tokenType") == "Bearer")
-    token = exact_record.get("accessToken")
-    require(type(token) is str and 100 < len(token) < 64 * 1024)
+    token_value = exact_record.get("accessToken")
+    require(type(token_value) is str and 100 < len(token_value) < 64 * 1024)
+    token = cast(str, token_value)
     pieces = token.split(".")
     require(len(pieces) == 3)
     payload = pieces[1] + "=" * (-len(pieces[1]) % 4)
@@ -150,16 +151,21 @@ def validate_token_record(
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
         raise BoundAzureRefused("staging_azure_cli_bound_refused") from None
     require(type(claims) is dict)
+    claims = cast(dict[str, Any], claims)
     require(claims.get("tid") == TENANT and claims.get("aud") in audiences)
     require(claims.get("idtyp") == "user")
-    expiry = claims.get("exp")
-    not_before = claims.get("nbf")
+    expiry_value = claims.get("exp")
+    not_before_value = claims.get("nbf")
     current_time = int(time.time()) if now is None else now
     require(type(current_time) is int)
-    require(type(expiry) is int and expiry > current_time + 300)
-    require(type(not_before) is int and not_before <= current_time + 30)
-    expires_on = exact_record.get("expires_on")
-    require(type(expires_on) in {int, str} and not isinstance(expires_on, bool))
+    require(type(expiry_value) is int and expiry_value > current_time + 300)
+    require(type(not_before_value) is int and not_before_value <= current_time + 30)
+    expiry = cast(int, expiry_value)
+    expires_on_value = exact_record.get("expires_on")
+    require(
+        type(expires_on_value) in {int, str} and not isinstance(expires_on_value, bool)
+    )
+    expires_on = cast(int | str, expires_on_value)
     try:
         record_expiry = int(expires_on)
     except ValueError:
@@ -280,8 +286,9 @@ def normalized_scopes(scopes: object) -> set[str]:
     if isinstance(scopes, str):
         return {scopes}
     require(isinstance(scopes, (list, tuple, set)))
-    require(all(type(scope) is str for scope in scopes))
-    return set(scopes)
+    exact_scopes = cast(list[object] | tuple[object, ...] | set[object], scopes)
+    require(all(type(scope) is str for scope in exact_scopes))
+    return set(cast(list[str] | tuple[str, ...] | set[str], exact_scopes))
 
 
 def main() -> int:
@@ -310,8 +317,8 @@ def main() -> int:
     if registry_required:
         registry_token, registry_expiry = token_record(4, {REGISTRY_AUDIENCE})
 
-    from azure.cli.core import get_default_cli
-    from azure.cli.core._profile import Profile
+    from azure.cli.core import get_default_cli  # pyright: ignore[reportMissingImports]
+    from azure.cli.core._profile import Profile  # pyright: ignore[reportMissingImports]
     from azure.core.credentials import AccessToken, AccessTokenInfo
 
     class StaticCredential:
@@ -325,7 +332,7 @@ def main() -> int:
                 and requested
                 and requested.issubset(REGISTRY_SCOPES)
             )
-            return AccessToken(registry_token, registry_expiry)
+            return AccessToken(cast(str, registry_token), cast(int, registry_expiry))
 
         def get_token_info(
             self, *scopes: str, options: dict[str, Any] | None = None
@@ -340,7 +347,9 @@ def main() -> int:
                 and requested
                 and requested.issubset(REGISTRY_SCOPES)
             )
-            return AccessTokenInfo(registry_token, registry_expiry)
+            return AccessTokenInfo(
+                cast(str, registry_token), cast(int, registry_expiry)
+            )
 
     credential = StaticCredential()
 

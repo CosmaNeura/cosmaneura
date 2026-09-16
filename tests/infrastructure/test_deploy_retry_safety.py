@@ -250,7 +250,12 @@ def test_deploy_validates_attempt_scoped_suffix_before_any_azure_call(
 ) -> None:
     deploy = (ROOT / deploy_path).read_text(encoding="utf-8")
 
-    assert 'source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"' in deploy
+    revision_helper = (
+        'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'
+        if deploy_path == "infra-staging/deploy.sh"
+        else 'source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"'
+    )
+    assert revision_helper in deploy
     generated = deploy.index("generate_deploy_revision_suffix")
     validated = deploy.index("validate_deploy_revision_suffix", generated)
     first_azure = deploy.index("az account show")
@@ -266,12 +271,13 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
     drop = deploy.index("unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET")
     azure = deploy.index("az account show")
 
-    assert (
-        drop
-        < deploy.index("git rev-parse")
-        < deploy.index('git show "$GIT_SHA:Procfile"')
-        < azure
+    source_resolution = deploy.index(
+        'git -C "$REPOSITORY_ROOT" rev-parse --quiet --verify', drop
     )
+    procfile_read = deploy.index(
+        'git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"', source_resolution
+    )
+    assert drop < source_resolution < procfile_read < azure
     assert '"$SCRIPT_DIR/../Procfile"' not in deploy
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy
     assert "STAGING_TAG=" not in deploy
@@ -601,6 +607,7 @@ def test_configuration_blockers_stop_before_any_azure_call(
         "python": "#!/bin/sh\ncat >/dev/null\nexit 0\n",
         "git": (
             "#!/bin/sh\n"
+            'if [ "$1" = "-C" ]; then shift 2; fi\n'
             'case "$1" in\n'
             "rev-parse) printf '%s\\n' \"$FAKE_SHA\" ;;\n"
             "show) printf 'worker: worker command\\nscheduler: scheduler command\\n' ;;\n"
@@ -655,9 +662,15 @@ def _run_staging_registry_preflight(
     recovery_status: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
-    start = deploy.index("if ! AZURE_ACCOUNT_JSON=")
+    identity_check = _shell_function(deploy, "verify_azure_deployment_identity")
+    start = deploy.index('ACR_NAME=$(echo "$STAGING_IMAGE"')
     end = deploy.index("if ! ACR_USERNAME=", start)
-    script = "set -euo pipefail\nemit_github_output() { :; }\n" + deploy[start:end]
+    script = (
+        "set -euo pipefail\nemit_github_output() { :; }\n"
+        + identity_check
+        + "\nverify_azure_deployment_identity || exit 1\n"
+        + deploy[start:end]
+    )
 
     fake_bin = tmp_path / "registry-bin"
     fake_bin.mkdir()
@@ -715,6 +728,7 @@ exit 99
         "PINNED_STAGING_CLIENT_ID": STAGING_CLIENT_ID,
         "PINNED_STAGING_TENANT_ID": STAGING_TENANT_ID,
         "PINNED_STAGING_SUBSCRIPTION_ID": STAGING_SUBSCRIPTION_ID,
+        "STAGING_DEPLOYMENT_IDENTITY_MODE": "service-principal",
     }
     result = subprocess.run(
         ["bash", "-c", script],

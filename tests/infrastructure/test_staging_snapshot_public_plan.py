@@ -493,7 +493,9 @@ class PublicPlanTests(unittest.TestCase):
 
     def test_packet_checks_start_lifetime_and_does_not_extend_handoff(self):
         # Keep token expiry independent so this exercises the handoff boundary.
-        self.observation["identity"]["token_expires_epoch"] = int(NOW.timestamp()) + 7200
+        self.observation["identity"]["token_expires_epoch"] = (
+            int(NOW.timestamp()) + 7200
+        )
         handoff = self.handoff()
         original = handoff.handoff
         self.packet(handoff, at=NOW + timedelta(seconds=2609))
