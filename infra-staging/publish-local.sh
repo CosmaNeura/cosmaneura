@@ -526,7 +526,8 @@ verify_founder_source
 verify_founder_azure_identity
 
 PHASE=load_and_verify_archive
-export DOCKER_HOST=unix:///Users/jw/.colima/default/docker.sock
+# Reload into the same dedicated engine used by the reviewed local builder.
+export DOCKER_HOST=unix:///Users/jw/.colima/staging-release/docker.sock
 "$DOCKER" image load --input "$IMAGE_ARCHIVE" >/dev/null
 image_json=$("$DOCKER" image inspect "$IMAGE_ID")
 printf '%s' "$image_json" | "$JQ" -e \
