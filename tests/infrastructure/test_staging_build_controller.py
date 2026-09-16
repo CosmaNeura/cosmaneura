@@ -162,6 +162,19 @@ class ControllerTests(unittest.TestCase):
             source_only=source_only,
         )
 
+    def invoke_with_output(self, commit_state, emit_success):
+        raw = m.canonical(self.plan)
+        path = self.root / "plan.json"
+        path.write_bytes(raw)
+        return m.run(
+            path,
+            m.sha(raw),
+            self.root,
+            check_only=False,
+            commit_state=commit_state,
+            emit_success=emit_success,
+        )
+
     def fake_modules(
         self,
         *,
@@ -416,6 +429,77 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(value["phase"], "commit_success_record")
         self.assertNotIn("image_id", value)
 
+    def test_interrupt_after_attempt_creation_persists_incomplete_result(self):
+        modules = self.fake_modules()
+
+        @contextmanager
+        def interrupted_exit():
+            yield
+            raise KeyboardInterrupt()
+
+        modules["staging_human_build_process"].defer_control_signals.side_effect = [
+            interrupted_exit(),
+            nullcontext(),
+        ]
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["phase"], "create_attempt")
+
+    def test_interrupt_after_success_temp_persists_incomplete_result(self):
+        modules = self.fake_modules()
+        write = modules["staging_human_build_inputs"].write_exclusive.side_effect
+
+        def interrupted_write(path, raw, mode):
+            write(path, raw, mode)
+            if path.name == "controller-result.success.tmp":
+                raise KeyboardInterrupt()
+
+        modules[
+            "staging_human_build_inputs"
+        ].write_exclusive.side_effect = interrupted_write
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["phase"], "prepare_success_record")
+
+    def test_directory_sync_failure_replaces_success_with_incomplete_result(self):
+        modules = self.fake_modules()
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            patch.object(
+                m,
+                "sync_directory",
+                side_effect=[OSError("invented sync refusal"), None],
+            ),
+            self.assertRaises(OSError),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertEqual(value["phase"], "commit_success_record")
+
+    def test_success_output_failure_is_best_effort_after_durable_commit(self):
+        modules = self.fake_modules()
+        committed = {}
+        output = Mock(side_effect=BrokenPipeError("invented closed output"))
+        with patch.object(m, "load_modules", return_value=modules):
+            value = self.invoke_with_output(committed, output)
+        self.assertTrue(value["complete"])
+        self.assertEqual(committed["result"], value)
+        output.assert_called_once_with(value)
+        self.assertEqual(
+            json.loads((self.parent / "controller-result.json").read_bytes()), value
+        )
+
     def test_interrupt_after_atomic_success_commit_remains_success(self):
         modules = self.fake_modules()
 
@@ -424,9 +508,10 @@ class ControllerTests(unittest.TestCase):
             yield
             raise KeyboardInterrupt()
 
-        modules[
-            "staging_human_build_process"
-        ].defer_control_signals.side_effect = interrupted_exit
+        modules["staging_human_build_process"].defer_control_signals.side_effect = [
+            nullcontext(),
+            interrupted_exit(),
+        ]
         with patch.object(m, "load_modules", return_value=modules):
             value = self.invoke()
         self.assertTrue(value["complete"])
