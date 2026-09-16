@@ -228,6 +228,12 @@
   publication job executes no candidate code, downloads only that verified
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
+  With Actions unavailable, `infra-staging/publish-local.sh` preserves this
+  separation: it accepts only a successful exact controller result, revalidates
+  the reviewed build plan and founder GitHub/Azure identities, refuses an existing
+  candidate SHA tag, pushes once to the existing staging registry, and verifies
+  the immutable digest. It cannot invoke deployment, write `latest`, retry, or
+  target production, and it removes its temporary registry credential locally.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,

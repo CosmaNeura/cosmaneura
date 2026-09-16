@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
 LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
+LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
 
 
 def _source() -> str:
@@ -498,6 +499,37 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert "refuses configured service-principal inputs" in deploy
     assert 'echo "Unsupported staging deployment identity mode."' in deploy
     assert "STAGING_DEPLOYMENT_IDENTITY_MODE" not in workflow
+
+
+def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
+    publisher = LOCAL_PUBLISHER.read_text(encoding="utf-8")
+
+    assert "cosmaneurastagingregistry.azurecr.io" in publisher
+    assert "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de" in publisher
+    assert "9a2399212488" in publisher
+    assert "staging_build_controller.py" in publisher
+    assert publisher.count("revalidate_build_plan") == 4
+    assert publisher.count("verify_founder_source") == 3
+    assert publisher.count("verify_founder_azure_identity") == 3
+    assert publisher.count("remote_tag_absent") == 3
+    assert "repos/CosmaNeura/cosmaneura/actions/permissions" in publisher
+    assert "GitHub Actions must remain disabled" in publisher
+    assert "OP_SERVICE_ACCOUNT_TOKEN" in publisher
+    assert "RECALL_WEBHOOK_SECRET" in publisher
+    assert "DOCKER_AUTH_CONFIG" in publisher
+    assert '"$DOCKER" image load --input "$IMAGE_ARCHIVE"' in publisher
+    assert '"$DOCKER" push "$CANDIDATE_IMAGE"' in publisher
+    assert "az acr login" not in publisher
+    assert '"$AZ" acr login --name "$REGISTRY_NAME"' in publisher
+    assert "--expose-token --output json" in publisher
+    assert '"$AZ" acr manifest show-metadata' in publisher
+    assert publisher.count('--subscription "$PINNED_SUBSCRIPTION_ID"') == 4
+    assert "publication-result.json" in publisher
+    assert "automatic_retry_allowed:false" in publisher
+    assert "deployment_performed:false" in publisher
+    assert ":latest" not in publisher
+    assert "infra-staging/deploy.sh" not in publisher
+    assert "cosmaneuraprodregistry" not in publisher
 
 
 def test_staging_workflow_does_not_reference_production_controls() -> None:
