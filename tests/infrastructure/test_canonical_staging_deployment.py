@@ -499,9 +499,13 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert "refuses configured service-principal inputs" in deploy
     assert "AZURE_CLIENT_SECRET" in deploy
     assert "AZURE_CLIENT_CERTIFICATE_PATH" in deploy
-    assert deploy.index("AZURE_CLIENT_SECRET") < deploy.index("hash_stdin()")
+    assert deploy.index("AZURE_CLIENT_SECRET") < deploy.index("SCRIPT_DIR=")
     assert "PYTHON_BIN=/opt/homebrew/bin/python3" in deploy
     assert '"$PYTHON_BIN" -I -S -B' in deploy
+    assert deploy.count('git -C "$REPOSITORY_ROOT"') == 5
+    assert deploy.index("founder-user) verify_founder_release_source") < deploy.index(
+        'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'
+    )
     assert (
         "PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin"
         in deploy

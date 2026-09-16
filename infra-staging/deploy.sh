@@ -13,16 +13,23 @@
 
 GIT_SHA="${1:-}"
 STAGING_IMAGE_DIGEST="${2:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
-
 EXPECTED_SCHEMA_BEFORE="${EXPECTED_SCHEMA_BEFORE:-}"
 EXPECTED_SCHEMA_AFTER="${EXPECTED_SCHEMA_AFTER:-}"
 EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
+
+if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
+	( -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+	-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+	-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ) ]]; then
+	echo "Founder-user staging deployment refuses configured service-principal inputs."
+	exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -51,12 +58,6 @@ PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2
 PYTHON_BIN=python
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
-	if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
-		-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
-		-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
-		echo "Founder-user staging deployment refuses configured service-principal inputs."
-		exit 1
-	fi
 	PYTHON_BIN=/opt/homebrew/bin/python3
 	for founder_tool in \
 		"$PYTHON_BIN" \
@@ -114,8 +115,8 @@ verify_founder_release_source() {
 		echo "Founder-user staging deployment requires an approval PR number."
 		return 1
 	fi
-	if ! canonical_origin=$(git remote get-url origin) || \
-		! dirty_checkout=$(git status --porcelain=v1 --untracked-files=all); then
+	if ! canonical_origin=$(git -C "$REPOSITORY_ROOT" remote get-url origin) || \
+		! dirty_checkout=$(git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all); then
 		echo "Failed to inspect the local staging controller repository."
 		return 1
 	fi
@@ -137,11 +138,12 @@ verify_founder_release_source() {
 		echo "The local GitHub operator is not the pinned founder."
 		return 1
 	fi
-	if ! controller_sha=$(git rev-parse HEAD); then
+	if ! controller_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD); then
 		echo "Failed to resolve the local staging controller."
 		return 1
 	fi
-	if ! "$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/verify_staging_candidate.py" \
+	if ! (cd "$REPOSITORY_ROOT" && \
+		"$PYTHON_BIN" -I -S -B scripts/verify_staging_candidate.py \
 		--candidate-sha "$GIT_SHA" \
 		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" \
 		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
@@ -151,7 +153,7 @@ verify_founder_release_source() {
 		--ref refs/heads/master \
 		--ref-protected true \
 		--actor JohnClem \
-		--triggering-actor JohnClem >/dev/null; then
+		--triggering-actor JohnClem >/dev/null); then
 		echo "Founder-user staging candidate provenance verification failed."
 		return 1
 	fi
@@ -162,6 +164,8 @@ service-principal) ;;
 founder-user) verify_founder_release_source || exit 1 ;;
 *) echo "Unsupported staging deployment identity mode."; exit 1 ;;
 esac
+
+source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"
 
 # Preserve explicit deployment controls before direnv renders the secret
 # bundle. `direnv export` emits a delta, so values inherited unchanged by the
@@ -187,7 +191,7 @@ fi
 # drop them immediately on either success or failure. ENV_JSON is deliberately
 # not exported, so later child processes receive only explicitly scoped values.
 CONFIGURATION_STATUS=0
-ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend) || \
+ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend) || \
 	CONFIGURATION_STATUS=$?
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
@@ -226,7 +230,7 @@ if [[ ! "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" =~ ^sha256:[0-9a-f]{64}
 	echo "Expected staging identity fingerprint-set hash must use the canonical sha256 form."
 	exit 1
 fi
-if ! RESOLVED_GIT_SHA=$(git rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
+if ! RESOLVED_GIT_SHA=$(git -C "$REPOSITORY_ROOT" rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
 	echo "Error: staging source is not a valid commit in this repository."
 	exit 1
 fi
@@ -234,7 +238,7 @@ if [[ "$RESOLVED_GIT_SHA" != "$GIT_SHA" ]]; then
 	echo "Error: staging source did not resolve to the exact supplied commit."
 	exit 1
 fi
-if ! CANDIDATE_PROCFILE=$(git show "$GIT_SHA:Procfile"); then
+if ! CANDIDATE_PROCFILE=$(git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"); then
 	echo "Error: the staging candidate does not contain a readable Procfile."
 	exit 1
 fi
