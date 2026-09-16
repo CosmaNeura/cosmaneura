@@ -48,13 +48,30 @@ PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 PINNED_FOUNDER_GITHUB_IDENTITY_SHA256="a4deb86ff0cd6ba7c4e14747a1f39526160ad161ae2ad2a4bb170d8d5d5d80f5"
 PINNED_FOUNDER_AZURE_USERNAME_SHA256="acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
 PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
+PYTHON_BIN=python
+
+if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+	PYTHON_BIN=/opt/homebrew/bin/python3
+	for founder_tool in \
+		"$PYTHON_BIN" \
+		/opt/homebrew/Cellar/gh/2.97.0/bin/gh \
+		/opt/homebrew/bin/az \
+		/usr/bin/git; do
+		[[ -x "$founder_tool" ]] || {
+			echo "Required founder-user staging tool is unavailable."
+			exit 1
+		}
+	done
+	export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
+	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
+fi
 
 hash_stdin() {
-	python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+	"$PYTHON_BIN" -I -S -B -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 canonical_github_user_sha256() {
-	python3 -c '
+	"$PYTHON_BIN" -I -S -B -c '
 import hashlib
 import json
 import sys
@@ -118,7 +135,7 @@ verify_founder_release_source() {
 		echo "Failed to resolve the local staging controller."
 		return 1
 	fi
-	if ! python3 "$SCRIPT_DIR/../scripts/verify_staging_candidate.py" \
+	if ! "$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/verify_staging_candidate.py" \
 		--candidate-sha "$GIT_SHA" \
 		--approval-pr-number "$STAGING_APPROVAL_PR_NUMBER" \
 		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
@@ -172,7 +189,7 @@ if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	exit 1
 fi
 if ! printf '%s' "$ENV_JSON" |
-	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
 		--environment staging; then
 	echo "Staging capability identity configuration is not deployable."
 	exit 1
@@ -266,7 +283,7 @@ emit_github_output() {
 }
 
 build_configuration_evidence() {
-	python3 -c '
+	"$PYTHON_BIN" -I -S -B -c '
 import hashlib, json, sys
 from urllib.parse import parse_qs, urlsplit
 def fail():
@@ -468,7 +485,8 @@ verify_azure_deployment_identity() {
 		;;
 	founder-user)
 		if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
-			-n "${AZURE_SUBSCRIPTION_ID:-}" ]]; then
+			-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+			-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
 			echo "Founder-user staging deployment refuses configured service-principal inputs."
 			return 1
 		fi
@@ -812,7 +830,7 @@ if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
 	exit 1
 fi
 if ! RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT" \
-	python "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
+	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
 	--validate-signing-secret-only; then
 	echo "Staging Recall webhook signing credential is invalid."
 	exit 1
@@ -855,7 +873,7 @@ verify_migration_job_template() {
 	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
 	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
 	if ! printf '%s' "$migration_template" |
-		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+		"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
 			--expected-name "$MIGRATION_JOB" \
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
 			--database-secret-name database-url \
@@ -917,7 +935,7 @@ if len(rows)!=1 or not isinstance(rows[0][0],str) or re.fullmatch(r"[0-9a-f]{12}
     raise SystemExit(1)
 print("STAGING_SCHEMA_REVISION="+rows[0][0])
 PY
-	payload=$(printf '%s' "$schema_probe" | python3 -c \
+	payload=$(printf '%s' "$schema_probe" | "$PYTHON_BIN" -I -S -B -c \
 		'import base64,sys,zlib;print(base64.b64encode(zlib.compress(sys.stdin.buffer.read(),9)).decode())')
 	if ! execution_name=$(az containerapp job start \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \

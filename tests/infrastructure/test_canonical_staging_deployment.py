@@ -497,6 +497,14 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93" in deploy
     assert '.userType == "user"' in deploy
     assert "refuses configured service-principal inputs" in deploy
+    assert "AZURE_CLIENT_SECRET" in deploy
+    assert "AZURE_CLIENT_CERTIFICATE_PATH" in deploy
+    assert "PYTHON_BIN=/opt/homebrew/bin/python3" in deploy
+    assert '"$PYTHON_BIN" -I -S -B' in deploy
+    assert (
+        "PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        in deploy
+    )
     assert 'echo "Unsupported staging deployment identity mode."' in deploy
     assert "STAGING_DEPLOYMENT_IDENTITY_MODE" not in workflow
 
@@ -527,6 +535,7 @@ def test_local_publisher_preserves_build_and_registry_boundaries() -> None:
     assert "publication-result.json" in publisher
     assert "automatic_retry_allowed:false" in publisher
     assert "deployment_performed:false" in publisher
+    assert publisher.count('"$PYTHON" -I -S -B') == 6
     assert ":latest" not in publisher
     assert "infra-staging/deploy.sh" not in publisher
     assert "cosmaneuraprodregistry" not in publisher

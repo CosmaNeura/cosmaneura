@@ -53,11 +53,11 @@ PUSH_STARTED=false
 IMAGE_DIGEST=""
 
 hash_stdin() {
-	"$PYTHON" -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
+	"$PYTHON" -I -S -B -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())'
 }
 
 secure_file_fingerprint() {
-	"$PYTHON" - "$1" "$2" <<'PY'
+	"$PYTHON" -I -S -B - "$1" "$2" <<'PY'
 import hashlib
 import os
 import stat
@@ -102,7 +102,7 @@ PY
 }
 
 canonical_github_user_sha256() {
-	"$PYTHON" -c '
+	"$PYTHON" -I -S -B -c '
 import hashlib
 import json
 import sys
@@ -158,7 +158,7 @@ verify_founder_source() {
 		echo "GitHub Actions must remain disabled during local publication." >&2
 		return 1
 	fi
-	"$PYTHON" "$REPOSITORY_ROOT/scripts/verify_staging_candidate.py" \
+	"$PYTHON" -I -S -B "$REPOSITORY_ROOT/scripts/verify_staging_candidate.py" \
 		--candidate-sha "$CANDIDATE_SHA" \
 		--approval-pr-number "$APPROVAL_PR_NUMBER" \
 		--expected-schema-after "$EXPECTED_SCHEMA_AFTER" \
@@ -256,7 +256,7 @@ write_evidence() {
 		  image_digest:(if $image_digest == "" then null else $image_digest end),
 		  image_reference:(if $image_digest == "" then null else $image_reference end),
 		  automatic_retry_allowed:false,deployment_performed:false,production_operation:false}')
-	printf '%s\n' "$payload" | "$PYTHON" -c '
+	printf '%s\n' "$payload" | "$PYTHON" -I -S -B -c '
 import os
 import sys
 
