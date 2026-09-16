@@ -213,6 +213,25 @@
   protected credentials, before image publication, and immediately before
   migrations or Azure mutation. The candidate is checked out and tested in a
   separate directory. A moving `master` is never substituted for it.
+- The deploy script defaults to the pinned staging service principal. When
+  Actions is unavailable, an explicit `STAGING_DEPLOYMENT_IDENTITY_MODE=founder-user`
+  fallback accepts only the pinned founder's independently authenticated GitHub
+  user object and Azure directory object plus username in the exact staging
+  tenant and subscription, while refusing any simultaneous service-principal
+  inputs. The fallback revalidates
+  the clean protected-master controller, exact reviewed build plan, authenticated
+  human source transport, selected PR `385`, exact candidate merge SHA and schema
+  head before protected configuration and again immediately before mutation. Every
+  Azure read and mutation is executed in-process with the exact freshly verified
+  founder access token supplied on a private descriptor; the Azure CLI profile's
+  SDK and raw-token credential acquisition are replaced before command loading so
+  a later shared-cache lookup cannot switch principals. The wrapper permits only
+  the staging ACR, staging resource group, named staging workloads, and pinned
+  subscription. It
+  grants no production authority and does not weaken the workflow's default path.
+  A controlled local invocation must also supply a fresh positive
+  `DEPLOY_RUN_ID` and `DEPLOY_RUN_ATTEMPT=1`; these only derive the unique Azure
+  revision suffix and do not substitute for any source, identity, or review gate.
 - Candidate build and registry-credentialed publication run as separate fresh
   jobs. The build job receives no protected deployment or registry credential,
   exports a content-addressed image archive, and records its SHA-256. A fresh

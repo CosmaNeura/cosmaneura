@@ -270,7 +270,12 @@ def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
 
 
 def run(
-    plan_path: Path, expected: str, root: Path, *, check_only: bool
+    plan_path: Path,
+    expected: str,
+    root: Path,
+    *,
+    check_only: bool,
+    source_only: bool = False,
 ) -> dict[str, Any]:
     raw_plan = read_bound(plan_path, expected, 65536)
     plan = record(raw_plan)
@@ -285,7 +290,7 @@ def run(
             "build_started": False,
             "plan_sha256": expected,
         }
-    clock_check(plan, starting=True)
+    clock_check(plan, starting=not source_only)
     modules = load_modules(raw_modules, root)
     source = modules["staging_build_source"]
     inputs = modules["staging_human_build_inputs"]
@@ -308,6 +313,20 @@ def run(
     )
     observed = source.collect_build_source(root, request)
     source_archive = observed.source_archive
+    if source_only:
+        return {
+            "local_bindings_passed": True,
+            "authenticated_source_checked": True,
+            "build_started": False,
+            "plan_sha256": expected,
+            "candidate_sha": CANDIDATE,
+            "approval_pr_number": 385,
+            "schema_head": REVISIONS[-1],
+            "controller_sha": plan["controller_sha"],
+            "github_user_sha256": observed.github_user_sha256,
+            "source_archive_sha256": observed.source_archive_sha256,
+            "protection_sha256": observed.protection_sha256,
+        }
     build_inputs = inputs.BuildInputs(
         CANDIDATE,
         sha(source_archive),
@@ -403,13 +422,17 @@ def main() -> int:
     require(sys.flags.isolated and sys.flags.no_site and not sys.flags.optimize)
     require(os.getuid() == os.geteuid() != 0)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
-    require(len(sys.argv) == 4 and sys.argv[1] in {"--check-only", "--run"})
+    require(
+        len(sys.argv) == 4
+        and sys.argv[1] in {"--check-only", "--verify-source", "--run"}
+    )
     try:
         result = run(
             Path(sys.argv[2]),
             sys.argv[3],
             Path(__file__).resolve().parents[1],
             check_only=sys.argv[1] == "--check-only",
+            source_only=sys.argv[1] == "--verify-source",
         )
     except BaseException as error:
         print(

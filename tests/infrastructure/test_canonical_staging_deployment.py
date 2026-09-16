@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
 LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
+BOUND_AZURE_CLI = ROOT / "scripts" / "staging_azure_cli_bound.py"
 
 
 def _source() -> str:
@@ -468,6 +469,80 @@ def test_azure_identity_is_pinned_and_legacy_branch_trust_is_rejected() -> None:
     assert "roleDefinitionId" in identity
     assert "startswith($staging_scope" not in identity
     assert "az account list" in identity
+
+
+def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
+    workflow = _source()
+    deploy = (ROOT / "infra-staging" / "deploy.sh").read_text(encoding="utf-8")
+    bound_azure = BOUND_AZURE_CLI.read_text(encoding="utf-8")
+
+    assert (
+        'STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"'
+        in deploy
+    )
+    assert 'case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in' in deploy
+    assert "service-principal)" in deploy
+    assert "founder-user)" in deploy
+    assert 'STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"' in deploy
+    assert 'STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"' in deploy
+    assert (
+        'EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"'
+        in deploy
+    )
+    assert deploy.count("verify_founder_release_source") == 3
+    assert deploy.count("verify_azure_deployment_identity") == 3
+    assert "scripts/staging_build_controller.py" in deploy
+    assert '--verify-source "$STAGING_BUILD_PLAN"' in deploy
+    assert 'FOUNDER_APPROVAL_PR_NUMBER="385"' in deploy
+    assert 'FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"' in deploy
+    assert 'FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"' in deploy
+    assert "--actor" not in deploy
+    assert "--triggering-actor" not in deploy
+    assert "JohnClem" not in deploy
+    assert "staging_azure_cli_bound.py" in deploy
+    assert "account get-access-token" in deploy
+    assert "https://management.azure.com/" in deploy
+    assert (
+        "acf2c107f43fa6950918e5f089e1b865ba56188295b88d3d72ad342d742e616a"
+        in bound_azure
+    )
+    assert (
+        "0839f64960f7e378762f2f1aab2d324b197c4c0d2198f87d9f595df4eb0b1f93"
+        in bound_azure
+    )
+    assert 'username = claims.get("email")' in bound_azure
+    assert 'claims.get("idtyp") == "user"' in bound_azure
+    assert "Profile.get_login_credentials = get_login_credentials" in bound_azure
+    assert "Profile.get_raw_token = get_raw_token" in bound_azure
+    assert "token_record(3, MANAGEMENT_AUDIENCES)" in bound_azure
+    assert "token_record(4, {REGISTRY_AUDIENCE})" in bound_azure
+    assert ".source_archive_sha256 == $source" in deploy
+    assert (
+        '"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"'
+        in deploy
+    )
+    assert "refuses configured service-principal inputs" in deploy
+    assert "AZURE_CLIENT_SECRET" in deploy
+    assert "AZURE_CLIENT_CERTIFICATE_PATH" in deploy
+    assert deploy.index("AZURE_CLIENT_SECRET") < deploy.index("SCRIPT_DIR=")
+    assert "PYTHON_BIN=/opt/homebrew/bin/python3" in deploy
+    assert '"$PYTHON_BIN" -I -S -B' in deploy
+    flight_plan = (
+        ROOT / "docs/flight-plans/2026-09-02-canonical-staging-candidate.md"
+    ).read_text(encoding="utf-8")
+    assert "`DEPLOY_RUN_ID`" in flight_plan
+    assert "`DEPLOY_RUN_ATTEMPT=1`" in flight_plan
+    assert deploy.count('git -C "$REPOSITORY_ROOT"') >= 5
+    assert "rev-parse --show-toplevel" in deploy
+    assert deploy.index("founder-user) verify_founder_release_source") < deploy.index(
+        'source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"'
+    )
+    assert (
+        "PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin"
+        in deploy
+    )
+    assert 'echo "Unsupported staging deployment identity mode."' in deploy
+    assert "STAGING_DEPLOYMENT_IDENTITY_MODE" not in workflow
 
 
 def test_staging_workflow_does_not_reference_production_controls() -> None:

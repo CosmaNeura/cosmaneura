@@ -502,9 +502,9 @@ class SnapshotCoreTests(unittest.TestCase):
         operations = MemoryOperations()
         original = operations.capture_to_exclusive_encrypted_descriptor
 
-        def use_budget(scope, timeout, maximum):
+        def use_budget(_inputs, timeout, max_bytes):
             operations.capture_seconds = timeout - 1
-            return original(scope, timeout, maximum)
+            return original(_inputs, timeout, max_bytes)
 
         operations.capture_to_exclusive_encrypted_descriptor = use_budget
         operations.removal_seconds = 599

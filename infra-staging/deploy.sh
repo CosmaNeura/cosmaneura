@@ -13,14 +13,25 @@
 
 GIT_SHA="${1:-}"
 STAGING_IMAGE_DIGEST="${2:-}"
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
-
 EXPECTED_SCHEMA_BEFORE="${EXPECTED_SCHEMA_BEFORE:-}"
 EXPECTED_SCHEMA_AFTER="${EXPECTED_SCHEMA_AFTER:-}"
 EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
+STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
+STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
+STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
+EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
+
+if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
+	( -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+	-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+	-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ) ]]; then
+	echo "Founder-user staging deployment refuses configured service-principal inputs."
+	exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -43,6 +54,162 @@ STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
 PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
+FOUNDER_APPROVAL_PR_NUMBER="385"
+FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"
+PYTHON_BIN=python
+AZURE_CLI_PYTHON=/opt/homebrew/Cellar/azure-cli/2.89.1/libexec/bin/python
+BOUND_AZURE_CLI="$REPOSITORY_ROOT/scripts/staging_azure_cli_bound.py"
+
+if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+	PYTHON_BIN=/opt/homebrew/bin/python3
+	for founder_tool in \
+		"$PYTHON_BIN" \
+		/opt/homebrew/Cellar/gh/2.97.0/bin/gh \
+		/opt/homebrew/bin/az \
+		"$AZURE_CLI_PYTHON" \
+		"$BOUND_AZURE_CLI" \
+		/usr/bin/git \
+		/usr/bin/jq; do
+		[[ -x "$founder_tool" ]] || {
+			echo "Required founder-user staging tool is unavailable."
+			exit 1
+		}
+	done
+	export PATH=/opt/homebrew/Cellar/gh/2.97.0/bin:/opt/homebrew/bin:/usr/bin:/bin
+	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
+fi
+
+AZ_EXECUTABLE=$(command -v az) || {
+	echo "Azure CLI is unavailable."
+	exit 1
+}
+az() {
+	if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" != "founder-user" ]]; then
+		"$AZ_EXECUTABLE" "$@" --subscription "$PINNED_STAGING_SUBSCRIPTION_ID"
+		return
+	fi
+	local management_token_json registry_token_json status
+	management_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+		--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if [[ "${1:-}" == "acr" && "${2:-}" == "manifest" ]]; then
+		registry_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			--resource https://containerregistry.azure.net \
+			--only-show-errors --output json) || return
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json") \
+			4< <(printf '%s' "$registry_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+		unset registry_token_json
+	else
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			3< <(printf '%s' "$management_token_json"); then
+			status=0
+		else
+			status=$?
+		fi
+	fi
+	unset management_token_json
+	return "$status"
+}
+
+verify_bound_founder_azure_identity() {
+	local management_token_json result
+	management_token_json=$("$AZ_EXECUTABLE" account get-access-token \
+		--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--resource https://management.azure.com/ \
+		--only-show-errors --output json) || return
+	if result=$("$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --verify-only \
+		3< <(printf '%s' "$management_token_json")); then
+		unset management_token_json
+	else
+		unset management_token_json
+		return 1
+	fi
+	printf '%s' "$result" | /usr/bin/jq -e \
+		--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+		--arg tenant "$PINNED_STAGING_TENANT_ID" '
+		type == "object" and .azure_principal_bound == true and
+		.management_token_used_for_mutation == false and
+		.subscription == $subscription and .tenant == $tenant' >/dev/null
+}
+
+verify_founder_release_source() {
+	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
+	local controller_sha canonical_root canonical_origin dirty_checkout source_result
+	local expected_identity_sha256 expected_source_archive_sha256
+	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
+		"$STAGING_APPROVAL_PR_NUMBER" != "$FOUNDER_APPROVAL_PR_NUMBER" || \
+		"$EXPECTED_SCHEMA_AFTER" != "$FOUNDER_EXPECTED_SCHEMA_AFTER" ]]; then
+		echo "Founder-user staging deployment is restricted to the reviewed PR #385 candidate and schema."
+		return 1
+	fi
+	if ! canonical_root=$(git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel) || \
+		! canonical_origin=$(git -C "$REPOSITORY_ROOT" remote get-url origin) || \
+		! dirty_checkout=$(git -C "$REPOSITORY_ROOT" status --porcelain=v1 --untracked-files=all); then
+		echo "Failed to inspect the local staging controller repository."
+		return 1
+	fi
+	if [[ "$canonical_root" != "$REPOSITORY_ROOT" || \
+		"$canonical_origin" != "https://github.com/CosmaNeura/cosmaneura.git" || \
+		-n "$dirty_checkout" ]]; then
+		echo "Founder-user staging deployment requires the clean canonical repository."
+		return 1
+	fi
+	if ! controller_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD); then
+		echo "Failed to resolve the local staging controller."
+		return 1
+	fi
+	if [[ ! "$EXPECTED_STAGING_BUILD_PLAN_SHA256" =~ ^[0-9a-f]{64}$ || \
+		-z "$STAGING_BUILD_PLAN" || "$STAGING_BUILD_PLAN" != /private/tmp/* ]]; then
+		echo "Founder-user staging deployment requires the exact reviewed build plan."
+		return 1
+	fi
+	if ! expected_identity_sha256=$(/usr/bin/jq -er \
+		'.github_user_sha256 | select(test("^[0-9a-f]{64}$"))' "$STAGING_BUILD_PLAN") || \
+		! expected_source_archive_sha256=$(/usr/bin/jq -er \
+			'.source_archive_sha256 | select(test("^[0-9a-f]{64}$"))' "$STAGING_BUILD_PLAN") || \
+		! source_result=$(cd "$REPOSITORY_ROOT" && \
+		"$PYTHON_BIN" -I -S -B scripts/staging_build_controller.py \
+			--verify-source "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256"); then
+		echo "Founder-user staging candidate provenance verification failed."
+		return 1
+	fi
+	if ! printf '%s' "$source_result" | /usr/bin/jq -e \
+		--arg candidate "$FOUNDER_CANDIDATE_SHA" \
+		--argjson approval_pr "$FOUNDER_APPROVAL_PR_NUMBER" \
+		--arg schema "$FOUNDER_EXPECTED_SCHEMA_AFTER" \
+		--arg controller "$controller_sha" \
+		--arg plan "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+		--arg identity "$expected_identity_sha256" \
+		--arg source "$expected_source_archive_sha256" '
+		type == "object" and .local_bindings_passed == true and
+		.authenticated_source_checked == true and .build_started == false and
+		.candidate_sha == $candidate and .approval_pr_number == $approval_pr and
+		.schema_head == $schema and .controller_sha == $controller and
+		.plan_sha256 == $plan and .github_user_sha256 == $identity and
+		.source_archive_sha256 == $source and
+		(.protection_sha256 | test("^[0-9a-f]{64}$"))' >/dev/null; then
+		echo "Founder-user staging source evidence is invalid."
+		return 1
+	fi
+}
+
+case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
+service-principal) ;;
+founder-user) verify_founder_release_source || exit 1 ;;
+*) echo "Unsupported staging deployment identity mode."; exit 1 ;;
+esac
+
+source "$REPOSITORY_ROOT/scripts/deploy_revision_suffix.sh"
 
 # Preserve explicit deployment controls before direnv renders the secret
 # bundle. `direnv export` emits a delta, so values inherited unchanged by the
@@ -68,7 +235,7 @@ fi
 # drop them immediately on either success or failure. ENV_JSON is deliberately
 # not exported, so later child processes receive only explicitly scoped values.
 CONFIGURATION_STATUS=0
-ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend) || \
+ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend) || \
 	CONFIGURATION_STATUS=$?
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
@@ -76,7 +243,7 @@ if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	exit 1
 fi
 if ! printf '%s' "$ENV_JSON" |
-	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
 		--environment staging; then
 	echo "Staging capability identity configuration is not deployable."
 	exit 1
@@ -107,7 +274,7 @@ if [[ ! "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" =~ ^sha256:[0-9a-f]{64}
 	echo "Expected staging identity fingerprint-set hash must use the canonical sha256 form."
 	exit 1
 fi
-if ! RESOLVED_GIT_SHA=$(git rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
+if ! RESOLVED_GIT_SHA=$(git -C "$REPOSITORY_ROOT" rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
 	echo "Error: staging source is not a valid commit in this repository."
 	exit 1
 fi
@@ -115,7 +282,7 @@ if [[ "$RESOLVED_GIT_SHA" != "$GIT_SHA" ]]; then
 	echo "Error: staging source did not resolve to the exact supplied commit."
 	exit 1
 fi
-if ! CANDIDATE_PROCFILE=$(git show "$GIT_SHA:Procfile"); then
+if ! CANDIDATE_PROCFILE=$(git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"); then
 	echo "Error: the staging candidate does not contain a readable Procfile."
 	exit 1
 fi
@@ -170,7 +337,7 @@ emit_github_output() {
 }
 
 build_configuration_evidence() {
-	python3 -c '
+	"$PYTHON_BIN" -I -S -B -c '
 import hashlib, json, sys
 from urllib.parse import parse_qs, urlsplit
 def fail():
@@ -343,28 +510,52 @@ fi
 echo "Revision string: $REVISION_STRING"
 emit_github_output source_sha "$GIT_SHA" || exit 1
 
-if ! AZURE_ACCOUNT_JSON=$(az account show \
-	--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
-	-o json); then
-	echo "Failed to inspect the active Azure identity."
-	exit 1
-fi
-if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
-	"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
-	"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
-	echo "Configured Azure identity inputs are not the pinned staging identity."
-	exit 1
-fi
-if ! printf '%s' "$AZURE_ACCOUNT_JSON" | jq -e \
-	--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
-	--arg tenant "$PINNED_STAGING_TENANT_ID" \
-	--arg client "$PINNED_STAGING_CLIENT_ID" \
-	'.subscriptionId == $subscription and .tenantId == $tenant and
-	 .userType == "servicePrincipal" and .userName == $client' >/dev/null; then
-	echo "Active Azure identity is not the exact staging deployment identity."
-	exit 1
-fi
-echo "Azure staging identity verified."
+verify_azure_deployment_identity() {
+	local azure_account_json
+	case "$STAGING_DEPLOYMENT_IDENTITY_MODE" in
+	service-principal)
+		if ! azure_account_json=$(az account show \
+			--query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
+			-o json); then
+			echo "Failed to inspect the active Azure identity."
+			return 1
+		fi
+		if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
+			"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
+			"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
+			echo "Configured Azure identity inputs are not the pinned staging identity."
+			return 1
+		fi
+		if ! printf '%s' "$azure_account_json" | jq -e \
+			--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+			--arg tenant "$PINNED_STAGING_TENANT_ID" \
+			--arg client "$PINNED_STAGING_CLIENT_ID" \
+			'.subscriptionId == $subscription and .tenantId == $tenant and
+			 .userType == "servicePrincipal" and .userName == $client' >/dev/null; then
+			echo "Active Azure identity is not the exact staging deployment identity."
+			return 1
+		fi
+		;;
+	founder-user)
+		if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+			-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+			-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
+			echo "Founder-user staging deployment refuses configured service-principal inputs."
+			return 1
+		fi
+		if ! verify_bound_founder_azure_identity; then
+			echo "Failed to bind the exact founder token for Azure staging operations."
+			return 1
+		fi
+		;;
+	*)
+		echo "Unsupported staging deployment identity mode."
+		return 1
+		;;
+	esac
+	echo "Azure staging identity verified for $STAGING_DEPLOYMENT_IDENTITY_MODE mode."
+}
+verify_azure_deployment_identity || exit 1
 
 ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
 if ! PUBLISHED_DIGEST=$(az acr manifest show-metadata \
@@ -663,7 +854,7 @@ if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
 	exit 1
 fi
 if ! RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT" \
-	python "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
+	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
 	--validate-signing-secret-only; then
 	echo "Staging Recall webhook signing credential is invalid."
 	exit 1
@@ -706,7 +897,7 @@ verify_migration_job_template() {
 	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
 	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
 	if ! printf '%s' "$migration_template" |
-		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+		"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
 			--expected-name "$MIGRATION_JOB" \
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
 			--database-secret-name database-url \
@@ -768,7 +959,7 @@ if len(rows)!=1 or not isinstance(rows[0][0],str) or re.fullmatch(r"[0-9a-f]{12}
     raise SystemExit(1)
 print("STAGING_SCHEMA_REVISION="+rows[0][0])
 PY
-	payload=$(printf '%s' "$schema_probe" | python3 -c \
+	payload=$(printf '%s' "$schema_probe" | "$PYTHON_BIN" -I -S -B -c \
 		'import base64,sys,zlib;print(base64.b64encode(zlib.compress(sys.stdin.buffer.read(),9)).decode())')
 	if ! execution_name=$(az containerapp job start \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
@@ -1227,6 +1418,8 @@ wait_for_incompatible_worker_replicas_to_drain() {
 }
 
 # Run migrations before deploying new containers
+verify_founder_release_source || exit 1
+verify_azure_deployment_identity || exit 1
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."
