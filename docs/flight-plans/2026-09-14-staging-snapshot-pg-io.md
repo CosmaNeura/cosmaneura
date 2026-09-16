@@ -114,6 +114,27 @@ an app/provider; no live migration, deployment, cleanup or merge is authorized.
 
 ## Validation and recovery
 
+### September 15 macOS archive-reader correction
+
+Both credentialless `pg_restore` calls now select `--format=custom`, matching
+the format already required from `pg_dump`. On macOS, reopening `/dev/fd/N`
+shares the descriptor offset: automatic format detection consumes the header,
+then the custom reader reopens at the advanced offset and rejects valid bytes.
+Explicit format selection avoids that extra read while retaining the held
+descriptor, bounded output, full decode, revision check, and original deadlines.
+The bootstrap dependency pin and human-command loader/bundle pins follow the
+changed source. This changes no firewall, credential, capture, or release scope.
+
+A native regression uses an invented 85-byte empty custom archive and exercises
+both validation commands: autodetection fails on macOS, explicit custom format
+succeeds. The composition test also requires this flag for both readers.
+The retained staging archive passed separate offline decode and archived-revision
+checks with explicit format; those observations do not retroactively turn the
+failed capture into an accepted run or authorize restore, migration, or release.
+Preserve that archive and the recorded failure; do not repeat the Azure/data-copy
+steps solely to correct local validation. Subsequent use needs its own exact
+artifact validation and the existing isolated-rehearsal decision.
+
 Prior45 correction:17affected methods passed (16in0.200s, signals0.100s); initial
 sandbox ps denial ran zero tests. Review46's3affected methods PASS0.019s include
 final-read before/at/after expiry. Historical results are not current acceptance.

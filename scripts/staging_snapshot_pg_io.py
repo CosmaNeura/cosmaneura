@@ -775,11 +775,14 @@ def _capture_with_verified_payload(
         check_archive_binding(binding, fd, size)
         # The reader uses this open descriptor, not a mutable pathname. No
         # connection flags or credentials are present in either restore command.
+        # On macOS, /dev/fd reopens share the offset. Format autodetection reads
+        # the header before reopening it; select the known custom format instead.
         local_environment = client_environment()
         os.lseek(fd, 0, os.SEEK_SET)
         children.run(
             [
                 str(CLIENT_DIRECTORY / "pg_restore"),
+                "--format=custom",
                 "--no-owner",
                 "--no-privileges",
                 "--file=/dev/null",
@@ -795,6 +798,7 @@ def _capture_with_verified_payload(
         children.run(
             [
                 str(CLIENT_DIRECTORY / "pg_restore"),
+                "--format=custom",
                 "--data-only",
                 "--table=alembic_version",
                 "--file=-",

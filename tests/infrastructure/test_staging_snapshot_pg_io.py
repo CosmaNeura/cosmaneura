@@ -302,6 +302,7 @@ class PayloadTests(unittest.TestCase):
         for argv, environment, _bound, descriptors in self.children.calls:
             self.assertNotIn("synthetic", " ".join(argv))
             if Path(argv[0]).name == "pg_restore":
+                self.assertIn("--format=custom", argv)
                 self.assertNotIn("PGPASSWORD", environment)
                 self.assertFalse(
                     any(argument.startswith("--dbname") for argument in argv)
@@ -367,6 +368,63 @@ class PayloadTests(unittest.TestCase):
                 pg.check_archive_binding(self.binding, fd, 0)
         finally:
             os.close(fd)
+
+
+@unittest.skipUnless(
+    sys.platform == "darwin"
+    and (pg.CLIENT_DIRECTORY / "pg_restore").is_file()
+    and pg.CLIENT_LIBRARIES.is_dir(),
+    "requires the existing macOS PostgreSQL16 client and private libraries",
+)
+@dedicated_process_tests
+class NativeArchiveFormatTests(unittest.TestCase):
+    def test_custom_format_preserves_header_on_shared_descriptor_reopen(self):
+        # Invent a complete empty PostgreSQL custom archive: no database or
+        # captured data. Integers carry a sign byte and four little-endian bytes.
+        def integer(value):
+            return b"\x00" + value.to_bytes(4, "little")
+
+        def string(value):
+            return integer(len(value)) + value
+
+        archive = (
+            b"PGDMP"
+            + bytes((1, 15, 0, 4, 8, 1, 0))
+            + b"".join(integer(value) for value in (0, 0, 0, 1, 0, 126, 0))
+            + string(b"invented")
+            + string(b"16.15")
+            + string(b"16.15")
+            + integer(0)
+        )
+        with tempfile.TemporaryFile() as descriptor:
+            descriptor.write(archive)
+            descriptor.flush()
+            for options in (
+                ["--no-owner", "--no-privileges", "--file=/dev/null"],
+                ["--data-only", "--table=alembic_version", "--file=-"],
+            ):
+                for explicit_format in (False, True):
+                    with self.subTest(options=options, explicit=explicit_format):
+                        descriptor.seek(0)
+                        result = subprocess.run(
+                            [
+                                str(pg.CLIENT_DIRECTORY / "pg_restore"),
+                                *(["--format=custom"] if explicit_format else []),
+                                *options,
+                                f"/dev/fd/{descriptor.fileno()}",
+                            ],
+                            env=pg.client_environment(),
+                            stdin=subprocess.DEVNULL,
+                            capture_output=True,
+                            pass_fds=(descriptor.fileno(),),
+                            timeout=5,
+                            check=False,
+                        )
+                        if explicit_format:
+                            self.assertEqual(result.returncode, 0, result.stderr)
+                        else:
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertIn(b"magic string in file header", result.stderr)
 
 
 @unittest.skipUnless(
