@@ -379,6 +379,26 @@ class ControllerTests(unittest.TestCase):
         value = json.loads((self.parent / "controller-result.json").read_bytes())
         self.assertFalse(value["complete"])
 
+    def test_late_executor_refusal_cannot_persist_completion(self):
+        modules = self.fake_modules()
+        build = modules["staging_human_build_executor"].build_candidate.side_effect
+
+        def refuse_after_finalization(*args, **kwargs):
+            build(*args, **kwargs)
+            raise RuntimeError("invented deadline refusal after finalization")
+
+        modules[
+            "staging_human_build_executor"
+        ].build_candidate.side_effect = refuse_after_finalization
+        with (
+            patch.object(m, "load_modules", return_value=modules),
+            self.assertRaises(RuntimeError),
+        ):
+            self.invoke()
+        value = json.loads((self.parent / "controller-result.json").read_bytes())
+        self.assertFalse(value["complete"])
+        self.assertNotIn("image_id", value)
+
     def test_success_preserves_actor_source_artifact_and_false_publish_authority(self):
         modules = self.fake_modules()
         with patch.object(m, "load_modules", return_value=modules):

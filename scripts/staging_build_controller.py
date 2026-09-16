@@ -385,7 +385,7 @@ def run(
         result["build_root"] = str(prepared.root)
         phase = "build"
 
-        finalized_archive: list[Any] = []
+        finalized_archive: list[tuple[Any, str, int]] = []
 
         def finalize_archive(archive: Any) -> None:
             nonlocal phase
@@ -401,18 +401,9 @@ def run(
                 archive.metadata_path, 65536
             )
             clock_check(plan)
-            result.update(
-                complete=True,
-                image_id=archive.image_id,
-                image_archive=str(archive.path),
-                image_archive_sha256=archive.sha256,
-                image_archive_bytes=archive.size,
-                build_metadata=str(archive.metadata_path),
-                build_metadata_sha256=build_metadata_sha256,
-                build_metadata_bytes=build_metadata_bytes,
-                public_assets_sha256=archive.public_assets_sha256,
+            finalized_archive.append(
+                (archive, build_metadata_sha256, build_metadata_bytes)
             )
-            finalized_archive.append(archive)
 
         archive = executor.build_candidate(
             prepared,
@@ -422,7 +413,20 @@ def run(
             finalize_archive=finalize_archive,
             seconds=plan["build_seconds"],
         )
-        require(len(finalized_archive) == 1 and archive is finalized_archive[0])
+        require(len(finalized_archive) == 1 and archive is finalized_archive[0][0])
+        _, build_metadata_sha256, build_metadata_bytes = finalized_archive[0]
+        clock_check(plan)
+        result.update(
+            complete=True,
+            image_id=archive.image_id,
+            image_archive=str(archive.path),
+            image_archive_sha256=archive.sha256,
+            image_archive_bytes=archive.size,
+            build_metadata=str(archive.metadata_path),
+            build_metadata_sha256=build_metadata_sha256,
+            build_metadata_bytes=build_metadata_bytes,
+            public_assets_sha256=archive.public_assets_sha256,
+        )
     except BaseException as error:
         result.update(phase=phase, error_class=type(error).__name__)
         raise
