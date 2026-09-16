@@ -51,6 +51,12 @@ PINNED_FOUNDER_AZURE_OBJECT_ID_SHA256="0839f64960f7e378762f2f1aab2d324b197c4c0d2
 PYTHON_BIN=python
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
+	if [[ -n "${AZURE_CLIENT_ID:-}" || -n "${AZURE_TENANT_ID:-}" || \
+		-n "${AZURE_SUBSCRIPTION_ID:-}" || -n "${AZURE_CLIENT_SECRET:-}" || \
+		-n "${AZURE_CLIENT_CERTIFICATE_PATH:-}" ]]; then
+		echo "Founder-user staging deployment refuses configured service-principal inputs."
+		exit 1
+	fi
 	PYTHON_BIN=/opt/homebrew/bin/python3
 	for founder_tool in \
 		"$PYTHON_BIN" \

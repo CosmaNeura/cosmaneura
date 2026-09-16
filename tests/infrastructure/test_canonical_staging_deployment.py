@@ -499,6 +499,7 @@ def test_local_founder_identity_fallback_is_explicit_and_fail_closed() -> None:
     assert "refuses configured service-principal inputs" in deploy
     assert "AZURE_CLIENT_SECRET" in deploy
     assert "AZURE_CLIENT_CERTIFICATE_PATH" in deploy
+    assert deploy.index("AZURE_CLIENT_SECRET") < deploy.index("hash_stdin()")
     assert "PYTHON_BIN=/opt/homebrew/bin/python3" in deploy
     assert '"$PYTHON_BIN" -I -S -B' in deploy
     assert (
