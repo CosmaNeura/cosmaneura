@@ -994,7 +994,7 @@ PY
 		--container-name "$migration_container_name" \
 		--image "$STAGING_IMAGE_REFERENCE" \
 		--command /opt/venv/bin/python \
-		--args -c "import base64,zlib;exec(zlib.decompress(base64.b64decode('$payload')))" \
+		--args="-cimport base64,zlib;exec(zlib.decompress(base64.b64decode('$payload')))" \
 		--env-vars "DATABASE_URL=secretref:database-url" \
 		--query "name" -o tsv); then
 		echo "The $phase schema evidence probe failed to start."

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import argparse
 import base64
 import importlib.util
 import json
+import re
+import subprocess
 import sys
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,6 +17,7 @@ MODULE_NAME = "staging_azure_cli_bound"
 MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "staging_azure_cli_bound.py"
 )
+DEPLOY_PATH = Path(__file__).resolve().parents[2] / "infra-staging" / "deploy.sh"
 SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -167,6 +172,145 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
         }:
             command.extend(["--image", image])
         m.validate_argv(command + subscription)
+
+
+def test_python_schema_probe_uses_azure_cli_safe_attached_argument() -> None:
+    image = f"{m.STAGING_REGISTRY_HOST}/{m.STAGING_REPOSITORY}@sha256:{'a' * 64}"
+    payload = base64.b64encode(
+        zlib.compress(m.SCHEMA_PROBE_SOURCE.encode(), level=9)
+    ).decode()
+    argument = (
+        "--args=-cimport base64,zlib;exec(zlib.decompress(base64.b64decode('"
+        + payload
+        + "')))"
+    )
+    command = [
+        "containerapp",
+        "job",
+        "start",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--image",
+        image,
+        "--command",
+        "/opt/venv/bin/python",
+        argument,
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    m.validate_argv(command)
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--args", nargs="*")
+    parser.add_argument("--subscription")
+    parsed = parser.parse_args([argument, "--subscription", m.SUBSCRIPTION])
+    assert parsed.args == [argument.removeprefix("--args=")]
+
+
+def test_schema_probe_guard_is_bound_to_exact_deploy_source() -> None:
+    deploy = DEPLOY_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r"read -r -d '' schema_probe <<'PY' \|\| true\n(.*?)\nPY\n",
+        deploy,
+        re.DOTALL,
+    )
+
+    assert match is not None
+    assert match.group(1) == m.SCHEMA_PROBE_SOURCE
+
+
+def test_python_accepts_code_attached_to_dash_c() -> None:
+    result = subprocess.run(
+        [sys.executable, "-cprint('attached-python-c-ok')"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "attached-python-c-ok\n"
+
+
+def test_python_schema_probe_rejects_detached_dash_c_argument() -> None:
+    command = [
+        "containerapp",
+        "job",
+        "start",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--command",
+        "/opt/venv/bin/python",
+        "--args",
+        "-c",
+        "print('schema probe')",
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command)
+
+
+@pytest.mark.parametrize(
+    "argument",
+    (
+        "--args=-cprint('different code')",
+        "--args=-c",
+        "--args=-cnot-base64",
+        m.SCHEMA_PROBE_ARGUMENT_PREFIX
+        + base64.b64encode(zlib.compress(b"print('different code')", level=9)).decode()
+        + m.SCHEMA_PROBE_ARGUMENT_SUFFIX,
+        m.SCHEMA_PROBE_ARGUMENT_PREFIX + "not-base64" + m.SCHEMA_PROBE_ARGUMENT_SUFFIX,
+    ),
+)
+def test_python_schema_probe_rejects_unreviewed_attached_code(argument: str) -> None:
+    command = [
+        "containerapp",
+        "job",
+        "start",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--command",
+        "/opt/venv/bin/python",
+        argument,
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command)
+
+
+def test_python_schema_probe_rejects_a_second_container_argument() -> None:
+    payload = base64.b64encode(
+        zlib.compress(m.SCHEMA_PROBE_SOURCE.encode(), level=9)
+    ).decode()
+    argument = m.SCHEMA_PROBE_ARGUMENT_PREFIX + payload + m.SCHEMA_PROBE_ARGUMENT_SUFFIX
+    command = [
+        "containerapp",
+        "job",
+        "start",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--command",
+        "/opt/venv/bin/python",
+        argument,
+        "second-container-argument",
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command)
 
 
 def test_opaque_secret_values_are_not_treated_as_azure_resource_targets() -> None:

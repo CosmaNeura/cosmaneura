@@ -292,6 +292,8 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
     assert deploy.index("emit_github_output schema_before") < deploy.index(
         "--args /app/scripts/billing_migration_preflight.py"
     )
+    assert '--args="-cimport base64,zlib;exec(' in deploy
+    assert "--args -c" not in deploy
     assert "identity_fingerprint_set_sha256" in deploy
     assert "staging_identity_fingerprint_set_mismatch" in deploy
     assert "database_sslmode_not_verify_full" in deploy

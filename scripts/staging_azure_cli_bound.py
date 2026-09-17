@@ -18,6 +18,7 @@ import re
 import resource
 import sys
 import time
+import zlib
 from typing import Any, cast
 
 SUBSCRIPTION = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -109,6 +110,17 @@ ALLOWED_OPTION_TOKENS = {
     "-n",
     "-o",
 }
+SCHEMA_PROBE_SOURCE = """import os,re
+import psycopg
+with psycopg.connect(os.environ["DATABASE_URL"],connect_timeout=10,options="-c default_transaction_read_only=on -c statement_timeout=15000") as connection:
+    rows=connection.execute("SELECT version_num FROM public.alembic_version").fetchall()
+if len(rows)!=1 or not isinstance(rows[0][0],str) or re.fullmatch(r"[0-9a-f]{12}",rows[0][0]) is None:
+    raise SystemExit(1)
+print("STAGING_SCHEMA_REVISION="+rows[0][0])"""
+SCHEMA_PROBE_ARGUMENT_PREFIX = (
+    "--args=-cimport base64,zlib;exec(zlib.decompress(base64.b64decode('"
+)
+SCHEMA_PROBE_ARGUMENT_SUFFIX = "')))"
 
 
 class BoundAzureRefused(RuntimeError):
@@ -206,18 +218,46 @@ def command_matches(argv: list[str], allowed: set[tuple[str, ...]]) -> bool:
     return any(argv[: len(prefix)] == list(prefix) for prefix in allowed)
 
 
+def validate_schema_probe_argument(argument: str) -> None:
+    require(
+        len(argument) < 8192
+        and argument.startswith(SCHEMA_PROBE_ARGUMENT_PREFIX)
+        and argument.endswith(SCHEMA_PROBE_ARGUMENT_SUFFIX)
+    )
+    encoded = argument[
+        len(SCHEMA_PROBE_ARGUMENT_PREFIX) : -len(SCHEMA_PROBE_ARGUMENT_SUFFIX)
+    ]
+    require(re.fullmatch(r"[A-Za-z0-9+/]+={0,2}", encoded) is not None)
+    expected = SCHEMA_PROBE_SOURCE.encode()
+    try:
+        compressed = base64.b64decode(encoded, validate=True)
+        require(len(compressed) <= 4096)
+        decompressor = zlib.decompressobj()
+        source = decompressor.decompress(compressed, len(expected) + 1)
+        require(
+            decompressor.eof
+            and not decompressor.unconsumed_tail
+            and not decompressor.unused_data
+        )
+    except (binascii.Error, zlib.error):
+        raise BoundAzureRefused("staging_azure_cli_bound_refused") from None
+    require(source == expected)
+
+
 def validate_option_spellings(argv: list[str]) -> None:
     for index, argument in enumerate(argv):
         if not argument.startswith("-"):
             continue
-        if argument == "-c":
+        if argument.startswith("--args=-c"):
             require(
                 argv[:3] == ["containerapp", "job", "start"]
-                and index > 0
-                and argv[index - 1] == "--args"
-                and argv.count("-c") == 1
+                and sum(value.startswith("--args=-c") for value in argv) == 1
+                and "--args" not in argv
                 and flag_values(argv, {"--command"}) == ["/opt/venv/bin/python"]
+                and index + 1 < len(argv)
+                and argv[index + 1].startswith("-")
             )
+            validate_schema_probe_argument(argument)
             continue
         require(argument in ALLOWED_OPTION_TOKENS)
         require(argv.count(argument) == 1)
