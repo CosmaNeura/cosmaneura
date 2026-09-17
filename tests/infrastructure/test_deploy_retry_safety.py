@@ -631,6 +631,96 @@ def test_deploy_removes_legacy_public_environment_variables() -> None:
     assert 'remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")' in initiate
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "api_args",
+        "worker_args",
+        "scheduler_args",
+        "command",
+        "image",
+        "environment_contract",
+        "common_flag",
+        "billing_flag",
+        "url",
+    ],
+)
+def test_final_candidate_verifier_executes_exact_contract(mutation: str | None) -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text()
+    flags = {
+        "SCRIBE_WORKFLOW_ENABLED": "false",
+        "STRIPE_INTEGRATION_ENABLED": "false",
+        "STRIPE_BILLING_ENABLED": "false",
+        "STRIPE_LIVE_MODE": "false",
+    }
+    urls = {"API_BASE_URL": "https://staging.example"}
+    state = [
+        {
+            "name": role,
+            "environmentContractExact": True,
+            "readyRevisionImage": f"registry.example/candidate@{DIGEST}",
+            "readyRevisionCommand": [],
+            "readyRevisionArgs": [f"{role} command"],
+            "publicConfig": {
+                "PYTHON_ENV": "staging",
+                **urls,
+                **{
+                    key: value
+                    for key, value in flags.items()
+                    if role != "scheduler" or not key.startswith("STRIPE_")
+                },
+            },
+        }
+        for role in ("api", "worker", "scheduler")
+    ]
+    if mutation and mutation.endswith("_args"):
+        next(item for item in state if item["name"] == mutation.removesuffix("_args"))[
+            "readyRevisionArgs"
+        ] = []
+    elif mutation in ("command", "image", "environment_contract"):
+        field, value = {
+            "command": ("readyRevisionCommand", ["unexpected"]),
+            "image": ("readyRevisionImage", "unexpected"),
+            "environment_contract": ("environmentContractExact", False),
+        }[mutation]
+        state[0][field] = value
+    elif mutation is not None:
+        key = {
+            "common_flag": "SCRIBE_WORKFLOW_ENABLED",
+            "billing_flag": "STRIPE_BILLING_ENABLED",
+            "url": "API_BASE_URL",
+        }[mutation]
+        state[0]["publicConfig"][key] = "unexpected"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _shell_function(deploy, "verify_candidate_workload_state")
+            + '\nverify_candidate_workload_state "$STATE"\n',
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "API_CONTAINER": "api",
+            "WORKER_CONTAINER": "worker",
+            "SCHEDULER_CONTAINER": "scheduler",
+            "STAGING_IMAGE_REFERENCE": f"registry.example/candidate@{DIGEST}",
+            "STAGING_API_COMMAND": "api command",
+            "STAGING_WORKER_COMMAND": "worker command",
+            "SCHEDULER_COMMAND": "scheduler command",
+            "CONFIGURATION_EVIDENCE_JSON": json.dumps(
+                {"environment": "staging", "flags": flags, "urls": urls}
+            ),
+            "STATE": json.dumps(state),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is (mutation is None), result.stderr
+    assert "compile error" not in result.stderr
+
+
 @pytest.mark.parametrize("role", ["api", "worker", "scheduler"])
 def test_deployment_explicitly_uses_each_candidate_procfile_command(
     tmp_path: Path, role: str

@@ -795,10 +795,10 @@ verify_candidate_workload_state() {
 		all(.[]; . as $workload | $workload.environmentContractExact == true and
 		 $workload.readyRevisionCommand == [] and
 		 $workload.readyRevisionImage == $expected_image and
-		 ($common | to_entries | all(.[] as $item; $workload.publicConfig[$item.key] == $item.value))) and
+		 ($common | to_entries | all(.[]; . as $item | $workload.publicConfig[$item.key] == $item.value))) and
 		all(.[] | select(.name != $scheduler); . as $workload | ($expected.flags |
 		 {STRIPE_INTEGRATION_ENABLED, STRIPE_BILLING_ENABLED, STRIPE_LIVE_MODE} |
-		 to_entries | all(.[] as $item; $workload.publicConfig[$item.key] == $item.value))) and
+		 to_entries | all(.[]; . as $item | $workload.publicConfig[$item.key] == $item.value))) and
 		([.[] | select(.name == $api)][0].readyRevisionArgs == [$api_command]) and
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
