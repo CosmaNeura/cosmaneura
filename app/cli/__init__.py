@@ -2620,10 +2620,6 @@ def restore_visit_note_version_command(
     )
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command("verify-alert-delivery")
 def verify_alert_delivery(flush_seconds: float = 15.0):
     """Fire a deliberate test alert and confirm a human receives it.
@@ -2634,10 +2630,10 @@ def verify_alert_delivery(flush_seconds: float = 15.0):
     alerting system nobody is subscribed to fails exactly the way the silent
     logging it replaced did, and the only way to know is to send one and look.
 
-    Refuses to claim success it cannot back. Sentry is only initialised in
-    production (`configuration.sentry.configure_sentry`), so anywhere else this
-    reports that nothing was sent rather than printing a reassuring message
-    over a no-op. It also flushes explicitly: the SDK's atexit flush allows two
+    Refuses to claim success it cannot back. Staging Sentry requires the
+    explicit SENTRY_STAGING_ENABLED control and an approved sink. An inactive
+    client reports that nothing was sent rather than printing a reassuring
+    message over a no-op. It also flushes explicitly: the SDK's atexit flush allows two
     seconds, and a probe that exits before its own event is transmitted would
     report delivery while proving none.
     """
@@ -2654,9 +2650,8 @@ def verify_alert_delivery(flush_seconds: float = 15.0):
         typer.secho(
             f"Sentry is not initialised for PYTHON_ENV={environment!r}, so nothing "
             "was sent.\n"
-            "Only production initialises Sentry. Re-run with PYTHON_ENV=production "
-            "and the production SENTRY_DSN, or run this inside a production "
-            "container.",
+            "Configure the approved Sentry sink for this environment before "
+            "rerunning. Staging additionally requires SENTRY_STAGING_ENABLED=true.",
             fg=typer.colors.YELLOW,
         )
         raise typer.Exit(code=1)
@@ -2672,3 +2667,7 @@ def verify_alert_delivery(flush_seconds: float = 15.0):
         "Only the second one is the thing being tested. An issue with no "
         "subscriber fails the same way the silent logging it replaces did."
     )
+
+
+if __name__ == "__main__":
+    app()

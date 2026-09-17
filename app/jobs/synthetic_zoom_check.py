@@ -1,56 +1,4 @@
-"""Ingress and credential probes for the Zoom capture path.
-
-What this does and does not establish, stated plainly because the previous
-framing overclaimed: these probes prove that the pieces a capture *depends on*
-are reachable and that our credentials still work. They do not prove a bot can
-join a meeting or produce a recording -- nothing here creates a bot. Only a
-real bot joining a real meeting shows that, and that smoke test is deliberately
-separate (see the follow-up noted at the bottom).
-
-Where the heartbeat task (app.jobs.heartbeat) only proves the worker is alive,
-these run every 15 minutes against production redis + database.
-
-It runs three probes, each of which fails independently so one broken
-dependency cannot mask another:
-
-1. **Dependency probe** (in-process). Calls handle_meeting_started directly.
-   Catches env var drift (DATABASE_URL, REDIS_URL, ZOOM_* secrets unset
-   or rotated), DB and Redis connectivity from the worker container,
-   import-chain breakage from a deploy that boots but explodes on first
-   real request, and Azure network policy changes blocking egress.
-
-2. **Ingress probe** (HTTP). POSTs a correctly signed synthetic webhook to
-   our own public endpoint. This is the layer probe 1 cannot see: TLS and
-   ingress, the FastAPI route, ``ZOOM_SECRET_TOKEN`` actually matching
-   what signs the request, and the Celery enqueue. It matters because a
-   rotated secret rejects *every* Zoom webhook with a 401 and Zoom
-   deactivates an endpoint after repeated failures -- a config change
-   nobody deployed silently takes the note-taker offline for all doctors.
-
-3. **Credential probe** (HTTP). One authenticated call to the Recall API.
-   An invalid ``RECALL_API_KEY`` is otherwise discovered by the first
-   patient visit that fails to record.
-
-Probes 2 and 3 leave the container, so they only run in production and
-staging; the handler probe runs everywhere.
-
-The payloads use host_ids that will never match a real
-DoctorVideoIntegration row, so handle_meeting_started executes the
-"no doctor found, skipping" branch instead of stamping live state into
-redis. That branch still touches redis (lock acquire) and the DB
-(doctor lookup), which is enough to validate the dependency chain.
-
-Sentry CeleryIntegration with monitor_beat_tasks=True turns this into a cron
-monitor: if the task fails or doesn't fire on schedule, the on-call gets paged.
-Probe failures alert through services.alerting instead, since a failed probe is
-a finding, not a crash.
-
-Not covered here, on purpose: an end-to-end bot-create/join/record smoke
-against a dedicated non-PHI meeting. That is the only check that would prove
-the note-taker actually works, and it costs a Recall bot per run, so its
-cadence and its meeting are a product decision rather than something to bury
-in this task.
-"""
+"""Probe dependencies and ingress without claiming Marketplace-secret proof."""
 
 import hashlib
 import hmac
@@ -67,15 +15,8 @@ from app.configuration.zoom import ZOOM_SECRET_TOKEN
 from app.environments import is_production, is_staging
 from app.services import alerting, recall, zoom_webhooks
 
-# Intentional sentinel values. Never use these as real Zoom IDs anywhere
-# else — the synthetic check would interfere with a real session that
-# happened to collide.
 SYNTHETIC_HOST_ID = "synthetic-monitor-not-a-real-zoom-host"
 SYNTHETIC_MEETING_ID = "synthetic-monitor-meeting-id"
-# The route probe uses its own meeting id so it exercises the handler in
-# full. Sharing one id would mean the second probe short-circuits on the
-# starting_lock the first one just took, and we would only be testing the
-# dedup guard.
 SYNTHETIC_HTTP_MEETING_ID = "synthetic-monitor-http-meeting-id"
 
 _PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
@@ -84,9 +25,6 @@ _PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 def _payload(meeting_id: str) -> dict:
     return {
         "event": "meeting.started",
-        # Unique per run so the webhook route's 48h idempotency guard sees
-        # a fresh event instead of replying `duplicate: true` — the whole
-        # probe would otherwise stop reaching Celery after the first run.
         "event_ts": int(time.time() * 1000),
         "payload": {
             "object": {
@@ -98,12 +36,6 @@ def _payload(meeting_id: str) -> dict:
 
 
 def _clear_lock(redis, meeting_id: str) -> None:
-    # Wipe the dedup lock from the previous run so this iteration is
-    # observable. Real meeting.started uses SET NX to prevent duplicate
-    # bot creation; if we left the lock in place across runs, every
-    # synthetic check after the first would short-circuit and we'd
-    # stop exercising the doctor-lookup + redis-write code paths we
-    # actually care about.
     redis.delete(f"recall:meeting:{meeting_id}:starting_lock")
 
 
@@ -113,13 +45,6 @@ def _probe_dependencies(redis) -> None:
 
 
 def signed_headers(body: bytes) -> dict[str, str]:
-    """Sign a probe body exactly the way Zoom signs a real webhook.
-
-    Kept public and separate so a test can feed the result straight into
-    the route's own ``_verify_zoom_signature``. Without that, the probe
-    could drift into signing something the endpoint would reject and we
-    would be monitoring nothing.
-    """
     timestamp = str(int(time.time()))
     signature = (
         "v0="
@@ -137,11 +62,7 @@ def signed_headers(body: bytes) -> dict[str, str]:
 
 
 def _probe_ingress(redis) -> None:
-    """POST a correctly signed webhook to our own public endpoint.
-
-    Signed with the same secret the route verifies against, so a mismatch
-    here is exactly the mismatch that would reject real Zoom traffic.
-    """
+    """Local signing proves route acceptance, not the Marketplace secret."""
     _clear_lock(redis, SYNTHETIC_HTTP_MEETING_ID)
 
     body = json.dumps(_payload(SYNTHETIC_HTTP_MEETING_ID)).encode()
@@ -157,17 +78,27 @@ def _probe_ingress(redis) -> None:
         return
 
     if response.status_code != httpx.codes.OK:
-        # A 401 here means ZOOM_SECRET_TOKEN no longer matches the Zoom app
-        # and every real webhook is being rejected too.
+        # A 401 means our locally signed request was rejected. It does not by
+        # itself establish the Marketplace app's configured secret.
         alerting.alert(
             alerting.WebhookRouteUnreachable,
             status=response.status_code,
         )
         return
 
-    if response.json().get("duplicate"):
-        # Not fatal, but it means the event never reached Celery, so the
-        # probe proved less than it looks like it did.
+    try:
+        response_body = response.json()
+    except ValueError:
+        response_body = None
+    if not isinstance(response_body, dict):
+        alerting.alert(
+            alerting.WebhookRouteUnreachable,
+            status=response.status_code,
+            error_class="InvalidResponse",
+        )
+        return
+
+    if response_body.get("duplicate"):
         log.warning(
             "zoom probes: ingress deduplicated, handler not enqueued",
             meeting_id=SYNTHETIC_HTTP_MEETING_ID,

@@ -241,6 +241,7 @@ def captured_alerts(monkeypatch):
 
     def fake_alert(alert_type, **context):
         calls.append({"type": alert_type, **context})
+        return "test-event-id"
 
     monkeypatch.setattr(alerting, "alert", fake_alert)
     return calls
