@@ -319,7 +319,10 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
         migration.index('capture_schema_revision "Post-migration"')
     )
     assert "migration_status=$?" in migration
-    assert "observed post-attempt schema was recorded" in migration
+    assert 'finish_migration_attempt "$migration_status" "$cleanup_status"' in migration
+    assert "observed post-attempt schema was recorded" in _shell_function(
+        deploy, "finish_migration_attempt"
+    )
     assert '"$STAGING_IMAGE":*)' not in _shell_function(
         deploy, "resolve_staging_digest"
     )
@@ -333,14 +336,11 @@ def test_staging_compatibility_secret_is_exact_candidate_and_job_only() -> None:
 
     assert '"$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA"' in migration
     assert '"$STAGING_IMAGE_DIGEST" != "$FOUNDER_CANDIDATE_IMAGE_DIGEST"' in migration
-    assert 'local alembic_compat_value="${value//%/%%}"' in migration
+    assert '"${value//%/%%}"' not in migration
+    assert "--staging-alembic-command" in migration
+    assert '--args "$migration_command"' in migration
     assert migration.count('"${secret_name}=${value}"') == 1
-    assert (
-        migration.count(
-            '"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${alembic_compat_value}"'
-        )
-        == 1
-    )
+    assert migration.count('"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${value}"') == 1
     assert (
         migration.count('"${var}=secretref:${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}"')
         == 1
