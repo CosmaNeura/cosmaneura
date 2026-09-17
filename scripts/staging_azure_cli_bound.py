@@ -223,6 +223,34 @@ def validate_option_spellings(argv: list[str]) -> None:
         require(argv.count(argument) == 1)
 
 
+def non_secret_argv(argv: list[str]) -> tuple[str, ...]:
+    """Return command material safe for production-name scope checks.
+
+    Secret definitions are still structurally checked, but their values are
+    opaque data rather than Azure resource selectors. In particular, staging's
+    database credential retains a legacy production-named username.
+    """
+    visible: list[str] = []
+    index = 0
+    while index < len(argv):
+        argument = argv[index]
+        visible.append(argument)
+        if argument == "--registry-password":
+            require(index + 1 < len(argv))
+            index += 2
+            continue
+        if argument == "--secrets":
+            index += 1
+            while index < len(argv) and not argv[index].startswith("-"):
+                name, separator, _value = argv[index].partition("=")
+                require(separator == "=" and bool(name))
+                visible.append(name)
+                index += 1
+            continue
+        index += 1
+    return tuple(visible)
+
+
 def validate_staging_scope(argv: list[str]) -> None:
     if argv[0] == "containerapp":
         require(command_matches(argv, ALLOWED_CONTAINERAPP_COMMANDS))
@@ -276,7 +304,9 @@ def validate_argv(argv: list[str]) -> None:
     require(argv.count("--subscription") == 1)
     index = argv.index("--subscription")
     require(index + 1 < len(argv) and argv[index + 1] == SUBSCRIPTION)
-    require(not any("cosmaneuraprod" in value.lower() for value in argv))
+    require(
+        not any("cosmaneuraprod" in value.lower() for value in non_secret_argv(argv))
+    )
     validate_staging_scope(argv)
 
 
