@@ -169,6 +169,81 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
         m.validate_argv(command + subscription)
 
 
+def test_opaque_secret_values_are_not_treated_as_azure_resource_targets() -> None:
+    image = f"{m.STAGING_REGISTRY_HOST}/{m.STAGING_REPOSITORY}@sha256:{'a' * 64}"
+    command = [
+        "containerapp",
+        "job",
+        "create",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--image",
+        image,
+        "--secrets",
+        "database-url=postgresql://cosmaneuraprod_admin:opaque@staging.invalid/staging",
+        "--env-vars",
+        "DATABASE_URL=secretref:database-url",
+        "--registry-password",
+        "opaque-cosmaneuraprod-password",
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    m.validate_argv(command)
+
+
+def test_non_secret_environment_value_cannot_name_production() -> None:
+    image = f"{m.STAGING_REGISTRY_HOST}/{m.STAGING_REPOSITORY}@sha256:{'a' * 64}"
+    command = [
+        "containerapp",
+        "job",
+        "create",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--image",
+        image,
+        "--env-vars",
+        "API_BASE_URL=https://cosmaneuraprod.example",
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command)
+
+
+@pytest.mark.parametrize(
+    "secret_definition",
+    (
+        "cosmaneuraprod-database-url=opaque",
+        "database-url-without-a-value-separator",
+    ),
+)
+def test_secret_definitions_remain_structurally_and_scope_checked(
+    secret_definition: str,
+) -> None:
+    command = [
+        "containerapp",
+        "job",
+        "create",
+        "--name",
+        "cosmaneura-staging-migrate",
+        "--resource-group",
+        m.STAGING_RESOURCE_GROUP,
+        "--secrets",
+        secret_definition,
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command)
+
+
 @pytest.mark.parametrize(
     "command",
     (
