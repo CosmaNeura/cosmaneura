@@ -284,5 +284,11 @@ def test_preflight_failure_and_timeout_block_migration(path: str) -> None:
     helper = deploy[helper_start:helper_end]
 
     assert "Failed|Stopped" in helper
-    assert 'echo "$phase timed out' in helper
-    assert helper.count("return 1") >= 3
+    if path == "infra-staging/deploy.sh":
+        assert 'echo "$phase remained nonterminal' in helper
+        assert "az containerapp job stop" in helper
+        assert helper.count("schema observation is unsafe") == 2
+        assert helper.count("return 2") == 2
+    else:
+        assert 'echo "$phase timed out' in helper
+    assert helper.count("return 1") >= 2

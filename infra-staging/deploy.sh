@@ -58,8 +58,11 @@ PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
 PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
 PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 FOUNDER_CANDIDATE_SHA="866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
+FOUNDER_CANDIDATE_IMAGE_DIGEST="sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5"
 FOUNDER_APPROVAL_PR_NUMBER="385"
 FOUNDER_EXPECTED_SCHEMA_AFTER="9a2399212488"
+ALEMBIC_COMPAT_DATABASE_SECRET_NAME="database-url-alembic-compat"
+MIGRATION_JOB_CLEANUP_REQUIRED="false"
 PYTHON_BIN=python
 AZURE_CLI_PYTHON=/opt/homebrew/Cellar/azure-cli/2.89.1/libexec/bin/python
 BOUND_AZURE_CLI="$REPOSITORY_ROOT/scripts/staging_azure_cli_bound.py"
@@ -309,6 +312,7 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 		SCRIBE_HANDOFF_ENABLED: "false",
 		SCRIBE_WORKFLOW_ENABLED: "false",
 		SESSION_PREP_SYNTHETIC_ENABLED: "false",
+		AUTO_MIGRATE_ON_STARTUP: "false",
 		STRIPE_INTEGRATION_ENABLED: "false",
 		STRIPE_BILLING_ENABLED: "false",
 		STRIPE_LIVE_MODE: "false",
@@ -359,9 +363,9 @@ urls = dict(API_BASE_URL="https://staging-app.cosmaneura.com",
     INTAKE_CHAT_DOMAIN="staging-chat.cosmaneura.com", AUTHORITY_CLERK_ISSUER="https://resolved-emu-53.clerk.accounts.dev")
 if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items()):
     fail()
-flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
+flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
-forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
+forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
 if any(v not in {"true", "false"} for v in flags.values()) or any(flags[k] != "false" for k in forced_false) or (flags["STRIPE_BILLING_ENABLED"] == "true" and flags["STRIPE_INTEGRATION_ENABLED"] != "true"):
     fail()
 try:
@@ -460,6 +464,7 @@ PUBLIC_VARS=(
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
 	SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED
+	AUTO_MIGRATE_ON_STARTUP
 	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
 	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
@@ -796,13 +801,39 @@ verify_candidate_workload_state() {
 	fi
 }
 
+cleanup_migration_job() {
+	[[ "$MIGRATION_JOB_CLEANUP_REQUIRED" == "true" ]] || return 0
+	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Deleting transient migration job..."
+		if ! az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes; then
+			echo "Failed to delete the transient migration job."
+			return 1
+		fi
+	fi
+	local remaining_jobs
+	if ! remaining_jobs=$(az containerapp job list -g "$RESOURCE_GROUP" \
+		--query "[?name=='$MIGRATION_JOB'] | length(@)" -o tsv); then
+		echo "Failed to verify transient migration job cleanup."
+		return 1
+	fi
+	if [[ "$remaining_jobs" != "0" ]]; then
+		echo "Transient migration job cleanup was not observed."
+		return 1
+	fi
+	MIGRATION_JOB_CLEANUP_REQUIRED="false"
+}
+
 capture_failed_workload_state() {
-	local exit_status=$? failure_state
+	local exit_status=$? failure_state cleanup_status=0
 	trap - EXIT
 	if [[ "$exit_status" -ne 0 && "${WORKLOAD_CAPTURE_READY:-false}" == "true" ]]; then
 		failure_state=$(collect_workload_state) &&
 			emit_github_output workloads_after "$failure_state" ||
 			echo "Failed to capture workload state after the deployment error."
+	fi
+	cleanup_migration_job || cleanup_status=$?
+	if [[ "$exit_status" -eq 0 && "$cleanup_status" -ne 0 ]]; then
+		exit_status=$cleanup_status
 	fi
 	exit "$exit_status"
 }
@@ -917,7 +948,7 @@ verify_migration_job_template() {
 	local migration_template secret_env_names public_env_names
 	if ! migration_template=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
+		--query '{containers:properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}},secretNames:properties.configuration.secrets[].name}' \
 		-o json); then
 		echo "Failed to inspect the migration job execution template."
 		return 1
@@ -928,7 +959,8 @@ verify_migration_job_template() {
 		"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
 			--expected-name "$MIGRATION_JOB" \
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
-			--database-secret-name database-url \
+			--database-secret-name "$ALEMBIC_COMPAT_DATABASE_SECRET_NAME" \
+			--raw-database-secret-name database-url \
 			--secret-env-names "$secret_env_names" \
 			--public-env-names "$public_env_names"; then
 		echo "Migration job template is not approved for schema mutation."
@@ -946,7 +978,7 @@ wait_for_migration_job_execution() {
 
 	echo "$phase execution started: $execution_name"
 	local attempts=0
-	local max_attempts=60 # 5 minutes
+	local max_attempts=72 # job limit (5m) plus one minute for terminal state
 
 	while [[ $attempts -lt $max_attempts ]]; do
 		local exec_status
@@ -969,8 +1001,32 @@ wait_for_migration_job_execution() {
 		esac
 	done
 
-	echo "$phase timed out after $((max_attempts * 5)) seconds."
-	return 1
+	echo "$phase remained nonterminal after $((max_attempts * 5)) seconds; stopping it."
+	if ! az containerapp job stop -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--job-execution-name "$execution_name"; then
+		echo "$phase could not be stopped; schema observation is unsafe."
+		return 2
+	fi
+	attempts=0
+	while [[ $attempts -lt 24 ]]; do
+		local stopped_status
+		stopped_status=$(az containerapp job execution show \
+			-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+			--job-execution-name "$execution_name" \
+			--query "properties.status" -o tsv 2>/dev/null)
+		case "$stopped_status" in
+		Succeeded)
+			echo "$phase completed successfully while the stop was reconciled."
+			return 0 ;;
+		Failed|Stopped)
+			echo "$phase reached terminal status: $stopped_status"
+			return 1 ;;
+		esac
+		sleep 5
+		((attempts++))
+	done
+	echo "$phase did not reach a terminal state; schema observation is unsafe."
+	return 2
 }
 
 capture_schema_revision() {
@@ -1023,8 +1079,31 @@ PY
 	return 1
 }
 
+finish_migration_attempt() {
+	local migration_status=$1
+	local cleanup_status=$2
+	if [[ "$migration_status" -ne 0 ]]; then
+		echo "Migration execution failed; the observed post-attempt schema was recorded."
+		return "$migration_status"
+	fi
+	if [[ "$SCHEMA_AFTER" != "$EXPECTED_SCHEMA_AFTER" ]]; then
+		echo "Live staging schema does not match the reviewed post-migration revision."
+		return 1
+	fi
+	if [[ "$cleanup_status" -ne 0 ]]; then
+		echo "Migration succeeded but transient job cleanup failed; workloads were not updated."
+		return "$cleanup_status"
+	fi
+	return 0
+}
+
 run_migrations() {
 	echo "Running database migrations with immutable image $STAGING_IMAGE_REFERENCE..."
+	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
+		"$STAGING_IMAGE_DIGEST" != "$FOUNDER_CANDIDATE_IMAGE_DIGEST" ]]; then
+		echo "The Alembic compatibility secret is approved only for the exact founder candidate."
+		return 1
+	fi
 
 	# Build secrets and env var args from the same source as the app containers.
 	local secrets_args=()
@@ -1037,7 +1116,22 @@ run_migrations() {
 		local secret_name
 		secret_name=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 		secrets_args+=("${secret_name}=${value}")
-		env_args+=("${var}=secretref:${secret_name}")
+		if [[ "$var" == "DATABASE_URL" ]]; then
+			# Candidate 866bd4 predates the permanent ConfigParser boundary fix.
+			# Keep the canonical URL raw for probes and preflight, and double its
+			# percent signs only in the migration-template secret consumed by the
+			# old Alembic env.py. Never project this compatibility secret to a
+			# long-running workload or retain it in 1Password.
+			local alembic_compat_value="${value//%/%%}"
+			[[ "$value" == *%* && "$alembic_compat_value" != "$value" ]] || return 1
+			secrets_args+=(
+				"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${alembic_compat_value}"
+			)
+			env_args+=("${var}=secretref:${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}")
+			unset alembic_compat_value
+		else
+			env_args+=("${var}=secretref:${secret_name}")
+		fi
 	done
 
 	for var in "${PUBLIC_VARS[@]}"; do
@@ -1048,11 +1142,22 @@ run_migrations() {
 
 	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
 		echo "Deleting existing migration job to recreate with fresh config..."
-		az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes
+		if ! az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes; then
+			echo "Failed to delete the existing migration job."
+			return 1
+		fi
 	fi
+	local remaining_jobs
+	remaining_jobs=$(az containerapp job list -g "$RESOURCE_GROUP" \
+		--query "[?name=='$MIGRATION_JOB'] | length(@)" -o tsv) || return 1
+	if [[ "$remaining_jobs" != "0" ]]; then
+		echo "Existing migration job deletion was not observed."
+		return 1
+	fi
+	MIGRATION_JOB_CLEANUP_REQUIRED="true"
 
 	echo "Creating migration job..."
-	az containerapp job create \
+	if ! az containerapp job create \
 		--name "$MIGRATION_JOB" \
 		--resource-group "$RESOURCE_GROUP" \
 		--environment "$ENVIRONMENT_NAME" \
@@ -1066,9 +1171,7 @@ run_migrations() {
 		--env-vars "${env_args[@]}" \
 		--registry-server "$ACR_SERVER" \
 		--registry-username "$ACR_USERNAME" \
-		--registry-password "$ACR_PASSWORD"
-
-	if [[ $? -ne 0 ]]; then
+		--registry-password "$ACR_PASSWORD"; then
 		echo "Failed to configure migration job."
 		return 1
 	fi
@@ -1131,17 +1234,16 @@ run_migrations() {
 	local migration_status=0
 	wait_for_migration_job_execution "$execution_name" "Migrations" || \
 		migration_status=$?
+	if [[ "$migration_status" -eq 2 ]]; then
+		echo "Migration execution is not terminal; refusing concurrent schema observation."
+		return 2
+	fi
 	capture_schema_revision "Post-migration" "$migration_container_name" || return 1
 	SCHEMA_AFTER=$CAPTURED_SCHEMA_REVISION
 	emit_github_output schema_after "$SCHEMA_AFTER" || return 1
-	if [[ "$migration_status" -ne 0 ]]; then
-		echo "Migration execution failed; the observed post-attempt schema was recorded."
-		return "$migration_status"
-	fi
-	if [[ "$SCHEMA_AFTER" != "$EXPECTED_SCHEMA_AFTER" ]]; then
-		echo "Live staging schema does not match the reviewed post-migration revision."
-		return 1
-	fi
+	local cleanup_status=0
+	cleanup_migration_job || cleanup_status=$?
+	finish_migration_attempt "$migration_status" "$cleanup_status"
 }
 
 initiate_deployment() {

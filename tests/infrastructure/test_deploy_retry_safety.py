@@ -324,16 +324,113 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
         deploy, "resolve_staging_digest"
     )
 
+
+def test_staging_compatibility_secret_is_exact_candidate_and_job_only() -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
+    migration = _shell_function(deploy, "run_migrations")
+    schema_probe = _shell_function(deploy, "capture_schema_revision")
+    initiate = _shell_function(deploy, "initiate_deployment")
+
+    assert '"$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA"' in migration
+    assert '"$STAGING_IMAGE_DIGEST" != "$FOUNDER_CANDIDATE_IMAGE_DIGEST"' in migration
+    assert 'local alembic_compat_value="${value//%/%%}"' in migration
+    assert migration.count('"${secret_name}=${value}"') == 1
+    assert (
+        migration.count(
+            '"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${alembic_compat_value}"'
+        )
+        == 1
+    )
+    assert (
+        migration.count('"${var}=secretref:${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}"')
+        == 1
+    )
+    assert migration.count('"DATABASE_URL=secretref:database-url"') == 1
+    assert schema_probe.count('"DATABASE_URL=secretref:database-url"') == 1
+    assert "ALEMBIC_COMPAT_DATABASE_SECRET_NAME" not in initiate
+
     production = (ROOT / "infra/deploy.sh").read_text(encoding="utf-8")
     start = deploy.index("\nPUBLIC_VARS=(")
     public_vars = deploy[start : deploy.index("\n)", start)]
     verifier = _shell_function(deploy, "verify_candidate_workload_state")
 
-    for flag in ("SCRIBE_WORKFLOW_ENABLED", "SESSION_PREP_SYNTHETIC_ENABLED"):
+    for flag in (
+        "SCRIBE_WORKFLOW_ENABLED",
+        "SESSION_PREP_SYNTHETIC_ENABLED",
+        "AUTO_MIGRATE_ON_STARTUP",
+    ):
         assert f'{flag}: "false"' in deploy and flag in public_vars
         assert flag not in production
     assert ".publicConfig[$item.key]" in verifier
     assert ".environmentContractExact == true" in verifier
+
+
+def test_staging_transient_migration_job_cleanup_is_fail_closed() -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
+    cleanup = _shell_function(deploy, "cleanup_migration_job")
+    migration = _shell_function(deploy, "run_migrations")
+    waiter = _shell_function(deploy, "wait_for_migration_job_execution")
+    exit_trap = _shell_function(deploy, "capture_failed_workload_state")
+
+    assert 'MIGRATION_JOB_CLEANUP_REQUIRED="true"' in migration
+    assert migration.index('MIGRATION_JOB_CLEANUP_REQUIRED="true"') < migration.index(
+        "az containerapp job create"
+    )
+    assert 'az containerapp job delete -n "$MIGRATION_JOB"' in cleanup
+    assert 'az containerapp job list -g "$RESOURCE_GROUP"' in cleanup
+    assert 'MIGRATION_JOB_CLEANUP_REQUIRED="false"' in cleanup
+    assert migration.index('emit_github_output schema_after "$SCHEMA_AFTER"') < (
+        migration.index("cleanup_migration_job")
+    )
+    assert "cleanup_migration_job || cleanup_status=$?" in exit_trap
+    assert 'if [[ "$exit_status" -eq 0 && "$cleanup_status" -ne 0 ]]' in exit_trap
+    assert 'az containerapp job stop -n "$MIGRATION_JOB"' in waiter
+    assert "schema observation is unsafe" in waiter
+    assert 'if [[ "$migration_status" -eq 2 ]]' in migration
+
+    production = (ROOT / "infra/deploy.sh").read_text(encoding="utf-8")
+    assert "cleanup_migration_job" not in production
+
+
+@pytest.mark.parametrize(
+    (
+        "migration_status",
+        "schema_after",
+        "cleanup_status",
+        "expected_status",
+        "message",
+    ),
+    (
+        (7, "unexpected", 9, 7, "Migration execution failed"),
+        (0, "unexpected", 9, 1, "does not match the reviewed"),
+        (0, "expected", 9, 9, "transient job cleanup failed"),
+    ),
+)
+def test_staging_migration_failure_priority_is_preserved(
+    migration_status: int,
+    schema_after: str,
+    cleanup_status: int,
+    expected_status: int,
+    message: str,
+) -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
+    function = _shell_function(deploy, "finish_migration_attempt")
+    script = f"""
+SCHEMA_AFTER={schema_after}
+EXPECTED_SCHEMA_AFTER=expected
+{function}
+finish_migration_attempt {migration_status} {cleanup_status}
+"""
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == expected_status
+    assert message in result.stdout
 
 
 def test_staging_workload_capture_propagates_azure_failure() -> None:

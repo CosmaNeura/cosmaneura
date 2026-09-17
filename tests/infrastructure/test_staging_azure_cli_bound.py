@@ -156,6 +156,20 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
     image = f"{m.STAGING_REGISTRY_HOST}/{m.STAGING_REPOSITORY}@sha256:{'a' * 64}"
     subscription = ["--subscription", m.SUBSCRIPTION]
     for prefix in m.ALLOWED_CONTAINERAPP_COMMANDS:
+        if prefix == ("containerapp", "job", "list"):
+            m.validate_argv(
+                [
+                    *prefix,
+                    "--resource-group",
+                    m.STAGING_RESOURCE_GROUP,
+                    "--query",
+                    "[?name=='cosmaneura-staging-migrate'] | length(@)",
+                    "--output",
+                    "tsv",
+                    *subscription,
+                ]
+            )
+            continue
         command = [
             *prefix,
             "--name",
@@ -171,7 +185,54 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
             ("containerapp", "job", "start"),
         }:
             command.extend(["--image", image])
+        if prefix == ("containerapp", "job", "stop"):
+            command.extend(
+                ["--job-execution-name", "cosmaneura-staging-migrate-abc123"]
+            )
         m.validate_argv(command + subscription)
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        [
+            "containerapp",
+            "job",
+            "list",
+            "--resource-group",
+            m.STAGING_RESOURCE_GROUP,
+            "--query",
+            "[].name",
+            "--output",
+            "tsv",
+        ],
+        [
+            "containerapp",
+            "job",
+            "stop",
+            "--name",
+            "cosmaneura-staging-migrate",
+            "--resource-group",
+            m.STAGING_RESOURCE_GROUP,
+            "--job-execution-name",
+            "other-job-abc123",
+        ],
+        [
+            "containerapp",
+            "job",
+            "stop",
+            "--name",
+            "cosmaneura-staging-app",
+            "--resource-group",
+            m.STAGING_RESOURCE_GROUP,
+            "--job-execution-name",
+            "cosmaneura-staging-migrate-abc123",
+        ],
+    ),
+)
+def test_migration_cleanup_commands_reject_broader_scope(command: list[str]) -> None:
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command + ["--subscription", m.SUBSCRIPTION])
 
 
 def test_python_schema_probe_uses_azure_cli_safe_attached_argument() -> None:
