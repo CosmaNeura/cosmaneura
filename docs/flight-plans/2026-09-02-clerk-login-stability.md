@@ -145,3 +145,39 @@ at the end of this plan for the latest source-only reconciliation.
 - No source merge, live staging acceptance, outside-party contact, broader
   cohort, or production promotion is authorized by this checkpoint. Existing
   protected merge, independent-review and founder deployment boundaries remain.
+
+## September 17 staging-first release
+
+This section supersedes the historical staging hold and production-first rollout
+sequence above. The owner approved validating and normally merging #238, deploying
+its exact merge commit to staging, and having the implementing and independent
+agents test it there before proceeding to Zoom #239/#251. Production promotion and
+outside-party communication remain separate decisions.
+
+- Current protected base is `53bd125622b77067a163980af4d5c23553f75ce6` after
+  staging controller/acceptance PRs #442, #443 and #444. Integration is a normal
+  merge; the Auth implementation and regression tests are unchanged.
+- Staging currently runs source `866bd4bc01e0e7be32c59eccdaf9dac3f495c7de`, image
+  `cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5`,
+  with schema head `9a2399212488`. API, worker and scheduler passed exact-state
+  verification; provider acceptance and owner sign-in passed. Keep this digest
+  available for rollback. No new schema rung is needed for this Auth release.
+- Preserve the separate Auth merge/deployment unit. Validate the complete PR,
+  record independent review after the final push, publish truthful required
+  statuses from documented local validation while Actions are disabled, and merge
+  through existing protection. Build and publish the exact resulting merge SHA
+  using staging's public frontend configuration, then deploy its immutable digest
+  only to staging. Record actual SHA, digest, configuration drift and rollback.
+- On canonical staging, use a dedicated non-human Clerk development identity.
+  Verify the email-code control remains mounted through more than 30 seconds plus
+  focus/visibility rechecks; the human enters the original code without resend.
+  Verify post-login routing, persistence and the expected synthetic practice.
+  Keep negative support-view and patient-intake regression evidence, and check
+  health, workload readiness and aggregate error signals.
+- Earlier local acceptance proved original-code success after the wait/tab switch;
+  live DOM identity was not captured and protected navigation was blocked by the
+  loopback CORS boundary. The owner's baseline staging login does not qualify this
+  new candidate. Record these as remaining staging checks, not completed evidence.
+- Abort on the existing security/lifecycle failure conditions. Restore the recorded
+  prior staging digest for an unsuccessful rollout; preserve diagnostic evidence.
+  Continue Zoom only after the Auth staging acceptance result is recorded.
