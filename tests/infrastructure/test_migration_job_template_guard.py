@@ -67,6 +67,29 @@ def test_exact_reviewed_alembic_template_is_accepted() -> None:
     assert _validate(_payload()) is None
 
 
+def test_staging_requires_exact_bootstrap_and_production_keeps_plain_alembic() -> None:
+    payload = _payload()
+
+    def validate_staging() -> str | None:
+        return GUARD.validate_template(
+            payload,
+            expected_name=JOB_NAME,
+            expected_image=IMAGE,
+            database_secret_name=DATABASE_SECRET,
+            raw_database_secret_name=RAW_DATABASE_SECRET,
+            secret_env_names=SECRET_NAMES,
+            public_env_names=PUBLIC_NAMES,
+            staging_alembic_compatibility=True,
+        )
+
+    assert validate_staging() == "persistent arguments"
+    payload["containers"][0]["args"] = GUARD.STAGING_ALEMBIC_ARGS.copy()  # type: ignore[index]
+    assert validate_staging() is None
+    assert _validate(payload) == "persistent arguments"
+    payload["containers"][0]["args"][0] += " --unexpected"  # type: ignore[index]
+    assert validate_staging() == "persistent arguments"
+
+
 def test_legacy_production_payload_remains_supported_without_raw_inventory() -> None:
     payload = _payload()
     assert (
