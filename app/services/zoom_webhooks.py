@@ -934,19 +934,11 @@ def _resume_or_start_recording_locked(
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     capture_started = bool(redis.get(f"recall:meeting:{meeting_id}:capture_started"))
     if bot_id or capture_started:
-        # Refusing to continue without an exact encounter binding is correct --
-        # the alternative is piling a second patient's audio onto the first
-        # one's chart. But the second visit still goes unrecorded, and until
-        # now that was a log line nobody read. The watchdog cannot surface it
-        # either: capture_started makes the session look healthy to it.
+        # A reconnect after a legitimate pause also reaches this boundary.
+        # Preserve the prior capture for teardown and refuse every second
+        # segment, without paging as if a new capture had been authorized.
         log.warning(
             "recording continuation blocked without exact encounter binding",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-            bot_ref=provider_log_ref(bot_id) if bot_id else None,
-            capture_started=capture_started,
-        )
-        alerting.alert(
-            alerting.RecordingContinuationBlocked,
             meeting_ref=provider_log_ref(str(meeting_id)),
             bot_ref=provider_log_ref(bot_id) if bot_id else None,
             capture_started=capture_started,

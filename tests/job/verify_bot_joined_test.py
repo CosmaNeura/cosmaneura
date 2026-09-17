@@ -235,10 +235,30 @@ def test_final_check_evaluates_participant_state_restored_under_lock(
     assert captured_alerts[0]["type"] is alerting.StuckHoldingForDoctor
 
 
-def test_no_alert_when_the_state_settles_before_the_verdict(redis, captured_alerts):
+@pytest.mark.parametrize(
+    "settled_key",
+    [
+        "recording_active",
+        "capture_started",
+        "paused_at",
+        "merge_task_id",
+        "occurrence_digest",
+        "doctor_id",
+    ],
+)
+def test_no_alert_or_rearm_when_state_settles_under_lock(
+    redis, captured_alerts, monkeypatch, settled_key
+):
     _live_session(redis)
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")
     real_lock = redis.lock
+    armed = []
+    monkeypatch.setattr(verify_bot_joined, "_capture_still_expected", lambda *_: True)
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+    monkeypatch.setattr(
+        verify_bot_joined, "queue_durably", lambda *a, **kw: armed.append((a, kw))
+    )
 
     class _LockThatWaitsForAHandler:
         def __init__(self, inner):
@@ -246,19 +266,89 @@ def test_no_alert_when_the_state_settles_before_the_verdict(redis, captured_aler
 
         def acquire(self, blocking=True):
             acquired = self._inner.acquire(blocking=blocking)
-            redis.set(f"{PREFIX}:recording_active", "1")
+            redis.delete(f"{PREFIX}:participants_present")
+            if settled_key == "doctor_id":
+                redis.delete(f"{PREFIX}:doctor_id")
+            else:
+                redis.set(
+                    f"{PREFIX}:{settled_key}",
+                    "occurrence-b" if settled_key == "occurrence_digest" else "1",
+                )
             return acquired
 
         def release(self):
             self._inner.release()
 
-    redis.lock = lambda *a, **kw: _LockThatWaitsForAHandler(real_lock(*a, **kw))
-    try:
-        verify_bot_joined.perform(MEETING_ID)
-    finally:
-        redis.lock = real_lock
+    monkeypatch.setattr(
+        redis, "lock", lambda *a, **kw: _LockThatWaitsForAHandler(real_lock(*a, **kw))
+    )
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest="occurrence-a",
+        meeting_record_id=MEETING_RECORD_ID,
+    )
     assert captured_alerts == []
-    assert redis.get(_alert_key()) is None
+    assert armed == []
+    assert redis.get(_alert_key("occurrence-a")) is None
+
+
+@pytest.mark.parametrize(
+    "check_number", [1, verify_bot_joined.MAX_CHECKS - 1, verify_bot_joined.MAX_CHECKS]
+)
+def test_participant_leave_under_lock_preserves_bounded_monitoring(
+    redis, captured_alerts, monkeypatch, check_number
+):
+    _live_session(redis)
+    redis.set(f"{PREFIX}:doctor_present", "1")
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+    real_lock = redis.lock
+    held = False
+    armed = []
+    monkeypatch.setattr(verify_bot_joined, "_capture_still_expected", lambda *_: True)
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+
+    def queue(record, meeting, occurrence, *, check_number):
+        assert not held
+        armed.append((record, meeting, occurrence, check_number))
+
+    class _LockAfterParticipantLeaves:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def acquire(self, blocking=True):
+            nonlocal held
+            held = self._inner.acquire(blocking=blocking)
+            redis.delete(f"{PREFIX}:participants_present")
+            return held
+
+        def release(self):
+            nonlocal held
+            self._inner.release()
+            held = False
+
+    monkeypatch.setattr(verify_bot_joined, "queue_durably", queue)
+    monkeypatch.setattr(
+        redis, "lock", lambda *a, **kw: _LockAfterParticipantLeaves(real_lock(*a, **kw))
+    )
+    verify_bot_joined.perform(
+        MEETING_ID, check_number, "occurrence-a", MEETING_RECORD_ID
+    )
+    assert captured_alerts == []
+    assert not held
+    if check_number == verify_bot_joined.MAX_CHECKS:
+        assert armed == []
+        return
+    assert armed == [(MEETING_RECORD_ID, MEETING_ID, "occurrence-a", check_number + 1)]
+
+    # A subsequent join still gets a verdict from the already-armed check.
+    monkeypatch.setattr(redis, "lock", real_lock)
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+    verify_bot_joined.perform(
+        MEETING_ID, check_number + 1, "occurrence-a", MEETING_RECORD_ID
+    )
+    assert [c["type"] for c in captured_alerts] == [alerting.NoRecordingWithBothPresent]
+    assert len(armed) == 1
 
 
 def test_alert_reason_is_reread_after_taking_the_lifecycle_lock(redis, captured_alerts):

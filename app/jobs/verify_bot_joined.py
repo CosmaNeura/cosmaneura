@@ -20,7 +20,9 @@ def _rget(redis, key: str) -> str | None:
     return val.decode() if isinstance(val, bytes) else val
 
 
-def _still_failing(redis, prefix: str, occurrence_digest: str | None) -> bool:
+def _session_needs_monitoring(
+    redis, prefix: str, occurrence_digest: str | None
+) -> bool:
     if not _occurrence_matches(redis, prefix, occurrence_digest):
         return False
     if not redis.get(f"{prefix}:doctor_id"):
@@ -31,7 +33,7 @@ def _still_failing(redis, prefix: str, occurrence_digest: str | None) -> bool:
         return False
     if redis.get(f"{prefix}:paused_at") or redis.get(f"{prefix}:merge_task_id"):
         return False
-    return cast(int, redis.scard(f"{prefix}:participants_present")) > 0
+    return True
 
 
 def _occurrence_matches(redis, prefix: str, occurrence_digest: str | None) -> bool:
@@ -218,8 +220,9 @@ def perform(
         _rearm(meeting_record_id, meeting_id, check_number, occurrence_digest)
         return
 
+    needs_recheck = False
     try:
-        if not _still_failing(redis, prefix, occurrence_digest):
+        if not _session_needs_monitoring(redis, prefix, occurrence_digest):
             log.info(
                 "join watchdog: state settled before alerting, no action",
                 meeting_ref=alerting.ref(meeting_id),
@@ -227,34 +230,42 @@ def perform(
             )
             return
 
-        doctor_present = bool(redis.get(f"{prefix}:doctor_present"))
         patient_count = cast(int, redis.scard(f"{prefix}:participants_present"))
-        bot_id = _rget(redis, f"{prefix}:bot_id")
-        alert_type = (
-            alerting.NoRecordingWithBothPresent
-            if doctor_present
-            else alerting.StuckHoldingForDoctor
-        )
-        _alert_once(
-            redis,
-            prefix,
-            occurrence_digest,
-            alert_type,
-            meeting_ref=alerting.ref(meeting_id),
-            bot_ref=alerting.ref(bot_id),
-            doctor_present=doctor_present,
-            patient_count=patient_count,
-            minutes_since_start=(
-                FIRST_CHECK_DELAY_SECONDS
-                + (check_number - 1) * RECHECK_INTERVAL_SECONDS
+        if patient_count <= 0:
+            # A participant can leave between the unlocked read and this lock.
+            # Keep the same bounded coverage as an initially empty room.
+            needs_recheck = True
+        else:
+            doctor_present = bool(redis.get(f"{prefix}:doctor_present"))
+            bot_id = _rget(redis, f"{prefix}:bot_id")
+            alert_type = (
+                alerting.NoRecordingWithBothPresent
+                if doctor_present
+                else alerting.StuckHoldingForDoctor
             )
-            // 60,
-        )
+            _alert_once(
+                redis,
+                prefix,
+                occurrence_digest,
+                alert_type,
+                meeting_ref=alerting.ref(meeting_id),
+                bot_ref=alerting.ref(bot_id),
+                doctor_present=doctor_present,
+                patient_count=patient_count,
+                minutes_since_start=(
+                    FIRST_CHECK_DELAY_SECONDS
+                    + (check_number - 1) * RECHECK_INTERVAL_SECONDS
+                )
+                // 60,
+            )
     finally:
         try:
             lock.release()
         except Exception:
             log.info("join watchdog: lifecycle lock already released")
+
+    if needs_recheck:
+        _rearm(meeting_record_id, meeting_id, check_number, occurrence_digest)
 
 
 def _delayed_execution_available() -> bool:

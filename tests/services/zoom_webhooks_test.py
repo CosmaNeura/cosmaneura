@@ -1541,6 +1541,7 @@ def test_doctor_return_with_patient_does_not_resume_same_bot(
     mock_recall,
     mock_zoom,
     monkeypatch,
+    captured_alerts,
 ):
     """Redis participant identity cannot authorize a second segment."""
     revoked = []
@@ -1578,10 +1579,16 @@ def test_doctor_return_with_patient_does_not_resume_same_bot(
     )
     # Doctor returns while the prior participant remains in Redis. That is not
     # strong enough identity to authorize recording another segment.
-    zoom_webhooks.handle_participant_joined(
-        _participant_joined_payload(HOST_ID, "Test Doctor")
-    )
+    for participant, name in (
+        (HOST_ID, "Test Doctor"),
+        ("patient-a", "Juan"),
+        ("patient-b", "Test Guest"),
+    ):
+        zoom_webhooks.handle_participant_joined(
+            _participant_joined_payload(participant, name)
+        )
 
+    assert captured_alerts == []
     assert revoked == []
     assert clean_redis.get(_key("merge_task_id")) == b"celery-task-99"
     assert clean_redis.get(_key("doctor_present")) == b"1"
@@ -2710,22 +2717,26 @@ def test_watchdog_publish_is_durable_and_post_success_persistence_retries(
     assert ExternalWebhookDelivery.one(parent.delivery_id).state == "completed"
 
 
-def test_blocked_continuation_is_reported(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, captured_alerts
+@pytest.mark.parametrize("capture_fence", ["bot_id", "capture_started"])
+def test_blocked_continuation_is_quiet_and_cannot_create_another_segment(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    captured_alerts,
+    capture_fence,
 ):
-    """Refusing to continue without an exact encounter binding is correct, but
-    the second visit still goes unrecorded. The watchdog cannot surface it --
-    capture_started makes the session look healthy to it -- so the refusal
-    reports itself."""
-    from app.services import alerting, zoom_webhooks
+    """Expected no-resume behavior is not a newly missed capture."""
+    from app.services import zoom_webhooks
 
-    clean_redis.set(_key("bot_id"), "recall-bot-existing")
+    clean_redis.set(_key(capture_fence), "1")
 
-    zoom_webhooks._resume_or_start_recording_locked(
-        clean_redis, MEETING_ID, "patient-b", "Segunda Paciente"
-    )
+    for _ in range(3):
+        zoom_webhooks._resume_or_start_recording_locked(
+            clean_redis, MEETING_ID, "patient-b", "Synthetic Guest"
+        )
 
     assert mock_recall["create_bot"] == []
-    assert [c["type"] for c in captured_alerts] == [
-        alerting.RecordingContinuationBlocked
-    ]
+    assert mock_recall["start_recording"] == []
+    assert captured_alerts == []
+    assert clean_redis.get(_key(capture_fence)) == b"1"
