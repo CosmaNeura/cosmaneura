@@ -342,6 +342,8 @@ def test_staging_workload_capture_propagates_azure_failure() -> None:
 def _workload_capture(
     *,
     app_environment: list[dict[str, str | None]] | None = None,
+    worker_environment: list[dict[str, str | None]] | None = None,
+    scheduler_environment: list[dict[str, str | None]] | None = None,
     app_extra_container: bool = False,
     app_args: list[str] | None = None,
     mode: str = "exact",
@@ -354,15 +356,25 @@ def _workload_capture(
     ]
     if app_environment is None:
         app_environment = default_environment
+    if worker_environment is None:
+        worker_environment = default_environment
+    if scheduler_environment is None:
+        scheduler_environment = default_environment
 
-    def revision(name: str, args: list[str]) -> str:
+    environments = {
+        "app": app_environment,
+        "worker": worker_environment,
+        "scheduler": scheduler_environment,
+    }
+
+    def revision(name: str, container_name: str, args: list[str]) -> str:
         containers = [
             {
-                "name": name,
+                "name": container_name,
                 "image": f"registry.example/cosmaneura@{DIGEST}",
                 "command": None,
                 "args": args,
-                "env": app_environment if name == "app" else default_environment,
+                "env": environments[name],
             }
         ]
         if name == "app" and app_extra_container:
@@ -378,9 +390,11 @@ def _workload_capture(
 
     environment = {
         **os.environ,
-        "APP_REVISION": revision("app", app_args or []),
-        "WORKER_REVISION": revision("worker", ["worker command"]),
-        "SCHEDULER_REVISION": revision("scheduler", ["scheduler command"]),
+        "APP_REVISION": revision("app", "app-web", app_args or []),
+        "WORKER_REVISION": revision("worker", "app-worker", ["worker command"]),
+        "SCHEDULER_REVISION": revision(
+            "scheduler", "app-scheduler", ["scheduler command"]
+        ),
         "FAIL_AZURE": "true" if azure_failure else "false",
     }
     functions = "\n".join(
@@ -390,6 +404,7 @@ def _workload_capture(
             "billing_workload_for",
             "billing_integration_enabled_for",
             "configure_workload_contract",
+            "workload_container_name",
             "collect_workload_state",
         )
     )
@@ -399,6 +414,9 @@ CRITICAL_CONTAINERS='worker scheduler app'
 API_CONTAINER=app
 WORKER_CONTAINER=worker
 SCHEDULER_CONTAINER=scheduler
+API_WORKLOAD_CONTAINER_NAME=app-web
+WORKER_WORKLOAD_CONTAINER_NAME=app-worker
+SCHEDULER_WORKLOAD_CONTAINER_NAME=app-scheduler
 STAGING_IMAGE=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
 STAGING_WORKER_COMMAND='worker command'
@@ -411,7 +429,8 @@ BILLING_SECRET_VARS=()
 BILLING_API_ONLY_SECRET_VARS=()
 BILLING_PUBLIC_VARS=()
 PUBLIC_VARS=(PYTHON_ENV)
-ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging"}}'
+LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
+ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging","CLERK_DEPLOYMENT_PUBLISHABLE_KEY":"pk_test_legacy"}}'
 az() {{
     local original="$*"
     [[ "$FAIL_AZURE" == true ]] && return 42
@@ -454,6 +473,11 @@ def test_workload_evidence_accepts_only_exact_single_container_contract() -> Non
     state = json.loads(result.stdout)
     assert all(item["environmentContractExact"] for item in state)
     assert all(item["secretRefs"] == {"DATABASE_URL": "database-url"} for item in state)
+    assert {item["name"]: item["containerName"] for item in state} == {
+        "app": "app-web",
+        "worker": "app-worker",
+        "scheduler": "app-scheduler",
+    }
 
 
 def test_workload_evidence_accepts_azure_normalized_empty_secret_value() -> None:
@@ -464,6 +488,42 @@ def test_workload_evidence_accepts_azure_normalized_empty_secret_value() -> None
         ]
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_safe_workload_evidence_accepts_only_matching_legacy_clerk_key() -> None:
+    legacy_environment = [
+        {"name": "DATABASE_URL", "value": None, "secretRef": "database-url"},
+        {"name": "PYTHON_ENV", "value": "staging", "secretRef": None},
+        {
+            "name": "CLERK_PUBLISHABLE_KEY",
+            "value": "pk_test_legacy",
+            "secretRef": None,
+        },
+    ]
+    result = _workload_capture(app_environment=legacy_environment, mode="safe")
+    assert result.returncode == 0, result.stderr
+    assert "pk_test_legacy" not in result.stdout + result.stderr
+    state = json.loads(result.stdout)
+    app = next(item for item in state if item["name"] == "app")
+    assert app["legacyPublicEnvNames"] == ["CLERK_PUBLISHABLE_KEY"]
+    assert "CLERK_PUBLISHABLE_KEY" not in app["publicConfig"]
+
+    worker = _workload_capture(worker_environment=legacy_environment, mode="safe")
+    assert worker.returncode == 0, worker.stderr
+    scheduler = _workload_capture(scheduler_environment=legacy_environment, mode="safe")
+    assert scheduler.returncode != 0
+
+    mismatched = [dict(item) for item in legacy_environment]
+    mismatched[-1]["value"] = "pk_test_other"
+    assert _workload_capture(app_environment=mismatched, mode="safe").returncode != 0
+    assert _workload_capture(app_environment=legacy_environment).returncode != 0
+
+
+def test_deploy_removes_legacy_public_environment_variables() -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
+    initiate = _shell_function(deploy, "initiate_deployment")
+    assert "LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)" in deploy
+    assert 'remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")' in initiate
 
 
 @pytest.mark.parametrize(
