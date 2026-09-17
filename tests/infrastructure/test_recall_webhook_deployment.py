@@ -132,7 +132,7 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
     deploy = _read("infra-staging/deploy.sh")
     assert 'SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"' in deploy
     assert "SCHEDULER_COMMAND=$(printf" in deploy
-    assert 'git show "$GIT_SHA:Procfile"' in deploy
+    assert 'git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"' in deploy
     assert "for container in $CONTAINERS" in deploy
     preflight = deploy.index("for container in $CONTAINERS")
     migration = deploy.index("\nrun_migrations\n")
@@ -182,7 +182,14 @@ def test_deploy_scripts_drop_ambient_provider_credentials_before_subprocesses() 
             "unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET",
             resolution,
         )
-        first_git = deploy.index("git rev-parse")
+        first_git = deploy.index(
+            (
+                'git -C "$REPOSITORY_ROOT" rev-parse'
+                if path == "infra-staging/deploy.sh"
+                else "git rev-parse"
+            ),
+            credential_drop,
+        )
         first_azure = deploy.index("az account show", credential_drop)
 
         assert resolution < credential_drop

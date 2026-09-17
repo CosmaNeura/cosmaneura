@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "react-router dev",
-    "build": "pnpm run openapi && react-router typegen && react-router build",
+    "build": "pnpm run openapi && node scripts/build-production.mjs",
     "test": "pnpm run openapi && vitest run",
     "start": "react-router-serve ./build/server/index.js",
     "openapi": "pnpm --package=@hey-api/openapi-ts@0.97.3 --package=typescript@5.8.2 dlx openapi-ts",

@@ -256,7 +256,7 @@ def _providers() -> dict[str, Any]:
         },
         "azapi": {
             "full_name": "registry.opentofu.org/azure/azapi",
-            "version_constraint": "2.1.0",
+            "version_constraint": "2.4.0",
             "expressions": {},
         },
         "terraform": {

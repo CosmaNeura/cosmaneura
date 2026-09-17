@@ -226,6 +226,10 @@ def test_operator_wrapper_never_accepts_a_workload_token() -> None:
     assert "EXPECTED_PUBLIC_CLIENT_ID" in wrapper
     assert '"$PUBLIC_CLIENT_ID"' in wrapper
     assert "EXPECTED_PLATFORM_IMAGE_DIGEST" in wrapper
+    assert 'EXPECTED_PLATFORM_CONTAINER_NAME="cosmaneura-staging-app-web"' in wrapper
+    assert '--arg expected_container "$EXPECTED_PLATFORM_CONTAINER_NAME"' in wrapper
+    assert ".containers[0].name == $expected_container" in wrapper
+    assert ".containers[0].name == $app" not in wrapper
     assert "cosmaneura/cosmaneura@$EXPECTED_PLATFORM_IMAGE_DIGEST" in wrapper
     assert "cosmaneura/cosmaneura:$HEAD" not in wrapper
     assert "properties.latestReadyRevisionName" in wrapper
@@ -267,7 +271,7 @@ def test_full_smoke_rejects_alternate_platform_origin_before_exec(tmp_path) -> N
         "      *) echo public.example.invalid ;;\n"
         "    esac ;;\n"
         '  *latestReadyRevision*) echo \'{"latestRevision":"platform--ready","latestReadyRevision":"platform--ready","activeRevisionsMode":"Single","traffic":[{"latestRevision":true,"weight":100}]}\' ;;\n'
-        '  *\'containerapp revision show\'*) echo \'{"containers":[{"name":"cosmaneura-staging-app","image":"cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","env":[{"name":"API_BASE_URL","value":"https://attacker.example","secretRef":null}]}],"health":"Healthy","running":"Running","provisioning":"Provisioned"}\' ;;\n'
+        '  *\'containerapp revision show\'*) echo \'{"containers":[{"name":"cosmaneura-staging-app-web","image":"cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","env":[{"name":"API_BASE_URL","value":"https://attacker.example","secretRef":null}]}],"health":"Healthy","running":"Running","provisioning":"Provisioned"}\' ;;\n'
         "  *PLATFORM_AGENT_API_SCOPE*) echo api://00000000-0000-0000-0000-000000000000/.default ;;\n"
         "esac\n"
     )

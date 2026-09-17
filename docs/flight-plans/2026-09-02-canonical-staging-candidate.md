@@ -213,12 +213,40 @@
   protected credentials, before image publication, and immediately before
   migrations or Azure mutation. The candidate is checked out and tested in a
   separate directory. A moving `master` is never substituted for it.
+- The deploy script defaults to the pinned staging service principal. When
+  Actions is unavailable, an explicit `STAGING_DEPLOYMENT_IDENTITY_MODE=founder-user`
+  fallback accepts only the pinned founder's independently authenticated GitHub
+  user object and Azure directory object plus username in the exact staging
+  tenant and subscription, while refusing any simultaneous service-principal
+  inputs. The fallback revalidates
+  the clean protected-master controller, exact reviewed build plan, authenticated
+  human source transport, selected PR `385`, exact candidate merge SHA and schema
+  head before protected configuration and again immediately before mutation. Every
+  Azure read and mutation is executed in-process with the exact freshly verified
+  founder access token supplied on a private descriptor; the Azure CLI profile's
+  SDK and raw-token credential acquisition are replaced before command loading so
+  a later shared-cache lookup cannot switch principals. The wrapper permits only
+  the staging ACR, staging resource group, named staging workloads, and pinned
+  subscription. It
+  grants no production authority and does not weaken the workflow's default path.
+  A controlled local invocation must also supply a fresh positive
+  `DEPLOY_RUN_ID` and `DEPLOY_RUN_ATTEMPT=1`; these only derive the unique Azure
+  revision suffix and do not substitute for any source, identity, or review gate.
 - Candidate build and registry-credentialed publication run as separate fresh
   jobs. The build job receives no protected deployment or registry credential,
   exports a content-addressed image archive, and records its SHA-256. A fresh
   publication job executes no candidate code, downloads only that verified
   archive, reverifies provenance and the archive digest before credential use,
   and publishes those same bytes. No mutable workspace crosses the boundary.
+  With Actions unavailable, `infra-staging/publish-local.sh` preserves this
+  separation: it binds a closed-schema controller result and build metadata to
+  independently captured digests, revalidates the reviewed plan and founder
+  identities, and requires the authenticated source, plan, result, and metadata
+  to agree. It rechecks the files immediately before a durable attempt record
+  and the first registry mutation. Blobs and the manifest are uploaded only by
+  content digest; ACR `NoForce` import creates the candidate tag once. The tag is
+  then locked and reverified. The script cannot deploy, write `latest`, retry,
+  target production, or persist registry credentials.
 - Preserve reviewed staging flags and record observed non-secret values before
   and after each run. Provider V7 and sovereign record grants are already
   configured `true`; this release does not toggle them. Force Session Prep,
@@ -382,8 +410,9 @@
    in the reviewed order, and prove incompatible revisions have drained before
    reopening synthetic traffic.
 4. During the separately confirmed canonical dispatch, require the candidate's
-   staging tag to be absent, publish the exact credentialless build archive,
-   resolve it to one immutable registry digest before persistent-staging
+   staging tag to be absent, upload the exact credentialless build archive by
+   content digest without a tag, create the candidate tag with ACR `NoForce`
+   import, and resolve it to one locked immutable registry digest before persistent-staging
    migration, and use that same digest for migration and every workload. Reject
    an existing candidate tag, a digest mismatch, `latest`, a production
    registry, or different digests among those steps. The post-deploy smoke is

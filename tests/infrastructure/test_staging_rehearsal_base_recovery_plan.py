@@ -144,7 +144,7 @@ def _valid_plan(*, state_projection: dict[str, Any] | None = None) -> dict[str, 
     changes = [no_op(address) for address in sorted(recovery.EXPECTED_EXISTING_ADDRESSES)]
     changes.extend(deepcopy(recovery._expected_create_change(address)) for address in sorted(recovery.EXPECTED_CREATE_ADDRESSES))
     providers = json.loads(
-        '{"azurerm":{"full_name":"registry.opentofu.org/hashicorp/azurerm","version_constraint":"4.73.0","expressions":{"features":[{"storage":[{"data_plane_available":{"constant_value":false}}]}]}},"azapi":{"full_name":"registry.opentofu.org/azure/azapi","version_constraint":"2.1.0","expressions":{}},"terraform":{"full_name":"terraform.io/builtin/terraform","version_constraint":null,"expressions":null}}'
+        '{"azurerm":{"full_name":"registry.opentofu.org/hashicorp/azurerm","version_constraint":"4.73.0","expressions":{"features":[{"storage":[{"data_plane_available":{"constant_value":false}}]}]}},"azapi":{"full_name":"registry.opentofu.org/azure/azapi","version_constraint":"2.4.0","expressions":{}},"terraform":{"full_name":"terraform.io/builtin/terraform","version_constraint":null,"expressions":null}}'
     )
     return {
         "format_version": recovery.EXPECTED_FORMAT_VERSION,
@@ -855,6 +855,18 @@ def test_state_snapshot_safety_regressions(monkeypatch: pytest.MonkeyPatch) -> N
     external = _valid_state(); embedded = deepcopy(external); external["check_results"] = [{"status": "pass"}]; embedded["check_results"] = None
     receipt = _validate(monkeypatch, state=external, embedded_state=embedded)
     assert receipt["state_semantic_sha256"] == recovery._semantic_state_sha256(external, label="state snapshot")
+
+
+def test_azapi_provider_pin_accepts_exact_compatible_version() -> None:
+    recovery._validate_provider_configuration(_valid_plan())
+
+
+@pytest.mark.parametrize("version", ["2.1.0", "2.2.0", "2.3.0", "2.6.1", ">=2.4.0", None])
+def test_azapi_provider_pin_rejects_old_newer_and_unpinned_versions(version: str | None) -> None:
+    plan = _valid_plan()
+    plan["configuration"]["provider_config"]["azapi"]["version_constraint"] = version
+    with pytest.raises(recovery.RecoveryPlanError, match="azapi provider version is not pinned"):
+        recovery._validate_provider_configuration(plan)
 
 
 def test_plan_safety_regressions_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
