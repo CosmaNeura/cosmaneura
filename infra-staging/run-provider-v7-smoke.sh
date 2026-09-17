@@ -87,10 +87,12 @@ run_probe() {
 	}
 }
 
-provider_command="PYTHONPATH=/app /opt/venv/bin/python /app/infra-staging/provider_v7_smoke.py"
+payload="$(python3 -c 'import base64,sys,zlib;print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$ROOT/infra-staging/provider_v7_acceptance.py")"
+provider_command="PYTHONPATH=/app /opt/venv/bin/python -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('$payload')))\""
 for argument in "$PLATFORM_ORIGIN" "https://$PROVIDER_FQDN" "https://$PUBLIC_FQDN"; do
 	provider_command+=" '$argument'"
 done
+[[ ${#provider_command} -lt 2000 ]] || fail
 run_probe "$PLATFORM_GROUP" "$PLATFORM_APP" "$provider_command" "V7_PROVIDER_SMOKE PASS"
 
 payload="$(python3 -c 'import base64,sys,zlib;print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$ROOT/infra-staging/provider_v7_public_probe.py")"
