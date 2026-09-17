@@ -319,7 +319,10 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
         migration.index('capture_schema_revision "Post-migration"')
     )
     assert "migration_status=$?" in migration
-    assert "observed post-attempt schema was recorded" in migration
+    assert 'finish_migration_attempt "$migration_status" "$cleanup_status"' in migration
+    assert "observed post-attempt schema was recorded" in _shell_function(
+        deploy, "finish_migration_attempt"
+    )
     assert '"$STAGING_IMAGE":*)' not in _shell_function(
         deploy, "resolve_staging_digest"
     )
@@ -333,14 +336,11 @@ def test_staging_compatibility_secret_is_exact_candidate_and_job_only() -> None:
 
     assert '"$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA"' in migration
     assert '"$STAGING_IMAGE_DIGEST" != "$FOUNDER_CANDIDATE_IMAGE_DIGEST"' in migration
-    assert 'local alembic_compat_value="${value//%/%%}"' in migration
+    assert '"${value//%/%%}"' not in migration
+    assert "--staging-alembic-command" in migration
+    assert '--args "$migration_command"' in migration
     assert migration.count('"${secret_name}=${value}"') == 1
-    assert (
-        migration.count(
-            '"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${alembic_compat_value}"'
-        )
-        == 1
-    )
+    assert migration.count('"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${value}"') == 1
     assert (
         migration.count('"${var}=secretref:${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}"')
         == 1
@@ -489,7 +489,9 @@ def _workload_capture(
 
     environment = {
         **os.environ,
-        "APP_REVISION": revision("app", "app-web", app_args or []),
+        "APP_REVISION": revision(
+            "app", "app-web", ["python main.py"] if app_args is None else app_args
+        ),
         "WORKER_REVISION": revision("worker", "app-worker", ["worker command"]),
         "SCHEDULER_REVISION": revision(
             "scheduler", "app-scheduler", ["scheduler command"]
@@ -518,6 +520,7 @@ WORKER_WORKLOAD_CONTAINER_NAME=app-worker
 SCHEDULER_WORKLOAD_CONTAINER_NAME=app-scheduler
 STAGING_IMAGE=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+STAGING_API_COMMAND='python main.py'
 STAGING_WORKER_COMMAND='worker command'
 SCHEDULER_COMMAND='scheduler command'
 ENABLE_SOVEREIGN_RECORD_GRANTS=false
@@ -571,6 +574,9 @@ def test_workload_evidence_accepts_only_exact_single_container_contract() -> Non
     assert "credential-must-not-appear" not in result.stdout + result.stderr
     state = json.loads(result.stdout)
     assert all(item["environmentContractExact"] for item in state)
+    assert next(item for item in state if item["name"] == "app")[
+        "readyRevisionArgs"
+    ] == ["python main.py"]
     assert all(item["secretRefs"] == {"DATABASE_URL": "database-url"} for item in state)
     assert {item["name"]: item["containerName"] for item in state} == {
         "app": "app-web",
@@ -626,8 +632,156 @@ def test_deploy_removes_legacy_public_environment_variables() -> None:
 
 
 @pytest.mark.parametrize(
+    "mutation",
+    [
+        None,
+        "api_args",
+        "worker_args",
+        "scheduler_args",
+        "command",
+        "image",
+        "environment_contract",
+        "common_flag",
+        "billing_flag",
+        "url",
+    ],
+)
+def test_final_candidate_verifier_executes_exact_contract(mutation: str | None) -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text()
+    flags = {
+        "SCRIBE_WORKFLOW_ENABLED": "false",
+        "STRIPE_INTEGRATION_ENABLED": "false",
+        "STRIPE_BILLING_ENABLED": "false",
+        "STRIPE_LIVE_MODE": "false",
+    }
+    urls = {"API_BASE_URL": "https://staging.example"}
+    state = [
+        {
+            "name": role,
+            "environmentContractExact": True,
+            "readyRevisionImage": f"registry.example/candidate@{DIGEST}",
+            "readyRevisionCommand": [],
+            "readyRevisionArgs": [f"{role} command"],
+            "publicConfig": {
+                "PYTHON_ENV": "staging",
+                **urls,
+                **{
+                    key: value
+                    for key, value in flags.items()
+                    if role != "scheduler" or not key.startswith("STRIPE_")
+                },
+            },
+        }
+        for role in ("api", "worker", "scheduler")
+    ]
+    if mutation and mutation.endswith("_args"):
+        next(item for item in state if item["name"] == mutation.removesuffix("_args"))[
+            "readyRevisionArgs"
+        ] = []
+    elif mutation in ("command", "image", "environment_contract"):
+        field, value = {
+            "command": ("readyRevisionCommand", ["unexpected"]),
+            "image": ("readyRevisionImage", "unexpected"),
+            "environment_contract": ("environmentContractExact", False),
+        }[mutation]
+        state[0][field] = value
+    elif mutation is not None:
+        key = {
+            "common_flag": "SCRIBE_WORKFLOW_ENABLED",
+            "billing_flag": "STRIPE_BILLING_ENABLED",
+            "url": "API_BASE_URL",
+        }[mutation]
+        state[0]["publicConfig"][key] = "unexpected"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            _shell_function(deploy, "verify_candidate_workload_state")
+            + '\nverify_candidate_workload_state "$STATE"\n',
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "API_CONTAINER": "api",
+            "WORKER_CONTAINER": "worker",
+            "SCHEDULER_CONTAINER": "scheduler",
+            "STAGING_IMAGE_REFERENCE": f"registry.example/candidate@{DIGEST}",
+            "STAGING_API_COMMAND": "api command",
+            "STAGING_WORKER_COMMAND": "worker command",
+            "SCHEDULER_COMMAND": "scheduler command",
+            "CONFIGURATION_EVIDENCE_JSON": json.dumps(
+                {"environment": "staging", "flags": flags, "urls": urls}
+            ),
+            "STATE": json.dumps(state),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is (mutation is None), result.stderr
+    assert "compile error" not in result.stderr
+
+
+@pytest.mark.parametrize("role", ["api", "worker", "scheduler"])
+def test_deployment_explicitly_uses_each_candidate_procfile_command(
+    tmp_path: Path, role: str
+) -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text()
+    start = deploy.index("if ! STAGING_API_COMMAND=")
+    parsing = deploy[start : deploy.index("unset CANDIDATE_PROCFILE", start)]
+    capture = tmp_path / "azure-update-arguments.txt"
+    script = r"""
+set -eu
+API_CONTAINER=api
+WORKER_CONTAINER=worker
+SCHEDULER_CONTAINER=scheduler
+RESOURCE_GROUP=synthetic
+STAGING_IMAGE_REFERENCE=registry.example/candidate@sha256:synthetic
+REVISION_STRING=synthetic-revision
+LEGACY_PUBLIC_ENV_VARS=()
+BILLING_PUBLIC_VARS=()
+GRANT_SECRET_ENV_NAME=SOVEREIGN_RECORD_GRANT_SECRET
+RECALL_SECRET_ENV_NAME=RECALL_WEBHOOK_SECRET
+STRIPE_INTEGRATION_ENABLED=false
+configure_workload_contract() { container_secret_vars=(); container_public_vars=(); }
+record_grants_enabled_for() { return 1; }
+billing_integration_enabled_for() { return 1; }
+billing_workload_for() { return 1; }
+az() { printf '%s\n' "$@" > "$CAPTURE"; }
+"""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            script
+            + parsing
+            + _shell_function(deploy, "initiate_deployment")
+            + '\ninitiate_deployment "$ROLE" synthetic-sha\n',
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "CANDIDATE_PROCFILE": (ROOT / "Procfile").read_text(),
+            "CAPTURE": str(capture),
+            "ROLE": role,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = capture.read_text().splitlines()
+    expected = next(
+        line.split(": ", 1)[1]
+        for line in (ROOT / "Procfile").read_text().splitlines()
+        if line.startswith(role + ": ")
+    )
+    assert arguments[arguments.index("--args") + 1] == expected
+    assert arguments.count("--args") == 1
+
+
+@pytest.mark.parametrize(
     ("extra_container", "environment", "app_args"),
     [
+        (False, None, []),
         (True, None, None),
         (False, [{"name": "UNKNOWN", "value": "hidden", "secretRef": None}], None),
         (

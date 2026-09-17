@@ -292,6 +292,10 @@ if ! CANDIDATE_PROCFILE=$(git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"); t
 	echo "Error: the staging candidate does not contain a readable Procfile."
 	exit 1
 fi
+if ! STAGING_API_COMMAND=$(printf '%s' "$CANDIDATE_PROCFILE" | yq -er '.api'); then
+	echo "Error: the staging candidate Procfile API command is missing."
+	exit 1
+fi
 if ! STAGING_WORKER_COMMAND=$(printf '%s' "$CANDIDATE_PROCFILE" | yq -er '.worker'); then
 	echo "Error: the staging candidate Procfile worker command is missing."
 	exit 1
@@ -644,7 +648,7 @@ collect_workload_state() {
 		fi
 		expected_container_name=$(workload_container_name "$container") || return 1
 		case "$container" in
-		"$API_CONTAINER") expected_args_json='[]' ;;
+		"$API_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_API_COMMAND" '[$value]') ;;
 		"$WORKER_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_WORKER_COMMAND" '[$value]') ;;
 		"$SCHEDULER_CONTAINER") expected_args_json=$(jq -cn --arg value "$SCHEDULER_COMMAND" '[$value]') ;;
 		esac
@@ -779,8 +783,10 @@ verify_candidate_workload_state() {
 	local state_json=$1
 	if ! jq -e \
 		--arg expected_image "$STAGING_IMAGE_REFERENCE" \
+		--arg api "$API_CONTAINER" \
 		--arg worker "$WORKER_CONTAINER" \
 		--arg scheduler "$SCHEDULER_CONTAINER" \
+		--arg api_command "$STAGING_API_COMMAND" \
 		--arg worker_command "$STAGING_WORKER_COMMAND" \
 		--arg scheduler_command "$SCHEDULER_COMMAND" \
 		--argjson expected "$CONFIGURATION_EVIDENCE_JSON" '
@@ -789,10 +795,11 @@ verify_candidate_workload_state() {
 		all(.[]; . as $workload | $workload.environmentContractExact == true and
 		 $workload.readyRevisionCommand == [] and
 		 $workload.readyRevisionImage == $expected_image and
-		 ($common | to_entries | all(.[] as $item; $workload.publicConfig[$item.key] == $item.value))) and
+		 ($common | to_entries | all(.[]; . as $item | $workload.publicConfig[$item.key] == $item.value))) and
 		all(.[] | select(.name != $scheduler); . as $workload | ($expected.flags |
 		 {STRIPE_INTEGRATION_ENABLED, STRIPE_BILLING_ENABLED, STRIPE_LIVE_MODE} |
-		 to_entries | all(.[] as $item; $workload.publicConfig[$item.key] == $item.value))) and
+		 to_entries | all(.[]; . as $item | $workload.publicConfig[$item.key] == $item.value))) and
+		([.[] | select(.name == $api)][0].readyRevisionArgs == [$api_command]) and
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
 	' <<<"$state_json" >/dev/null; then
@@ -961,6 +968,7 @@ verify_migration_job_template() {
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
 			--database-secret-name "$ALEMBIC_COMPAT_DATABASE_SECRET_NAME" \
 			--raw-database-secret-name database-url \
+			--staging-alembic-compatibility \
 			--secret-env-names "$secret_env_names" \
 			--public-env-names "$public_env_names"; then
 		echo "Migration job template is not approved for schema mutation."
@@ -1106,6 +1114,10 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
+	local migration_command
+	migration_command=$("$PYTHON_BIN" -I -S -B \
+		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+		--staging-alembic-command) || return 1
 	local secrets_args=()
 	local env_args=()
 
@@ -1117,18 +1129,13 @@ run_migrations() {
 		secret_name=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 		secrets_args+=("${secret_name}=${value}")
 		if [[ "$var" == "DATABASE_URL" ]]; then
-			# Candidate 866bd4 predates the permanent ConfigParser boundary fix.
-			# Keep the canonical URL raw for probes and preflight, and double its
-			# percent signs only in the migration-template secret consumed by the
-			# old Alembic env.py. Never project this compatibility secret to a
-			# long-running workload or retain it in 1Password.
-			local alembic_compat_value="${value//%/%%}"
-			[[ "$value" == *%* && "$alembic_compat_value" != "$value" ]] || return 1
+			# Application startup connects before env.py sets the Alembic URL.
+			# Keep this job-only secret raw too; the exact bootstrap command
+			# escapes only Config.set_main_option("sqlalchemy.url", ...).
 			secrets_args+=(
-				"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${alembic_compat_value}"
+				"${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}=${value}"
 			)
 			env_args+=("${var}=secretref:${ALEMBIC_COMPAT_DATABASE_SECRET_NAME}")
-			unset alembic_compat_value
 		else
 			env_args+=("${var}=secretref:${secret_name}")
 		fi
@@ -1165,7 +1172,7 @@ run_migrations() {
 		--replica-timeout 300 \
 		--replica-retry-limit 0 \
 		--image "$STAGING_IMAGE_REFERENCE" \
-		--args "/opt/venv/bin/alembic upgrade head" \
+		--args "$migration_command" \
 		--cpu 0.5 --memory 1Gi \
 		--secrets "${secrets_args[@]}" \
 		--env-vars "${env_args[@]}" \
@@ -1301,6 +1308,9 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
+		update_args+=(--args "$STAGING_API_COMMAND")
+	fi
 	if [[ "$container_name" == "$WORKER_CONTAINER" ]]; then
 		update_args+=(--args "$STAGING_WORKER_COMMAND")
 	fi
