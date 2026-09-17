@@ -26,13 +26,35 @@ def validate_template(
     expected_name: str,
     expected_image: str,
     database_secret_name: str,
+    raw_database_secret_name: str | None,
     secret_env_names: set[str],
     public_env_names: set[str],
 ) -> str | None:
-    if not isinstance(payload, list) or len(payload) != 1:
+    if raw_database_secret_name is None:
+        containers = payload
+    else:
+        if raw_database_secret_name == database_secret_name:
+            return "database secret identities"
+        if not isinstance(payload, dict) or set(payload) != {
+            "containers",
+            "secretNames",
+        }:
+            return "provider response shape"
+        secret_names = payload["secretNames"]
+        if not isinstance(secret_names, list) or not all(
+            isinstance(name, str) and name for name in secret_names
+        ):
+            return "secret inventory shape"
+        if (
+            secret_names.count(database_secret_name) != 1
+            or secret_names.count(raw_database_secret_name) != 1
+        ):
+            return "database secret inventory"
+        containers = payload["containers"]
+    if not isinstance(containers, list) or len(containers) != 1:
         return "container cardinality"
 
-    container = payload[0]
+    container = containers[0]
     if not isinstance(container, dict):
         return "container shape"
     if container.get("name") != expected_name:
@@ -90,6 +112,7 @@ def main() -> int:
     parser.add_argument("--expected-name", required=True)
     parser.add_argument("--expected-image", required=True)
     parser.add_argument("--database-secret-name", required=True)
+    parser.add_argument("--raw-database-secret-name")
     parser.add_argument("--secret-env-names", required=True)
     parser.add_argument("--public-env-names", default="")
     args = parser.parse_args()
@@ -104,6 +127,7 @@ def main() -> int:
         expected_name=args.expected_name,
         expected_image=args.expected_image,
         database_secret_name=args.database_secret_name,
+        raw_database_secret_name=args.raw_database_secret_name,
         secret_env_names=_names(args.secret_env_names),
         public_env_names=_names(args.public_env_names),
     )

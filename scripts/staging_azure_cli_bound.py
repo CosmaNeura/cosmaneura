@@ -62,9 +62,11 @@ ALLOWED_CONTAINERAPP_COMMANDS = {
     ("containerapp", "job", "create"),
     ("containerapp", "job", "delete"),
     ("containerapp", "job", "execution", "show"),
+    ("containerapp", "job", "list"),
     ("containerapp", "job", "logs", "show"),
     ("containerapp", "job", "show"),
     ("containerapp", "job", "start"),
+    ("containerapp", "job", "stop"),
     ("containerapp", "replica", "list"),
     ("containerapp", "revision", "list"),
     ("containerapp", "revision", "show"),
@@ -297,10 +299,31 @@ def validate_staging_scope(argv: list[str]) -> None:
         require(
             flag_values(argv, {"-g", "--resource-group"}) == [STAGING_RESOURCE_GROUP]
         )
+        if argv[:3] == ["containerapp", "job", "list"]:
+            require(not flag_values(argv, {"-n", "--name"}))
+            require(
+                flag_values(argv, {"--query"})
+                == ["[?name=='cosmaneura-staging-migrate'] | length(@)"]
+            )
+            require(flag_values(argv, {"-o", "--output"}) == ["tsv"])
+            require("--ids" not in argv)
+            return
         require(
             flag_values(argv, {"-n", "--name"})
             in [[name] for name in STAGING_CONTAINER_NAMES]
         )
+        if argv[:3] == ["containerapp", "job", "stop"]:
+            require(
+                flag_values(argv, {"-n", "--name"}) == ["cosmaneura-staging-migrate"]
+            )
+            execution_names = flag_values(argv, {"--job-execution-name"})
+            require(
+                len(execution_names) == 1
+                and re.fullmatch(
+                    r"cosmaneura-staging-migrate-[a-z0-9]+", execution_names[0]
+                )
+                is not None
+            )
         require("--ids" not in argv)
         for image in flag_values(argv, {"-i", "--image"}):
             require(
