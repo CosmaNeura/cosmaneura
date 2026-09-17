@@ -8,9 +8,14 @@ from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
 from app.environments import is_production, is_staging
-from app.jobs import merge_window
+from app.jobs import merge_window, verify_bot_joined
 from app.routes.recall_callbacks import zak_token_redis_key
-from app.services import recall, zoom_capture_authorization, zoom_webhook_operations
+from app.services import (
+    alerting,
+    recall,
+    zoom_capture_authorization,
+    zoom_webhook_operations,
+)
 from app.services import zoom as zoom_service
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import (
@@ -268,6 +273,30 @@ def handle_meeting_started(
     )
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
+
+    if occurrence_armed:
+        # Arm monitoring only once capture is actually expected.
+        # arm_authorized_occurrence_locked returns True only when the doctor's
+        # access is in force, capture is available to them, and the meeting has
+        # a validated appointment bound -- which is exactly the condition under
+        # which a visit with no recording is a defect rather than a
+        # configuration choice. Arming on mere session registration would page
+        # for every meeting we were never going to capture.
+        #
+        # The occurrence digest travels with the task: `meeting_id` is reused
+        # all day by a personal meeting room, so a check that fires after this
+        # occurrence ended would otherwise judge the next patient's visit.
+        _arm_join_watchdog(meeting_id_str, event_occurrence)
+    elif zoom_mtg is not None and zoom_mtg.appointment_id is None:
+        # The meeting is one we track, but nothing bound it to an appointment,
+        # so authorization can never arm and the visit is silently never
+        # recorded. A meeting we do not track at all is somebody else's and
+        # stays quiet.
+        alerting.alert(
+            alerting.MissingAppointmentBinding,
+            meeting_ref=provider_log_ref(meeting_id_str),
+            doctor_ref=provider_log_ref(str(doctor.id)),
+        )
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
@@ -286,6 +315,35 @@ def handle_meeting_started(
         start_zoom_capture_job.queue(str(zoom_mtg.id))
 
 
+def _arm_join_watchdog(meeting_id: str, occurrence_digest: str | None) -> None:
+    """Arm monitoring without letting it take down what it monitors.
+
+    Arming touches Redis and the Celery broker. Either can fail, and an
+    exception here would abort handle_meeting_started -- the webhook would
+    retry and the capture path would be disrupted by its own observer. A visit
+    that runs unwatched is worse than one that runs watched, and far better
+    than one that does not run. The failure is itself alerted so an unwatched
+    session is not also an unnoticed one.
+    """
+    try:
+        verify_bot_joined.queue(meeting_id, occurrence_digest=occurrence_digest)
+    except Exception as exc:
+        log.warning(
+            "join watchdog could not be armed",
+            meeting_ref=provider_log_ref(meeting_id),
+            error_type=type(exc).__name__,
+        )
+        try:
+            alerting.alert(
+                alerting.WatchdogArmingFailed,
+                meeting_ref=provider_log_ref(meeting_id),
+                error_type=type(exc).__name__,
+            )
+        except Exception:
+            # Alerting about a broken dependency must not raise either.
+            log.exception("failed to report watchdog arming failure")
+
+
 def _rget(redis, key: str) -> str | None:
     val = redis.get(key)
     return val.decode() if isinstance(val, bytes) else val
@@ -301,9 +359,20 @@ def _rhget(redis, key: str, field: str) -> str | None:
     return val.decode() if isinstance(val, bytes) else cast(str | None, val)
 
 
+def lifecycle_lock_key(meeting_id: str) -> str:
+    """The lock every mutation of a meeting's session state is taken under.
+
+    Public because jobs.verify_bot_joined takes the same lock before deciding a
+    session has failed -- with its own, much shorter blocking timeout, since a
+    watchdog must never hold a worker slot waiting on a live handler. Sharing
+    the key rather than the constructor keeps the two from drifting apart.
+    """
+    return f"recall:meeting:{meeting_id}:lifecycle_lock"
+
+
 def _lifecycle_lock(redis, meeting_id: str):
     return redis.lock(
-        f"recall:meeting:{meeting_id}:lifecycle_lock",
+        lifecycle_lock_key(meeting_id),
         timeout=_LIFECYCLE_LOCK_TIMEOUT_SECONDS,
         blocking_timeout=_LIFECYCLE_LOCK_BLOCKING_TIMEOUT_SECONDS,
     )
@@ -855,8 +924,19 @@ def _resume_or_start_recording_locked(
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     capture_started = bool(redis.get(f"recall:meeting:{meeting_id}:capture_started"))
     if bot_id or capture_started:
+        # Refusing to continue without an exact encounter binding is correct --
+        # the alternative is piling a second patient's audio onto the first
+        # one's chart. But the second visit still goes unrecorded, and until
+        # now that was a log line nobody read. The watchdog cannot surface it
+        # either: capture_started makes the session look healthy to it.
         log.warning(
             "recording continuation blocked without exact encounter binding",
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            bot_ref=provider_log_ref(bot_id) if bot_id else None,
+            capture_started=capture_started,
+        )
+        alerting.alert(
+            alerting.RecordingContinuationBlocked,
             meeting_ref=provider_log_ref(str(meeting_id)),
             bot_ref=provider_log_ref(bot_id) if bot_id else None,
             capture_started=capture_started,
@@ -1224,6 +1304,8 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
         "merge_task_id",
         "merge_release_intent_id",
         "paused_at",
+        "watchdog_queued",
+        "watchdog_alerted",
     ]
     # Keep merge_generation until its own 24-hour TTL. Personal meeting rooms
     # reuse meeting_id, and a revoked task from the prior session can still be

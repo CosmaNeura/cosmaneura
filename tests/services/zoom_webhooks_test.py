@@ -2452,3 +2452,126 @@ def test_dispatch_logs_shape_even_for_unhandled_event_types():
     events = [e["event"] for e in logs]
     assert "zoom payload shape" in events
     assert "no handler for zoom event type" in events
+
+
+# --------- Monitoring is armed from capture-expected, and never blocks ---------
+
+
+def _doctor_with_unbound_meeting(allow_doctor_access):
+    "A tracked Zoom meeting that nothing bound to an appointment."
+    doctor = DoctorFactory.build().save()
+    DoctorVideoIntegration(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+        provider_user_id=HOST_ID,
+        access_token="tok",
+        refresh_token="rtok",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    ).save()
+    ZoomMeeting(
+        doctor_id=doctor.id,
+        zoom_meeting_id=MEETING_ID,
+        topic="Unbound visit",
+        start_time=datetime.now(timezone.utc),
+        duration=30,
+        join_url=f"https://zoom.us/j/{MEETING_ID}",
+        status=ZoomMeetingStatus.scheduled,
+        appointment_id=None,
+    ).save()
+    return doctor
+
+
+def test_watchdog_is_armed_when_capture_is_expected(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch
+):
+    """Arming keys off the authorization actually arming, not off the session
+    merely being registered."""
+    from app.jobs import verify_bot_joined
+    from app.services import zoom_webhooks
+
+    armed: list[tuple] = []
+    monkeypatch.setattr(
+        verify_bot_joined,
+        "queue",
+        lambda meeting_id, **kw: armed.append(
+            (meeting_id, kw.get("occurrence_digest"))
+        ),
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert len(armed) == 1
+    meeting_id, occurrence = armed[0]
+    assert meeting_id == MEETING_ID
+    # The occurrence travels with the task so a check that fires after this
+    # visit ends cannot judge the next patient's.
+    assert occurrence is not None
+
+
+def test_watchdog_is_not_armed_when_no_capture_is_expected(
+    clean_redis,
+    allow_doctor_access,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+    captured_alerts,
+):
+    """No appointment bound means authorization can never arm and no capture
+    was ever going to happen. Arming there would page for every meeting we
+    were not going to record -- but the missing binding is itself a silent
+    failure, so it gets its own alert instead."""
+    from app.jobs import verify_bot_joined
+    from app.services import alerting, zoom_webhooks
+
+    _doctor_with_unbound_meeting(allow_doctor_access)
+
+    armed: list = []
+    monkeypatch.setattr(
+        verify_bot_joined, "queue", lambda meeting_id, **kw: armed.append(meeting_id)
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert armed == []
+    assert [c["type"] for c in captured_alerts] == [alerting.MissingAppointmentBinding]
+
+
+def test_watchdog_arming_failure_does_not_break_dispatch(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch, captured_alerts
+):
+    """Monitoring must never take down what it monitors. If Redis or the broker
+    is unavailable, arming fails, the session still registers, and the failure
+    to watch is itself reported."""
+    from app.jobs import verify_bot_joined
+    from app.services import alerting, zoom_webhooks
+
+    def explode(meeting_id, **kw):
+        raise ConnectionError("broker unavailable")
+
+    monkeypatch.setattr(verify_bot_joined, "queue", explode)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert clean_redis.get(_key("doctor_id")) is not None, "dispatch state was lost"
+    assert alerting.WatchdogArmingFailed in [c["type"] for c in captured_alerts]
+
+
+def test_blocked_continuation_is_reported(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, captured_alerts
+):
+    """Refusing to continue without an exact encounter binding is correct, but
+    the second visit still goes unrecorded. The watchdog cannot surface it --
+    capture_started makes the session look healthy to it -- so the refusal
+    reports itself."""
+    from app.services import alerting, zoom_webhooks
+
+    clean_redis.set(_key("bot_id"), "recall-bot-existing")
+
+    zoom_webhooks._resume_or_start_recording_locked(
+        clean_redis, MEETING_ID, "patient-b", "Segunda Paciente"
+    )
+
+    assert mock_recall["create_bot"] == []
+    assert [c["type"] for c in captured_alerts] == [
+        alerting.RecordingContinuationBlocked
+    ]

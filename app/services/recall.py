@@ -140,6 +140,25 @@ def create_bot(
     return data
 
 
+def ping() -> None:
+    """Cheapest authenticated call the Recall API offers.
+
+    Used by the synthetic monitor to prove two things a rotated or revoked
+    ``RECALL_API_KEY`` would break: the API is reachable from this container,
+    and our credentials still work. Without it, an invalid key is discovered by
+    the first real patient visit that fails to record.
+
+    Raises ``httpx.HTTPError`` so the caller decides how to alert.
+    """
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+        response = client.get(
+            f"{RECALL_API_BASE}/bot/",
+            params={"limit": 1},
+            headers={"Authorization": f"Token {RECALL_API_KEY}"},
+        )
+        response.raise_for_status()
+
+
 def get_bot(bot_id: str) -> dict:
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.get(
