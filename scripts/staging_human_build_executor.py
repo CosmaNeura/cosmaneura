@@ -328,18 +328,16 @@ def image_record(
 
 
 def archive_binding(path: Path, image_id: str) -> None:
-    """Bind Docker-save metadata to the inspected immutable config, no extraction.
+    """Bind Docker-save metadata to the inspected image, without extraction.
 
     Layer decoding remains Docker-load's job in the separate reviewed publisher;
     this does not claim that a manifest/hash alone verifies executable layers.
     """
-    digest = image_id.removeprefix("sha256:")
-    config_names = {digest + ".json", "blobs/sha256/" + digest}
-    manifest: object = None
-    configs: set[str] = set()
-    files: set[str] = set()
-    count = 0
+    image_digest = image_id.removeprefix("sha256:")
+    require(image_id == "sha256:" + image_digest and inputs.digest(image_digest))
     with tarfile.open(path, mode="r:") as archive:
+        members: dict[str, tarfile.TarInfo] = {}
+        count = 0
         for member in archive:
             count += 1
             require(count <= 10000 and (member.isfile() or member.isdir()))
@@ -353,28 +351,77 @@ def archive_binding(path: Path, image_id: str) -> None:
             require(not member.linkname and member.sparse is None)
             if member.isdir():
                 continue
-            require(name not in files)
-            files.add(name)
-            if name == "manifest.json" or name in config_names:
-                require(0 < member.size <= 4 * 1024**2)
-                stream = archive.extractfile(member)
-                require(stream is not None)
-                assert stream is not None
-                raw = stream.read(member.size + 1)
-                require(len(raw) == member.size)
-                if name == "manifest.json":
-                    manifest = json.loads(raw)
-                else:
-                    require(sha(raw) == digest)
-                    configs.add(name)
-    require(type(manifest) is list and len(manifest) == 1)
-    row = cast(list[Any], manifest)[0]
-    require(type(row) is dict and row.get("Config") in configs)
-    layers = row.get("Layers")
-    require(type(layers) is list and 0 < len(layers) <= 1000)
-    layers = cast(list[str], layers)
-    require(all(type(name) is str and name in files for name in layers))
-    require(len(set(layers)) == len(layers))
+            require(name not in members)
+            members[name] = member
+
+        def metadata(name: str) -> bytes:
+            require(type(name) is str and name in members)
+            member = members[name]
+            require(0 < member.size <= 4 * 1024**2)
+            stream = archive.extractfile(member)
+            require(stream is not None)
+            assert stream is not None
+            raw = stream.read(member.size + 1)
+            require(len(raw) == member.size)
+            return raw
+
+        manifest = json.loads(metadata("manifest.json"))
+        require(type(manifest) is list and len(manifest) == 1)
+        row = cast(list[Any], manifest)[0]
+        require(type(row) is dict and type(row.get("Config")) is str)
+        config_name = cast(str, row["Config"])
+        config_raw = metadata(config_name)
+        config_digest = sha(config_raw)
+        require(
+            config_name in {config_digest + ".json", "blobs/sha256/" + config_digest}
+        )
+        layers = row.get("Layers")
+        require(type(layers) is list and 0 < len(layers) <= 1000)
+        layer_names = cast(list[str], layers)
+        require(
+            all(type(name) is str and name in members for name in layer_names)
+            and len(set(layer_names)) == len(layer_names)
+        )
+
+        if image_digest != config_digest:
+            image_manifest_raw = metadata("blobs/sha256/" + image_digest)
+            require(sha(image_manifest_raw) == image_digest)
+            image_manifest = json.loads(image_manifest_raw)
+            require(
+                type(image_manifest) is dict
+                and image_manifest.get("schemaVersion") == 2
+                and image_manifest.get("mediaType")
+                == "application/vnd.docker.distribution.manifest.v2+json"
+            )
+            descriptor = image_manifest.get("config")
+            require(
+                type(descriptor) is dict
+                and set(descriptor) == {"digest", "mediaType", "size"}
+                and descriptor.get("digest") == "sha256:" + config_digest
+                and descriptor.get("mediaType")
+                == "application/vnd.docker.container.image.v1+json"
+                and descriptor.get("size") == len(config_raw)
+            )
+            descriptors = image_manifest.get("layers")
+            require(type(descriptors) is list and len(descriptors) == len(layer_names))
+            for name, descriptor in zip(
+                layer_names, cast(list[object], descriptors), strict=True
+            ):
+                require(
+                    type(descriptor) is dict
+                    and set(descriptor) == {"digest", "mediaType", "size"}
+                    and descriptor.get("digest")
+                    == "sha256:" + name.removeprefix("blobs/sha256/")
+                    and descriptor.get("mediaType")
+                    == "application/vnd.docker.image.rootfs.diff.tar.gzip"
+                    and descriptor.get("size") == members[name].size
+                    and name == "blobs/sha256/" + name.removeprefix("blobs/sha256/")
+                    and inputs.digest(name.removeprefix("blobs/sha256/"))
+                )
+        else:
+            require(
+                config_name in {image_digest + ".json", "blobs/sha256/" + image_digest}
+            )
 
 
 class Builder:
