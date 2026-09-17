@@ -70,6 +70,48 @@ def image_archive(config=CONFIG_BYTES):
     )
 
 
+def containerd_image_archive():
+    layer = b"INVENTED_NOT_AN_EXECUTABLE_LAYER"
+    config_digest = m.sha(CONFIG_BYTES)
+    layer_digest = m.sha(layer)
+    image_manifest = m.canonical(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+            "config": {
+                "mediaType": "application/vnd.docker.container.image.v1+json",
+                "digest": "sha256:" + config_digest,
+                "size": len(CONFIG_BYTES),
+            },
+            "layers": [
+                {
+                    "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
+                    "digest": "sha256:" + layer_digest,
+                    "size": len(layer),
+                }
+            ],
+        }
+    )
+    image_id = "sha256:" + m.sha(image_manifest)
+    config_name = "blobs/sha256/" + config_digest
+    layer_name = "blobs/sha256/" + layer_digest
+    manifest = m.canonical(
+        [{"Config": config_name, "RepoTags": None, "Layers": [layer_name]}]
+    )
+    return image_id, tar(
+        [
+            (config_name, CONFIG_BYTES, tarfile.REGTYPE),
+            (layer_name, layer, tarfile.REGTYPE),
+            (
+                "blobs/sha256/" + image_id.removeprefix("sha256:"),
+                image_manifest,
+                tarfile.REGTYPE,
+            ),
+            ("manifest.json", manifest, tarfile.REGTYPE),
+        ]
+    )
+
+
 def image(prepared, javascript):
     environment = dict(m.inputs.SHARED_ENVIRONMENT)
     environment.update(
@@ -609,6 +651,15 @@ class ArchiveTests(unittest.TestCase):
             path.write_bytes(image_archive(b"mismatched config"))
             with self.assertRaises(m.BuildExecutionRefused):
                 m.archive_binding(path, APP_ID)
+
+    def test_image_archive_binds_containerd_manifest_id_to_config_id(self):
+        image_id, raw = containerd_image_archive()
+        with tempfile.TemporaryDirectory(prefix="cosmaneura-archive-unit-") as root:
+            path = Path(root) / "image.tar"
+            path.write_bytes(raw)
+            m.archive_binding(path, image_id)
+            with self.assertRaises(m.BuildExecutionRefused):
+                m.archive_binding(path, "sha256:" + "f" * 64)
 
 
 class DeadlineTests(unittest.TestCase):

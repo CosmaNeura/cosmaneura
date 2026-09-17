@@ -8,6 +8,7 @@ transport cannot overwrite a tag or associate a mutable name with an image.
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import http.client
 import json
@@ -33,6 +34,10 @@ MAX_RESPONSE_BYTES = 64 * 1024
 OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
 OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
 OCI_LAYER = "application/vnd.oci.image.layer.v1.tar"
+OCI_LAYER_GZIP = "application/vnd.oci.image.layer.v1.tar+gzip"
+DOCKER_MANIFEST = "application/vnd.docker.distribution.manifest.v2+json"
+DOCKER_CONFIG = "application/vnd.docker.container.image.v1+json"
+DOCKER_LAYER_GZIP = "application/vnd.docker.image.rootfs.diff.tar.gzip"
 
 
 class UploadRefused(RuntimeError):
@@ -131,6 +136,26 @@ def hash_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str:
             require(total <= member.size)
             digest.update(chunk)
     require(total == member.size)
+    return digest.hexdigest()
+
+
+def hash_gzip_member(archive: tarfile.TarFile, member: tarfile.TarInfo) -> str:
+    """Hash a bounded decompressed layer without materializing it on disk."""
+    require(member.isfile() and 0 < member.size <= MAX_ARCHIVE_BYTES)
+    stream = archive.extractfile(member)
+    require(stream is not None)
+    exact_stream = cast(BinaryIO, stream)
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with exact_stream, gzip.GzipFile(fileobj=exact_stream, mode="rb") as expanded:
+            while chunk := expanded.read(1024 * 1024):
+                total += len(chunk)
+                require(total <= MAX_ARCHIVE_BYTES)
+                digest.update(chunk)
+    except (EOFError, OSError):
+        raise UploadRefused("staging_acr_untagged_upload_refused") from None
+    require(total > 0)
     return digest.hexdigest()
 
 
@@ -365,26 +390,80 @@ def build_and_upload(
             diff_ids = cast(dict[str, Any], rootfs).get("diff_ids")
             require(type(diff_ids) is list and len(diff_ids) == len(layer_names))
             exact_diff_ids = cast(list[object], diff_ids)
+            config_digest = "sha256:" + sha(config_raw)
+            image_manifest_layers: list[object] | None = None
+            if expected_image_id != config_digest:
+                image_digest = expected_image_id.removeprefix("sha256:")
+                image_manifest_name = "blobs/sha256/" + image_digest
+                require(
+                    config_name
+                    == "blobs/sha256/" + config_digest.removeprefix("sha256:")
+                    and image_manifest_name in names
+                )
+                image_manifest_raw = read_member(
+                    archive, names[image_manifest_name], MAX_METADATA_BYTES
+                )
+                require("sha256:" + sha(image_manifest_raw) == expected_image_id)
+                image_manifest = json_record(image_manifest_raw)
+                require(
+                    set(image_manifest)
+                    == {"schemaVersion", "mediaType", "config", "layers"}
+                    and image_manifest.get("schemaVersion") == 2
+                    and image_manifest.get("mediaType") == DOCKER_MANIFEST
+                )
+                image_config = image_manifest.get("config")
+                require(
+                    type(image_config) is dict
+                    and set(image_config) == {"digest", "mediaType", "size"}
+                    and image_config.get("digest") == config_digest
+                    and image_config.get("mediaType") == DOCKER_CONFIG
+                    and image_config.get("size") == len(config_raw)
+                )
+                image_manifest_layers = image_manifest.get("layers")
+                require(
+                    type(image_manifest_layers) is list
+                    and len(image_manifest_layers) == len(layer_names)
+                )
+
+            prepared_layers: list[tuple[str, tarfile.TarInfo, str]] = []
+            for index, (name, expected_diff_id) in enumerate(
+                zip(layer_names, exact_diff_ids, strict=True)
+            ):
+                member = names[name]
+                digest = "sha256:" + hash_member(archive, member)
+                if image_manifest_layers is None:
+                    require(expected_diff_id == digest)
+                    media_type = OCI_LAYER
+                else:
+                    descriptor = image_manifest_layers[index]
+                    require(
+                        name == "blobs/sha256/" + digest.removeprefix("sha256:")
+                        and type(descriptor) is dict
+                        and set(descriptor) == {"digest", "mediaType", "size"}
+                        and descriptor.get("digest") == digest
+                        and descriptor.get("mediaType") == DOCKER_LAYER_GZIP
+                        and descriptor.get("size") == member.size
+                        and expected_diff_id
+                        == "sha256:" + hash_gzip_member(archive, member)
+                    )
+                    media_type = OCI_LAYER_GZIP
+                prepared_layers.append((digest, member, media_type))
+
             access_token = exchange_refresh_token(cast(str, refresh_token))
             refresh_token = ""
             authorization = "Bearer " + access_token
             access_token = ""
             registry = Registry(REGISTRY_HOST, REGISTRY_REPOSITORY, authorization)
-            config_digest = "sha256:" + sha(config_raw)
-            require(config_digest == expected_image_id)
             registry.upload_blob(config_digest, config_raw, len(config_raw))
             layers = []
-            for name, expected_diff_id in zip(layer_names, exact_diff_ids, strict=True):
-                member = names[name]
-                digest = "sha256:" + hash_member(archive, member)
-                require(expected_diff_id == digest)
+            for digest, member, media_type in prepared_layers:
                 body = archive.extractfile(member)
                 require(body is not None)
                 exact_body = cast(BinaryIO, body)
                 with exact_body:
                     registry.upload_blob(digest, exact_body, member.size)
                 layers.append(
-                    {"mediaType": OCI_LAYER, "digest": digest, "size": member.size}
+                    {"mediaType": media_type, "digest": digest, "size": member.size}
                 )
             manifest = {
                 "schemaVersion": 2,
