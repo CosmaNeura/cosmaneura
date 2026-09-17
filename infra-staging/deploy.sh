@@ -44,6 +44,9 @@ CRITICAL_CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
 WORKER_CONTAINER="cosmaneura-staging-worker"
 CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
 SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"
+API_WORKLOAD_CONTAINER_NAME="cosmaneura-staging-app-web"
+WORKER_WORKLOAD_CONTAINER_NAME="cosmaneura-staging-app-worker"
+SCHEDULER_WORKLOAD_CONTAINER_NAME="cosmaneura-staging-app-scheduler"
 GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
 GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
 RECALL_SECRET_ENV_NAME="RECALL_WEBHOOK_SECRET"
@@ -462,6 +465,16 @@ PUBLIC_VARS=(
 	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
 	DURABLE_WEBHOOK_INBOX_ENABLED SENTRY_STAGING_ENABLED
 )
+LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
+
+workload_container_name() {
+	case "$1" in
+	"$API_CONTAINER") printf '%s\n' "$API_WORKLOAD_CONTAINER_NAME" ;;
+	"$WORKER_CONTAINER") printf '%s\n' "$WORKER_WORKLOAD_CONTAINER_NAME" ;;
+	"$SCHEDULER_CONTAINER") printf '%s\n' "$SCHEDULER_WORKLOAD_CONTAINER_NAME" ;;
+	*) return 1 ;;
+	esac
+}
 
 record_grants_enabled_for() {
 	local container_name=$1
@@ -608,8 +621,8 @@ resolve_staging_digest() {
 
 collect_workload_state() {
 	local mode=${1:-safe}
-	local container workload_json ready_revision revision_json state_json states_json
-	local secret_names_json public_names_json expected_args_json
+	local container expected_container_name workload_json ready_revision revision_json state_json states_json
+	local secret_names_json public_names_json legacy_public_names_json expected_args_json
 	local container_secret_vars=() container_public_vars=()
 	[[ "$mode" == "safe" || "$mode" == "exact" ]] || return 1
 	local states=()
@@ -619,6 +632,12 @@ collect_workload_state() {
 			jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
 		public_names_json=$(printf '%s\n' "${container_public_vars[@]}" |
 			jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		legacy_public_names_json='[]'
+		if [[ "$container" == "$API_CONTAINER" || "$container" == "$WORKER_CONTAINER" ]]; then
+			legacy_public_names_json=$(printf '%s\n' "${LEGACY_PUBLIC_ENV_VARS[@]}" |
+				jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		fi
+		expected_container_name=$(workload_container_name "$container") || return 1
 		case "$container" in
 		"$API_CONTAINER") expected_args_json='[]' ;;
 		"$WORKER_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_WORKER_COMMAND" '[$value]') ;;
@@ -654,8 +673,10 @@ collect_workload_state() {
 			"$workload_json" "$revision_json" "$ENV_JSON" | jq -ces \
 			--argjson secret_names "$secret_names_json" \
 			--argjson public_names "$public_names_json" \
+			--argjson legacy_public_names "$legacy_public_names_json" \
 			--argjson expected_args "$expected_args_json" \
 			--arg expected_name "$container" \
+			--arg expected_container_name "$expected_container_name" \
 			--arg expected_image "$STAGING_IMAGE_REFERENCE" \
 			--arg mode "$mode" '
 			def secret_ref($name): $name | ascii_downcase | gsub("_"; "-");
@@ -664,7 +685,7 @@ collect_workload_state() {
 			 ($revision.containers | length) == 1) |
 			$revision.containers[0] as $container |
 			($container.env // []) as $environment |
-			select($container.name == $expected_name and
+			select($container.name == $expected_container_name and
 			 ($container.image | type == "string" and length > 0) and
 			 ($container.command == null or ($container.command | type == "array")) and
 			 ($container.args == null or ($container.args | type == "array")) and
@@ -677,10 +698,14 @@ collect_workload_state() {
 			     .secretRef == secret_ref($name) and (.value == null or .value == "")
 			   elif ($public_names | index($name)) != null then
 			     (.value | type == "string") and .secretRef == null
+			   elif $mode == "safe" and ($legacy_public_names | index($name)) != null then
+			     (.value | type == "string" and length > 0) and .secretRef == null and
+			     .value == $configuration.CLERK_DEPLOYMENT_PUBLISHABLE_KEY
 			   else false end)) |
 			($environment | map(select(.secretRef != null) |
 			 {key: .name, value: .secretRef}) | from_entries) as $secret_refs |
-			($environment | map(select(.secretRef == null) |
+			($environment | map(.name as $name |
+			 select(.secretRef == null and ($public_names | index($name)) != null) |
 			 {key: .name, value: .value}) | from_entries) as $public_config |
 			(reduce $secret_names[] as $name ({};
 			  if (($configuration[$name] // "") | type == "string" and length > 0)
@@ -696,6 +721,7 @@ collect_workload_state() {
 			 name: $workload.name, latestRevision: $workload.latestRevision,
 			 latestReadyRevision: $workload.latestReadyRevision,
 			 containerCount: ($revision.containers | length),
+			 containerName: $container.name,
 			 readyRevisionImage: $container.image,
 			 readyRevisionCommand: ($container.command // []),
 			 readyRevisionArgs: ($container.args // []),
@@ -703,6 +729,8 @@ collect_workload_state() {
 			 readyRevisionProvisioning: $revision.provisioning,
 			 activeRevisionsMode: $workload.activeRevisionsMode, traffic: $workload.traffic,
 			 publicConfig: $public_config, secretRefs: $secret_refs,
+			 legacyPublicEnvNames: ($environment | map(.name as $name |
+			   select(($legacy_public_names | index($name)) != null) | .name) | sort),
 			 environmentContractExact: ($mode == "exact")
 			}
 		') || {
@@ -1128,6 +1156,7 @@ initiate_deployment() {
 	local remove_env_vars=()
 	local container_secret_vars=() container_public_vars=()
 	configure_workload_contract "$container_name"
+	remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")
 
 	for var in "${container_secret_vars[@]}"; do
 		local value
