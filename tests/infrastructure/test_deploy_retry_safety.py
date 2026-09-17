@@ -489,7 +489,9 @@ def _workload_capture(
 
     environment = {
         **os.environ,
-        "APP_REVISION": revision("app", "app-web", app_args or []),
+        "APP_REVISION": revision(
+            "app", "app-web", ["python main.py"] if app_args is None else app_args
+        ),
         "WORKER_REVISION": revision("worker", "app-worker", ["worker command"]),
         "SCHEDULER_REVISION": revision(
             "scheduler", "app-scheduler", ["scheduler command"]
@@ -518,6 +520,7 @@ WORKER_WORKLOAD_CONTAINER_NAME=app-worker
 SCHEDULER_WORKLOAD_CONTAINER_NAME=app-scheduler
 STAGING_IMAGE=registry.example/cosmaneura
 STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
+STAGING_API_COMMAND='python main.py'
 STAGING_WORKER_COMMAND='worker command'
 SCHEDULER_COMMAND='scheduler command'
 ENABLE_SOVEREIGN_RECORD_GRANTS=false
@@ -571,6 +574,9 @@ def test_workload_evidence_accepts_only_exact_single_container_contract() -> Non
     assert "credential-must-not-appear" not in result.stdout + result.stderr
     state = json.loads(result.stdout)
     assert all(item["environmentContractExact"] for item in state)
+    assert next(item for item in state if item["name"] == "app")[
+        "readyRevisionArgs"
+    ] == ["python main.py"]
     assert all(item["secretRefs"] == {"DATABASE_URL": "database-url"} for item in state)
     assert {item["name"]: item["containerName"] for item in state} == {
         "app": "app-web",
@@ -625,9 +631,67 @@ def test_deploy_removes_legacy_public_environment_variables() -> None:
     assert 'remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")' in initiate
 
 
+@pytest.mark.parametrize("role", ["api", "worker", "scheduler"])
+def test_deployment_explicitly_uses_each_candidate_procfile_command(
+    tmp_path: Path, role: str
+) -> None:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text()
+    start = deploy.index("if ! STAGING_API_COMMAND=")
+    parsing = deploy[start : deploy.index("unset CANDIDATE_PROCFILE", start)]
+    capture = tmp_path / "azure-update-arguments.txt"
+    script = r"""
+set -eu
+API_CONTAINER=api
+WORKER_CONTAINER=worker
+SCHEDULER_CONTAINER=scheduler
+RESOURCE_GROUP=synthetic
+STAGING_IMAGE_REFERENCE=registry.example/candidate@sha256:synthetic
+REVISION_STRING=synthetic-revision
+LEGACY_PUBLIC_ENV_VARS=()
+BILLING_PUBLIC_VARS=()
+GRANT_SECRET_ENV_NAME=SOVEREIGN_RECORD_GRANT_SECRET
+RECALL_SECRET_ENV_NAME=RECALL_WEBHOOK_SECRET
+STRIPE_INTEGRATION_ENABLED=false
+configure_workload_contract() { container_secret_vars=(); container_public_vars=(); }
+record_grants_enabled_for() { return 1; }
+billing_integration_enabled_for() { return 1; }
+billing_workload_for() { return 1; }
+az() { printf '%s\n' "$@" > "$CAPTURE"; }
+"""
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            script
+            + parsing
+            + _shell_function(deploy, "initiate_deployment")
+            + '\ninitiate_deployment "$ROLE" synthetic-sha\n',
+        ],
+        env={
+            "PATH": os.environ["PATH"],
+            "CANDIDATE_PROCFILE": (ROOT / "Procfile").read_text(),
+            "CAPTURE": str(capture),
+            "ROLE": role,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = capture.read_text().splitlines()
+    expected = next(
+        line.split(": ", 1)[1]
+        for line in (ROOT / "Procfile").read_text().splitlines()
+        if line.startswith(role + ": ")
+    )
+    assert arguments[arguments.index("--args") + 1] == expected
+    assert arguments.count("--args") == 1
+
+
 @pytest.mark.parametrize(
     ("extra_container", "environment", "app_args"),
     [
+        (False, None, []),
         (True, None, None),
         (False, [{"name": "UNKNOWN", "value": "hidden", "secretRef": None}], None),
         (

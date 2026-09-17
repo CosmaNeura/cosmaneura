@@ -292,6 +292,10 @@ if ! CANDIDATE_PROCFILE=$(git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"); t
 	echo "Error: the staging candidate does not contain a readable Procfile."
 	exit 1
 fi
+if ! STAGING_API_COMMAND=$(printf '%s' "$CANDIDATE_PROCFILE" | yq -er '.api'); then
+	echo "Error: the staging candidate Procfile API command is missing."
+	exit 1
+fi
 if ! STAGING_WORKER_COMMAND=$(printf '%s' "$CANDIDATE_PROCFILE" | yq -er '.worker'); then
 	echo "Error: the staging candidate Procfile worker command is missing."
 	exit 1
@@ -644,7 +648,7 @@ collect_workload_state() {
 		fi
 		expected_container_name=$(workload_container_name "$container") || return 1
 		case "$container" in
-		"$API_CONTAINER") expected_args_json='[]' ;;
+		"$API_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_API_COMMAND" '[$value]') ;;
 		"$WORKER_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_WORKER_COMMAND" '[$value]') ;;
 		"$SCHEDULER_CONTAINER") expected_args_json=$(jq -cn --arg value "$SCHEDULER_COMMAND" '[$value]') ;;
 		esac
@@ -779,8 +783,10 @@ verify_candidate_workload_state() {
 	local state_json=$1
 	if ! jq -e \
 		--arg expected_image "$STAGING_IMAGE_REFERENCE" \
+		--arg api "$API_CONTAINER" \
 		--arg worker "$WORKER_CONTAINER" \
 		--arg scheduler "$SCHEDULER_CONTAINER" \
+		--arg api_command "$STAGING_API_COMMAND" \
 		--arg worker_command "$STAGING_WORKER_COMMAND" \
 		--arg scheduler_command "$SCHEDULER_COMMAND" \
 		--argjson expected "$CONFIGURATION_EVIDENCE_JSON" '
@@ -793,6 +799,7 @@ verify_candidate_workload_state() {
 		all(.[] | select(.name != $scheduler); . as $workload | ($expected.flags |
 		 {STRIPE_INTEGRATION_ENABLED, STRIPE_BILLING_ENABLED, STRIPE_LIVE_MODE} |
 		 to_entries | all(.[] as $item; $workload.publicConfig[$item.key] == $item.value))) and
+		([.[] | select(.name == $api)][0].readyRevisionArgs == [$api_command]) and
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
 	' <<<"$state_json" >/dev/null; then
@@ -1301,6 +1308,9 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
+		update_args+=(--args "$STAGING_API_COMMAND")
+	fi
 	if [[ "$container_name" == "$WORKER_CONTAINER" ]]; then
 		update_args+=(--args "$STAGING_WORKER_COMMAND")
 	fi
