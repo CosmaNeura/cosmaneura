@@ -2,7 +2,7 @@
 
 > Architecture decisions for this system live in the `cosmaneura-architecture` repo, in `ARCHITECTURE.md`. Read it before making structural changes. If a change conflicts with it, stop and resolve the conflict rather than proceeding.
 
-Ese repo también contiene `AUDIT.md` (auditoría cross-repo contra `ARCHITECTURE.md` v2) y los ADRs en `adr/`. Léelos antes de mover código entre repos.
+That repo also contains the ADR index (`adr/README.md`) and ratified contracts. Read those before moving code between repos. Do not treat historical audit notes as current policy.
 
 ## Qué es
 
