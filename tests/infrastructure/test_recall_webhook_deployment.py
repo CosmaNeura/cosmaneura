@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SECRET = "RECALL_WEBHOOK_SECRET"
@@ -148,6 +152,20 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
 
 def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
     deploy = _read("infra-staging/deploy.sh")
+    # The EXIT cleanup helper is defined before validation but remains dormant
+    # until run_migrations arms it. Check its behavior separately below instead
+    # of treating its definition as an already executed Azure mutation.
+    cleanup_start = deploy.index("\ncleanup_migration_job() {")
+    cleanup_end = deploy.index("\ncapture_failed_workload_state() {", cleanup_start)
+    initialization = 'MIGRATION_JOB_CLEANUP_REQUIRED="false"'
+    assert deploy.index(initialization) < cleanup_start
+    assert deploy.count('MIGRATION_JOB_CLEANUP_REQUIRED="true"') == 1
+    assert (
+        deploy.index("\nrun_migrations() {")
+        < deploy.index('MIGRATION_JOB_CLEANUP_REQUIRED="true"')
+        < deploy.index("\nrun_migrations\n")
+    )
+    deploy = deploy[:cleanup_start] + deploy[cleanup_end:]
     validation = deploy.index("--validate-signing-secret-only")
 
     assert "api_only_secret_live_guard.py" in deploy
@@ -167,6 +185,87 @@ def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
         "az containerapp update",
     ):
         assert validation < deploy.index(mutation)
+
+
+@pytest.mark.parametrize(
+    ("configuration", "expected_status", "cleanup_expected"),
+    [
+        ({}, 1, False),
+        ({SECRET: "invalid-synthetic-signing-secret"}, 1, False),
+        ({SECRET: "whsec_" + base64.b64encode(b"x" * 32).decode()}, 0, True),
+    ],
+)
+def test_staging_recall_validation_gates_exit_cleanup(
+    tmp_path: Path,
+    configuration: dict[str, str],
+    expected_status: int,
+    cleanup_expected: bool,
+) -> None:
+    deploy = _read("infra-staging/deploy.sh")
+    initialization = re.search(r"^MIGRATION_JOB_CLEANUP_REQUIRED=.*$", deploy, re.M)
+    assert initialization is not None
+    cleanup = deploy[
+        deploy.index("\ncleanup_migration_job() {") : deploy.index(
+            "\nif ! WORKLOADS_BEFORE_JSON="
+        )
+    ]
+    validation_start = deploy.index("\nif ! RECALL_WEBHOOK_SECRET_INPUT=")
+    validation_end = deploy.index(
+        "\nunset RECALL_WEBHOOK_SECRET_INPUT", validation_start
+    )
+    validation = (
+        deploy[validation_start:validation_end]
+        + "\nunset RECALL_WEBHOOK_SECRET_INPUT\n"
+    )
+    calls_path = tmp_path / "azure-calls"
+    calls_path.write_text("")
+    # Execute the real initializer, EXIT trap and credential validator. Every
+    # Azure operation is a local stub; the successful case proves cleanup can
+    # actually delete a job once the post-validation migration phase arms it.
+    script = "\n".join(
+        [
+            "set -eu",
+            initialization.group(),
+            """
+az() {
+    printf '%s\\n' "$*" >> "$AZURE_CALLS"
+    if [[ "$*" == 'containerapp job list '* ]]; then printf '0\\n'; fi
+}
+collect_workload_state() { printf '[]\\n'; }
+emit_github_output() { :; }
+""",
+            cleanup,
+            validation,
+            'MIGRATION_JOB_CLEANUP_REQUIRED="true"',
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": os.environ["PATH"],
+            "AZURE_CALLS": str(calls_path),
+            "ENV_JSON": json.dumps(configuration),
+            "PYTHON_BIN": sys.executable,
+            "SCRIPT_DIR": str(ROOT / "infra-staging"),
+            "MIGRATION_JOB": "synthetic-migration-job",
+            "RESOURCE_GROUP": "synthetic-resource-group",
+            # A caller cannot arm the trap before validation through the env.
+            "MIGRATION_JOB_CLEANUP_REQUIRED": "true",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    calls = calls_path.read_text().splitlines()
+    if cleanup_expected:
+        assert len(calls) == 3
+        assert calls[0].startswith("containerapp job show ")
+        assert calls[1].startswith("containerapp job delete ")
+        assert calls[2].startswith("containerapp job list ")
+    else:
+        assert "Staging Recall webhook signing credential is invalid." in result.stdout
+        assert calls == []
 
 
 def test_deploy_scripts_drop_ambient_provider_credentials_before_subprocesses() -> None:
