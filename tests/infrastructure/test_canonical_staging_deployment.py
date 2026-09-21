@@ -57,19 +57,14 @@ def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() 
     assert "cancel-in-progress: false" in source
 
 
-def test_legacy_and_canonical_staging_paths_are_ref_disjoint() -> None:
+def test_canonical_workflow_is_the_only_staging_path() -> None:
     legacy = LEGACY_WORKFLOW.read_text(encoding="utf-8")
-    authorization = _job(legacy, "authorize-staging")
-    legacy_deploy = _job(legacy, "deploy-staging")
     canonical_deploy = _job(_source(), "deploy")
 
-    assert "name: Hold legacy staging deployment for canonical cutover" not in legacy
-    assert "github.ref == 'refs/heads/staging'" in authorization
-    assert '"$DEPLOYMENT_REF" != "refs/heads/staging"' in authorization
-    assert "environment:" not in authorization
-    assert "github.ref == 'refs/heads/staging'" in legacy_deploy
-    assert "environment: staging" in legacy_deploy
-    assert "refs/heads/master" not in authorization + legacy_deploy
+    assert "refs/heads/staging" not in legacy
+    assert "\n  authorize-staging:" not in legacy
+    assert "\n  deploy-staging:" not in legacy
+    assert "environment: staging" not in legacy
 
     assert "github.ref == 'refs/heads/master'" in canonical_deploy
     assert "environment: staging" in canonical_deploy

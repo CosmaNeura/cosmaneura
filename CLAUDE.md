@@ -84,8 +84,12 @@ just js_generate-openapi
   `tests/migrations_graph_test.py` verifica el grafo (IDs únicos, sin ciclos, un solo head).
 - Worker y scheduler corren en **contenedores separados** a propósito.
 - Env se gestiona **exclusivamente vía direnv** (`.envrc` + `.env.*`), no en el Justfile.
-- Los pushes a `master` y `staging` ejecutan validación, pero no despliegan. Los despliegues de
-  ambos entornos requieren una ejecución manual iniciada por el fundador desde la rama exacta.
+- `master` es el tronco. Staging y producción son entornos que se promueven a un SHA de `master`
+  explícito y revisado; hacer merge nunca despliega. La rama vestigial `staging` ya no tiene
+  ninguna ruta de despliegue y está en proceso de retirarse. Los despliegues de ambos entornos
+  requieren una ejecución manual iniciada por el fundador: producción con
+  `Build & Publish (manual)` sobre `master`, y staging con `Deploy Staging Candidate`, que recibe
+  un `candidate_sha` contenido en `master`.
 - Aliases de paths frontend: `~/*` y `@/*` → `web/app/*`.
 
 ## Config

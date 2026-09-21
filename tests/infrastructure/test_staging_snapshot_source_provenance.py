@@ -569,16 +569,19 @@ class BoundedReadTests(unittest.TestCase):
             "print(str(os.getpid())+':'+str(child),flush=True)\n"
             "os._exit(0)\n"
         )
-        code, raw = m.read_command(
-            [sys.executable, "-I", "-S", "-B", "-c", source],
-            Path.cwd().resolve(),
-            {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
-            time.monotonic() + 3,
-            64,
-        )
-        leader, child = (int(value) for value in raw.strip().split(b":"))
-        self.assertEqual(code, 0)
-        self.assertEqual(m.group_members(leader, time.monotonic() + 2), ())
+        # Exercise real local process cleanup; production pins target macOS.
+        ps_bytes = m.PS.read_bytes()
+        with patch.dict(m.TOOL_PINS, {m.PS: (len(ps_bytes), m.sha(ps_bytes))}):
+            code, raw = m.read_command(
+                [sys.executable, "-I", "-S", "-B", "-c", source],
+                Path.cwd().resolve(),
+                {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+                time.monotonic() + 3,
+                64,
+            )
+            leader, child = (int(value) for value in raw.strip().split(b":"))
+            self.assertEqual(code, 0)
+            self.assertEqual(m.group_members(leader, time.monotonic() + 2), ())
         with self.assertRaises(ProcessLookupError):
             os.getpgid(child)
 
@@ -721,7 +724,11 @@ class BoundedReadTests(unittest.TestCase):
             children.append(process)
             return process
 
-        with patch.object(m.subprocess, "Popen", side_effect=start):
+        ps_bytes = m.PS.read_bytes()
+        with (
+            patch.dict(m.TOOL_PINS, {m.PS: (len(ps_bytes), m.sha(ps_bytes))}),
+            patch.object(m.subprocess, "Popen", side_effect=start),
+        ):
             code, raw = m.read_command(
                 [sys.executable, "-I", "-S", "-B", "-c", "print('public fixture')"],
                 root,

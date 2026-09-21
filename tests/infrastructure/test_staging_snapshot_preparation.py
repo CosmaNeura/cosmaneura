@@ -195,7 +195,11 @@ class PreparationArtifactTests(unittest.TestCase):
 
     def test_source_review_fail_and_unmerged_or_stale_provenance_refuse(self):
         original = dict(self.packet)
-        for state, observed in (("OPEN", NOW), ("MERGED", NOW - timedelta(minutes=11))):
+        for state, observed in (
+            ("OPEN", NOW),
+            ("MERGED", NOW - timedelta(minutes=30, seconds=1)),
+            ("MERGED", NOW + timedelta(seconds=1)),
+        ):
             self.packet = dict(original)
             value = json.loads(self.packet["source-provenance.json"])
             value["pull_requests"][0]["state"] = state
@@ -206,7 +210,10 @@ class PreparationArtifactTests(unittest.TestCase):
                     self.packet["source-provenance.json"]
                 )
             )
-            with self.assertRaises(art.SnapshotArtifactsRefused):
+            with (
+                self.subTest(state=state, observed=observed),
+                self.assertRaises(art.SnapshotArtifactsRefused),
+            ):
                 self.read()
         self.packet = dict(original)
         value = json.loads(self.packet["source-review-summary.json"])
@@ -219,6 +226,15 @@ class PreparationArtifactTests(unittest.TestCase):
         )
         with self.assertRaises(art.SnapshotArtifactsRefused):
             self.read()
+
+    def test_provenance_at_exact_freshness_limit_is_accepted(self):
+        value = json.loads(self.packet["source-provenance.json"])
+        value["observed_at"] = public.encoded_time(NOW - timedelta(minutes=30))
+        self.packet["source-provenance.json"] = public.canonical(value)
+        self.change(
+            source_provenance_sha256=public.sha(self.packet["source-provenance.json"])
+        )
+        self.read()
 
     def test_retained_inode_and_time_cannot_be_renewed(self):
         result = self.read()
@@ -245,8 +261,8 @@ class PreparationArtifactTests(unittest.TestCase):
 class PreparationConsoleTests(unittest.TestCase):
     def setUp(self):
         self.f = console_fixtures.ConsoleTests()
-        self.f.setUp()
         self.addCleanup(self.f.doCleanups)
+        self.f.setUp()
         self.value = console.PreparationConsole()
         self.addCleanup(self.value.close)
 

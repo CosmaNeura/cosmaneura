@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
-    "staging_snapshot_identity",
+    "_test_staging_snapshot_identity_unit",
     Path(__file__).resolve().parents[2] / "scripts/staging_snapshot_identity.py",
 )
 assert SPEC is not None and SPEC.loader is not None
