@@ -12,10 +12,21 @@ from app.configuration.redis import get_redis
 from app.routes import internal
 from app.server import api_app
 from app.services import stripe_billing
+from app.services.public_entitlements import (
+    MAX_ACTIVE_CLINICIAN_SEATS,
+    active_clinician_seat_count,
+)
 from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
-from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
+from app.models.baa import (
+    BAA_CURRENT_REFERENCE,
+    BAA_CURRENT_SHA256,
+    BAA_CURRENT_VERSION,
+    BAA_DOC_ID,
+    BaaAcceptance,
+    BaaVersion,
+)
 from app.models.doctor import Doctor, DoctorRole
 from app.models.organization_access import ProviderOrganization
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -50,6 +61,9 @@ def _accept_baa(client: TestClient) -> dict:
     resp = client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],
@@ -116,7 +130,7 @@ def test_complete_onboarding_requires_practice(
     assert "practice" in resp.json()["detail"].lower()
 
 
-def test_grandfathered_doctor_can_complete_without_practice(
+def test_pilot_grant_cannot_complete_onboarding_without_practice(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -131,20 +145,20 @@ def test_grandfathered_doctor_can_complete_without_practice(
 
     settings = bare_authenticated_client.get(api_app.url_path_for("settings_data"))
     assert settings.status_code == status.HTTP_200_OK
-    assert settings.json()["onboarding_completed"] is True
-    assert settings.json()["practice_ready"] is True
+    assert settings.json()["onboarding_completed"] is False
+    assert settings.json()["practice_ready"] is False
     assert settings.json()["billing_recovery_required"] is False
 
     notes = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert notes.status_code == status.HTTP_200_OK
+    assert notes.status_code == status.HTTP_403_FORBIDDEN
 
     resp = bare_authenticated_client.post(api_app.url_path_for("complete_onboarding"))
-    assert resp.status_code == status.HTTP_200_OK
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
     doctor.refresh()
-    assert doctor.onboarding_completed_at is not None
+    assert doctor.onboarding_completed_at is None
 
 
-def test_continuity_granted_legacy_admin_can_reach_clinical_dashboard(
+def test_legacy_role_and_pilot_grant_cannot_bypass_membership(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -159,10 +173,10 @@ def test_continuity_granted_legacy_admin_can_reach_clinical_dashboard(
 
     response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
 
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
+def test_pilot_grant_does_not_activate_before_practice_gates(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -179,7 +193,7 @@ def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
 
     assert response.status_code == status.HTTP_200_OK
     payload = response.json()
-    assert payload["pilot_access_grant_active"] is True
+    assert payload["pilot_access_grant_active"] is False
     assert payload["baa_accepted"] is False
     assert payload["access_authorized"] is False
     assert payload["entitled"] is False
@@ -302,26 +316,16 @@ def test_create_practice_rechecks_live_email_while_rows_are_locked(
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-@pytest.mark.parametrize(
-    ("npi", "message"),
-    [
-        ("12345678901", "exactly 10 digits"),
-        ("12345A7893", "exactly 10 digits"),
-        ("1234567890", "checksum is invalid"),
-    ],
-)
-def test_create_practice_rejects_invalid_npi_without_truncating(
+def test_create_practice_rejects_npi_and_never_persists_it(
     bare_authenticated_client: TestClient,
-    npi: str,
-    message: str,
 ):
     doctor = _authed_doctor()
 
     response = bare_authenticated_client.post(
         api_app.url_path_for("create_practice"),
         json={
-            "legal_name": "NPI Validation Practice",
-            "npi": npi,
+            "legal_name": "NPI-Free Practice",
+            "npi": "1234567893",
             "is_solo": True,
             "channel": "direct",
             "pastoral_pack": False,
@@ -329,16 +333,13 @@ def test_create_practice_rejects_invalid_npi_without_truncating(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert message in response.text
+    assert "extra_forbidden" in response.text
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
-
-def test_create_practice_accepts_valid_npi(bare_authenticated_client: TestClient):
-    doctor = _authed_doctor()
-
-    _create_practice(bare_authenticated_client, npi="1234567893")
-
-    assert _own_practice(doctor).npi == "1234567893"
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    assert practice.npi is None
+    assert practice.acquisition_source == "public_self_service"
 
 
 @pytest.mark.parametrize("reservation", ["bootstrap", "organization"])
@@ -405,6 +406,86 @@ def test_owner_baa_then_complete(bare_authenticated_client: TestClient):
     assert doctor.onboarding_completed_at is not None
 
 
+def test_current_baa_endpoint_serves_the_v23_asset(
+    bare_authenticated_client: TestClient,
+):
+    _authed_doctor()
+
+    response = bare_authenticated_client.get(api_app.url_path_for("baa_current"))
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["doc_id"] == BAA_DOC_ID
+    assert body["version"] == BAA_CURRENT_VERSION
+    assert body["sha256"] == BAA_CURRENT_SHA256
+    assert "claims preparation and submission support" not in body["html"]
+
+
+def test_prior_clickwrap_requires_reacceptance_of_current_baa(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member
+
+    accepted_at = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    old_version = BaaVersion(
+        doc_id=BAA_DOC_ID,
+        version="2.2",
+        sha256="13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e",
+        content_path="app/assets/baa/baa_cn-baa-cust-cw_v2.2.html",
+        published_at=accepted_at,
+        is_current=False,
+    ).save()
+    old_acceptance = BaaAcceptance(
+        practice_id=practice.id,
+        baa_version_id=old_version.id,
+        covered_entity_legal_name=practice.legal_name,
+        accepted_by_doctor_id=doctor.id,
+        accepted_by_name="Pat Owner",
+        accepted_by_title="Physician / owner",
+        accepted_by_email=doctor.email or "test@example.com",
+        accepted_at_utc=accepted_at,
+        content_sha256=old_version.sha256,
+    ).save()
+    practice.baa_version = f"{BAA_DOC_ID} v2.2"
+    practice.baa_accepted_at = accepted_at
+    practice.baa_accepted_by_doctor_id = doctor.id
+    practice.baa_signature_name = "Pat Owner"
+    practice.baa_signature_title = "Physician / owner"
+    practice.save()
+    member.attested_at = accepted_at
+    member.attestation_name = "Pat Owner"
+    member.save()
+
+    stale_status = bare_authenticated_client.get(
+        api_app.url_path_for("practice_status")
+    )
+    assert stale_status.status_code == status.HTTP_200_OK
+    assert stale_status.json()["baa_accepted"] is False
+    blocked = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert blocked.status_code == status.HTTP_400_BAD_REQUEST
+
+    reaccepted = _accept_baa(bare_authenticated_client)
+    practice.refresh()
+    assert reaccepted["baa_accepted"] is True
+    assert practice.baa_version == BAA_CURRENT_REFERENCE
+    assert BaaAcceptance.get(id=old_acceptance.id) is not None
+    current = BaaVersion.get(doc_id=BAA_DOC_ID, version=BAA_CURRENT_VERSION)
+    assert current
+    assert (
+        BaaAcceptance.where(
+            (BaaAcceptance.practice_id == practice.id)
+            & (BaaAcceptance.baa_version_id == current.id)
+        ).count()
+        == 1
+    )
+
+
 def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient):
     _authed_doctor()
     _create_practice(bare_authenticated_client)
@@ -412,12 +493,61 @@ def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient)
     resp = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": [],
         },
     )
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.parametrize(
+    "identity_override",
+    [
+        pytest.param({"doc_id": "CN-BAA-CUST-CW-OTHER"}, id="doc-id"),
+        pytest.param({"version": "2.2"}, id="version"),
+        pytest.param({"sha256": "0" * 64}, id="sha256"),
+        pytest.param(
+            {
+                "version": "2.2",
+                "sha256": (
+                    "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
+                ),
+            },
+            id="stale-v2.2-tab",
+        ),
+    ],
+)
+def test_baa_acceptance_rejects_document_identity_mismatch(
+    bare_authenticated_client: TestClient,
+    identity_override: dict[str, str],
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    body = {
+        "doc_id": BAA_DOC_ID,
+        "version": BAA_CURRENT_VERSION,
+        "sha256": BAA_CURRENT_SHA256,
+        "signature_name": "Pat Owner",
+        "signature_title": "Physician / owner",
+        "checks": ["baa"],
+    } | identity_override
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json=body,
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "reload and review" in response.json()["detail"].lower()
+    assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
+    practice.refresh()
+    assert practice.baa_version is None
+    assert practice.baa_accepted_at is None
 
 
 def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
@@ -438,6 +568,9 @@ def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
     clickwrap = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],
@@ -504,7 +637,7 @@ def test_baa_acceptance_writes_append_only_record(
     assert acceptance_count() == 1
 
 
-def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
+def test_public_baa_acceptance_retry_repairs_legal_gate_without_starting_trial(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -520,7 +653,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     original_accepted_at = acceptance.accepted_at_utc
 
     # Simulate the historical partial-commit failure: legal evidence exists,
-    # but the denormalized gate/trial and owner attestation are absent.
+    # but the denormalized legal gate and owner attestation are absent.
     practice.baa_version = None
     practice.baa_accepted_at = None
     practice.baa_accepted_by_doctor_id = None
@@ -537,7 +670,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     member.refresh()
     assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 1
     assert practice.baa_accepted_at == original_accepted_at
-    assert practice.trial_ends_at == original_accepted_at + timedelta(days=14)
+    assert practice.trial_ends_at is None
     assert practice.baa_in_force()
     assert member.attested_at == original_accepted_at
     assert member.attestation_name == acceptance.accepted_by_name
@@ -588,7 +721,7 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
         pastoral_pack=True,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -626,7 +759,7 @@ def test_solo_practice_code_is_never_disclosed_or_accepted(
         pastoral_pack=False,
         is_solo=True,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -662,7 +795,7 @@ def test_legacy_public_domain_group_code_is_not_usable(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -699,7 +832,7 @@ def test_lookup_does_not_disclose_practice_to_a_stale_bound_email(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
     monkeypatch.setattr(
         internal,
@@ -732,7 +865,7 @@ def test_join_rechecks_live_email_while_rows_are_locked(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
     live_emails = iter([doctor.email, "replacement@outside.example"])
     monkeypatch.setattr(
@@ -794,7 +927,7 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
         stripe_customer_id="cus_fast_join",
         stripe_subscription_id="sub_fast_join",
         subscription_status="active",
@@ -805,6 +938,9 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
 
     monkeypatch.setattr(
         stripe_billing, "sync_subscription_quantity", forbidden_remote_sync
+    )
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", forbidden_remote_sync
     )
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -819,6 +955,61 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
     practice.refresh()
     assert practice.stripe_quantity_sync_required is True
     assert practice.stripe_quantity_sync_target == 1
+
+
+def test_join_rejects_twenty_first_active_clinician_atomically(
+    bare_authenticated_client: TestClient,
+):
+    joining_doctor = _authed_doctor()
+    domain = extract_email_domain(joining_doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Full Public Practice, PLLC",
+        join_code=f"F{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+        stripe_subscription_id=f"sub_join_full_{secrets.token_hex(8)}",
+        stripe_quantity_sync_target=MAX_ACTIVE_CLINICIAN_SEATS,
+        stripe_quantity_sync_version=3,
+    ).save()
+    for ordinal in range(MAX_ACTIVE_CLINICIAN_SEATS):
+        doctor = Doctor(
+            clerk_id=f"user_full_join_{secrets.token_hex(8)}",
+            email=f"member-{ordinal}-{secrets.token_hex(3)}@{domain}",
+            biography="",
+        ).save()
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+        ).save()
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": practice.join_code,
+            "attestation_name": "Twenty First Clinician",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == (
+        "A practice may have at most 20 active clinicians."
+    )
+    assert PracticeMember.get(doctor_id=joining_doctor.id) is None
+    with get_session() as session:
+        assert (
+            active_clinician_seat_count(session, practice.id)
+            == MAX_ACTIVE_CLINICIAN_SEATS
+        )
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target == MAX_ACTIVE_CLINICIAN_SEATS
+    assert practice.stripe_quantity_sync_version == 3
 
 
 def test_mcd_channel_without_mcd_email_coerces_to_catholic(
@@ -878,7 +1069,7 @@ def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_baa_acceptance_starts_trial_and_opens_the_gate(
+def test_public_baa_acceptance_does_not_start_trial_or_open_product_gate(
     bare_authenticated_client: TestClient,
 ):
     _authed_doctor()
@@ -892,19 +1083,15 @@ def test_baa_acceptance_starts_trial_and_opens_the_gate(
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["entitled"] is True
+    assert body["entitled"] is False
     assert body["billing_exempt"] is False
-    assert body["trial_ends_at"] is not None
+    assert body["trial_ends_at"] is None
 
-    trial_ends_at = datetime.fromisoformat(body["trial_ends_at"])
-    trial_left = trial_ends_at - datetime.now(timezone.utc)
-    assert timedelta(days=13) < trial_left <= timedelta(days=14)
-
-    opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert opened.status_code == status.HTTP_200_OK
+    still_blocked = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert still_blocked.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
 
-def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
+def test_expired_timed_comp_does_not_create_public_baa_trial(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -915,11 +1102,11 @@ def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
     practice.save()
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["trial_ends_at"] is not None
-    assert body["entitled"] is True
+    assert body["trial_ends_at"] is None
+    assert body["entitled"] is False
 
 
-def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
+def test_public_subscription_gate_and_exemption_sources(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -946,6 +1133,9 @@ def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     assert ended.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
     # an active subscription (mirrored from Stripe) is the third source
+    practice.stripe_customer_id = "cus_authoritative_public"
+    practice.stripe_subscription_id = "sub_authoritative_public"
+    practice.stripe_state_version = 1
     practice.subscription_status = "active"
     practice.save()
     subscribed = bare_authenticated_client.get(api_app.url_path_for("note_list"))

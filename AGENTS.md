@@ -1,78 +1,135 @@
-# AGENTS.md — Cosmaneura engineering guardrails
+# AGENTS.md — Cosmaneura core engineering guardrails (v0.2.1)
 
-> Canonical copy lives in `cosmaneura-architecture/deploy-kit/`. Sync on Contract Friday.
-> Keep this file under ~150 lines: only non-inferable rules belong here.
+> The canonical baseline lives in `cosmaneura-architecture/deploy-kit/`.
+> Preserve stricter local rules when syncing it here.
 
-## Stack
+## Operating objective
 
-GitHub + GitHub Actions (no Azure DevOps) · Azure Container Apps · ACR ·
-Azure Database for PostgreSQL Flexible Server · Clerk + Microsoft Entra ID
-(sign-in; varies by service). Core deploys from `master`. Key Vault + App
-Insights are target-state, not yet live in core prod.
-**This repo: the core platform. ACA prod + staging, deploys from `master`.**
+Reduce deployment risk created by rapid code growth. Make changes small,
+independently deployable, observable, and reversible. Documentation supports
+that work; it does not replace decomposition or deployed-state reconciliation.
 
-## Commands
+## Repository facts and verified commands
 
-- Install: `just setup`
-- Test (all): `just py_test && just js_test`
-- Test (single file): `uv run pytest <path>`
-- Lint + typecheck: `just lint`
-- Local dev: `just dev`
-- DB migration create: `just db_migrate` (Alembic; revisions in `migrations/versions/`)
-- Deploy: never manually. Merging to `master` deploys via GitHub Actions (image → ACR → `az containerapp update`). Do not invoke `az` deploy commands directly.
+- This is the HIPAA-oriented core platform. The default branch is `master`.
+  Production and staging run on Azure Container Apps.
+- Install: `just setup` (macOS local setup; creates local configuration).
+- Full test: `just py_test && just js_test`.
+- Focused test: `uv run pytest <path>`.
+- Lint/typecheck: `just lint`.
+- Local development: `just dev`.
+- Generate an Alembic revision: `just db_generate_migration "<name>"`.
+- Apply migrations to local dev/test databases: `just db_migrate`.
+- PR CI runs secretless Backend and Frontend jobs. Infrastructure PRs run
+  secretless OpenTofu format, validation, and provider-mocked tests.
 
-## Risk tiers (declare one on every PR)
+Agents never invoke production deploy, migration, or Azure mutation commands.
 
-- **Tier 0** — copy, styling, docs, config text, additive UI behind an existing flag. CI green → merge.
-- **Tier 1** — new feature logic, new endpoints, additive-only schema changes (new tables/columns, nullable). Requires: feature flag + flight plan reference.
-- **Tier 2** — anything touching `app/security/`, `app/configuration/clerk.py`, `app/configuration/authority.py`, `app/configuration/service_auth.py`, Stripe/billing paths, patient-data schemas, session/token logic, or any destructive migration. Requires: flight plan, migration ladder compliance (docs/MIGRATION_PLAYBOOK.md), rehearsal run, founder sign-off.
+## Risk classes (declare one on every PR)
 
-Tier is set by the *paths a change touches*, never by urgency.
+- **Tier 0 — routine:** localized code, test, copy, style, documentation, or a
+  behavior-preserving refactor with no deployment-surface, schema/data,
+  auth/session, billing, PHI, security-boundary, or external-contract impact.
+- **Tier 1 — deployment-sensitive and reversible:** a dependency, runtime
+  configuration, CI/build path, additive API/contract, additive schema/data
+  structure, or user-visible behavior needing deliberate recovery.
+- **Tier 2 — irreversible or high blast radius:** destructive or large-scale
+  data work; auth/session, Stripe/billing, patient/PHI paths; security
+  boundaries; production identity/network/promotion; breaking contracts; or
+  broad infrastructure changes.
+
+The following set a Tier 2 minimum: `app/security/`,
+`app/configuration/clerk.py`, `app/configuration/authority.py`,
+`app/configuration/service_auth.py`, Stripe/billing paths, patient-data schema,
+session/token logic, destructive migrations, and production deployment or
+infrastructure control. Urgency never lowers a tier. A mixed PR takes its
+highest tier and should be split when concerns can deploy independently.
+
+## Conditional controls
+
+- A feature flag applies only to reversible user-visible behavior. It is not a
+  rollback for schema, data, infrastructure, security, or refactoring work.
+- A flight plan is required for Tier 2, schema/data sequences, cross-repo
+  rollouts, or work released over multiple deploys/cohorts.
+- A migration rung and rehearsal apply only to schema/data work. Auth, billing,
+  or PHI code without a schema/data change does not invent them.
+- Every code-changing PR receives independent agent review after its final
+  substantive push. The reviewer cannot be the implementer. Durable PR
+  evidence links the reviewed commit and records findings and dispositions. A
+  later substantive push invalidates it. Agent review is not GitHub approval.
+
+## Approval and promotion boundaries
+
+- Preserve the repository's current GitHub PR approval settings. These
+  documents add or remove no required human approvals.
+- Production promotion is founder-only and manual. `Build & Publish (manual)` permits
+  the production job only for a manual run of the exact `master` ref when both
+  the original actor and any rerun actor are `JohnClem`; ordinary pushes,
+  including documentation-only pushes, cannot enter that job. The run records
+  founder self-authorization; it is not independent review.
+- Canonical staging deployment is founder-only and manual. Its control-plane
+  workflow runs from the exact current protected `master`. The legacy
+  `staging`-ref deployment path has been removed, so `Deploy Staging Candidate`
+  is the only staging deployment path; the `staging` branch itself is retired
+  separately and carries no deploy path either way. Each
+  canonical run requires a full immutable candidate SHA that is both
+  contained in protected `master` and the exact merge commit of the
+  founder-selected merged PR. It tests and deploys that candidate, not the
+  moving `master` tip, and reverifies provenance before protected credentials,
+  image publication, migrations, and Azure mutation. This source gate does not
+  prove that staging is synthetic-only or non-PHI.
+- The production job still builds and publishes during the promotion run
+  instead of promoting a previously verified immutable artifact. Treat that
+  source-to-artifact separation as an open remediation item. Preserve the
+  existing Terraform Apply, provider-callback, ancestry, and current-`master`
+  gates, and never claim a required environment reviewer exists.
+- Before promoting over an environment whose SHA, digest, configuration, or
+  schema differs from `master`, record the drift and choose keep, assimilate,
+  or replace. Never reconcile by blindly deploying `master`.
+- Unless explicitly broader, security-risk acceptance permits dark development
+  in a non-PHI environment only and blocks production or PHI-bearing promotion.
 
 ## Permission boundaries
 
-**Allowed freely**
-- Creating branches, PRs, and stacked PRs; small refactors inside a feature's own module
-- Adding feature flags; additive migrations (new nullable columns, new tables, new indexes)
-- Updating docs, tests, and flight plans
+**Allowed without a separate production decision**
+
+- Create small or stacked PRs, tests, flight plans, and reversible refactors.
+- Add dormant additive schema structures through an approved expand rung.
+- Inspect live state read-only and prepare reconciliation options.
 
 **Ask first**
-- Any change under the Tier 2 paths above — even one line
-- Adding a new external dependency or third-party service (BAA implications)
-- Changing CI workflows, environment config, or anything under `.github/`
-- Backfill scripts that write to production data
+
+- Change auth/session, billing, patient-record schemas, security boundaries,
+  CI/deployment workflows, environment configuration, or production data.
+- Add an external dependency/service or broaden a release cohort.
+- Execute a production promotion, migration, backfill, or destructive cleanup.
 
 **Never**
-- Destructive migrations (DROP/RENAME column or table, type changes) outside a labeled `contract` PR whose hold period has elapsed
-- Importing auth/billing internals from feature code — go through the public interface of the module only
-- Turning a feature flag on for all users in code; rollout happens through the flag system, by cohort
-- Touching production directly (`az` commands against prod resources), force-pushing the default branch, committing secrets, or putting real PHI in tests, fixtures, seeds, staging, or logs
 
-## Architecture rules (the non-inferable ones)
+- Put PHI in tests, fixtures, seeds, staging, rehearsal exports, logs, PR text,
+  or agent prompts; commit secrets; or force-push the default branch.
+- Deploy an unmerged branch or represent prose/agent output as GitHub approval.
+- Drop an additive expand structure as immediate rollback; leave it dormant.
+- Archive/delete repositories or production resources under this doctrine.
 
-- Identity: only this repo's designated auth adapter module(s) — `app/configuration/clerk.py` (Clerk) and `app/configuration/service_auth.py` (service tokens) — may import vendor SDKs (Clerk, Entra/MSAL) or parse provider claims. All domain code consumes a normalized principal from the adapter — never raw tokens, never provider-specific branches. One adapter per service; there is no cross-service facade.
-- Reversible user-visible behavior ships behind a flag/cohort control from its first commit (name: `ff_<feature>_<yyyymm>`, owner + expiry in the flight plan). Refactors, security fixes, infra, and schema work are NOT flagged — small PRs + migration ladder + revert.
-- All schema changes follow docs/MIGRATION_PLAYBOOK.md. Additive first; destructive only as a final `contract` step. A "rung" = one independently deployable, observable, backward-compatible transition (may span coordinated cross-repo PRs; receiver/auth deploys before sender activation).
-- Users carry an `auth_version` (or equivalent) marker during auth migrations; both old and new paths must work until the contract step.
+## Architecture and workflow
 
-## Workflow
-
-1. New feature? FIRST draft `docs/flight-plans/<feature>.md` from the template. Do not write feature code before the flight plan exists.
-2. Build as a stack of small PRs (interface/seam → logic → UI → flag wiring). One session per layer. Keep diffs reviewable by one human.
-3. Every PR fills in the PR template completely, including the tier and the change record.
-4. If a PR changes deploy-relevant behavior, update this file in the same PR.
-
-## Repo notes
-
-- Default branch is `master`, not `main`. Production and staging both run on ACA.
-- **The auth-adapter rule is aspirational here today.** Clerk is currently imported
-  directly from at least ten modules outside the adapter, including `app/celery.py`,
-  `app/models/doctor.py`, `app/models/view_as.py` and `app/utils/email_domain.py`.
-  Do not add new direct importers; route new code through the adapter, and treat
-  narrowing the existing ones as its own tracked work. This coupling is the reason
-  an auth change touches the whole codebase.
-- CI runs `just db_migrate`, so migrations execute from GitHub Actions runners, not
-  from inside Azure. Keep that in mind before tightening database firewall rules.
-- `master` currently has **no branch protection** and the Production environment has
-  **no required reviewer**. Until SECURITY_HARDENING.md items 5–6 land, "founder
-  sign-off" on Tier 2 is a convention, not an enforced gate.
+- Vendor identity SDKs and claim parsing belong in
+  `app/configuration/clerk.py` and `app/configuration/service_auth.py`; domain
+  code consumes a normalized principal. Existing direct Clerk imports are known
+  debt: add none, and reduce them in separate reviewable work.
+- Preserve `main.py` as the production entrypoint, import-time fail-fast setup,
+  separate worker/scheduler containers, and OpenAPI operation IDs.
+- Never invent Alembic revision IDs. Generate them with the verified recipe;
+  `tests/migrations_graph_test.py` enforces a unique acyclic single-head graph.
+- Build cross-repo work receiver-first with backward-compatible contracts.
+- Keep each PR to one deployable outcome, reviewable in roughly ten minutes.
+- Obey the repository-specific blocking change-budget check once installed.
+  Its numeric threshold belongs in a small, separately reviewed policy
+  workflow; an oversized PR cannot waive its own limit by label or checkbox.
+  The tracked `change-budget` workflow enforces at most 2,000 changed lines and
+  50 changed files. Keep that exact context required in the `master` ruleset;
+  until the ruleset is configured, reviewers must require decomposition.
+- Every PR records its tier, tests, exact recovery, independent agent-review
+  evidence, and only the conditional controls that apply.
+- Documentation-only changes must not build or deploy production artifacts.

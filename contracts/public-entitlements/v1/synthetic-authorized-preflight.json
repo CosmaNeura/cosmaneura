@@ -1,0 +1,54 @@
+{
+  "contract_version": "public-capability-entitlements.v1",
+  "policy_revision": "2026-08-28",
+  "generated_at": "2026-08-28T12:00:00Z",
+  "actor": {"actor_id": "actor_synthetic_01", "practice_id": "practice_synthetic_01", "role": "owner", "membership_state": "active"},
+  "gates": {"identity_verified": true, "membership_authorized": true, "baa_accepted": true, "terms_accepted": true, "privacy_accepted": true, "subscription_state": "trialing", "tenant_isolation_verified": true},
+  "seats": {"active_clinician_seats": 1, "maximum_active_clinician_seats": 20, "pending_invitations": 0, "stripe_quantity_sync_required": false},
+  "capabilities": {
+    "soap_note": {
+      "decision": "allowed",
+      "data_mode": "real_phi",
+      "rollout": "cohort",
+      "operation_mode": "standard",
+      "consent_requirement": "execution_context",
+      "reason_codes": ["allowed"]
+    },
+    "intake_prep": {
+      "decision": "denied",
+      "data_mode": "none",
+      "rollout": "disabled",
+      "operation_mode": "standard",
+      "consent_requirement": "execution_context",
+      "reason_codes": ["rollout_disabled"],
+      "question_set": {"version": "intake-prep.questions.v1", "question_count": 5, "modifiable_by": "authorized_practice_users"}
+    },
+    "session_prep": {
+      "decision": "denied",
+      "data_mode": "none",
+      "rollout": "disabled",
+      "operation_mode": "read_only",
+      "consent_requirement": "execution_context",
+      "reason_codes": ["rollout_disabled"]
+    },
+    "scribe": {
+      "decision": "denied",
+      "data_mode": "none",
+      "rollout": "disabled",
+      "operation_mode": "web_pwa_first",
+      "consent_requirement": "execution_context",
+      "reason_codes": ["rollout_disabled"]
+    },
+    "cab": {
+      "decision": "denied",
+      "data_mode": "none",
+      "rollout": "disabled",
+      "operation_mode": "advisory_only",
+      "consent_requirement": "execution_context",
+      "reason_codes": ["rollout_disabled"],
+      "ehr_write": false,
+      "claim_submission": false,
+      "clearinghouse_submission": false
+    }
+  }
+}

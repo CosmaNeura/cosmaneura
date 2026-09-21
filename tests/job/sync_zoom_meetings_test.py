@@ -10,7 +10,7 @@ from app.jobs.sync_zoom_meetings import perform
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
-from tests.factories import DoctorFactory
+from tests.factories import AppointmentFactory, DoctorFactory
 from tests.routes.utils import provision_practice_in_force
 
 
@@ -88,6 +88,9 @@ def test_sync_creates_zoom_meetings(global_session):
 def test_sync_upserts_existing_meetings(global_session):
     doctor = _authorized_doctor()
     _create_zoom_integration(doctor)
+    appointment = AppointmentFactory.build(doctor_id=doctor.id).save()
+    authorization_digest = "a" * 64
+    authorization_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
 
     # pre-create one meeting
     ZoomMeeting(
@@ -97,6 +100,9 @@ def test_sync_upserts_existing_meetings(global_session):
         start_time=datetime(2026, 4, 7, 14, 0, tzinfo=timezone.utc),
         duration=30,
         join_url="https://zoom.us/j/123456789",
+        appointment_id=appointment.id,
+        capture_authorization_occurrence_digest=authorization_digest,
+        capture_authorization_expires_at=authorization_expiry,
     ).save()
 
     with patch(
@@ -114,6 +120,9 @@ def test_sync_upserts_existing_meetings(global_session):
     updated = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="123456789")
     assert updated is not None
     assert updated.topic == "Patient Follow-up"  # updated from Zoom
+    assert updated.appointment_id == appointment.id
+    assert updated.capture_authorization_occurrence_digest == authorization_digest
+    assert updated.capture_authorization_expires_at == authorization_expiry
 
 
 def test_sync_preserves_started_status(global_session):

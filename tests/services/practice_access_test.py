@@ -13,6 +13,7 @@ from app.services.practice_access import (
 )
 
 from activemodel.session_manager import get_session
+from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.practice import Practice
 from app.models.practice_access_audit import (
     PracticeAccessAction,
@@ -52,6 +53,17 @@ def test_future_negotiated_baa_is_recorded_but_does_not_unlock_early():
     assert audit.action == PracticeAccessAction.negotiated_baa_recorded.value
     assert audit.operator_ref == "ticket-BAA-204"
     assert audit.document_reference == "CN-BAA-CUST-2026-0042"
+
+
+def test_clickwrap_baa_requires_the_current_version() -> None:
+    practice = _practice()
+    practice.baa_accepted_at = NOW
+    practice.baa_version = "CN-BAA-CUST-CW v2.2"
+
+    assert not practice.baa_in_force(at=NOW)
+
+    practice.baa_version = BAA_CURRENT_REFERENCE
+    assert practice.baa_in_force(at=NOW)
 
 
 def test_future_replacement_cannot_suspend_negotiated_baa_currently_in_force():
@@ -110,6 +122,61 @@ def test_billing_exemption_changes_append_operator_evidence():
         ),
     )
     assert {record.id for record in records} == {set_audit.id, clear_audit.id}
+
+
+@pytest.mark.parametrize(
+    "billing_state",
+    ["frozen_checkout", "cached_checkout", "nonterminal_subscription"],
+)
+def test_billing_exemption_requires_existing_stripe_state_to_be_resolved(
+    billing_state: str,
+):
+    practice = _practice()
+    if billing_state == "frozen_checkout":
+        practice.stripe_checkout_request_json = "{}"
+        practice.stripe_checkout_request_created_at = NOW
+    elif billing_state == "cached_checkout":
+        practice.stripe_checkout_session_id = "cs_pending_exemption"
+    else:
+        practice.stripe_subscription_id = "sub_pending_exemption"
+        practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(PracticeAccessChangeError, match="must be resolved"):
+        set_billing_exemption(
+            practice,
+            operator_ref="ticket-PILOT-blocked",
+            reason="Comp must not race a Stripe obligation",
+            expires_at=None,
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert not practice.billing_exempt
+    assert not PracticeAccessAudit.where(
+        PracticeAccessAudit.practice_id == practice.id
+    ).first()
+
+
+def test_clearing_billing_exemption_does_not_require_stripe_resolution():
+    practice = _practice()
+    practice.billing_exempt = True
+    practice.stripe_checkout_session_id = "cs_existing_while_clearing"
+    practice.save()
+
+    audit = set_billing_exemption(
+        practice,
+        operator_ref="ticket-PILOT-clear",
+        reason="Remove exemption without altering Stripe state",
+        expires_at=None,
+        clear=True,
+        now=NOW,
+    )
+
+    practice.refresh()
+    assert not practice.billing_exempt
+    assert practice.stripe_checkout_session_id == "cs_existing_while_clearing"
+    assert audit.action == PracticeAccessAction.billing_exemption_cleared.value
 
 
 def test_practice_access_audit_database_rejects_update_and_delete():

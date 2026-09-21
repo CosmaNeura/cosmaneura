@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import json
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SECRET = "RECALL_WEBHOOK_SECRET"
@@ -88,7 +92,7 @@ def test_recall_signing_secret_is_api_only_and_flag_is_public() -> None:
     production = _read("infra/main.tf")
     api = _hcl_block(production, 'resource "azurerm_container_app" "app"')
     assert api.count("var.python_api_only_secret_vars") == 2
-    for workload in ("scheduler", "worker", "job-monitor"):
+    for workload in ("scheduler", "worker"):
         block = _hcl_block(production, f'resource "azurerm_container_app" "{workload}"')
         assert "python_api_only_secret_vars" not in block
         assert SECRET not in block
@@ -100,7 +104,7 @@ def test_recall_signing_secret_is_api_only_and_flag_is_public() -> None:
     )
 
 
-def test_production_rollout_verifies_consumers_before_api_and_jmon() -> None:
+def test_production_rollout_verifies_consumers_before_api() -> None:
     deploy = _read("infra/deploy.sh")
 
     assert (
@@ -108,18 +112,14 @@ def test_production_rollout_verifies_consumers_before_api_and_jmon() -> None:
         'cosmaneura-prod-scheduler"' in deploy
     )
     assert 'API_CONTAINER="cosmaneura-prod-app"' in deploy
-    assert 'JMON_CONTAINER="cosmaneura-prod-app-jmon"' in deploy
 
     migration = deploy.index("\nrun_migrations\n")
     consumers = deploy.index("for container in $WORKER_SCHEDULER_CONTAINERS")
     consumer_check = deploy.index('check_deployment "$container" "$GIT_SHA"', consumers)
     api_start = deploy.index('initiate_deployment "$API_CONTAINER"', consumer_check)
     api_check = deploy.index('check_deployment "$API_CONTAINER"', api_start)
-    jmon_start = deploy.index('initiate_deployment "$JMON_CONTAINER"', api_check)
-    jmon_check = deploy.index('check_deployment "$JMON_CONTAINER"', jmon_start)
 
     assert migration < consumers < consumer_check < api_start < api_check
-    assert api_check < jmon_start < jmon_check
 
 
 def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> None:
@@ -135,7 +135,8 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
 
     deploy = _read("infra-staging/deploy.sh")
     assert 'SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"' in deploy
-    assert "SCHEDULER_COMMAND=$(yq" in deploy
+    assert "SCHEDULER_COMMAND=$(printf" in deploy
+    assert 'git -C "$REPOSITORY_ROOT" show "$GIT_SHA:Procfile"' in deploy
     assert "for container in $CONTAINERS" in deploy
     preflight = deploy.index("for container in $CONTAINERS")
     migration = deploy.index("\nrun_migrations\n")
@@ -151,11 +152,27 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
 
 def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
     deploy = _read("infra-staging/deploy.sh")
+    # The EXIT cleanup helper is defined before validation but remains dormant
+    # until run_migrations arms it. Check its behavior separately below instead
+    # of treating its definition as an already executed Azure mutation.
+    cleanup_start = deploy.index("\ncleanup_migration_job() {")
+    cleanup_end = deploy.index("\ncapture_failed_workload_state() {", cleanup_start)
+    initialization = 'MIGRATION_JOB_CLEANUP_REQUIRED="false"'
+    assert deploy.index(initialization) < cleanup_start
+    assert deploy.count('MIGRATION_JOB_CLEANUP_REQUIRED="true"') == 1
+    assert (
+        deploy.index("\nrun_migrations() {")
+        < deploy.index('MIGRATION_JOB_CLEANUP_REQUIRED="true"')
+        < deploy.index("\nrun_migrations\n")
+    )
+    deploy = deploy[:cleanup_start] + deploy[cleanup_end:]
     validation = deploy.index("--validate-signing-secret-only")
 
     assert "api_only_secret_live_guard.py" in deploy
     assert 'RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT"' in deploy
-    assert 'type == "string" and length > 0' not in deploy
+    assert (
+        '.RECALL_WEBHOOK_SECRET | select(type == "string" and length > 0)' not in deploy
+    )
     assert "Staging Recall webhook signing credential is invalid." in deploy
     assert deploy.index("unset RECALL_WEBHOOK_SECRET_INPUT") > validation
     assert validation < deploy.index("\nrun_migrations\n")
@@ -168,6 +185,87 @@ def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
         "az containerapp update",
     ):
         assert validation < deploy.index(mutation)
+
+
+@pytest.mark.parametrize(
+    ("configuration", "expected_status", "cleanup_expected"),
+    [
+        ({}, 1, False),
+        ({SECRET: "invalid-synthetic-signing-secret"}, 1, False),
+        ({SECRET: "whsec_" + base64.b64encode(b"x" * 32).decode()}, 0, True),
+    ],
+)
+def test_staging_recall_validation_gates_exit_cleanup(
+    tmp_path: Path,
+    configuration: dict[str, str],
+    expected_status: int,
+    cleanup_expected: bool,
+) -> None:
+    deploy = _read("infra-staging/deploy.sh")
+    initialization = re.search(r"^MIGRATION_JOB_CLEANUP_REQUIRED=.*$", deploy, re.M)
+    assert initialization is not None
+    cleanup = deploy[
+        deploy.index("\ncleanup_migration_job() {") : deploy.index(
+            "\nif ! WORKLOADS_BEFORE_JSON="
+        )
+    ]
+    validation_start = deploy.index("\nif ! RECALL_WEBHOOK_SECRET_INPUT=")
+    validation_end = deploy.index(
+        "\nunset RECALL_WEBHOOK_SECRET_INPUT", validation_start
+    )
+    validation = (
+        deploy[validation_start:validation_end]
+        + "\nunset RECALL_WEBHOOK_SECRET_INPUT\n"
+    )
+    calls_path = tmp_path / "azure-calls"
+    calls_path.write_text("")
+    # Execute the real initializer, EXIT trap and credential validator. Every
+    # Azure operation is a local stub; the successful case proves cleanup can
+    # actually delete a job once the post-validation migration phase arms it.
+    script = "\n".join(
+        [
+            "set -eu",
+            initialization.group(),
+            """
+az() {
+    printf '%s\\n' "$*" >> "$AZURE_CALLS"
+    if [[ "$*" == 'containerapp job list '* ]]; then printf '0\\n'; fi
+}
+collect_workload_state() { printf '[]\\n'; }
+emit_github_output() { :; }
+""",
+            cleanup,
+            validation,
+            'MIGRATION_JOB_CLEANUP_REQUIRED="true"',
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": os.environ["PATH"],
+            "AZURE_CALLS": str(calls_path),
+            "ENV_JSON": json.dumps(configuration),
+            "PYTHON_BIN": sys.executable,
+            "SCRIPT_DIR": str(ROOT / "infra-staging"),
+            "MIGRATION_JOB": "synthetic-migration-job",
+            "RESOURCE_GROUP": "synthetic-resource-group",
+            # A caller cannot arm the trap before validation through the env.
+            "MIGRATION_JOB_CLEANUP_REQUIRED": "true",
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    calls = calls_path.read_text().splitlines()
+    if cleanup_expected:
+        assert len(calls) == 3
+        assert calls[0].startswith("containerapp job show ")
+        assert calls[1].startswith("containerapp job delete ")
+        assert calls[2].startswith("containerapp job list ")
+    else:
+        assert "Staging Recall webhook signing credential is invalid." in result.stdout
+        assert calls == []
 
 
 def test_deploy_scripts_drop_ambient_provider_credentials_before_subprocesses() -> None:
@@ -183,15 +281,26 @@ def test_deploy_scripts_drop_ambient_provider_credentials_before_subprocesses() 
             "unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET",
             resolution,
         )
-        first_git = deploy.index("if ! git rev-parse", credential_drop)
+        first_git = deploy.index(
+            (
+                'git -C "$REPOSITORY_ROOT" rev-parse'
+                if path == "infra-staging/deploy.sh"
+                else "git rev-parse"
+            ),
+            credential_drop,
+        )
         first_azure = deploy.index("az account show", credential_drop)
-        first_docker = deploy.index("docker manifest inspect", credential_drop)
 
         assert resolution < credential_drop
         assert credential_drop < first_git
         assert credential_drop < first_azure
-        assert credential_drop < first_docker
         assert "export ENV_JSON" not in deploy
+        if path == "infra/deploy.sh":
+            first_registry_read = deploy.index("docker manifest inspect")
+        else:
+            assert "\ndocker " not in deploy
+            first_registry_read = deploy.index("az acr manifest show-metadata")
+        assert credential_drop < first_registry_read
 
     production = _read("infra/deploy.sh")
     guard_assignment = production.index("RECALL_WEBHOOK_SECRET_GUARD=")
@@ -279,12 +388,16 @@ def test_pull_request_plan_is_secretless_and_cannot_read_production_state() -> N
 
 def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     workflow = _read(".github/workflows/pull_request_checks.yml")
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
-    pull_request_jobs = {name: _workflow_job(workflow, name) for name in ("app", "web")}
+    pull_request_jobs = {
+        name: _workflow_job(workflow, name)
+        for name in ("backend-quality", "backend-tests", "app", "web")
+    }
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     protected_jobs = {
         "deploy": _workflow_job(publish_workflow, "deploy"),
-        "deploy-staging": _workflow_job(publish_workflow, "deploy-staging"),
+        "deploy-staging-candidate": _workflow_job(candidate_workflow, "deploy"),
     }
 
     assert "  pull_request: {}" in workflow_scope
@@ -341,11 +454,12 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
             assert "persist-credentials: false" in step
 
     production = protected_jobs["deploy"]
-    staging = protected_jobs["deploy-staging"]
+    staging = protected_jobs["deploy-staging-candidate"]
     assert "github.ref == 'refs/heads/master'" in production
     assert "environment: production" in production
-    assert "github.ref == 'refs/heads/staging'" in staging
-    assert "github.event_name == 'push'" in staging
+    assert "github.ref == 'refs/heads/master'" in staging
+    assert "github.event_name == 'workflow_dispatch'" in staging
+    assert "github.event_name == 'push'" not in staging
     assert "environment: staging" in staging
     for protected_job in protected_jobs.values():
         assert "id-token: write" in protected_job
@@ -364,7 +478,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         "${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}" in staging
     )
     assert production.count("secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN") == 2
-    assert staging.count("secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN") == 2
+    assert staging.count("secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN") == 1
+    # Neither protected job may reach the other environment's vault.
+    assert "OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN" not in staging
+    assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in production
     assert "CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}" not in publish_workflow
     assert "secrets.OP_SERVICE_ACCOUNT_TOKEN" not in publish_workflow
 
@@ -384,6 +501,7 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
             pull_request_workflows.append((path.name, source))
 
     assert {name for name, _ in pull_request_workflows} == {
+        "change-budget.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
     }
@@ -429,13 +547,10 @@ def test_secret_sources_are_references_or_protected_workflow_values() -> None:
     assert "    environment: production" in plan_job
     assert plan_job.count(protected_reference) == 1
 
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
-    production_deploy = publish_workflow[
-        publish_workflow.index("  deploy:\n") : publish_workflow.index(
-            "  deploy-staging:\n"
-        )
-    ]
-    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    staging_deploy = _workflow_job(candidate_workflow, "deploy")
     assert "    environment: production" in production_deploy
     assert production_deploy.count(protected_reference) == 1
     assert "    environment: staging" in staging_deploy
@@ -446,13 +561,9 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     plan_workflow = _read(".github/workflows/infra_plan.yml")
     production_plan = _read(".github/workflows/infra_production_plan.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
-    production_deploy = publish_workflow[
-        publish_workflow.index("  deploy:\n") : publish_workflow.index(
-            "  deploy-staging:\n"
-        )
-    ]
-    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
     fixed_false = f'{FLAG}: "false"'
     mutable_default = f"{FLAG}: ${{{{ vars.{FLAG} || 'false' }}}}"
     protected_probe = f"{PROTECTED_FLAG}: ${{{{ vars.{FLAG} }}}}"
@@ -467,7 +578,6 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
         production_plan,
         apply_workflow,
         production_deploy,
-        staging_deploy,
     ):
         assert protected_job.count(fixed_false) == 1
         assert mutable_default not in protected_job
@@ -480,6 +590,15 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
             protected_job.index("actions/checkout")
         )
 
+    # Staging reads the repository variable and then refuses any value other
+    # than "false", where production never reads it at all. The rejection is
+    # the guard, so it must be present wherever the variable is read.
+    assert candidate_workflow.count(fixed_false) == 2
+    assert candidate_workflow.count(mutable_default) == 2
+    assert candidate_workflow.count(f'"${FLAG}" != "false"') == 2
+    assert candidate_workflow.count(f"{FLAG} is source-locked false.") == 1
+    assert protected_probe not in candidate_workflow
+
 
 def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None:
     apply_workflow = _read(".github/workflows/infra_apply.yml")
@@ -491,7 +610,8 @@ def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None
     assert "production_plan_run_id:" in trigger
     assert "production_plan_artifact_digest:" in trigger
     assert "required: true" in trigger
-    assert "if: github.ref == 'refs/heads/master'" in apply_job
+    assert "github.ref == 'refs/heads/master'" in apply_job
+    assert "needs.authorize-production.result == 'success'" in apply_job
     assert "environment: production" in apply_job
     assert "actions: read" in apply_job
     assert "actions: write" not in apply_job
@@ -636,7 +756,7 @@ def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:
 def test_changed_workflow_actions_are_immutably_pinned() -> None:
     for path in (
         ".github/actions/common-setup/action.yml",
-        ".github/workflows/build_and_publish.yml",
+        ".github/workflows/build_and_publish_manual.yml",
         ".github/workflows/infra_apply.yml",
         ".github/workflows/infra_plan.yml",
         ".github/workflows/infra_production_plan.yml",
@@ -654,9 +774,8 @@ def test_changed_workflow_actions_are_immutably_pinned() -> None:
 def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     installer = _read(".github/actions/install-nixpacks/action.yml")
     build_recipe = _read("just/build.just")
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
 
     assert "NIXPACKS_VERSION: 1.41.0" in installer
     assert (
@@ -677,13 +796,16 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     assert "nixpacks.com/install.sh" not in build_recipe
     assert "command -v nixpacks" in build_recipe
 
-    for deploy_job in (production_deploy, staging_deploy):
-        install = deploy_job.index("uses: ./.github/actions/install-nixpacks")
-        registry_login = deploy_job.index("uses: docker/login-action@")
-        build = deploy_job.index("run: just build\n")
-        first_secret = deploy_job.index("${{ secrets.")
-        assert install < registry_login < build
-        assert install < first_secret
+    # Production builds and publishes inside one job, so the ordering is what
+    # keeps the toolchain install ahead of any credential. Staging reaches the
+    # same end by splitting build, publish and deploy into separate jobs; that
+    # separation is asserted in test_canonical_staging_deployment.py.
+    install = production_deploy.index("uses: ./.github/actions/install-nixpacks")
+    registry_login = production_deploy.index("uses: docker/login-action@")
+    build = production_deploy.index("run: just build\n")
+    first_secret = production_deploy.index("${{ secrets.")
+    assert install < registry_login < build
+    assert install < first_secret
 
     for workflow in (
         ".github/workflows/infra_production_plan.yml",
@@ -695,12 +817,14 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
         configuration_scope = source[hash_start:hash_end]
         assert "Justfile just Procfile .github/actions" in configuration_scope
         assert ".github/workflows/build_and_publish.yml" in configuration_scope
+        assert ".github/workflows/build_and_publish_manual.yml" in configuration_scope
 
     privileged_paths = (
         ".github/actions/common-setup/action.yml",
         ".github/actions/install-nixpacks/action.yml",
         ".github/actions/install-op/action.yml",
         ".github/workflows/build_and_publish.yml",
+        ".github/workflows/build_and_publish_manual.yml",
         ".github/workflows/infra_apply.yml",
         ".github/workflows/infra_production_plan.yml",
         "infra/deploy.sh",
@@ -770,7 +894,7 @@ def test_onepassword_cli_installer_is_exact_and_checksum_verified(
 
 
 def test_production_deploy_rechecks_current_master_before_mutation() -> None:
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
 
     publish_check = production_deploy.index(
@@ -851,9 +975,9 @@ def test_protected_environment_files_use_only_their_own_vault() -> None:
 
 
 def test_protected_build_resolves_locally_then_drops_credential_capabilities() -> None:
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
     build_recipe = _read("just/build.just")
     vite_config = _read("web/vite.config.ts")
 
@@ -862,20 +986,18 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
             "Resolve production frontend build configuration"
         ) : production_deploy.index("uses: docker/login-action@")
     ]
-    staging_resolve = staging_deploy[
-        staging_deploy.index(
-            "Resolve staging frontend build configuration"
-        ) : staging_deploy.index("uses: docker/login-action@")
+    # Staging resolves configuration and builds in two separate jobs.
+    staging_config = _workflow_job(candidate_workflow, "config")
+    staging_resolve = staging_config[
+        staging_config.index(
+            "Resolve allowlisted public staging frontend configuration"
+        ) :
     ]
+    staging_build = _workflow_job(candidate_workflow, "build")
     production_build = production_deploy[
         production_deploy.index(
             "Build production images from resolved public configuration"
         ) : production_deploy.index("Remove resolved production frontend configuration")
-    ]
-    staging_build = staging_deploy[
-        staging_deploy.index(
-            "Build staging images from resolved public configuration"
-        ) : staging_deploy.index("Remove resolved staging frontend configuration")
     ]
     assert "OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN" in production_resolve
     assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in production_resolve
@@ -902,13 +1024,13 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
     assert production_deploy.index("Resolve production frontend") < (
         production_deploy.index("uses: docker/login-action@")
     )
-    assert staging_deploy.index("Resolve staging frontend") < staging_deploy.index(
-        "uses: docker/login-action@"
-    )
     assert production_deploy.count("if: always()") >= 1
-    assert staging_deploy.count("if: always()") >= 1
     assert production_deploy.count('rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"') == 1
-    assert staging_deploy.count('rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"') == 1
+    # Staging needs no in-job scrub: configuration is resolved in a job that
+    # holds no registry credentials and hands the build an artifact, so the
+    # resolved file never shares a runner with a docker login.
+    assert "uses: docker/login-action@" not in staging_config
+    assert "uses: docker/login-action@" not in staging_build
 
     assert (
         'NIXPACKS_CREDENTIAL_BARRIER := "env -u OP_SERVICE_ACCOUNT_TOKEN '
@@ -1041,7 +1163,7 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
         for path in (
             ".github/workflows/infra_production_plan.yml",
             ".github/workflows/infra_apply.yml",
-            ".github/workflows/build_and_publish.yml",
+            ".github/workflows/build_and_publish_manual.yml",
         )
     )
     production_plan = _workflow_job(
@@ -1050,9 +1172,10 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
     production_apply = _workflow_job(
         _read(".github/workflows/infra_apply.yml"), "apply"
     )
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    staging_deploy = _workflow_job(candidate_workflow, "deploy")
 
     assert "secrets.OP_SERVICE_ACCOUNT_TOKEN" not in workflows
     for production_job in (production_plan, production_apply, production_deploy):
@@ -1086,9 +1209,10 @@ def test_azure_oidc_trust_is_bound_to_protected_environments() -> None:
     assert ":ref:refs/heads/" not in production
     assert ":ref:refs/heads/" not in staging
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     assert "environment: production" in _workflow_job(workflow, "deploy")
-    assert "environment: staging" in _workflow_job(workflow, "deploy-staging")
+    assert "environment: staging" in _workflow_job(candidate_workflow, "deploy")
 
     documentation = _read("infra/README.md")
     normalized_documentation = " ".join(documentation.split())
@@ -1116,6 +1240,23 @@ def test_azure_oidc_trust_is_bound_to_protected_environments() -> None:
     assert "can collide with the existing issuer/subject pair" in _read(
         "infra-staging/main.tf"
     )
+
+
+def test_oidc_documentation_names_the_real_deploying_workflows() -> None:
+    documentation = _read("infra/README.md")
+
+    # The federation table tells an operator which workflow to expect against
+    # each environment subject; a stale row sends them to a job that no longer
+    # exists.
+    assert (
+        "| `deploy_staging_candidate.yml` (staging candidate deploy) "
+        "| `environment: staging` |" in documentation
+    )
+    assert (
+        "| `build_and_publish_manual.yml` (production deploy) "
+        "| `environment: production` |" in documentation
+    )
+    assert "`build_and_publish_manual.yml` (staging deploy)" not in documentation
 
 
 def test_durable_webhook_rollback_preserves_schema_and_evidence() -> None:

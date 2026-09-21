@@ -1,0 +1,315 @@
+from __future__ import annotations
+
+import gzip
+import hashlib
+import importlib.util
+import io
+import json
+import sys
+import tarfile
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any, ClassVar
+from unittest.mock import patch
+from urllib.parse import parse_qs
+
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location(
+    "staging_acr_untagged_upload_test_subject",
+    ROOT / "scripts/staging_acr_untagged_upload.py",
+)
+assert spec and spec.loader
+m = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = m
+spec.loader.exec_module(m)
+
+
+def digest(raw: bytes) -> str:
+    return hashlib.sha256(raw).hexdigest()
+
+
+class FakeRegistry:
+    instances: ClassVar[list[FakeRegistry]] = []
+
+    def __init__(self, host: str, repository: str, authorization: str):
+        assert host == m.REGISTRY_HOST
+        assert repository == m.REGISTRY_REPOSITORY
+        assert authorization == "Bearer " + "y" * 256
+        self.blobs: list[tuple[str, bytes]] = []
+        self.manifests: list[tuple[str, bytes]] = []
+        self.instances.append(self)
+
+    def upload_blob(self, blob_digest: str, body, size: int) -> None:
+        raw = body if isinstance(body, bytes) else body.read()
+        assert len(raw) == size
+        assert blob_digest == "sha256:" + digest(raw)
+        self.blobs.append((blob_digest, raw))
+
+    def upload_manifest_by_digest(self, raw: bytes, manifest_digest: str) -> None:
+        assert manifest_digest == "sha256:" + digest(raw)
+        self.manifests.append((manifest_digest, raw))
+
+
+class UntaggedUploadTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(
+            prefix="cosmaneura-acr-upload-test-", dir="/private/tmp"
+        )
+        self.archive = Path(self.temp.name) / "image.tar"
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+        FakeRegistry.instances.clear()
+
+    def write_archive(self, *, candidate: str = m.CANDIDATE_SHA) -> bytes:
+        layer = b"invented uncompressed layer\n"
+        config = json.dumps(
+            {
+                "architecture": "amd64",
+                "os": "linux",
+                "config": {
+                    "Labels": {
+                        "org.opencontainers.image.revision": candidate,
+                        "org.opencontainers.image.source": "https://github.com/CosmaNeura/cosmaneura",
+                    }
+                },
+                "rootfs": {"diff_ids": ["sha256:" + digest(layer)]},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        self.config_digest = digest(config)
+        manifest = json.dumps(
+            [
+                {
+                    "Config": "config.json",
+                    "RepoTags": [],
+                    "Layers": ["layers/layer.tar"],
+                }
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        with tarfile.open(self.archive, "w") as archive:
+            directory = tarfile.TarInfo("layers/")
+            directory.type = tarfile.DIRTYPE
+            archive.addfile(directory)
+            for name, raw in (
+                ("manifest.json", manifest),
+                ("config.json", config),
+                ("layers/layer.tar", layer),
+            ):
+                info = tarfile.TarInfo(name)
+                info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+        self.archive.chmod(0o400)
+        return self.archive.read_bytes()
+
+    def write_containerd_archive(self) -> tuple[bytes, str, bytes]:
+        layer = b"invented uncompressed layer\n"
+        compressed = gzip.compress(layer, mtime=0)
+        config = json.dumps(
+            {
+                "architecture": "amd64",
+                "os": "linux",
+                "config": {
+                    "Labels": {
+                        "org.opencontainers.image.revision": m.CANDIDATE_SHA,
+                        "org.opencontainers.image.source": "https://github.com/CosmaNeura/cosmaneura",
+                    }
+                },
+                "rootfs": {"diff_ids": ["sha256:" + digest(layer)]},
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        self.config_digest = digest(config)
+        layer_digest = digest(compressed)
+        image_manifest = json.dumps(
+            {
+                "schemaVersion": 2,
+                "mediaType": m.DOCKER_MANIFEST,
+                "config": {
+                    "mediaType": m.DOCKER_CONFIG,
+                    "digest": "sha256:" + self.config_digest,
+                    "size": len(config),
+                },
+                "layers": [
+                    {
+                        "mediaType": m.DOCKER_LAYER_GZIP,
+                        "digest": "sha256:" + layer_digest,
+                        "size": len(compressed),
+                    }
+                ],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        image_id = "sha256:" + digest(image_manifest)
+        config_name = "blobs/sha256/" + self.config_digest
+        layer_name = "blobs/sha256/" + layer_digest
+        docker_manifest = json.dumps(
+            [{"Config": config_name, "RepoTags": None, "Layers": [layer_name]}],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        with tarfile.open(self.archive, "w") as archive:
+            for directory_name in ("blobs/", "blobs/sha256/"):
+                directory = tarfile.TarInfo(directory_name)
+                directory.type = tarfile.DIRTYPE
+                archive.addfile(directory)
+            for name, raw in (
+                ("manifest.json", docker_manifest),
+                (config_name, config),
+                (layer_name, compressed),
+                ("blobs/sha256/" + image_id.removeprefix("sha256:"), image_manifest),
+            ):
+                info = tarfile.TarInfo(name)
+                info.size = len(raw)
+                archive.addfile(info, io.BytesIO(raw))
+        self.archive.chmod(0o400)
+        return self.archive.read_bytes(), image_id, compressed
+
+    @staticmethod
+    def token() -> dict[str, str]:
+        return {
+            "accessToken": "x" * 256,
+            "refreshToken": "x" * 256,
+            "loginServer": m.REGISTRY_HOST,
+            "username": m.USERNAME,
+        }
+
+    def test_refresh_token_is_exchanged_for_exact_repository_scope(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Response:
+            status = 200
+
+            @staticmethod
+            def read(_maximum: int) -> bytes:
+                return json.dumps({"access_token": "y" * 256}).encode()
+
+        class Connection:
+            def __init__(self, host: str, *, timeout: int, context) -> None:
+                self.host = host
+                assert timeout == 60 and context is not None
+
+            def request(self, method: str, target: str, *, body, headers) -> None:
+                captured.update(
+                    method=method, target=target, body=body, headers=headers
+                )
+
+            @staticmethod
+            def getresponse() -> Response:
+                return Response()
+
+            @staticmethod
+            def close() -> None:
+                return None
+
+        with patch.object(m.http.client, "HTTPSConnection", Connection):
+            access_token = m.exchange_refresh_token("x" * 256)
+        self.assertEqual(access_token, "y" * 256)
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["target"], "/oauth2/token")
+        self.assertEqual(
+            parse_qs(captured["body"].decode()),  # type: ignore[union-attr]
+            {
+                "grant_type": ["refresh_token"],
+                "service": [m.REGISTRY_HOST],
+                "scope": [m.TOKEN_SCOPE],
+                "refresh_token": ["x" * 256],
+            },
+        )
+
+    def test_uploads_blobs_and_manifest_only_by_digest(self) -> None:
+        raw = self.write_archive()
+        tokens = (
+            self.token(),
+            {key: self.token()[key] for key in ("accessToken", "loginServer")},
+        )
+        result: dict[str, Any] = {}
+        with (
+            patch.object(m, "Registry", FakeRegistry),
+            patch.object(
+                m, "exchange_refresh_token", return_value="y" * 256
+            ) as exchange,
+        ):
+            for token in tokens:
+                result = m.build_and_upload(
+                    self.archive, digest(raw), "sha256:" + self.config_digest, token
+                )
+        self.assertEqual(exchange.call_count, 2)
+        self.assertEqual(tokens, ({}, {}))
+        self.assertFalse(result["tag_created"])
+        self.assertFalse(result["tag_overwrite_possible"])
+        self.assertRegex(result["manifest_digest"], r"^sha256:[0-9a-f]{64}$")
+        registry = FakeRegistry.instances[-1]
+        self.assertEqual(len(registry.blobs), 2)
+        self.assertEqual(len(registry.manifests), 1)
+        manifest = json.loads(registry.manifests[0][1])
+        self.assertEqual(manifest["mediaType"], m.OCI_MANIFEST)
+        self.assertNotIn("annotations", manifest)
+
+    def test_uploads_containerd_gzip_archive_with_manifest_id_binding(self) -> None:
+        raw, image_id, compressed = self.write_containerd_archive()
+        with (
+            patch.object(m, "Registry", FakeRegistry),
+            patch.object(m, "exchange_refresh_token", return_value="y" * 256),
+        ):
+            result = m.build_and_upload(
+                self.archive, digest(raw), image_id, self.token()
+            )
+        self.assertEqual(result["config_digest"], "sha256:" + self.config_digest)
+        registry = FakeRegistry.instances[-1]
+        self.assertIn(("sha256:" + digest(compressed), compressed), registry.blobs)
+        manifest = json.loads(registry.manifests[0][1])
+        self.assertEqual(manifest["layers"][0]["mediaType"], m.OCI_LAYER_GZIP)
+
+    def test_containerd_archive_refuses_unbound_manifest_id(self) -> None:
+        raw, _image_id, _compressed = self.write_containerd_archive()
+        with (
+            patch.object(m, "Registry", FakeRegistry),
+            self.assertRaises(m.UploadRefused),
+        ):
+            m.build_and_upload(
+                self.archive, digest(raw), "sha256:" + "f" * 64, self.token()
+            )
+        self.assertEqual(FakeRegistry.instances, [])
+
+    def test_wrong_candidate_label_is_refused_before_registry_access(self) -> None:
+        raw = self.write_archive(candidate="0" * 40)
+        with (
+            patch.object(m, "Registry", FakeRegistry),
+            self.assertRaises(m.UploadRefused),
+        ):
+            m.build_and_upload(
+                self.archive,
+                digest(raw),
+                "sha256:" + self.config_digest,
+                self.token(),
+            )
+        self.assertEqual(FakeRegistry.instances, [])
+
+    def test_archive_digest_and_mode_are_mandatory(self) -> None:
+        raw = self.write_archive()
+        with self.assertRaises(m.UploadRefused):
+            m.build_and_upload(
+                self.archive,
+                "0" * 64,
+                "sha256:" + self.config_digest,
+                self.token(),
+            )
+        self.archive.chmod(0o600)
+        with self.assertRaises(m.UploadRefused):
+            m.build_and_upload(
+                self.archive,
+                digest(raw),
+                "sha256:" + self.config_digest,
+                self.token(),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

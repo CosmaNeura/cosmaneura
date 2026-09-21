@@ -1,5 +1,12 @@
 # Engagement Role Badge + Staging Demo Data — Implementation Plan
 
+> **Historical record — superseded; do not execute its staging push, secret,
+> seed, or database instructions.** A push to `staging` now validates only;
+> staging deployment is founder-triggered and manual. Staging has not been
+> established as synthetic-only/non-PHI, and any schema/data work requires a
+> separately reviewed migration rung and rehearsal. Use the root `README.md`,
+> `AGENTS.md`, and current workflow as the operational source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Show the engagement-engine role as a colored, tooltipped badge under the patient name on the note detail screen, and seed 6 demo encounters under `dev@cosmaneura.com` on staging so it's demoable.

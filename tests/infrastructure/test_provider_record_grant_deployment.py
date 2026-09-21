@@ -48,7 +48,7 @@ def test_production_grant_key_is_scoped_only_to_api_container_app() -> None:
     api = _hcl_block(main, 'resource "azurerm_container_app" "app"')
     assert api.count("var.python_api_only_secret_vars") == 2
 
-    for workload in ("scheduler", "worker", "job-monitor"):
+    for workload in ("scheduler", "worker"):
         block = _hcl_block(main, f'resource "azurerm_container_app" "{workload}"')
         assert "python_api_only_secret_vars" not in block
         assert GRANT_SECRET not in block
@@ -67,14 +67,18 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert api_only.count(GRANT_SECRET) == 1
 
     deploy = _read("infra-staging/deploy.sh")
-    control_default = (
-        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"'
+    control_capture = (
+        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-}"'
     )
-    assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
+    resolver = deploy.index("if ! ENV_JSON=")
+    assert deploy.index(control_capture) < resolver
+    assert (
+        deploy.index('if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]') < resolver
+    )
     assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
-    # Recall's always-configured API-only secret is separate from the optional
-    # record-grant capability, which is appended only behind its feature gate.
+    # Recall's always-configured API-only secret is separate from the
+    # record-grant capability, which remains scoped behind its feature gate.
     assert GRANT_SECRET not in _shell_array(deploy, "API_ONLY_SECRET_VARS")
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy
     assert '"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true"' in deploy
@@ -112,8 +116,8 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     )
 
 
-def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+def test_production_application_requires_manual_plan_and_apply() -> None:
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
     production_plan_workflow = _read(".github/workflows/infra_production_plan.yml")
@@ -127,11 +131,9 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert workflow.count("Justfile just Procfile .github/actions") == 2
     assert workflow.count(".github/workflows/infra_apply.yml") >= 2
     assert workflow.count(".github/workflows/infra_production_plan.yml") >= 2
-    assert workflow.count(".github/workflows/build_and_publish.yml") >= 2
-    assert "needs: [web, app, deployment-scope]" in workflow
-    assert (
-        "needs.deployment-scope.outputs.production_infra_changed != 'true'" in workflow
-    )
+    assert workflow.count(".github/workflows/build_and_publish_manual.yml") >= 2
+    assert "needs: [web, app, deployment-scope, authorize-production]" in workflow
+    assert "needs.deployment-scope.outputs.production_infra_changed" not in workflow
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "terraform_apply_run_id" in workflow
     assert "provider_signed_recall_callback_verified" in workflow
@@ -182,16 +184,87 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert "staging-scoped Azure identity" in documentation
 
 
+def test_production_promotion_requires_founder_manual_dispatch() -> None:
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+
+    authorization_start = workflow.index("\n  authorize-production:")
+    deployment_scope_start = workflow.index("\n  deployment-scope:")
+    authorization_job = workflow[authorization_start:deployment_scope_start]
+
+    production_job = workflow[workflow.index("\n  deploy:") :]
+
+    assert "github.event_name == 'workflow_dispatch'" in authorization_job
+    assert "github.ref == 'refs/heads/master'" in authorization_job
+    assert "permissions: {}" in authorization_job
+    assert "PROMOTION_ACTOR: ${{ github.actor }}" in authorization_job
+    assert (
+        "PROMOTION_TRIGGERING_ACTOR: ${{ github.triggering_actor }}"
+        in authorization_job
+    )
+    assert '"$PROMOTION_REF" != "refs/heads/master"' in authorization_job
+    assert '"$PROMOTION_ACTOR" != "JohnClem"' in authorization_job
+    assert '"$PROMOTION_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+
+    assert "needs: [web, app, deployment-scope, authorize-production]" in production_job
+    assert "github.event_name == 'workflow_dispatch'" in production_job
+    assert "github.ref == 'refs/heads/master'" in production_job
+    assert "github.actor == 'JohnClem'" in production_job
+    assert "github.triggering_actor == 'JohnClem'" in production_job
+    assert "needs.authorize-production.result == 'success'" in production_job
+
+
+def test_legacy_staging_branch_deployment_path_is_absent() -> None:
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow_scope = workflow[: workflow.index("jobs:\n")]
+
+    # The founder-only, dispatch-only staging guarantees belong to
+    # deploy_staging_candidate.yml, which promotes a reviewed master SHA.
+    assert "  workflow_dispatch:" in workflow_scope
+    assert "\n  push:" not in workflow_scope
+    assert "\n  authorize-staging:" not in workflow
+    assert "\n  deploy-staging:" not in workflow
+    assert "refs/heads/staging" not in workflow
+    assert "environment: staging" not in workflow
+
+
+def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
+    for path, protected_job_name, prefix in (
+        (".github/workflows/infra_production_plan.yml", "plan", "PLAN"),
+        (".github/workflows/infra_apply.yml", "apply", "APPLY"),
+    ):
+        workflow = _read(path)
+        authorization_start = workflow.index("\n  authorize-production:")
+        protected_start = workflow.index(f"\n  {protected_job_name}:")
+        authorization_job = workflow[authorization_start:protected_start]
+        protected_job = workflow[protected_start:]
+
+        assert "permissions: {}" in authorization_job
+        assert "environment: production" not in authorization_job
+        assert f"{prefix}_ACTOR: ${{{{ github.actor }}}}" in authorization_job
+        assert (
+            f"{prefix}_TRIGGERING_ACTOR: ${{{{ github.triggering_actor }}}}"
+            in authorization_job
+        )
+        assert f'"${prefix}_EVENT" != "workflow_dispatch"' in authorization_job
+        assert f'"${prefix}_REF" != "refs/heads/master"' in authorization_job
+        assert f'"${prefix}_ACTOR" != "JohnClem"' in authorization_job
+        assert f'"${prefix}_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+
+        assert "needs: authorize-production" in protected_job
+        assert "environment: production" in protected_job
+        assert "github.event_name == 'workflow_dispatch'" in protected_job
+        assert "github.ref == 'refs/heads/master'" in protected_job
+        assert "github.actor == 'JohnClem'" in protected_job
+        assert "github.triggering_actor == 'JohnClem'" in protected_job
+        assert "needs.authorize-production.result == 'success'" in protected_job
+
+
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
-    production_start = workflow.index("\n  deploy:")
-    staging_start = workflow.index("\n  deploy-staging:")
-    production_job = workflow[production_start:staging_start]
-    staging_job = workflow[staging_start:]
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    production_job = workflow[workflow.index("\n  deploy:") :]
 
     assert "cancel-in-progress: false" in workflow[: workflow.index("jobs:\n")]
     assert "timeout-minutes: 60" in production_job
-    assert "timeout-minutes: 60" in staging_job
 
 
 def test_terraform_plan_installs_only_required_host_package() -> None:

@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "471f497d1824535cf2a7903f25406c0fa7ae39e9",
+      "024655ca3a542caf02e46d1b9b209d3c5b4d96d0",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
@@ -43,12 +43,32 @@ describe("pinned Sovereign panel asset", () => {
     expect(bytes.toString("utf8")).toContain(
       'if (typeof opts.onHumanContact !== "function")',
     )
-    expect(bytes.toString("utf8")).toContain(
-      "if (r.status === 401) attempt.forceRefresh = true",
+    const source = bytes.toString("utf8")
+    const governedContext = source.slice(
+      source.indexOf("function governedContext"),
+      source.indexOf("function governedChatMetadata"),
     )
-    expect(bytes.toString("utf8")).toContain("? { forceRefresh: true }")
-    expect(bytes.toString("utf8")).not.toContain(
-      'headers["x-cosmaneura-mount-context"]',
+    expect(governedContext).not.toContain("context_snapshot_ref")
+    expect(source).toContain('url + "/session-prep"')
+    expect(source).toContain("function governedChatMetadata")
+    const chatProjection = source.slice(
+      source.indexOf("function governedChatMetadata"),
+      source.indexOf("function applyWelcomeUX"),
     )
+    expect(chatProjection).not.toContain("context_snapshot_ref")
+    const prepRequest = source.slice(
+      source.indexOf("async function requestSessionPrep"),
+      source.indexOf("async function headersForAttempt"),
+    )
+    expect(prepRequest).not.toContain("context_snapshot_ref")
+    for (const state of ["ready", "refreshing", "pending", "unavailable"])
+      expect(source).toContain(`Session Prep ${state}`)
+    expect(source).toContain("lockNamedBeta();")
+    expect(source).not.toContain("attempt.forceRefresh = true")
+    expect(source).not.toContain("localStorage")
+    expect(source).not.toContain("sessionStorage")
+    expect(source).not.toContain("indexedDB")
+    expect(source).not.toContain("caches.open")
+    expect(source).not.toContain('headers["x-cosmaneura-mount-context"]')
   })
 })

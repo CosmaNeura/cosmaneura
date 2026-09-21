@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-source-provider-observation-v1",
+  "activation_ready": false,
+  "activation": {
+    "trusted_provider_transport_implemented": false,
+    "workflow_integrated": false,
+    "network_access_enabled": false
+  },
+  "server_scope_authentication_policy": {
+    "policy_id": "cosmaneura-staging-server-scope-authentication-v1",
+    "sha256": "sha256:ad4b5ddd3e7cf8f6c50e34f63f1d2bd1d46d36f418fcd64b262b514daa2a28d5"
+  },
+  "provider": {
+    "kind": "azure-resource-manager",
+    "management_origin": "https://management.azure.com",
+    "oauth_resource": "https://management.azure.com/",
+    "http_method": "GET",
+    "api_version": "2024-08-01",
+    "request_timeout_seconds": 30,
+    "maximum_response_bytes": 1048576,
+    "response_media_type": "application/json",
+    "redirects_permitted": false,
+    "maximum_requests": 1
+  },
+  "source": {
+    "subscription_id": "bab2a709-1fcb-4c87-a9fc-802f7477ec13",
+    "resource_group": "cosmaneura-staging",
+    "resource_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres",
+    "resource_type": "Microsoft.DBforPostgreSQL/flexibleServers",
+    "server_name": "cosmaneura-staging-postgres",
+    "database_name": "staging",
+    "fqdn": "cosmaneura-staging-postgres.postgres.database.azure.com",
+    "location": "northcentralus",
+    "postgresql_major": "16",
+    "state": "Ready",
+    "public_network_access": "Enabled",
+    "backup_retention_days": 7,
+    "geo_redundant_backup": "Disabled",
+    "replication_role": "Primary"
+  },
+  "restore_capability": {
+    "mode": "PointInTimeRestore",
+    "earliest_restore_date_path": "properties.backup.earliestRestoreDate",
+    "latest_restore_bound": "trusted_observation_time",
+    "maximum_receipt_lifetime_seconds": 60,
+    "claim": "provider_advertised_window_only"
+  },
+  "receipt_fields": [
+    "schema_version",
+    "policy_id",
+    "policy_sha256",
+    "base_binding_sha256",
+    "manifest_id",
+    "evidence_set_sha256",
+    "source_sha",
+    "candidate_sha",
+    "provider_kind",
+    "management_origin",
+    "provider_api_version",
+    "source_server_resource_id",
+    "source_server_name",
+    "source_server_type",
+    "source_location",
+    "source_database_name",
+    "source_fqdn",
+    "source_postgresql_major",
+    "source_state",
+    "source_public_network_access",
+    "source_backup_retention_days",
+    "source_geo_redundant_backup",
+    "source_replication_role",
+    "approved_restore_time",
+    "earliest_restore_time",
+    "restore_mode",
+    "restore_window_claim",
+    "provider_response_sha256",
+    "observed_at",
+    "expires_at",
+    "pass"
+  ],
+  "activation_blockers": [
+    "source_provider_observation_policy_disabled",
+    "trusted_provider_transport_unimplemented",
+    "attestation_verification_unimplemented",
+    "composite_binding_unimplemented",
+    "workflow_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ],
+  "output_activation_blockers": [
+    "attestation_verification_unimplemented",
+    "composite_binding_unimplemented",
+    "workflow_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ]
+}

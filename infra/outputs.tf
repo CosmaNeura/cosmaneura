@@ -1,8 +1,7 @@
 output "python_containers" {
   value = [
     azurerm_container_app.app.name,
-    azurerm_container_app.worker.name,
-    azurerm_container_app.job-monitor.name
+    azurerm_container_app.worker.name
   ]
 }
 
@@ -18,6 +17,16 @@ output "scribe_workflow_managed_identity_client_id" {
 output "scribe_workflow_managed_identity_principal_id" {
   description = "Object ID used when assigning the Scribe API application role."
   value       = azurerm_user_assigned_identity.scribe_workflow.principal_id
+}
+
+output "deid_managed_identity_client_id" {
+  description = "Non-secret client ID pinned by the production worker for Azure DeID calls."
+  value       = azurerm_user_assigned_identity.health_services.client_id
+}
+
+output "deid_managed_identity_principal_id" {
+  description = "Object ID holding the realtime-only role at the AnonymizerAPI resource."
+  value       = azurerm_user_assigned_identity.health_services.principal_id
 }
 
 output "parallel_platform_virtual_network_id" {

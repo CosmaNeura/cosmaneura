@@ -12,6 +12,7 @@ __pycache__
 *.superadmin-capabilities.private.json
 
 .nixpacks
+.cursor/runtime-home/
 
 # TODO this should really be redirected to a tmp/ directory
 .coverage
@@ -30,9 +31,13 @@ __pycache__
 # plugin installation folder
 infra/.terraform
 infra-staging/.terraform
+infra-staging-rehearsal/.terraform
+infra-staging-sanitizer-bootstrap-identity/.terraform
 # this contains secrets!
 infra/terraform.tfstate*
 infra-staging/terraform.tfstate*
+infra-staging-rehearsal/terraform.tfstate*
+infra-staging-sanitizer-bootstrap-identity/terraform.tfstate*
 .superpowers/
 .worktrees/
 

@@ -8,6 +8,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTROL = "ENABLE_PROVIDER_V7"
 BACKEND_FLAGS = ("AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED")
+FORCED_FALSE_FLAGS = (
+    "SCRIBE_HANDOFF_ENABLED",
+    "SCRIBE_WORKFLOW_ENABLED",
+    "SESSION_PREP_SYNTHETIC_ENABLED",
+    "STRIPE_INTEGRATION_ENABLED",
+    "STRIPE_BILLING_ENABLED",
+    "STRIPE_LIVE_MODE",
+    "DURABLE_WEBHOOK_INBOX_ENABLED",
+    "ZOOM_WATCHDOG_ENABLED",
+)
 FRONTEND_FLAG = "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"
 PROVIDER_ORIGIN = (
     "https://cosmaneura-sovereign-staging-app.happygrass-736dc5a6."
@@ -33,10 +43,6 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def _staging_job(workflow: str) -> str:
-    return workflow[workflow.index("\n  deploy-staging:") :]
-
-
 def _frontend_resolve_step(job: str, environment: str) -> str:
     start = job.index(f"Resolve {environment} frontend build configuration")
     end = job.index("uses: docker/login-action@", start)
@@ -57,28 +63,31 @@ def _hcl_variable(source: str, name: str) -> str:
 
 def _deploy_control_prefix() -> str:
     deploy = _read("infra-staging/deploy.sh")
-    return deploy[
-        deploy.index(f'{CONTROL}="${{{CONTROL}:-false}}"') : deploy.index(
-            'if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS"'
-        )
-    ]
-
-
-def _run_deploy_control(value: str | None) -> subprocess.CompletedProcess[str]:
-    # Execute the real validation and JSON reconciliation statements while
-    # replacing the secret-bearing direnv command with a deterministic stub.
-    script = _deploy_control_prefix().replace(
-        'if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then',
-        "if ! ENV_JSON='{}'; then",
+    capture_start = deploy.index(f'{CONTROL}="${{{CONTROL}:-}}"')
+    capture_end = deploy.index("# Resolve protected configuration", capture_start)
+    reconciliation_start = deploy.index(
+        "# Keep the provider-v7 runtime gates synchronized", capture_end
     )
-    # This helper isolates the provider-v7 flag reconciliation. Capability
-    # identity validation has its own executable tests and requires a complete
-    # resolved Clerk configuration rather than this helper's `{}` stub.
-    preflight_start = script.index("if ! printf '%s' \"$ENV_JSON\" |")
-    preflight_end = script.index("unset OP_SERVICE_ACCOUNT_TOKEN", preflight_start)
-    script = script[:preflight_start] + script[preflight_end:]
+    reconciliation_end = deploy.index("\nemit_github_output() {", reconciliation_start)
+    return (
+        deploy[capture_start:capture_end]
+        + 'ENV_JSON=\'{"SOVEREIGN_RECORD_GRANT_SECRET":"synthetic"}\'\n'
+        + deploy[reconciliation_start:reconciliation_end]
+    )
+
+
+def _run_deploy_control(
+    value: str | None, record_grants: str | None = "true"
+) -> subprocess.CompletedProcess[str]:
+    # Execute the real validation and JSON reconciliation statements without
+    # entering the protected configuration resolver.
+    script = _deploy_control_prefix()
     script += '\nprintf "%s\\n" "$ENV_JSON"\n'
     environment = os.environ.copy()
+    if record_grants is None:
+        environment.pop("ENABLE_SOVEREIGN_RECORD_GRANTS", None)
+    else:
+        environment["ENABLE_SOVEREIGN_RECORD_GRANTS"] = record_grants
     if value is None:
         environment.pop(CONTROL, None)
     else:
@@ -155,12 +164,15 @@ def _decode_build_arguments(output: bytes) -> dict[str, str]:
 
 
 def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
-    staging_start = workflow.index("\n  deploy-staging:")
+    manual = _read(".github/workflows/build_and_publish_manual.yml")
+    canonical = _read(".github/workflows/deploy_staging_candidate.yml")
 
-    assert setting not in workflow[:staging_start]
-    assert _staging_job(workflow).count(setting) == 1
+    # Only the canonical candidate workflow deploys staging, so only it may
+    # carry this control.
+    assert CONTROL not in manual
+    assert canonical.count(f"vars.{CONTROL}") > 0
+    assert canonical.count(f"vars.{CONTROL}") == canonical.count(setting)
 
     for path in (".env.staging.backend", "just/direnv.just"):
         assert f'{CONTROL}="${{{CONTROL}:-false}}"' in _read(path)
@@ -169,20 +181,21 @@ def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
 def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak() -> (
     None
 ):
-    workflow = _read(".github/workflows/build_and_publish.yml")
-    staging_start = workflow.index("\n  deploy-staging:")
-    production_job = workflow[:staging_start]
-    staging_job = workflow[staging_start:]
-    production_resolve = _frontend_resolve_step(production_job, "production")
-    staging_resolve = _frontend_resolve_step(staging_job, "staging")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    canonical = _read(".github/workflows/deploy_staging_candidate.yml")
+    production_resolve = _frontend_resolve_step(workflow, "production")
     exact_boolean_check = f'(.{FRONTEND_FLAG} == "true" or .{FRONTEND_FLAG} == "false")'
 
     assert production_resolve.count(f'\n              {FRONTEND_FLAG}: "false",') == 1
-    assert staging_resolve.count(f"\n              {FRONTEND_FLAG},") == 1
+    assert canonical.count(f"\n              {FRONTEND_FLAG},") == 1
     assert exact_boolean_check in production_resolve
-    assert exact_boolean_check in staging_resolve
+    # Staging's resolver is in the candidate workflow and wraps the same check
+    # across two lines; compare with whitespace collapsed so reindenting the
+    # workflow cannot fail this for a reason unrelated to the contract.
+    assert exact_boolean_check in " ".join(canonical.split())
     assert CONTROL not in production_resolve
     assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in workflow
+    assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in canonical
 
 
 def test_frontend_environment_files_remove_legacy_clerk_token_template() -> None:
@@ -241,15 +254,12 @@ def test_frontend_build_allowlist_keeps_production_false(tmp_path: Path) -> None
     )
 
 
-def test_unset_switch_executably_injects_both_backend_gates_as_false() -> None:
+def test_unset_switch_blocks_canonical_deploy_while_frontend_defaults_false() -> None:
     result = _run_deploy_control(None)
     frontend = _render_frontend_flag(None)
 
-    assert result.returncode == 0, result.stderr
-    assert (
-        result.stdout.strip()
-        == '{"AUTHORITY_KERNEL_ENABLED":"false","AGENT_API_ENABLED":"false"}'
-    )
+    assert result.returncode == 1
+    assert "must remain true for canonical staging deployment" in result.stdout
     assert frontend.returncode == 0, frontend.stderr
     assert frontend.stdout.strip() == "false"
 
@@ -258,8 +268,24 @@ def test_invalid_switch_is_rejected_before_configuration_is_rendered() -> None:
     result = _run_deploy_control("TRUE")
 
     assert result.returncode == 1
-    assert result.stdout.strip() == f"{CONTROL} must be true or false."
+    assert (
+        result.stdout.strip()
+        == f"{CONTROL} must remain true for canonical staging deployment."
+    )
     assert "AUTHORITY_KERNEL_ENABLED" not in result.stdout
+
+
+def test_record_grant_switch_must_be_true_before_configuration_is_rendered() -> None:
+    for value in (None, "false", "TRUE"):
+        result = _run_deploy_control("true", record_grants=value)
+
+        assert result.returncode == 1
+        assert (
+            result.stdout.strip()
+            == "ENABLE_SOVEREIGN_RECORD_GRANTS must remain true for canonical "
+            "staging deployment."
+        )
+        assert "AUTHORITY_KERNEL_ENABLED" not in result.stdout
 
 
 def test_true_switch_executably_injects_both_backend_gates() -> None:
@@ -267,10 +293,9 @@ def test_true_switch_executably_injects_both_backend_gates() -> None:
     frontend_result = _render_frontend_flag("true")
 
     assert result.returncode == 0, result.stderr
-    assert (
-        result.stdout.strip()
-        == '{"AUTHORITY_KERNEL_ENABLED":"true","AGENT_API_ENABLED":"true"}'
-    )
+    rendered = json.loads(result.stdout)
+    assert all(rendered[name] == "true" for name in BACKEND_FLAGS)
+    assert all(rendered[name] == "false" for name in FORCED_FALSE_FLAGS)
 
     frontend = _read(".env.staging.frontend")
     assert f'export {FRONTEND_FLAG}="${{{CONTROL}:-false}}"' in frontend
@@ -325,5 +350,5 @@ def test_provider_v7_control_does_not_leak_into_production_paths() -> None:
         assert CONTROL not in source
         assert PROVIDER_ORIGIN not in source
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
-    assert CONTROL not in workflow[: workflow.index("\n  deploy-staging:")]
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    assert CONTROL not in workflow

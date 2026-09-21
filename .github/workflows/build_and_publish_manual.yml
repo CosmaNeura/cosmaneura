@@ -1,0 +1,508 @@
+name: Build & Publish (manual)
+
+# Primary deployment workflow. This new path gives it a distinct workflow ID so
+# the legacy registration and all of its rerunnable historical snapshots can be
+# disabled without deleting repository history.
+
+on:
+  workflow_dispatch:
+    # allow ssh access to be enabled via the GH actions UI
+    inputs:
+      debug_enabled:
+        type: boolean
+        description: "Run with tmate enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
+        required: false
+        default: false
+      terraform_apply_run_id:
+        type: string
+        description: "Successful Terraform Apply run that authorizes a held production deploy"
+        required: true
+      provider_signed_recall_callback_verified:
+        type: boolean
+        description: "Attest that a real provider-signed non-PHI Recall callback passed immediately before production deploy"
+        required: true
+        default: false
+
+# Deployment validation belongs only to explicit manual promotions, not pushes.
+# Repository Actions remains disabled until the user authorizes re-enabling it.
+
+concurrency:
+  # Match historical Build & Publish runs during the short registration
+  # transition so an old rerun cannot overlap this replacement.
+  group: Build & Publish-${{ github.ref }}
+  # Neither release branch may cancel an in-flight run: migrations or Azure
+  # revision reconciliation can outlive GitHub's cancellation signal. Queue a
+  # newer dispatch behind the current release instead of creating partial state.
+  cancel-in-progress: false
+
+# Long-lived credentials are scoped to the protected deploy jobs below. Pull
+# requests run in the separate, entirely secretless pull_request_checks.yml.
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Public, deliberately non-routable test identifier for the secretless
+  # Backend/Frontend verification jobs. Protected deploy jobs override it
+  # with their environment-scoped publishable key.
+  VITE_CLERK_PUBLIC_KEY: pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
+
+  # a important design goal is to avoid custom configuration in CI. This enables tests to be run in a CI-like environment
+  # locally, making it easy to replicate CI issues. This is one of the few CI-specific configuration changes since
+  # the host where services are located is truly unique to the CI environment.
+  DATABASE_HOST: localhost
+  REDIS_HOST: localhost
+  SMTP_HOST: localhost
+
+  # https://github.com/Textualize/rich/issues/2769
+  COLUMNS: 120
+
+jobs:
+  authorize-production:
+    name: Authorize production promotion
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require founder-authorized manual promotion from master
+        env:
+          PROMOTION_ACTOR: ${{ github.actor }}
+          PROMOTION_EVENT: ${{ github.event_name }}
+          PROMOTION_REF: ${{ github.ref }}
+          PROMOTION_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROMOTION_EVENT" != "workflow_dispatch" ]]; then
+            echo "::error::Production promotion must be started manually with workflow_dispatch."
+            exit 1
+          fi
+          if [[ "$PROMOTION_REF" != "refs/heads/master" ]]; then
+            echo "::error::Production promotion must target the exact master branch."
+            exit 1
+          fi
+          if [[ "$PROMOTION_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production promotion is restricted to the founder account."
+            exit 1
+          fi
+          if [[ "$PROMOTION_TRIGGERING_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production promotion reruns are restricted to the founder account."
+            exit 1
+          fi
+
+  deployment-scope:
+    name: Release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      production_infra_changed: ${{ steps.classify.outputs.production_infra_changed }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Hold app deployment when production infrastructure changes
+        id: classify
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          production_infra_changed=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ -z "$BEFORE_SHA" ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              # Unknown push scope must fail closed. An operator can run this
+              # workflow manually on master after Terraform Apply is green.
+              production_infra_changed=true
+            elif ! git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- \
+              infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+              Justfile just Procfile .github/actions \
+              .github/workflows/infra_apply.yml \
+              .github/workflows/infra_production_plan.yml \
+              .github/workflows/build_and_publish.yml \
+              .github/workflows/build_and_publish_manual.yml; then
+              production_infra_changed=true
+            fi
+          fi
+          echo "production_infra_changed=$production_infra_changed" >> "$GITHUB_OUTPUT"
+          if [[ "$production_infra_changed" == "true" ]]; then
+            echo "Production app deployment is held until Terraform Apply is green. Run Build & Publish (manual) on master to deploy the image." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # NOTE there is no global timeout minutes, so we need to set it on each job :/
+
+  backend-quality:
+    name: Backend quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # fetch-depth: 0 so `db_lint` can diff new migrations against origin/master
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          # Quality recipes require only zsh. The test matrix adds
+          # libnss3-tools only for the Localias-backed integration shard.
+          apt-packages: zsh
+      - run: just up --fast
+      - run: just py_setup
+      - run: just py_lint
+
+      - run: just db_migrate
+      - run: just db_lint
+
+      - name: Log service routing (diagnostics)
+        run: |
+          echo "CI Service Routing Diagnostics:"
+          echo "Azure OpenAI Endpoint: ${AZURE_OPENAI_ENDPOINT}"
+          echo "Container Registry: ${CONTAINER_REGISTRY_HOST}"
+          echo "Storage Account: ${AZURE_UPLOADS_ACCOUNT_NAME}"
+          # Log hostnames/resource names
+
+      # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
+      # for instance GITHUB_ENV, seems to be cleared out.
+      - uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
+        with: { detached: true }
+
+  backend-tests:
+    name: Backend tests (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: application
+            apt-packages: zsh
+          - shard: infrastructure-general
+            apt-packages: zsh
+          - shard: infrastructure-controller
+            apt-packages: zsh
+          - shard: infrastructure-receipt-io
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-foundation
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-authority
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-context
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-runtime
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-contract
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-digest
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-duplicate
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-tamper
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-failure
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-data-contract-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-snapshot
+            apt-packages: zsh
+          - shard: infrastructure-restore
+            apt-packages: zsh
+          - shard: integration
+            apt-packages: zsh libnss3-tools
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: ${{ matrix.apt-packages }}
+      - name: Install SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/install_pinned_localias.sh
+      - run: just up --fast
+      - run: just py_setup
+      - name: Install integration Chromium headless shell
+        if: ${{ matrix.shard == 'integration' }}
+        run: uv run playwright install chromium --only-shell
+      - name: Start SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/start_pinned_localias_ci.sh
+      - run: just db_migrate
+      - id: py_test
+        run: just py_test-ci-${{ matrix.shard }}
+      - name: Upload shard test artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # playwright traces, screenshots, logs, etc
+          # traces and pngs allow us to debug e2e test failures
+          name: backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          # NOTE if direnv sourcing fails, this var will not be set and it will fail
+          path: |
+            ${{ env.TEST_RESULTS_DIRECTORY }}
+            ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  app:
+    name: Backend
+    needs: [backend-quality, backend-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every backend prerequisite to succeed
+        env:
+          BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
+            echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+            exit 1
+          fi
+
+  web:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+      - run: just js_setup
+      - name: Generate OpenAPI client
+        run: cd web && pnpm run openapi
+      - run: just js_lint
+      - run: just js_test
+
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: cosmaneura-production-container-apps
+      cancel-in-progress: false
+    needs: [web, app, deployment-scope, authorize-production]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-production.result == 'success'
+      }}
+    environment: production
+    env:
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+    permissions:
+      actions: read
+      contents: read
+      # TODO why exactly do we need id-token here?
+      id-token: write
+    steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require provider-signed callback gate for manual production deploy
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PROVIDER_CALLBACK_VERIFIED: ${{ inputs.provider_signed_recall_callback_verified }}
+        run: |
+          if [[ "$PROVIDER_CALLBACK_VERIFIED" != "true" ]]; then
+            echo "A real provider-signed non-PHI Recall callback must pass before production deploy." >&2
+            exit 1
+          fi
+      - name: Verify successful applicable Terraform Apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            TERRAFORM_APPLY_RUN_ID=$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply.yml/runs?branch=master&event=workflow_dispatch&status=success&per_page=1" \
+                --jq '.workflow_runs[0].id // empty'
+            )
+          fi
+          if [[ ! "$TERRAFORM_APPLY_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "No successful Terraform Apply is available for this production deploy." >&2
+            exit 1
+          fi
+          mapfile -t apply_run < <(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TERRAFORM_APPLY_RUN_ID" \
+              --jq '[.name, .path, .conclusion, .event, .head_branch, .head_sha] | .[]'
+          )
+          if [[ "${apply_run[0]:-}" != "Terraform Apply" || \
+                "${apply_run[1]:-}" != ".github/workflows/infra_apply.yml" || \
+                "${apply_run[2]:-}" != "success" || \
+                "${apply_run[4]:-}" != "master" ]]; then
+            echo "The supplied run is not a successful Terraform Apply on master." >&2
+            exit 1
+          fi
+          if [[ "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
+            echo "The supplied Terraform Apply run has an invalid trigger." >&2
+            exit 1
+          fi
+          apply_sha="${apply_run[5]:-}"
+          if [[ -z "$apply_sha" ]] || \
+             ! git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"; then
+            echo "The supplied Terraform Apply commit is not an ancestor of this deploy." >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
+            infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+            Justfile just Procfile .github/actions \
+            .github/workflows/infra_apply.yml \
+            .github/workflows/infra_production_plan.yml \
+            .github/workflows/build_and_publish.yml \
+            .github/workflows/build_and_publish_manual.yml; then
+            echo "Production infrastructure changed after the supplied Terraform Apply." >&2
+            exit 1
+          fi
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          # deploy only builds/pushes the image + calls Azure; ffmpeg & friends
+          # are baked into the image, not needed on the host (only zsh, for `just`)
+          apt-packages: zsh
+
+      # This verified tool install runs before registry authentication and
+      # before any production secret is bound to a build/deploy step.
+      - uses: ./.github/actions/install-nixpacks
+
+      - name: Resolve production frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+
+      # NOTE registry/Azure vars resolve at step level so the environment scope
+      # is active during evaluation — job-level env blocks miss environment vars
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+      - name: Build production images from resolved public configuration
+        run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          PYTHON_ENV: production
+      - name: Remove resolved production frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify current master before publishing production images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced during the build; refusing to publish stale images." >&2
+            exit 1
+          fi
+      - run: just build_push
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          PYTHON_ENV: production
+
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Reverify current master before production deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced before deployment; refusing to mutate Azure from a stale commit." >&2
+            exit 1
+          fi
+
+      - name: Deploy to Azure
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          CONTAINER_REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+        run: |
+          cd infra && bash deploy.sh ${{ github.sha }}

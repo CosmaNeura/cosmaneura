@@ -19,7 +19,12 @@ from app.services.organization_access import (
     revoke_roster_access,
 )
 
-from app.models.baa import BaaAcceptance
+from app.models.baa import (
+    BAA_CURRENT_SHA256,
+    BAA_CURRENT_VERSION,
+    BAA_DOC_ID,
+    BaaAcceptance,
+)
 from app.models.doctor import Doctor
 from app.models.organization_access import ProviderOrganization
 from app.models.practice import Practice, PracticeMember
@@ -259,6 +264,9 @@ def test_live_managed_email_drift_routes_to_support_and_blocks_personal_baa(
     baa = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Must Not Persist",
             "signature_title": "Clinician",
             "checks": ["baa"],
@@ -328,6 +336,9 @@ def test_unprovisioned_managed_identity_gets_pending_and_cannot_self_enroll(
     baa = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Doctor",
             "signature_title": "Clinician",
             "checks": ["baa"],
@@ -460,6 +471,9 @@ def test_organization_linked_owner_cannot_create_clickwrap_acceptance(
     response = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Organization Owner",
             "signature_title": "Owner",
             "checks": ["baa"],

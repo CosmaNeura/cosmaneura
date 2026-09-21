@@ -62,20 +62,22 @@ State lives in the `cosmaneuratfstate` Azure storage account (see
 
    The pull-request job is intentionally secretless and cannot read the
    production backend, Azure identity, 1Password, or application secrets.
-   Reviewers must approve the source changes and static-plan result. A real
-   production-state plan is intentionally available only on trusted `master`:
-   run **Terraform Production Plan** manually after merge. The workflow fails
-   if its checkout is no longer the exact current `master` commit and records
-   its run ID, commit, canonical plan hash, and immutable attestation digest in
-   the job summary. The upload action's digest is normalized to exactly
+   An independent agent must review the source changes and static-plan result;
+   that evidence is not a GitHub approval. A real production-state plan is
+   intentionally available only on trusted `master`:
+   the founder account (`JohnClem`) runs **Terraform Production Plan** manually
+   after merge. The workflow rejects another original or rerun actor, fails if
+   its checkout is no longer the exact current `master` commit, and records its
+   run ID, commit, canonical plan hash, and immutable attestation digest in the
+   job summary. The upload action's digest is normalized to exactly
    `sha256:<64 lowercase hex>` before it is displayed or copied to a step
    output. It validates the Recall webhook signing credential's `whsec_` plus
    canonical base64 shape and minimum length without printing it.
 
 2. **Apply explicitly after reviewing the protected plan.**
    Copy the successful **Terraform Production Plan** run ID and its `sha256:`
-   artifact digest, then manually run **Terraform Apply** on `master` with that
-   ID as `production_plan_run_id` and digest as
+   artifact digest, then the founder manually runs **Terraform Apply** on
+   `master` with that ID as `production_plan_run_id` and digest as
    `production_plan_artifact_digest`:
    - `tofu init`
    - verify the run's exact workflow name/path, attempt, manual event,
@@ -90,56 +92,56 @@ State lives in the `cosmaneuratfstate` Azure storage account (see
    - apply that freshly saved, digest-matched plan with
      `tofu apply -auto-approve`
 
-   A merge or push never starts a production apply. If `master` advances at
-   any point, obtain a new protected plan run for the new exact commit.
-   Concurrency remains serialized so two explicitly approved applies cannot
-   race on the state file.
+   A merge or push never starts a production apply. Another actor cannot start
+   or rerun the production plan or apply job. If `master` advances at any
+   point, obtain a new protected plan run for the new exact commit. Concurrency
+   remains serialized so two explicitly approved applies cannot race on the
+   state file.
 
 3. **Deploy the application only after the operational callback gate.**
    For a held infrastructure/application release, first send a real
    provider-signed Recall event containing no PHI to the production endpoint.
    Confirm HTTP 200 and the expected metadata-only receipt, with no body,
-   signature, or provider identifier in logs. A production environment
-   reviewer must verify that evidence before approving the manual
-   **Build & Publish** run and the operator must check
+   signature, or provider identifier in logs. No required production
+   environment reviewer is configured. The founder self-authorizes the manual
+   **Build & Publish (manual)** run, must verify that evidence, and must check
    `provider_signed_recall_callback_verified`. Never paste the callback body,
    signature, URL parameters, or provider IDs into GitHub inputs or comments.
 
-## When to apply locally instead
+## Local infrastructure commands
 
-You should almost never need to. The local recipes in `Justfile`
-(`just tofu_apply`, `just tofu_output`, `just tofu_init`) still work
-and are the right tool when:
-
-- You need to bootstrap the state backend from scratch.
-- CI is unavailable and there's a production incident that requires a
-  hotfix faster than a CI cycle.
-- You're iterating on terraform changes that you don't intend to
-  commit yet (use `tofu plan` only — never `tofu apply` from local on
-  uncommitted code).
-
-When you do run apply locally, push the resulting changes to a PR
-immediately so the state in the cloud and the source tree stay in
-sync.
+The local recipes in `Justfile` (`just tofu_apply`, `just tofu_output`,
+`just tofu_init`) still exist for disposable development infrastructure and
+initial state-backend bootstrap. Do not use a local apply as a production
+rollback or as a substitute for the founder-gated plan/apply chain. Local
+production planning may be used read-only for diagnosis, but production
+mutation requires a separately reviewed emergency procedure if GitHub Actions
+is unavailable; no such bypass is authorized by this runbook.
 
 ## Required GitHub configuration
 
 These need to exist for the protected apply/deploy and manual production-plan
 jobs to authenticate; pull-request jobs do not receive them:
 
-Configure `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID` as
-**environment variables**, not repository variables. The repeated names are
-intentional: GitHub resolves them only after the protected job enters its
-declared environment. `AZURE_CLIENT_ID` must identify that environment's
-Terraform-managed `ghactions` user-assigned identity. Tenant and subscription
-values may be the same, but must still be configured on each environment so a
-missing environment binding fails closed.
+The target state configures `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+`AZURE_SUBSCRIPTION_ID` as **environment variables**, not repository variables.
+`AZURE_CLIENT_ID` must identify that environment's Terraform-managed
+`ghactions` user-assigned identity.
+
+Verified drift on 2026-08-25: repository variables with all three Azure names
+still exist, and the workflows resolve `vars.* || secrets.*`. A missing
+environment value can therefore fall back to a repository value instead of
+failing closed. A repository secret named `OP_SERVICE_ACCOUNT_TOKEN` also
+remains even though current workflows reference only the environment-specific
+production/staging token names. Inventory all consumers, then remove these
+legacy repository-scoped values in a separate authorized configuration change;
+do not treat their presence as production authorization.
 
 **Environment** `production` (Settings → Environments → production):
 
-- Required reviewers: required for production plan, apply, and deploy. Before
-  approving the deploy, verify the real provider-signed non-PHI Recall callback
-  gate described above.
+- Required reviewers: none currently configured. The workflow itself restricts
+  production plan, apply, deploy, and reruns to the founder account. Independent
+  agent review remains PR evidence rather than a GitHub environment approval.
 - Branch policy: `master` only.
 - Environment variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
   `AZURE_SUBSCRIPTION_ID`, bound to the production `ghactions` identity.
@@ -161,8 +163,9 @@ missing environment binding fails closed.
   staging items referenced by `.env.staging.backend` and
   `.env.staging.frontend`.
 - Do not define either environment-specific token as a repository secret and
-  do not configure a fallback `OP_SERVICE_ACCOUNT_TOKEN`. Production and
-  staging must not be able to read one another's vault items.
+  do not configure a fallback `OP_SERVICE_ACCOUNT_TOKEN`. The currently
+  observed legacy repository secret is drift awaiting separate removal;
+  production and staging must not be able to read one another's vault items.
 
 ### Environment-local 1Password prerequisites
 
@@ -215,8 +218,8 @@ that use a protected deployment environment.
 | --- | --- | --- |
 | `infra_apply.yml` (manual attested-plan apply) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 | `infra_production_plan.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish.yml` (staging deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
+| `build_and_publish_manual.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `deploy_staging_candidate.yml` (staging candidate deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
 
 The three production rows share the production environment subject, so one
 matching production federated credential is sufficient. Staging requires its
@@ -284,16 +287,18 @@ For a change that includes both infrastructure and application code:
 4. Send and verify the real provider-signed non-PHI Recall callback described
    above.
 5. Copy the successful apply run's numeric ID from its Actions URL.
-6. Manually run **Build & Publish** on `master`, supplying the ID as
+6. Manually run **Build & Publish (manual)** on `master`, supplying the ID as
    `terraform_apply_run_id` and checking
    `provider_signed_recall_callback_verified`. The workflow verifies the apply
    run, its ancestry, and that no later production-infrastructure change exists
    before it deploys the current immutable commit image.
 
-Application-only pushes keep their existing automatic behavior, but the deploy
-first resolves the latest successful Terraform Apply and performs the same
-ancestry/no-drift verification. An unknown push comparison fails closed and
-requires the same manual run.
+Application-only pushes still run validation and build jobs, but they cannot
+enter the production deploy job. The founder must manually dispatch **Build &
+Publish (manual)** on the exact current `master`; the deploy first resolves the latest
+successful Terraform Apply and performs the same ancestry/no-drift
+verification. An unknown push comparison fails closed and requires the same
+manual run.
 Terraform Production Plan, Terraform Apply, and the production deploy share
 one non-cancelling concurrency group, so a later application-only push queues
 instead of mutating Container Apps while plan evidence is generated or an
@@ -304,7 +309,7 @@ apply is in flight.
 `SOVEREIGN_RECORD_GRANT_SECRET` is a capability-bearing key used only by the
 HTTP API to mint short-lived synthetic Preview record grants. OpenTofu exposes
 it only to `cosmaneura-prod-app`; it is excluded from the worker, scheduler,
-job-monitor, and migration job. Staging's deployment script enforces the same
+and migration job. Staging's deployment script enforces the same
 API-only split for `cosmaneura-staging-app`. Staging remains off by default;
 provision its separate 1Password item first, then set the staging GitHub
 environment variable `ENABLE_SOVEREIGN_RECORD_GRANTS=true` only for the
@@ -322,7 +327,7 @@ source-controlled old/v2 secret selection, adoption-only live-state guard,
 cluster-database ACL audit, and value-free migration preflight. The current
 inline-secret model places encrypted values in protected OpenTofu state; moving
 them to Key Vault references remains a separate architecture change.
-OpenTofu owns the four long-running apps; the deploy script owns the already-
+OpenTofu owns the three long-running apps; the deploy script owns the already-
 provisioned migration job and now fails rather than creating it implicitly.
 
 ## Scribe workflow identity

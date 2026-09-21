@@ -39,10 +39,10 @@ def test_open_tofu_owns_both_database_secrets_and_selected_reference() -> None:
     main = _read("infra/main.tf")
 
     assert '"database-url-v2" = local.database_url_v2_value' in main
-    for resource in ("app", "scheduler", "worker", "job-monitor"):
+    for resource in ("app", "scheduler", "worker"):
         block = _hcl_block(main, f'resource "azurerm_container_app" "{resource}"')
         # Keep DATABASE_URL in the legacy set-driven blocks. Moving it to a
-        # static block rotates AzureRM's ordered env list and creates four
+        # static block rotates AzureRM's ordered env list and creates three
         # otherwise-no-op production revisions before the cutover window.
         assert 'toset(["DATABASE_URL"])' not in block
         assert 'name        = "DATABASE_URL"' not in block
@@ -121,10 +121,8 @@ def test_deploy_adopts_selection_and_never_recreates_migration_job() -> None:
     assert '"database-url": .DATABASE_URL' not in migrations
     assert '"database-url-v2": .DATABASE_URL_V2' in migrations
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
-    production_deploy = workflow[
-        workflow.index("  deploy:\n") : workflow.index("  deploy-staging:\n")
-    ]
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    production_deploy = workflow[workflow.index("  deploy:\n") :]
     assert "AZURE_SUBSCRIPTION_ID:" in production_deploy
     assert "vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID" in (
         production_deploy

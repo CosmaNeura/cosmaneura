@@ -1,0 +1,9 @@
+# Staging provider acceptance after synthetic recovery
+
+Tier 1. The owner approved closing one 24-day-old entry tied to the existing synthetic fixture. The existing operator services appended a fixed unavailable final and closed audit/usage ingestion as failed. Independent readback verified one retained user phase, one exact recovery final, four retained usage facts and five audit facts including the three recovery events. No records were deleted.
+
+Accept exactly the original closed failure and the newly recovered entry, identified only by their SHA-256 references in `provider_v7_acceptance.py`. Require two failed audit/usage states, zero pending states, and exact reference membership; reject missing, duplicate or unknown entries and inconsistent counts. This records a historical failure disposition and does not describe that failed interaction as successful.
+
+Use one controller-owned acceptance entry for full smoke and status-only checks. It runs in memory inside the already deployed immutable candidate, invokes that candidate's existing staging gates and full provider exercise unchanged, and checks the accepted baseline before and after. The existing provider exercise verifies temporary Clerk-session revocation, persistence and replay rejection. The outer wrapper retains exact image, workload, identity, origin and public-denial checks. No candidate rebuild, migration, workload rollout, production change or feature-gate change is required. Future direct invocation of the image's smoke module delegates to the same baseline check.
+
+Validate closed-set rejection, gate/check ordering, pre- and post-chat failures, fixed output, existing provider regression tests, and bounded shell payloads. Require final-push independent review. Operational recovery is inspection of any partial acceptance result; code recovery is a revert, which will deliberately reject the now-two-failure baseline. Retain the actual history in either case.

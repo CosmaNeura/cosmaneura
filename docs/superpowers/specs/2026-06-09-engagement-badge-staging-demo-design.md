@@ -1,5 +1,11 @@
 # Engagement Role Badge + Staging Demo Data — Design
 
+> **Historical record — superseded; not operational authorization.** Staging
+> deployment is now founder-triggered and manual, not push-triggered. Staging
+> has not been established as synthetic-only/non-PHI, so this document does not
+> authorize seed data, database access, or deployment. Follow the root
+> `README.md`, `AGENTS.md`, and current workflow instead.
+
 **Date:** 2026-06-09
 **Status:** Approved (brainstorming) — pending spec review before planning
 **Target environment:** `staging` only (must not touch production)
