@@ -259,7 +259,17 @@ def test_staging_preflight_runs_after_job_creation_before_alembic() -> None:
     plain_start = deploy.index("local execution_name", preflight)
 
     assert create < preflight < plain_start
-    assert '--args "/opt/venv/bin/alembic upgrade head"' in deploy[create:preflight]
+    command_start = deploy.index(
+        "migration_command=$(", deploy.index("run_migrations()")
+    )
+    command_end = deploy.index(") || return 1", command_start)
+    assert command_end < create
+    assert (
+        '"$SCRIPT_DIR/../scripts/migration_job_template_guard.py"'
+        in deploy[command_start:command_end]
+    )
+    assert "--staging-alembic-command" in deploy[command_start:command_end]
+    assert '--args "$migration_command"' in deploy[create:preflight]
     override = deploy[
         deploy.rfind("az containerapp job start", create, preflight) : plain_start
     ]
