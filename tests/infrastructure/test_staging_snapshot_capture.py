@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
-    "staging_snapshot_capture",
+    "_test_staging_snapshot_capture_unit",
     Path(__file__).resolve().parents[2] / "scripts/staging_snapshot_capture.py",
 )
 assert SPEC is not None and SPEC.loader is not None

@@ -254,6 +254,16 @@ class NativeFiles:
                         chunks.append(chunk)
                         remaining -= len(chunk)
                     value = b"".join(chunks)
+                    # Same-size writes can share the original timestamps.
+                    # Recheck the captured bytes through the same held file
+                    # descriptor before accepting its final metadata.
+                    require(os.lseek(descriptor, 0, os.SEEK_SET) == 0)
+                    offset = 0
+                    while offset < len(value):
+                        chunk = os.read(descriptor, min(65536, len(value) - offset))
+                        require(chunk and chunk == value[offset : offset + len(chunk)])
+                        offset += len(chunk)
+                    require(os.read(descriptor, 1) == b"")
                     self.acl_safe(descriptor)
                     self.acl_safe(parent)
                     require(

@@ -560,7 +560,14 @@ class ShellFixtureTests(unittest.TestCase):
             "not_before": now - 2,
             "not_after": now + 60,
         }
-        return shlex.split(module.shell_text(**{**arguments, **changes}).decode())
+        command = module.shell_text(**{**arguments, **changes}).decode()
+        if sys.platform == "linux":
+            # The production launcher targets macOS. Exercise the same real
+            # file metadata checks with GNU stat in the Linux dummy fixture.
+            bsd_stat = '/usr/bin/stat -f "%z:%Lp:%u:%l"'
+            self.assertEqual(command.count(bsd_stat), 1)
+            command = command.replace(bsd_stat, '/usr/bin/stat -c "%s:%a:%u:%h"')
+        return shlex.split(command)
 
     def run_dummy(self, command):
         master, slave = pty.openpty()
