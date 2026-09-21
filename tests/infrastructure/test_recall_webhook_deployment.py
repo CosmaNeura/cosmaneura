@@ -295,9 +295,13 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         name: _workflow_job(workflow, name)
         for name in ("backend-quality", "backend-tests", "app", "web")
     }
+    # Staging's protected deploy job moved to the canonical candidate workflow
+    # when the staging-branch path was retired. Both protected jobs are still
+    # covered here; only their home workflow changed.
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     protected_jobs = {
         "deploy": _workflow_job(publish_workflow, "deploy"),
-        "deploy-staging": _workflow_job(publish_workflow, "deploy-staging"),
+        "deploy-staging-candidate": _workflow_job(candidate_workflow, "deploy"),
     }
 
     assert "  pull_request: {}" in workflow_scope
@@ -354,10 +358,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
             assert "persist-credentials: false" in step
 
     production = protected_jobs["deploy"]
-    staging = protected_jobs["deploy-staging"]
+    staging = protected_jobs["deploy-staging-candidate"]
     assert "github.ref == 'refs/heads/master'" in production
     assert "environment: production" in production
-    assert "github.ref == 'refs/heads/staging'" in staging
+    assert "github.ref == 'refs/heads/master'" in staging
     assert "github.event_name == 'workflow_dispatch'" in staging
     assert "github.event_name == 'push'" not in staging
     assert "environment: staging" in staging
@@ -378,7 +382,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         "${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}" in staging
     )
     assert production.count("secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN") == 2
-    assert staging.count("secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN") == 2
+    assert staging.count("secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN") == 1
+    # Neither protected job may reach the other environment's vault.
+    assert "OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN" not in staging
+    assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in production
     assert "CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}" not in publish_workflow
     assert "secrets.OP_SERVICE_ACCOUNT_TOKEN" not in publish_workflow
 
@@ -445,12 +452,11 @@ def test_secret_sources_are_references_or_protected_workflow_values() -> None:
     assert plan_job.count(protected_reference) == 1
 
     publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    production_deploy = publish_workflow[
-        publish_workflow.index("  deploy:\n") : publish_workflow.index(
-            "  deploy-staging:\n"
-        )
-    ]
-    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
+    # Staging deploys from the canonical candidate workflow since the
+    # staging-branch path was retired.
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    staging_deploy = _workflow_job(candidate_workflow, "deploy")
     assert "    environment: production" in production_deploy
     assert production_deploy.count(protected_reference) == 1
     assert "    environment: staging" in staging_deploy
@@ -462,12 +468,8 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     production_plan = _read(".github/workflows/infra_production_plan.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    production_deploy = publish_workflow[
-        publish_workflow.index("  deploy:\n") : publish_workflow.index(
-            "  deploy-staging:\n"
-        )
-    ]
-    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
     fixed_false = f'{FLAG}: "false"'
     mutable_default = f"{FLAG}: ${{{{ vars.{FLAG} || 'false' }}}}"
     protected_probe = f"{PROTECTED_FLAG}: ${{{{ vars.{FLAG} }}}}"
@@ -482,7 +484,6 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
         production_plan,
         apply_workflow,
         production_deploy,
-        staging_deploy,
     ):
         assert protected_job.count(fixed_false) == 1
         assert mutable_default not in protected_job
@@ -494,6 +495,13 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
         assert protected_job.index("Reject unreviewed durable webhook activation") < (
             protected_job.index("actions/checkout")
         )
+
+    # The canonical staging workflow source-locks the same flag, but rejects any
+    # value other than "false" outright rather than probing a protected var, so
+    # it is asserted in its own shape rather than folded into the loop above.
+    assert fixed_false in candidate_workflow
+    assert f'"${FLAG}" != "false"' in candidate_workflow
+    assert f"{FLAG} is source-locked false." in candidate_workflow
 
 
 def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None:
@@ -672,7 +680,6 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     build_recipe = _read("just/build.just")
     publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
 
     assert "NIXPACKS_VERSION: 1.41.0" in installer
     assert (
@@ -693,13 +700,16 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     assert "nixpacks.com/install.sh" not in build_recipe
     assert "command -v nixpacks" in build_recipe
 
-    for deploy_job in (production_deploy, staging_deploy):
-        install = deploy_job.index("uses: ./.github/actions/install-nixpacks")
-        registry_login = deploy_job.index("uses: docker/login-action@")
-        build = deploy_job.index("run: just build\n")
-        first_secret = deploy_job.index("${{ secrets.")
-        assert install < registry_login < build
-        assert install < first_secret
+    # Production builds and publishes inside one job, so the ordering is what
+    # keeps the toolchain install ahead of any credential. Staging reaches the
+    # same end by splitting build, publish and deploy into separate jobs; that
+    # separation is asserted in test_canonical_staging_deployment.py.
+    install = production_deploy.index("uses: ./.github/actions/install-nixpacks")
+    registry_login = production_deploy.index("uses: docker/login-action@")
+    build = production_deploy.index("run: just build\n")
+    first_secret = production_deploy.index("${{ secrets.")
+    assert install < registry_login < build
+    assert install < first_secret
 
     for workflow in (
         ".github/workflows/infra_production_plan.yml",
@@ -870,8 +880,8 @@ def test_protected_environment_files_use_only_their_own_vault() -> None:
 
 def test_protected_build_resolves_locally_then_drops_credential_capabilities() -> None:
     publish = _read(".github/workflows/build_and_publish_manual.yml")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
     build_recipe = _read("just/build.just")
     vite_config = _read("web/vite.config.ts")
 
@@ -880,20 +890,19 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
             "Resolve production frontend build configuration"
         ) : production_deploy.index("uses: docker/login-action@")
     ]
-    staging_resolve = staging_deploy[
-        staging_deploy.index(
-            "Resolve staging frontend build configuration"
-        ) : staging_deploy.index("uses: docker/login-action@")
+    # Staging resolves its configuration and builds in separate jobs of the
+    # canonical candidate workflow, so the same guarantees are read from there.
+    staging_config = _workflow_job(candidate_workflow, "config")
+    staging_resolve = staging_config[
+        staging_config.index(
+            "Resolve allowlisted public staging frontend configuration"
+        ) :
     ]
+    staging_build = _workflow_job(candidate_workflow, "build")
     production_build = production_deploy[
         production_deploy.index(
             "Build production images from resolved public configuration"
         ) : production_deploy.index("Remove resolved production frontend configuration")
-    ]
-    staging_build = staging_deploy[
-        staging_deploy.index(
-            "Build staging images from resolved public configuration"
-        ) : staging_deploy.index("Remove resolved staging frontend configuration")
     ]
     assert "OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN" in production_resolve
     assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in production_resolve
@@ -920,13 +929,13 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
     assert production_deploy.index("Resolve production frontend") < (
         production_deploy.index("uses: docker/login-action@")
     )
-    assert staging_deploy.index("Resolve staging frontend") < staging_deploy.index(
-        "uses: docker/login-action@"
-    )
     assert production_deploy.count("if: always()") >= 1
-    assert staging_deploy.count("if: always()") >= 1
     assert production_deploy.count('rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"') == 1
-    assert staging_deploy.count('rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"') == 1
+    # Staging needs no in-job scrub: configuration is resolved in a job that
+    # holds no registry credentials and hands the build an artifact, so the
+    # resolved file never shares a runner with a docker login.
+    assert "uses: docker/login-action@" not in staging_config
+    assert "uses: docker/login-action@" not in staging_build
 
     assert (
         'NIXPACKS_CREDENTIAL_BARRIER := "env -u OP_SERVICE_ACCOUNT_TOKEN '
@@ -1070,7 +1079,9 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
     )
     publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    staging_deploy = _workflow_job(publish, "deploy-staging")
+    # Staging's protected deploy job lives in the canonical candidate workflow.
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
+    staging_deploy = _workflow_job(candidate_workflow, "deploy")
 
     assert "secrets.OP_SERVICE_ACCOUNT_TOKEN" not in workflows
     for production_job in (production_plan, production_apply, production_deploy):
@@ -1105,8 +1116,9 @@ def test_azure_oidc_trust_is_bound_to_protected_environments() -> None:
     assert ":ref:refs/heads/" not in staging
 
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     assert "environment: production" in _workflow_job(workflow, "deploy")
-    assert "environment: staging" in _workflow_job(workflow, "deploy-staging")
+    assert "environment: staging" in _workflow_job(candidate_workflow, "deploy")
 
     documentation = _read("infra/README.md")
     normalized_documentation = " ".join(documentation.split())

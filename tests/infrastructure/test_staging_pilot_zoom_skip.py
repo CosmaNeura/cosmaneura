@@ -13,10 +13,13 @@ def _read(path: str) -> str:
 
 def test_staging_pilot_zoom_skip_build_control_is_default_off() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    canonical = _read(".github/workflows/deploy_staging_candidate.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
-    staging_job_start = workflow.index("\n  deploy-staging:")
-    assert setting not in workflow[:staging_job_start]
-    assert workflow[staging_job_start:].count(setting) == 1
+    # The staging-branch deploy path was retired; this control belongs only to
+    # the canonical candidate workflow, and only in its default-off form.
+    assert CONTROL not in workflow
+    assert canonical.count(f"vars.{CONTROL}") == canonical.count(setting)
+    assert f'"${CONTROL}" != "false"' in canonical
 
     staging = _read(".env.staging.frontend")
     assert f'export {PUBLIC_FLAG}="${{{CONTROL}:-false}}"' in staging

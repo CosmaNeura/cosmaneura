@@ -68,10 +68,10 @@ highest tier and should be split when concerns can deploy independently.
   including documentation-only pushes, cannot enter that job. The run records
   founder self-authorization; it is not independent review.
 - Canonical staging deployment is founder-only and manual. Its control-plane
-  workflow runs from the exact current protected `master`. Keep the legacy
-  `staging`-ref path operationally frozen; after the separately approved
-  environment-policy and federation cutover, it cannot enter a protected deploy
-  job. Each canonical run requires a full immutable candidate SHA that is both
+  workflow runs from the exact current protected `master`. The legacy
+  `staging`-ref path has been removed along with the `staging` branch, so
+  `Deploy Staging Candidate` is the only staging deployment path. Each
+  canonical run requires a full immutable candidate SHA that is both
   contained in protected `master` and the exact merge commit of the
   founder-selected merged PR. It tests and deploys that candidate, not the
   moving `master` tip, and reverifies provenance before protected credentials,
