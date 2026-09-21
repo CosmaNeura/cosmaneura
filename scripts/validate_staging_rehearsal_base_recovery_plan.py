@@ -2375,6 +2375,7 @@ def _read_protected_file(
             before.st_size,
             before.st_mtime_ns,
             before.st_ctime_ns,
+            before.st_nlink,
         )
         identity_after = (
             after.st_dev,
@@ -2382,6 +2383,7 @@ def _read_protected_file(
             after.st_size,
             after.st_mtime_ns,
             after.st_ctime_ns,
+            after.st_nlink,
         )
         if len(value) != before.st_size or identity_before != identity_after:
             raise RecoveryPlanError(f"{label} changed while it was being read")
