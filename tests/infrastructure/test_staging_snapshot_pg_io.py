@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location(
-    "staging_snapshot_pg_io",
+    "_test_staging_snapshot_pg_io_unit",
     Path(__file__).resolve().parents[2] / "scripts/staging_snapshot_pg_io.py",
 )
 assert SPEC is not None and SPEC.loader is not None

@@ -144,7 +144,7 @@ class OperationsTests(unittest.TestCase):
             now - timedelta(minutes=10),
             now + timedelta(hours=3, minutes=50),
             now - timedelta(seconds=10),
-            now + timedelta(seconds=590),
+            now + timedelta(minutes=45, seconds=-10),
         )
         self.source = SourceRuntimeBinding()
         self.source.files = FILES

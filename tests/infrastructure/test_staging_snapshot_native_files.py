@@ -133,6 +133,31 @@ class NativeTests(unittest.TestCase):
         with self.assertRaises(native.ProtectedReadRefused):
             FILES.read(self.path, mode=0o600, maximum=2)
 
+    def test_same_size_change_with_unchanged_timestamps_refuses(self):
+        original = self.path.stat()
+        real_identity = native.identity
+        real_read = os.read
+
+        def unchanged_timestamps(metadata):
+            value = real_identity(metadata)
+            if (metadata.st_dev, metadata.st_ino) == (original.st_dev, original.st_ino):
+                return (*value[:-2], original.st_mtime_ns, original.st_ctime_ns)
+            return value
+
+        def changing(descriptor, count):
+            value = real_read(descriptor, count)
+            self.path.write_bytes(b'{"invented":null}')
+            return value
+
+        # Retain real bytes, sizes, links, ownership and modes while modeling
+        # two writes within one filesystem timestamp tick.
+        with (
+            patch.object(native, "identity", side_effect=unchanged_timestamps),
+            patch.object(native.os, "read", side_effect=changing),
+            self.assertRaises(native.ProtectedReadRefused),
+        ):
+            self.read()
+
     @unittest.skipUnless(sys.platform == "darwin", "macOS ACL regression")
     def test_ancestor_allow_acl_refuses_before_content_read(self):
         nested = self.root / "nested"
