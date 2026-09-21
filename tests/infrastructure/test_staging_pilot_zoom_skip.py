@@ -15,9 +15,10 @@ def test_staging_pilot_zoom_skip_build_control_is_default_off() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
-    # The staging-branch deploy path was retired; this control belongs only to
-    # the canonical candidate workflow, and only in its default-off form.
+    # Only the canonical candidate workflow deploys staging, so only it may
+    # carry this control.
     assert CONTROL not in workflow
+    assert canonical.count(f"vars.{CONTROL}") > 0
     assert canonical.count(f"vars.{CONTROL}") == canonical.count(setting)
     assert f'"${CONTROL}" != "false"' in canonical
 

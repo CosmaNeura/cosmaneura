@@ -295,9 +295,6 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
         name: _workflow_job(workflow, name)
         for name in ("backend-quality", "backend-tests", "app", "web")
     }
-    # Staging's protected deploy job moved to the canonical candidate workflow
-    # when the staging-branch path was retired. Both protected jobs are still
-    # covered here; only their home workflow changed.
     candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     protected_jobs = {
         "deploy": _workflow_job(publish_workflow, "deploy"),
@@ -453,8 +450,6 @@ def test_secret_sources_are_references_or_protected_workflow_values() -> None:
 
     publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = publish_workflow[publish_workflow.index("  deploy:\n") :]
-    # Staging deploys from the canonical candidate workflow since the
-    # staging-branch path was retired.
     candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     staging_deploy = _workflow_job(candidate_workflow, "deploy")
     assert "    environment: production" in production_deploy
@@ -496,12 +491,14 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
             protected_job.index("actions/checkout")
         )
 
-    # The canonical staging workflow source-locks the same flag, but rejects any
-    # value other than "false" outright rather than probing a protected var, so
-    # it is asserted in its own shape rather than folded into the loop above.
-    assert fixed_false in candidate_workflow
-    assert f'"${FLAG}" != "false"' in candidate_workflow
-    assert f"{FLAG} is source-locked false." in candidate_workflow
+    # Staging reads the repository variable and then refuses any value other
+    # than "false", where production never reads it at all. The rejection is
+    # the guard, so it must be present wherever the variable is read.
+    assert candidate_workflow.count(fixed_false) == 2
+    assert candidate_workflow.count(mutable_default) == 2
+    assert candidate_workflow.count(f'"${FLAG}" != "false"') == 2
+    assert candidate_workflow.count(f"{FLAG} is source-locked false.") == 1
+    assert protected_probe not in candidate_workflow
 
 
 def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None:
@@ -890,8 +887,7 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
             "Resolve production frontend build configuration"
         ) : production_deploy.index("uses: docker/login-action@")
     ]
-    # Staging resolves its configuration and builds in separate jobs of the
-    # canonical candidate workflow, so the same guarantees are read from there.
+    # Staging resolves configuration and builds in two separate jobs.
     staging_config = _workflow_job(candidate_workflow, "config")
     staging_resolve = staging_config[
         staging_config.index(
@@ -1079,7 +1075,6 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
     )
     publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
-    # Staging's protected deploy job lives in the canonical candidate workflow.
     candidate_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
     staging_deploy = _workflow_job(candidate_workflow, "deploy")
 
@@ -1146,6 +1141,23 @@ def test_azure_oidc_trust_is_bound_to_protected_environments() -> None:
     assert "can collide with the existing issuer/subject pair" in _read(
         "infra-staging/main.tf"
     )
+
+
+def test_oidc_documentation_names_the_real_deploying_workflows() -> None:
+    documentation = _read("infra/README.md")
+
+    # The federation table tells an operator which workflow to expect against
+    # each environment subject; a stale row sends them to a job that no longer
+    # exists.
+    assert (
+        "| `deploy_staging_candidate.yml` (staging candidate deploy) "
+        "| `environment: staging` |" in documentation
+    )
+    assert (
+        "| `build_and_publish_manual.yml` (production deploy) "
+        "| `environment: production` |" in documentation
+    )
+    assert "`build_and_publish_manual.yml` (staging deploy)" not in documentation
 
 
 def test_durable_webhook_rollback_preserves_schema_and_evidence() -> None:

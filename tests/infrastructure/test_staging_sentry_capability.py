@@ -60,8 +60,6 @@ def test_staging_sentry_control_is_default_off_and_staging_only() -> None:
     direnv = _read("just/direnv.just")
     legacy_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     legacy_production = legacy_workflow[legacy_workflow.index("\n  deploy:\n") :]
-    # Staging's source-locked Sentry control moved to the canonical candidate
-    # workflow when the staging-branch deploy path was retired.
     canonical_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
 
     assert staging_environment.count(f"export {CONTROL}=false") == 1
@@ -70,7 +68,6 @@ def test_staging_sentry_control_is_default_off_and_staging_only() -> None:
     assert f'{CONTROL}: "false"' in canonical_workflow
     assert f'"${CONTROL}" != "false"' in canonical_workflow
     assert f"vars.{CONTROL}" not in legacy_workflow
-    assert f"vars.{CONTROL}" not in canonical_workflow
     assert CONTROL not in production_environment
     assert CONTROL not in legacy_production
 

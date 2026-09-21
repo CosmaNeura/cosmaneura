@@ -61,10 +61,6 @@ def test_canonical_workflow_is_the_only_staging_path() -> None:
     legacy = LEGACY_WORKFLOW.read_text(encoding="utf-8")
     canonical_deploy = _job(_source(), "deploy")
 
-    # The staging-branch deployment path was retired once the staging branch
-    # itself was. Absence is the stronger successor to the ref-disjointness
-    # this test previously asserted: the legacy workflow can no longer reach a
-    # staging environment by any ref.
     assert "refs/heads/staging" not in legacy
     assert "\n  authorize-staging:" not in legacy
     assert "\n  deploy-staging:" not in legacy

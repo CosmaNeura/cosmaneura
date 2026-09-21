@@ -168,10 +168,10 @@ def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
     manual = _read(".github/workflows/build_and_publish_manual.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
 
-    # The staging-branch deploy path was retired with the staging branch, so
-    # the canonical candidate workflow is the only staging deployment path and
-    # the only workflow permitted to carry this control at all.
+    # Only the canonical candidate workflow deploys staging, so only it may
+    # carry this control.
     assert CONTROL not in manual
+    assert canonical.count(f"vars.{CONTROL}") > 0
     assert canonical.count(f"vars.{CONTROL}") == canonical.count(setting)
 
     for path in (".env.staging.backend", "just/direnv.just"):
@@ -184,17 +184,15 @@ def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
     production_resolve = _frontend_resolve_step(workflow, "production")
-    # Staging's resolver moved to the canonical candidate workflow when the
-    # staging-branch deploy path was retired; the flag contract is unchanged.
-    staging_boolean_check = (
-        f'(.{FRONTEND_FLAG} == "true" or\n               .{FRONTEND_FLAG} == "false")'
-    )
     exact_boolean_check = f'(.{FRONTEND_FLAG} == "true" or .{FRONTEND_FLAG} == "false")'
 
     assert production_resolve.count(f'\n              {FRONTEND_FLAG}: "false",') == 1
     assert canonical.count(f"\n              {FRONTEND_FLAG},") == 1
     assert exact_boolean_check in production_resolve
-    assert staging_boolean_check in canonical
+    # Staging's resolver is in the candidate workflow and wraps the same check
+    # across two lines; compare with whitespace collapsed so reindenting the
+    # workflow cannot fail this for a reason unrelated to the contract.
+    assert exact_boolean_check in " ".join(canonical.split())
     assert CONTROL not in production_resolve
     assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in workflow
     assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in canonical

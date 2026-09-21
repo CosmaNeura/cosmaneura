@@ -10,7 +10,7 @@ Architecture source of truth: the `cosmaneura-architecture` repository (`ARCHITE
 
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
 * `infra/` contains all terraform logic. `cd infra && just install && just azure_apply` will setup infrastructure.
-- `master` is the only long-lived branch. Staging and production are environments promoted to an explicit reviewed `master` SHA; merging never deploys.
+- `master` is the trunk. Staging and production are environments promoted to an explicit reviewed `master` SHA; merging never deploys. The vestigial `staging` branch no longer has a deployment path and is being retired.
 - Pull requests have a required `change-budget` check that rejects more than 2,000 changed lines or 50 changed files. The repository ruleset enforces that exact context without changing the current human-approval requirement.
 - Each environment has its own founder-started workflow, and both run from `master`:
   - Production: `Build & Publish (manual)`, dispatched on `master`. It requires the Terraform apply run ID and the provider-signed Recall callback attestation.

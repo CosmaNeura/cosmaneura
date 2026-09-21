@@ -217,10 +217,8 @@ def test_legacy_staging_branch_deployment_path_is_absent() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
 
-    # The staging branch was retired; this dispatcher is production-only. The
-    # founder-only, dispatch-only staging guarantees this test used to assert
-    # now belong to deploy_staging_candidate.yml, which promotes a reviewed
-    # master SHA instead of a branch tip.
+    # The founder-only, dispatch-only staging guarantees belong to
+    # deploy_staging_candidate.yml, which promotes a reviewed master SHA.
     assert "  workflow_dispatch:" in workflow_scope
     assert "\n  push:" not in workflow_scope
     assert "\n  authorize-staging:" not in workflow
