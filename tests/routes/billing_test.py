@@ -688,13 +688,17 @@ def test_portal_conflicts_without_billing_account(authenticated_client: TestClie
     assert response.status_code == status.HTTP_409_CONFLICT
 
 
-def test_stripe_webhook_unavailable_until_full_rollout_config(client: TestClient):
-    response = client.post(
-        STRIPE_WEBHOOK_PATH,
-        content=b'{"id":"evt_x","type":"customer.subscription.updated"}',
-        headers={"content-type": "application/json"},
-    )
+def test_stripe_webhook_unavailable_until_integration_is_configured(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(stripe_config, "STRIPE_INTEGRATION_ENABLED", False)
+    monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "")
+
+    response = client.post(STRIPE_WEBHOOK_PATH, content=b"")
+
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json() == {"status": "billing webhook not configured"}
 
 
 @pytest.mark.usefixtures("stripe_configured")
@@ -709,6 +713,56 @@ def test_stripe_webhook_rejects_bad_signature(client: TestClient):
         },
     )
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.parametrize("event_type", ["invoice.paid", "invoice.payment_succeeded"])
+@pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_durably_accepts_paid_invoice_events(
+    client: TestClient,
+    event_type: str,
+):
+    event_id = f"evt_route_{event_type.replace('.', '_')}"
+    body = json.dumps(
+        {
+            "id": event_id,
+            "type": event_type,
+            "created": int(time.time()),
+            "api_version": "2025-09-30.clover",
+            "livemode": False,
+            "data": {
+                "object": {
+                    "id": f"in_route_{event_type.replace('.', '_')}",
+                    "customer": f"cus_route_{event_type.replace('.', '_')}",
+                    "customer_email": "sensitive-route-invoice@example.com",
+                    "livemode": False,
+                    "parent": {
+                        "type": "subscription_details",
+                        "subscription_details": {
+                            "subscription": (
+                                f"sub_route_{event_type.replace('.', '_')}"
+                            ),
+                            "metadata": {},
+                        },
+                    },
+                }
+            },
+        }
+    ).encode()
+
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "stripe-signature": _sign(body),
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    inbox = StripeEventInbox.get(event_id=event_id)
+    assert inbox
+    assert inbox.event_type == event_type
+    assert "sensitive-route-invoice@example.com" not in inbox.payload_json
 
 
 @pytest.mark.usefixtures("stripe_configured")

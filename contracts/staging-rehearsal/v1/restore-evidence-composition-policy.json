@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+  "closed_world": true,
+  "activation_ready": false,
+  "activation": {
+    "trusted_composite_verifier_implemented": false,
+    "workflow_integrated": false,
+    "trusted_executor_integrated": false,
+    "restore_activation_authorized": false
+  },
+  "policy_pins": {
+    "evidence_manifest": {
+      "policy_id": "cosmaneura-staging-evidence-manifest-v2",
+      "sha256": "sha256:8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
+    },
+    "server_scope_authentication": {
+      "policy_id": "cosmaneura-staging-server-scope-authentication-v1",
+      "sha256": "sha256:ad4b5ddd3e7cf8f6c50e34f63f1d2bd1d46d36f418fcd64b262b514daa2a28d5"
+    },
+    "source_provider_observation": {
+      "policy_id": "cosmaneura-staging-source-provider-observation-v1",
+      "sha256": "sha256:5a5774b26852421e01388317d89fb64d093fdf5d1e49ad04165c88bdf6f3fb52"
+    },
+    "github_attestation_authentication": {
+      "policy_id": "cosmaneura-staging-github-attestation-authentication-v1",
+      "sha256": "sha256:df7c2a2fca20dc05b3814d0762a286d6a9ff695e1ee7527ad9bd995f39b3fc1d"
+    }
+  },
+  "inputs": {
+    "server_authenticated_binding": {
+      "type": "authenticate_staging_server_scope_receipt.ServerAuthenticatedSafeSubmitBinding",
+      "exact_type_required": true,
+      "module_seal_required": true,
+      "canonical_record_required": true
+    },
+    "server_scope_authentication_receipt": {
+      "type": "canonical_json_bytes",
+      "maximum_bytes": 1048576,
+      "fields": [
+        "schema_version", "policy_id", "policy_sha256", "manifest_id",
+        "manifest_file_sha256", "bundle_index_sha256", "evidence_set_sha256",
+        "server_scope_file_sha256", "server_scope_receipt_sha256", "source_sha",
+        "source_server_resource_id", "source_database_name", "source_resource_hmac",
+        "primary_database_identity_hmac", "server_scope_key_version",
+        "server_scope_evidence_hmac", "observed_at", "expires_at",
+        "authenticated_at", "pass"
+      ]
+    },
+    "provider_observation": {
+      "type": "verify_staging_source_provider_observation.VerifiedProviderObservation",
+      "exact_type_required": true,
+      "module_seal_required": true,
+      "canonical_receipt_required": true
+    },
+    "github_attestation": {
+      "type": "authenticate_staging_github_attestation.VerifiedGitHubAttestation",
+      "exact_type_required": true,
+      "module_seal_required": true,
+      "canonical_receipt_required": true
+    }
+  },
+  "cross_bindings": {
+    "base_binding_sha256": "sha256(exact_server_authenticated_binding_record_bytes)",
+    "provider_base_binding_sha256": "provider_observation.receipt.base_binding_sha256",
+    "github_attestation_base_binding_sha256": "github_attestation.receipt.base_binding_sha256",
+    "base_binding_sha256_values_must_be_identical": true,
+    "server_authentication_fields_equal_base": [
+      "manifest_id", "manifest_file_sha256", "bundle_index_sha256", "evidence_set_sha256",
+      "server_scope_receipt_sha256", "source_sha", "source_server_resource_id",
+      "source_database_name", "observed_at", "expires_at"
+    ],
+    "provider_fields_equal_base": [
+      "manifest_id", "evidence_set_sha256", "source_sha", "candidate_sha",
+      "source_server_resource_id", "source_database_name", "approved_restore_time"
+    ],
+    "github_attestation_fields_equal_base": [
+      "manifest_id", "manifest_file_sha256", "evidence_set_sha256", "source_sha",
+      "candidate_sha", "repository", "protected_ref", "workflow_path", "workflow_sha",
+      "run_id", "run_attempt", "event_name"
+    ],
+    "github_attestation_identity_equal_base": {
+      "certificate_oidc_issuer": "signer_issuer",
+      "certificate_token_subject": "signer_subject"
+    },
+    "github_attestation_subject_sha256": "base.manifest_file_sha256",
+    "all_upstream_pass_values_must_be_true": true
+  },
+  "upstream_receipt_digests": {
+    "server_scope_authentication_receipt_sha256": "sha256(exact_server_scope_authentication_receipt_bytes)==base.server_scope_authentication_receipt_sha256",
+    "provider_receipt_sha256": "sha256(exact_provider_observation_receipt_bytes)",
+    "attestation_receipt_sha256": "sha256(exact_github_attestation_receipt_bytes)"
+  },
+  "time": {
+    "trusted_clock_reads": 1,
+    "read_after_all_inputs_and_receipt_digests_are_revalidated": true,
+    "maximum_upstream_receipt_lifetime_seconds": {
+      "server_scope_authentication": 900,
+      "source_provider_observation": 60,
+      "github_attestation_authentication": 60
+    },
+    "trusted_now_not_before": [
+      "base.observed_at",
+      "server_scope_authentication.receipt.authenticated_at",
+      "provider_observation.receipt.observed_at",
+      "github_attestation.receipt.verified_at"
+    ],
+    "output_expires_at": "min(server_scope_authentication.receipt.expires_at,provider_observation.receipt.expires_at,github_attestation.receipt.expires_at)",
+    "trusted_now_must_be_before_output_expires_at": true,
+    "expiry_upper_bound_exclusive": true
+  },
+  "output": {
+    "type": "staging_restore_safe_submit.RestoreEvidenceBinding",
+    "exact_type_required": true,
+    "module_seal_required": true,
+    "schema_version": 1,
+    "binding_policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+    "copy_from_base_except": ["expires_at"],
+    "add_from_upstream_receipt_digests": [
+      "server_scope_authentication_receipt_sha256",
+      "provider_receipt_sha256",
+      "attestation_receipt_sha256"
+    ],
+    "fields": [
+      "schema_version", "binding_policy_id", "evidence_manifest_policy_id",
+      "evidence_manifest_policy_sha256", "manifest_id", "manifest_file_sha256",
+      "bundle_index_sha256", "evidence_set_sha256", "source_sha", "candidate_sha",
+      "source_server_resource_id", "source_database_name", "approved_restore_time",
+      "observed_at", "expires_at", "candidate_approval_pr_number",
+      "candidate_protected_master_sha", "candidate_schema_revision",
+      "candidate_receipt_sha256", "inventory_receipt_sha256",
+      "quiescence_receipt_sha256", "server_scope_receipt_sha256", "repository",
+      "protected_ref", "workflow_path", "workflow_sha", "run_id", "run_attempt",
+      "event_name", "signer_issuer", "signer_subject", "attestation_receipt_sha256",
+      "provider_receipt_sha256", "server_scope_authentication_receipt_sha256"
+    ],
+    "unknown_fields_permitted": false
+  },
+  "activation_blockers": [
+    "restore_evidence_composition_policy_disabled",
+    "upstream_policies_disabled",
+    "trusted_composite_verifier_unimplemented",
+    "workflow_integration_unimplemented",
+    "trusted_executor_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ],
+  "output_activation_blockers": [
+    "workflow_integration_unimplemented",
+    "trusted_executor_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ]
+}

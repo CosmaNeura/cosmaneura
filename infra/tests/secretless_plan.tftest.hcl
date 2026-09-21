@@ -170,6 +170,7 @@ override_data {
       ZOOM_REDIRECT_URI          = "https://example.invalid/callback"
       ZOOM_SECRET_TOKEN          = "not-a-secret"
       ZOOM_SUCCESS_REDIRECT      = "https://example.invalid/settings"
+      ZOOM_WATCHDOG_ENABLED      = "false"
     }
   }
 }

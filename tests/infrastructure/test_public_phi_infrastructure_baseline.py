@@ -110,7 +110,7 @@ def test_observability_is_default_off_and_aggregate_only() -> None:
     assert module.count('resource "azurerm_monitor_activity_log_alert"') == 1
 
 
-def test_startup_migration_switch_is_not_propagated_before_identity_rung() -> None:
+def test_startup_migration_switch_is_disabled_only_for_staging_deploy() -> None:
     assert "AUTO_MIGRATE_ON_STARTUP" in _read("app/configuration/database.py")
 
     for path in (
@@ -118,9 +118,13 @@ def test_startup_migration_switch_is_not_propagated_before_identity_rung() -> No
         ".env.staging.backend",
         "infra/variables.tf",
         "infra-staging/variables.tf",
-        "infra-staging/deploy.sh",
     ):
         assert "AUTO_MIGRATE_ON_STARTUP" not in _read(path)
+
+    staging_deploy = _read("infra-staging/deploy.sh")
+    assert staging_deploy.count("AUTO_MIGRATE_ON_STARTUP") == 4
+    assert 'AUTO_MIGRATE_ON_STARTUP: "false"' in staging_deploy
+    assert 'AUTO_MIGRATE_ON_STARTUP: "true"' not in staging_deploy
 
 
 def test_owner_policy_is_an_activation_control_not_an_auth_substitute() -> None:

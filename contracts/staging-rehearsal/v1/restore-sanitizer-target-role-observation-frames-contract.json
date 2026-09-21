@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-sanitizer-target-role-observation-frames-v1",
+  "closed_world": true,
+  "upstream_policies": {
+    "target_role_query_grammar": {
+      "policy_id": "cosmaneura-staging-sanitizer-target-role-query-grammar-v1",
+      "sha256": "sha256:8f1c4831c4766942778e5be24149a779ba0cd84081d03c11ed21463aabc3d1fe"
+    }
+  },
+  "input": {
+    "source": "future_target_role_database_observer_exact_query_results",
+    "container_shape": "tuple-of-frame-name-and-tuple-of-row-tuples",
+    "exact_builtin_scalar_types_only": true,
+    "caller_maps_iterators_generators_callbacks_connections_cursors_sql_schemas_or_bounds_permitted": false
+  },
+  "decoding": {
+    "frame_order_source": "target_role_query_grammar.grammar.exact_order",
+    "column_schema_source": "target_role_query_grammar.grammar.templates.exact_columns",
+    "row_order_preserved_exactly": true,
+    "duplicate_rows_per_frame_permitted": false,
+    "unknown_missing_or_duplicate_frames_permitted": false,
+    "unknown_missing_or_duplicate_columns_permitted": false,
+    "boolean_is_integer_permitted": false,
+    "integer_ranges_enforced": true,
+    "utf8_text_required": true,
+    "nul_in_text_permitted": false,
+    "canonical_json_encoding": "utf-8-sort-keys-compact-no-nan"
+  },
+  "resource_bounds": {
+    "source": "target_role_query_grammar.resource_bounds",
+    "maximum_queries": 13,
+    "maximum_template_bytes": 4096,
+    "maximum_rows_total": 4096,
+    "maximum_row_bytes": 16384,
+    "maximum_output_bytes": 8388608,
+    "maximum_elapsed_seconds_per_query": 5,
+    "maximum_elapsed_seconds_total": 30,
+    "retry_permitted": false
+  },
+  "output": {
+    "kind": "sealed-sanitizer-target-role-decoded-frames-v1",
+    "public_metadata_fields": [
+      "kind",
+      "observation_frames_contract_sha256",
+      "query_grammar_contract_sha256",
+      "template_set_sha256",
+      "frame_set_sha256",
+      "frame_count",
+      "row_count",
+      "canonical_byte_count",
+      "frame_schema_validated",
+      "row_order_preserved",
+      "resource_bounds_enforced",
+      "database_connection_authority",
+      "database_mutation_authority",
+      "database_role_state_authenticated",
+      "evidence_publication_authority",
+      "live_database_calls_enabled",
+      "observer_implemented",
+      "provider_calls_permitted",
+      "runtime_authority",
+      "sanitizer_authority",
+      "transaction_executed",
+      "workflow_integrated"
+    ],
+    "raw_frames_retained_process_local_only": true,
+    "raw_frames_publicly_serializable": false,
+    "raw_frames_in_repr_or_exception_permitted": false,
+    "copy_pickle_or_mutation_permitted": false,
+    "offline_authenticator_must_consume_identical_sealed_object": true
+  },
+  "claims": {
+    "frame_schema_validated": true,
+    "row_order_preserved": true,
+    "resource_bounds_enforced": true,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "database_role_state_authenticated": false,
+    "evidence_publication_authority": false,
+    "live_database_calls_enabled": false,
+    "observer_implemented": false,
+    "provider_calls_permitted": false,
+    "runtime_authority": false,
+    "sanitizer_authority": false,
+    "transaction_executed": false,
+    "workflow_integrated": false
+  },
+  "status": {
+    "contract_validator_implemented": true,
+    "frame_decoder_implemented": true,
+    "connection_adapter_implemented": false,
+    "observer_implemented": false,
+    "offline_authenticator_implemented": false,
+    "live_database_calls_enabled": false,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "runtime_authority": false,
+    "sanitizer_authority": false,
+    "workflow_integrated": false,
+    "executable": false,
+    "activation_ready": false,
+    "public_activation_failure": "activation.sanitizer_target_role_database_observer_unimplemented",
+    "activation_blockers": [
+      "exact_database_role_unselected",
+      "provision_job_identity_exact_ids_unpinned",
+      "target_role_database_observer_unimplemented",
+      "offline_authenticator_unimplemented",
+      "privileged_global_observer_unimplemented",
+      "stability_authorities_unimplemented",
+      "post_provision_schema_descriptor_unselected",
+      "adapter_join_unimplemented"
+    ]
+  }
+}

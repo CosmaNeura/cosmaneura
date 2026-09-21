@@ -1,5 +1,10 @@
 # Public auth and entitlement receiver handoff v1
 
+> **2026-08-29 supersession note:** this handoff's v2.2 statements remain
+> historical evidence. Counsel-approved v2.3 publication, current-version
+> re-acceptance, and the coordinated web/Core release order are governed by
+> `docs/flight-plans/2026-08-29-baa-v2-3-publication.md`.
+
 ## Release identity and ownership
 
 - **Capability:** public authentication, practice onboarding evidence,
@@ -136,5 +141,6 @@ git diff --check
 
 No merge, deployment, activation, live charge, real-PHI processing,
 claim/clearinghouse/EHR action, or legal-text change is authorized by this
-handoff. The byte-pinned BAA v2.2 remains unchanged; its Exhibit A wording is a
-separate counsel-resolution promotion blocker.
+handoff. The byte-pinned BAA v2.2 remains unchanged. Its former Exhibit A
+promotion blocker is addressed separately by the counsel-approved v2.3 flight
+plan linked above; this historical handoff does not authorize that release.

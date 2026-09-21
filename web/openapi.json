@@ -2473,6 +2473,18 @@
       },
       "AcceptBaaBody": {
         "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
           "signature_name": {
             "type": "string",
             "maxLength": 120,
@@ -2496,6 +2508,9 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "doc_id",
+          "version",
+          "sha256",
           "signature_name",
           "signature_title",
           "checks"

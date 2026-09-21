@@ -136,6 +136,9 @@ export function createPractice(body: {
 }
 
 export function acceptPracticeBaa(body: {
+  doc_id: string
+  version: string
+  sha256: string
   signature_name: string
   signature_title: string
   checks: string[]

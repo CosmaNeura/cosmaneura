@@ -10,3 +10,23 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+
+  # The frontend lives in web/ with its own pnpm lockfile. Without this entry
+  # its advisories are detected but never produce an update, so they accumulate
+  # silently: 114 open npm alerts had no route to a fix when this was added.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "monthly"
+    # Grouped deliberately. Ungrouped, the existing backlog would open one PR
+    # per advisory, and each PR runs the full matrix once Actions is re-enabled
+    # — the same fan-out that caused the CI cost overrun.
+    groups:
+      frontend-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      frontend-minor-and-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    open-pull-requests-limit: 5

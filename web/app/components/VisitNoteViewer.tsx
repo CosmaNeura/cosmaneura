@@ -35,13 +35,7 @@ export default function VisitNoteViewer({
             <span className="text-xl font-semibold">{note.note_type}</span>
           </Button>
         </CollapsibleTrigger>
-        {isOpen && (
-          <CopyButton
-            htmlRef={contentRef}
-            className="mt-1 ml-5"
-            text={note.note.content}
-          />
-        )}
+        {isOpen && <CopyButton htmlRef={contentRef} className="mt-1 ml-5" />}
       </div>
 
       <CollapsibleContent className="mt-3">

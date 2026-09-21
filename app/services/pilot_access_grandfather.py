@@ -747,8 +747,10 @@ def active_pilot_access_grant(
 
     The email check intentionally fails closed after a Clerk/Doctor email
     change. An operator must review the new Clerk export and explicitly issue
-    replacement evidence rather than silently transferring it. Callers must
-    still enforce membership, tenant, BAA, and all other authorization gates.
+    replacement evidence rather than silently transferring it. Callers may use
+    the grant as an entitlement for its snapshotted practice; treating it as
+    the legacy access basis additionally requires the Doctor's durable
+    completed-onboarding marker.
     """
 
     current = _aware(at)

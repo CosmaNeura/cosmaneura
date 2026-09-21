@@ -35,6 +35,8 @@ ZOOM_TEARDOWN_RECOVERY_DELAY = timedelta(minutes=3)
 ZOOM_TEARDOWN_EVENTS = frozenset(
     {"internal.zoom_bot_pause", "internal.zoom_bot_release"}
 )
+ZOOM_WATCHDOG_ARM_EVENT = "internal.zoom_watchdog_arm"
+ZOOM_WATCHDOG_MAX_CHECKS = 5
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _PSEUDONYMOUS_EVENT_PREFIX = "hmac-v1:"
 # Keep aligned with app.services.recall.BOT_NAME without importing that module
@@ -126,6 +128,21 @@ def _project_recall(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_zoom(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if event_type == ZOOM_WATCHDOG_ARM_EVENT:
+        intent = payload.get("watchdog_intent")
+        if not isinstance(intent, dict):
+            intent = {}
+        projected = {
+            key: intent[key]
+            for key in (
+                "meeting_record_id",
+                "meeting_id",
+                "occurrence_digest",
+                "check_number",
+            )
+            if intent.get(key) is not None
+        }
+        return {"event": event_type, "watchdog_intent": projected}
     if event_type in ZOOM_TEARDOWN_EVENTS:
         intent = payload.get("teardown_intent")
         if not isinstance(intent, dict):
@@ -347,6 +364,47 @@ def store_zoom_teardown_intent(
     )
 
 
+def store_zoom_watchdog_intent(
+    *,
+    meeting_record_id: str,
+    meeting_id: str,
+    occurrence_digest: str,
+    check_number: int = 1,
+    delay_seconds: int = 0,
+    now: datetime | None = None,
+) -> StoredDelivery:
+    """Persist one occurrence/check-scoped publication for reconciliation."""
+    if (
+        not _is_typeid(meeting_record_id, "zmtg")
+        or not meeting_id
+        or not _DIGEST_RE.fullmatch(occurrence_digest)
+        or not isinstance(check_number, int)
+        or isinstance(check_number, bool)
+        or check_number < 1
+        or check_number > ZOOM_WATCHDOG_MAX_CHECKS
+        or not isinstance(delay_seconds, int)
+        or isinstance(delay_seconds, bool)
+        or delay_seconds < 0
+    ):
+        raise ValueError("invalid Zoom watchdog target")
+    intent = {
+        "meeting_record_id": meeting_record_id,
+        "meeting_id": meeting_id,
+        "occurrence_digest": occurrence_digest,
+        "check_number": check_number,
+    }
+    return store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id=(
+            f"{ZOOM_WATCHDOG_ARM_EVENT}:{meeting_id}:{occurrence_digest}:{check_number}"
+        ),
+        event_type=ZOOM_WATCHDOG_ARM_EVENT,
+        payload={"event": ZOOM_WATCHDOG_ARM_EVENT, "watchdog_intent": intent},
+        now=now,
+        _next_attempt_at=(now or datetime.now(UTC)) + timedelta(seconds=delay_seconds),
+    )
+
+
 def complete_zoom_teardown_intent(delivery_id: str) -> bool:
     """Atomically retire a pending teardown intent after confirmed success."""
 
@@ -402,12 +460,15 @@ def store_legacy_queued_webhook(
     )
 
 
-def publish_delivery(delivery_id: str) -> None:
+def publish_delivery(delivery_id: str, *, countdown: int | None = None) -> None:
     """Publish only an internal TypeID; payloads and provider IDs stay in PG."""
 
     from app.jobs.external_webhooks import process_delivery_celery
 
-    process_delivery_celery.delay(delivery_id)
+    if countdown is None:
+        process_delivery_celery.delay(delivery_id)
+    else:
+        process_delivery_celery.apply_async(args=(delivery_id,), countdown=countdown)
 
 
 def publish_best_effort(delivery_id: str) -> None:
@@ -421,6 +482,13 @@ def publish_best_effort(delivery_id: str) -> None:
             delivery_id=delivery_id,
             error_type=type(exc).__name__,
         )
+
+
+def _is_typeid(value: object, prefix: str) -> bool:
+    try:
+        return isinstance(value, str) and TypeID.from_string(value).prefix == prefix
+    except Exception:
+        return False
 
 
 def _delivery_id(value: str) -> TypeID:
@@ -567,6 +635,51 @@ def _dispatch(claim: ClaimedDelivery, payload: dict[str, Any]) -> None:
         recall_webhooks.dispatch(event_type=claim.event_type, payload=payload)
         return
     if claim.provider == "zoom":
+        if claim.event_type == ZOOM_WATCHDOG_ARM_EVENT:
+            from app.jobs import verify_bot_joined
+
+            intent = payload.get("watchdog_intent")
+            meeting_record_id = (
+                intent.get("meeting_record_id") if isinstance(intent, dict) else None
+            )
+            meeting_id = intent.get("meeting_id") if isinstance(intent, dict) else None
+            occurrence = (
+                intent.get("occurrence_digest") if isinstance(intent, dict) else None
+            )
+            check_number = (
+                intent.get("check_number", 1) if isinstance(intent, dict) else None
+            )
+            if (
+                not _is_typeid(meeting_record_id, "zmtg")
+                or not isinstance(meeting_id, str)
+                or not meeting_id
+                or not isinstance(occurrence, str)
+                or not _DIGEST_RE.fullmatch(occurrence)
+                or isinstance(check_number, bool)
+                or not isinstance(check_number, int)
+                or not 1 <= check_number <= verify_bot_joined.MAX_CHECKS
+            ):
+                raise PermanentWebhookError()
+            try:
+                verify_bot_joined.perform(
+                    meeting_id,
+                    check_number=check_number,
+                    occurrence_digest=occurrence,
+                    meeting_record_id=meeting_record_id,
+                )
+            except Exception as exc:
+                from app.services import alerting
+
+                try:
+                    alerting.alert(
+                        alerting.WatchdogArmingFailed,
+                        meeting_ref=provider_log_ref(meeting_id),
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    log.exception("failed to report watchdog execution failure")
+                raise RetryableWebhookError("handler_error") from exc
+            return
         if claim.event_type in ZOOM_TEARDOWN_EVENTS:
             from app.jobs import merge_window
 

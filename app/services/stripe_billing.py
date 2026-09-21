@@ -90,7 +90,7 @@ LOCAL_SEAT_COUNT_OUT_OF_RANGE_ERROR = (
 )
 LOCAL_SEAT_LEDGER_INVALID_ERROR = "active_seat_ledger_invalid"
 
-MIRRORED_EVENT_TYPES = {
+SUBSCRIPTION_EVENT_TYPES = {
     "checkout.session.completed",
     "customer.subscription.created",
     "customer.subscription.updated",
@@ -98,6 +98,12 @@ MIRRORED_EVENT_TYPES = {
     "customer.subscription.paused",
     "customer.subscription.resumed",
 }
+INVOICE_SUCCESS_EVENT_TYPES = {
+    "invoice.paid",
+    "invoice.payment_succeeded",
+}
+INVOICE_EVENT_TYPES = INVOICE_SUCCESS_EVENT_TYPES | {"invoice.payment_failed"}
+MIRRORED_EVENT_TYPES = SUBSCRIPTION_EVENT_TYPES | INVOICE_EVENT_TYPES
 KNOWN_SUBSCRIPTION_STATUSES = {
     "incomplete",
     "incomplete_expired",
@@ -682,6 +688,8 @@ def _apply_authoritative_subscription(
     require_practice_metadata: bool = False,
     allow_terminal_rebind: bool = False,
     trusted_checkout_session_id: str | None = None,
+    invoice_customer_id: str | None = None,
+    allow_paid_invoice_bind: bool = False,
     deleted_fallback: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Fetch outside a transaction, then apply through a short optimistic lock.
@@ -705,10 +713,22 @@ def _apply_authoritative_subscription(
             snapshot = session.exec(
                 select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
+            invoice_can_attempt_bind = bool(
+                allow_paid_invoice_bind
+                and event_type in INVOICE_SUCCESS_EVENT_TYPES
+                and invoice_customer_id is not None
+                and snapshot.stripe_customer_id == invoice_customer_id
+                and (
+                    snapshot.stripe_subscription_id is None
+                    or snapshot.stripe_subscription_id == subscription_id
+                    or snapshot.subscription_status in TERMINAL_SUBSCRIPTION_STATUSES
+                )
+            )
             if (
                 event_id is not None
                 and snapshot.stripe_subscription_id not in (None, subscription_id)
                 and not clear_checkout
+                and not invoice_can_attempt_bind
             ):
                 if event_created_at is None or event_type is None:
                     raise StripeStateInvalid(
@@ -799,6 +819,22 @@ def _apply_authoritative_subscription(
                 continue
 
             same_subscription = row.stripe_subscription_id == subscription["id"]
+            metadata_matches = (subscription.get("metadata") or {}).get(
+                "practice_id"
+            ) == str(row.id)
+            trusted_paid_invoice = bool(
+                not same_subscription
+                and allow_paid_invoice_bind
+                and event_type in INVOICE_SUCCESS_EVENT_TYPES
+                and invoice_customer_id is not None
+                and subscription["customer"] == invoice_customer_id
+                and row.stripe_customer_id == invoice_customer_id
+                and (
+                    row.stripe_subscription_id is None
+                    or row.subscription_status in TERMINAL_SUBSCRIPTION_STATUSES
+                )
+                and metadata_matches
+            )
             if not same_subscription and _public_checkout_is_managed(row):
                 raise StripeManagedBilling
             trusted_pending_checkout = bool(
@@ -827,11 +863,16 @@ def _apply_authoritative_subscription(
                 raise StripeStateConflict(
                     "an unrelated subscription arrived while Checkout was pending"
                 )
-            if not same_subscription and not trusted_pending_checkout:
+            if (
+                not same_subscription
+                and not trusted_pending_checkout
+                and not trusted_paid_invoice
+            ):
                 # Mutable subscription metadata is only a routing hint.  An
                 # initial binding requires the immutable Checkout Session id
                 # that Core persisted before Stripe created the subscription,
-                # even when the first event happens to be terminal.
+                # or a paid Invoice whose customer was already persisted for
+                # this practice and whose fresh subscription metadata matches.
                 raise StripeStateConflict(
                     "initial subscription binding requires exact Checkout completion"
                 )
@@ -848,9 +889,17 @@ def _apply_authoritative_subscription(
                     contract_error = exc
                 else:
                     raise
-            metadata_matches = (subscription.get("metadata") or {}).get(
-                "practice_id"
-            ) == str(row.id)
+            if (
+                invoice_customer_id is not None
+                and subscription["customer"] != invoice_customer_id
+            ):
+                invoice_customer_error = StripeStateInvalid(
+                    "invoice customer does not match its Stripe subscription"
+                )
+                if same_subscription:
+                    contract_error = invoice_customer_error
+                else:
+                    raise invoice_customer_error
             mirrored_status = _mirrored_subscription_status(subscription)
             metadata = subscription.get("metadata")
             expected_entitlement_contract = (
@@ -858,6 +907,13 @@ def _apply_authoritative_subscription(
                 if same_subscription
                 else row.stripe_checkout_entitlement_contract
             )
+            if trusted_paid_invoice and expected_entitlement_contract is None:
+                # A paid Invoice is recovery evidence, not a second product
+                # definition. Only the current source-controlled contract can
+                # establish a binding when no frozen Checkout contract remains.
+                expected_entitlement_contract = (
+                    CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+                )
             trusted_bound_terminal = bool(
                 same_subscription and mirrored_status in TERMINAL_SUBSCRIPTION_STATUSES
             )
@@ -2909,7 +2965,85 @@ def _event_created_at(event: dict[str, Any]) -> datetime:
     return _stripe_timestamp(event.get("created"), source="Stripe event creation time")
 
 
-def _event_subscription_id(event_type: str, obj: dict[str, Any]) -> str:
+def _stripe_reference_id(value: object, *, prefix: str, source: str) -> str:
+    if isinstance(value, dict):
+        value = value.get("id")
+    if (
+        not isinstance(value, str)
+        or not value.startswith(prefix)
+        or len(value) <= len(prefix)
+    ):
+        raise StripeStateInvalid(f"{source} is invalid")
+    return value
+
+
+def _practice_id_hint(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = TypeID.from_string(value)
+    except (TypeError, ValueError, TypeIDException):
+        return None
+    return value if parsed.prefix == "practice" and str(parsed) == value else None
+
+
+def _invoice_event_details(
+    obj: dict[str, Any],
+) -> tuple[str, str] | None:
+    """Return a subscription Invoice's canonical subscription/customer ids."""
+
+    _stripe_reference_id(obj.get("id"), prefix="in_", source="invoice id")
+    _validate_livemode(obj.get("livemode"), source="invoice")
+
+    top_level_subscription = obj.get("subscription")
+    top_level_subscription_id = (
+        _stripe_reference_id(
+            top_level_subscription,
+            prefix="sub_",
+            source="invoice subscription",
+        )
+        if top_level_subscription is not None
+        else None
+    )
+
+    parent = obj.get("parent")
+    parent_subscription_id: str | None = None
+    if parent is not None:
+        if not isinstance(parent, dict):
+            raise StripeStateInvalid("invoice parent is invalid")
+        parent_type = parent.get("type")
+        if parent_type == "subscription_details":
+            details = parent.get("subscription_details")
+            if not isinstance(details, dict):
+                raise StripeStateInvalid("invoice subscription details are invalid")
+            parent_subscription_id = _stripe_reference_id(
+                details.get("subscription"),
+                prefix="sub_",
+                source="invoice subscription",
+            )
+        elif top_level_subscription_id is None:
+            # One-off invoices have no subscription state to mirror.
+            return None
+
+    if parent_subscription_id is not None and top_level_subscription_id not in (
+        None,
+        parent_subscription_id,
+    ):
+        raise StripeStateInvalid("invoice subscription references conflict")
+    subscription_id = parent_subscription_id or top_level_subscription_id
+    if subscription_id is None:
+        return None
+
+    customer_id = _stripe_reference_id(
+        obj.get("customer"), prefix="cus_", source="invoice customer"
+    )
+    return subscription_id, customer_id
+
+
+def _event_subscription_id(event_type: str, obj: dict[str, Any]) -> str | None:
+    if event_type in INVOICE_EVENT_TYPES:
+        details = _invoice_event_details(obj)
+        return details[0] if details is not None else None
     subscription_id = (
         obj.get("subscription")
         if event_type == "checkout.session.completed"
@@ -2943,6 +3077,8 @@ def validate_stripe_event_envelope(
     if not isinstance(obj, dict):
         raise StripeStateInvalid("Stripe event object is invalid")
     subscription_id = _event_subscription_id(event_type, obj)
+    if subscription_id is None:
+        return None
     return event_type, event_id, event_created_at, obj, subscription_id
 
 
@@ -2951,20 +3087,26 @@ def _minimal_stripe_event(event: dict[str, Any], obj: dict[str, Any]) -> dict[st
 
     event_type = cast(str, event["type"])
 
-    def practice_hint(value: object) -> str | None:
-        if not isinstance(value, str):
-            return None
-        try:
-            parsed = TypeID.from_string(value)
-        except (TypeError, ValueError, TypeIDException):
-            return None
-        return value if parsed.prefix == "practice" and str(parsed) == value else None
-
     if event_type == "checkout.session.completed":
         minimal_object = {
             "id": obj.get("id"),
-            "client_reference_id": practice_hint(obj.get("client_reference_id")),
+            "client_reference_id": _practice_id_hint(obj.get("client_reference_id")),
             "subscription": obj.get("subscription"),
+        }
+    elif event_type in INVOICE_EVENT_TYPES:
+        invoice_details = _invoice_event_details(obj)
+        assert invoice_details is not None
+        subscription_id, customer_id = invoice_details
+        minimal_object = {
+            "id": obj.get("id"),
+            "customer": customer_id,
+            "livemode": obj.get("livemode"),
+            "parent": {
+                "type": "subscription_details",
+                "subscription_details": {
+                    "subscription": subscription_id,
+                },
+            },
         }
     else:
         items: list[dict[str, Any]] = []
@@ -3000,7 +3142,7 @@ def _minimal_stripe_event(event: dict[str, Any], obj: dict[str, Any]) -> dict[st
             "customer": customer_id,
             "status": obj.get("status"),
             "livemode": obj.get("livemode"),
-            "metadata": {"practice_id": practice_hint(metadata.get("practice_id"))},
+            "metadata": {"practice_id": _practice_id_hint(metadata.get("practice_id"))},
             "items": {"data": items},
             "pause_collection": minimal_pause,
         }
@@ -3036,7 +3178,28 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
 
             # A signed non-entitling or contract-invalid payload can safely
             # revoke while the worker obtains fresh state; payloads never grant.
-            if event_type != "checkout.session.completed":
+            if event_type in INVOICE_EVENT_TYPES:
+                practice = session.exec(
+                    select(Practice)
+                    .where(Practice.stripe_subscription_id == subscription_id)
+                    .with_for_update()
+                ).one_or_none()
+                if practice is not None:
+                    invoice_details = _invoice_event_details(obj)
+                    assert invoice_details is not None
+                    _, invoice_customer_id = invoice_details
+                    should_revoke_pending = bool(
+                        event_type == "invoice.payment_failed"
+                        or practice.stripe_customer_id != invoice_customer_id
+                    )
+                    if should_revoke_pending and (
+                        practice.stripe_last_event_created_at is None
+                        or event_created_at >= practice.stripe_last_event_created_at
+                    ):
+                        practice.subscription_status = "pending_verification"
+                        practice.stripe_state_version += 1
+                        session.add(practice)
+            elif event_type != "checkout.session.completed":
                 practice = session.exec(
                     select(Practice)
                     .where(Practice.stripe_subscription_id == subscription_id)
@@ -3187,10 +3350,13 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
     event_type, event_id, event_created_at, obj, subscription_id = envelope
 
     # An immutable local subscription binding outranks mutable Stripe metadata.
-    # Metadata is used only for an initial bind; otherwise drift cannot redirect
-    # a revocation to a different practice.
+    # Initial invoice recovery routes only through a Stripe customer id already
+    # persisted by Core; fresh subscription metadata must then confirm it.
     practice = Practice.get(stripe_subscription_id=subscription_id)
     resolved_from_metadata = False
+    resolved_from_paid_invoice = False
+    invoice_customer_id: str | None = None
+    trusted_invoice_checkout_session_id: str | None = None
     if practice is None and event_type == "checkout.session.completed":
         candidate_practice_id = obj.get("client_reference_id")
         practice = (
@@ -3198,6 +3364,13 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
             if isinstance(candidate_practice_id, str)
             else None
         )
+    elif event_type in INVOICE_EVENT_TYPES:
+        invoice_details = _invoice_event_details(obj)
+        assert invoice_details is not None
+        _, invoice_customer_id = invoice_details
+        if practice is None and event_type in INVOICE_SUCCESS_EVENT_TYPES:
+            practice = Practice.get(stripe_customer_id=invoice_customer_id)
+            resolved_from_paid_invoice = practice is not None
     elif practice is None:
         metadata = obj.get("metadata") or {}
         candidate_practice_id = (
@@ -3213,23 +3386,64 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
         log.warning("stripe event matched no practice", event_type=event_type)
         return False
 
+    if resolved_from_paid_invoice and practice.stripe_checkout_session_id is not None:
+        _validate_runtime_configuration()
+        checkout_session_id = practice.stripe_checkout_session_id
+        checkout_session = _request("GET", f"/checkout/sessions/{checkout_session_id}")
+        _validate_checkout_session_binding(
+            checkout_session,
+            practice,
+            expected_id=checkout_session_id,
+            expected_customer_id=invoice_customer_id,
+        )
+        if checkout_session.get("status") != "complete":
+            raise StripeStateConflict(
+                "paid invoice arrived while Checkout was still pending"
+            )
+        checkout_subscription_id = _stripe_reference_id(
+            checkout_session.get("subscription"),
+            prefix="sub_",
+            source="checkout subscription",
+        )
+        if checkout_subscription_id != subscription_id:
+            raise StripeStateConflict(
+                "paid invoice does not match the pending Checkout Session"
+            )
+        if not _checkout_session_uses_current_policy(
+            checkout_session, practice, require_metadata=True
+        ):
+            raise StripeStateInvalid(
+                "completed Checkout Session did not enforce paid-pilot policy"
+            )
+        trusted_invoice_checkout_session_id = checkout_session_id
+
+    trusted_checkout_session_id = (
+        cast(str, obj["id"])
+        if event_type == "checkout.session.completed" and isinstance(obj.get("id"), str)
+        else trusted_invoice_checkout_session_id
+    )
+
     subscription, applied = _apply_authoritative_subscription(
         practice,
         subscription_id,
         event_created_at=event_created_at,
         event_id=event_id,
         event_type=event_type,
-        clear_checkout=event_type == "checkout.session.completed",
+        clear_checkout=(
+            event_type == "checkout.session.completed"
+            or trusted_invoice_checkout_session_id is not None
+        ),
         require_practice_metadata=(
-            event_type == "checkout.session.completed" or resolved_from_metadata
+            event_type == "checkout.session.completed"
+            or resolved_from_metadata
+            or resolved_from_paid_invoice
         ),
-        allow_terminal_rebind=event_type == "checkout.session.completed",
-        trusted_checkout_session_id=(
-            cast(str, obj["id"])
-            if event_type == "checkout.session.completed"
-            and isinstance(obj.get("id"), str)
-            else None
+        allow_terminal_rebind=(
+            event_type == "checkout.session.completed" or resolved_from_paid_invoice
         ),
+        trusted_checkout_session_id=trusted_checkout_session_id,
+        invoice_customer_id=invoice_customer_id,
+        allow_paid_invoice_bind=resolved_from_paid_invoice,
         deleted_fallback=(
             obj if event_type == "customer.subscription.deleted" else None
         ),

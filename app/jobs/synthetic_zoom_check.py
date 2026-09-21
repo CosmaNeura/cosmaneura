@@ -1,60 +1,142 @@
-"""Synthetic monitor that exercises the meeting.started webhook handler
-against production redis + database every 15 minutes.
+"""Probe dependencies and ingress without claiming Marketplace-secret proof."""
 
-Where the heartbeat task (app.jobs.heartbeat) only proves the worker
-is alive, this proves the actual code path that handles real user
-traffic is still intact. It catches:
+import hashlib
+import hmac
+import json
+import time
 
-- env var drift (DATABASE_URL, REDIS_URL, ZOOM_* secrets unset/rotated)
-- DB connectivity from the worker container
-- Redis connectivity from the worker container
-- Import-chain breakage from a bad deploy that boots but explodes at
-  first real request
-- Azure-side network policy changes that block prod egress
-
-The payload uses host_ids that will never match a real
-DoctorVideoIntegration row, so handle_meeting_started executes the
-"no doctor found, skipping" branch instead of stamping live state into
-redis. That branch still touches redis (lock acquire) and the DB
-(doctor lookup), which is enough to validate the dependency chain.
-
-Sentry CeleryIntegration with monitor_beat_tasks=True turns this into
-a cron monitor: if the task fails or doesn't fire on schedule, the
-on-call gets paged."""
+import httpx
 
 from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
-from app.services import zoom_webhooks
+from app.configuration.server import API_BASE_URL
+from app.configuration.zoom import ZOOM_SECRET_TOKEN
+from app.environments import is_production, is_staging
+from app.services import alerting, recall, zoom_webhooks
 
-# Intentional sentinel values. Never use these as real Zoom IDs anywhere
-# else — the synthetic check would interfere with a real session that
-# happened to collide.
 SYNTHETIC_HOST_ID = "synthetic-monitor-not-a-real-zoom-host"
 SYNTHETIC_MEETING_ID = "synthetic-monitor-meeting-id"
+SYNTHETIC_HTTP_MEETING_ID = "synthetic-monitor-http-meeting-id"
+
+_PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+
+def _payload(meeting_id: str) -> dict:
+    return {
+        "event": "meeting.started",
+        "event_ts": int(time.time() * 1000),
+        "payload": {
+            "object": {
+                "host_id": SYNTHETIC_HOST_ID,
+                "id": meeting_id,
+            }
+        },
+    }
+
+
+def _clear_lock(redis, meeting_id: str) -> None:
+    redis.delete(f"recall:meeting:{meeting_id}:starting_lock")
+
+
+def _probe_dependencies(redis) -> None:
+    _clear_lock(redis, SYNTHETIC_MEETING_ID)
+    zoom_webhooks.handle_meeting_started(_payload(SYNTHETIC_MEETING_ID))
+
+
+def signed_headers(body: bytes) -> dict[str, str]:
+    timestamp = str(int(time.time()))
+    signature = (
+        "v0="
+        + hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            b"v0:" + timestamp.encode() + b":" + body,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    return {
+        "Content-Type": "application/json",
+        "x-zm-request-timestamp": timestamp,
+        "x-zm-signature": signature,
+    }
+
+
+def _probe_ingress(redis) -> None:
+    """Local signing proves route acceptance, not the Marketplace secret."""
+    _clear_lock(redis, SYNTHETIC_HTTP_MEETING_ID)
+
+    body = json.dumps(_payload(SYNTHETIC_HTTP_MEETING_ID)).encode()
+    url = f"{API_BASE_URL}/external/v1/webhooks/zoom"
+    try:
+        with httpx.Client(timeout=_PROBE_TIMEOUT) as client:
+            response = client.post(url, content=body, headers=signed_headers(body))
+    except httpx.HTTPError as exc:
+        alerting.alert(
+            alerting.WebhookRouteUnreachable,
+            error_class=type(exc).__name__,
+        )
+        return
+
+    if response.status_code != httpx.codes.OK:
+        # A 401 means our locally signed request was rejected. It does not by
+        # itself establish the Marketplace app's configured secret.
+        alerting.alert(
+            alerting.WebhookRouteUnreachable,
+            status=response.status_code,
+        )
+        return
+
+    try:
+        response_body = response.json()
+    except ValueError:
+        response_body = None
+    if not isinstance(response_body, dict):
+        alerting.alert(
+            alerting.WebhookRouteUnreachable,
+            status=response.status_code,
+            error_class="InvalidResponse",
+        )
+        return
+
+    if response_body.get("duplicate"):
+        log.warning(
+            "zoom probes: ingress deduplicated, handler not enqueued",
+            meeting_id=SYNTHETIC_HTTP_MEETING_ID,
+        )
+        return
+
+    log.info("zoom probes: ingress ok")
+
+
+def _probe_recall_credentials() -> None:
+    try:
+        recall.ping()
+    except httpx.HTTPStatusError as exc:
+        alerting.alert(
+            alerting.RecallApiUnreachable,
+            status=exc.response.status_code,
+        )
+        return
+    except httpx.HTTPError as exc:
+        alerting.alert(
+            alerting.RecallApiUnreachable,
+            error_class=type(exc).__name__,
+        )
+        return
+
+    log.info("zoom probes: recall credentials ok")
 
 
 def perform() -> None:
     redis = get_redis()
-    # Wipe the dedup lock from the previous run so this iteration is
-    # observable. Real meeting.started uses SET NX to prevent duplicate
-    # bot creation; if we left the lock in place across runs, every
-    # synthetic check after the first would short-circuit and we'd
-    # stop exercising the doctor-lookup + redis-write code paths we
-    # actually care about.
-    redis.delete(f"recall:meeting:{SYNTHETIC_MEETING_ID}:starting_lock")
 
-    payload = {
-        "payload": {
-            "object": {
-                "host_id": SYNTHETIC_HOST_ID,
-                "id": SYNTHETIC_MEETING_ID,
-            }
-        }
-    }
-    zoom_webhooks.handle_meeting_started(payload)
+    _probe_dependencies(redis)
 
-    log.info("synthetic zoom check completed")
+    if is_production() or is_staging():
+        _probe_ingress(redis)
+        _probe_recall_credentials()
+
+    log.info("zoom probes completed")
 
 
 perform_celery = celery_app.task(name="app.jobs.synthetic_zoom_check.perform")(perform)

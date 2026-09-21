@@ -381,9 +381,9 @@ def test_old_clickwrap_cannot_rescue_invalid_negotiated_baa_for_org_access(
     practice, code = _configured_practice(domain, now=now)
     _approve(practice, approved.email or "", now=now)
 
-    # Simulate a clickwrap that predates the organization cutover. It keeps
-    # the generic practice BAA predicate true, but must never substitute for
-    # the organization's own negotiated instrument.
+    # Simulate a clickwrap that predates the organization cutover. Its old
+    # version is no longer in force and it must never substitute for the
+    # organization's own negotiated instrument.
     practice.baa_accepted_at = now - timedelta(days=90)
     practice.baa_version = "CN-BAA-CUST-CW v2.2"
     if invalid_negotiated_baa == "future":
@@ -392,7 +392,7 @@ def test_old_clickwrap_cannot_rescue_invalid_negotiated_baa_for_org_access(
         practice.negotiated_baa_reference = None
     practice.save()
 
-    assert practice.baa_in_force(at=now)
+    assert not practice.baa_in_force(at=now)
     assert not practice.negotiated_baa_in_force(at=now)
     with pytest.raises(OrganizationAccessError, match="negotiated BAA"):
         _approve(practice, later_candidate.email or "", now=now)

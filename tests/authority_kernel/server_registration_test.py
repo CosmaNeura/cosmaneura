@@ -22,6 +22,7 @@ def test_authority_routes_are_registered_on_the_platform_server() -> None:
         "/service/v1/agent/audit-events/write",
         "/service/v1/agent/conversation-turns/write",
         "/service/v1/agent/model-usage-events/report",
+        "/service/v1/agent/tools/invoke",
     } <= paths
 
 

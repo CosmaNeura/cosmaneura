@@ -224,3 +224,24 @@ def datatabase_reset_transaction_for_standard_tests(request):
         return
 
     yield from database_reset_transaction()
+
+
+@pytest.fixture
+def captured_alerts(monkeypatch):
+    """Record every services.alerting.alert() call instead of emitting it.
+
+    Alerts are the contract the Zoom dispatch path is held to -- "this visit
+    will have no note-taker and a human must know" -- so tests assert on them
+    directly, including the negative case: a doctor waiting alone for a patient
+    is normal and must not page anyone.
+    """
+    from app.services import alerting
+
+    calls: list[dict] = []
+
+    def fake_alert(alert_type, **context):
+        calls.append({"type": alert_type, **context})
+        return "test-event-id"
+
+    monkeypatch.setattr(alerting, "alert", fake_alert)
+    return calls

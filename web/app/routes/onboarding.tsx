@@ -772,7 +772,7 @@ export function PracticeForm({
   )
 }
 
-function BaaClickwrap({
+export function BaaClickwrap({
   practice,
   onPractice,
   onDecline,
@@ -793,7 +793,14 @@ function BaaClickwrap({
     let cancelled = false
     getBaaCurrent()
       .then((next) => {
-        if (!cancelled) setDoc(next)
+        if (cancelled) return
+        if (next.doc_id !== BAA_DOC_ID || next.version !== BAA_VERSION) {
+          setDocError(
+            "The agreement version could not be verified. Reload before accepting.",
+          )
+          return
+        }
+        setDoc(next)
       })
       .catch((err) => {
         if (!cancelled)
@@ -813,10 +820,14 @@ function BaaClickwrap({
     signatureTitle.trim().length >= 2
 
   async function onAccept() {
+    if (doc === null) return
     setBusy(true)
     setError(null)
     try {
       const next = await acceptPracticeBaa({
+        doc_id: doc.doc_id,
+        version: doc.version,
+        sha256: doc.sha256,
         signature_name: signatureName,
         signature_title: signatureTitle,
         checks: ["baa"],

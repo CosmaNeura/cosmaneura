@@ -17,6 +17,9 @@ CANONICAL_ASSETS = {
     "baa_cn-baa-cust-cw_v2.2.html": (
         "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
     ),
+    "baa_cn-baa-cust-cw_v2.3.html": (
+        "9bdc110b6b2ffcc9f5e7aee653af499357d2f35dccf43c57d8bbcf70094ed34e"
+    ),
 }
 
 
@@ -40,3 +43,17 @@ def test_every_baa_asset_is_registered() -> None:
         f"CANONICAL_ASSETS map: {sorted(on_disk ^ set(CANONICAL_ASSETS))}. "
         "Register new versions here with their counsel-approved hash."
     )
+
+
+def test_v23_removes_only_the_disallowed_exhibit_a_service() -> None:
+    v22 = (ASSET_DIR / "baa_cn-baa-cust-cw_v2.2.html").read_text()
+    v23 = (ASSET_DIR / "baa_cn-baa-cust-cw_v2.3.html").read_text()
+
+    assert "claims preparation and submission support" in v22
+    assert "claims preparation and submission support" not in v23
+    assert (
+        "Billing and revenue-cycle support, including charge capture and "
+        "remittance and payment-posting support;"
+    ) in v23
+    assert 'data-version="2.3"' in v23
+    assert "Issued: 2026-08-29" in v23
