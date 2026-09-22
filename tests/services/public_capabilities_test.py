@@ -45,6 +45,13 @@ def _authorized() -> CapabilityPolicyFacts:
     )
 
 
+def _reason_codes(decision: dict[str, object]) -> list[str]:
+    codes = decision["reason_codes"]
+    assert isinstance(codes, list)
+    assert all(isinstance(code, str) for code in codes)
+    return codes
+
+
 def test_decisions_cover_exactly_the_frozen_capability_catalog() -> None:
     decisions = capability_decisions(_authorized())
 
@@ -71,9 +78,9 @@ def test_every_decision_matches_the_v1_wire_contract() -> None:
         assert required <= set(decision), key
         for field, permitted in enums.items():
             assert decision[field] in permitted, (key, field, decision[field])
-        assert decision["reason_codes"], key
-        assert len(set(decision["reason_codes"])) == len(decision["reason_codes"]), key
-        assert set(decision["reason_codes"]) <= allowed_reason_codes, key
+        assert _reason_codes(decision), key
+        assert len(set(_reason_codes(decision))) == len(_reason_codes(decision)), key
+        assert set(_reason_codes(decision)) <= allowed_reason_codes, key
 
 
 def test_a_fully_gated_cohort_actor_is_allowed_real_phi() -> None:
@@ -82,7 +89,7 @@ def test_a_fully_gated_cohort_actor_is_allowed_real_phi() -> None:
     assert soap_note["decision"] == "allowed"
     assert soap_note["data_mode"] == "real_phi"
     assert soap_note["rollout"] == "cohort"
-    assert soap_note["reason_codes"] == ["allowed"]
+    assert _reason_codes(soap_note) == ["allowed"]
 
 
 def test_default_rollouts_leave_every_unfinished_tool_dark() -> None:
@@ -92,7 +99,7 @@ def test_default_rollouts_leave_every_unfinished_tool_dark() -> None:
         assert decisions[key]["decision"] == "denied", key
         assert decisions[key]["data_mode"] == "none", key
         assert decisions[key]["rollout"] == "disabled", key
-        assert "rollout_disabled" in decisions[key]["reason_codes"], key
+        assert "rollout_disabled" in _reason_codes(decisions[key]), key
 
 
 @pytest.mark.parametrize(
@@ -117,7 +124,7 @@ def test_each_failed_gate_denies_every_capability(
     for key, decision in capability_decisions(facts).items():
         assert decision["decision"] == "denied", key
         assert decision["data_mode"] == "none", key
-        assert expected_reason in decision["reason_codes"], key
+        assert expected_reason in _reason_codes(decision), key
 
 
 def test_cohort_rollout_requires_the_explicit_practice_cohort_bit() -> None:
@@ -126,7 +133,7 @@ def test_cohort_rollout_requires_the_explicit_practice_cohort_bit() -> None:
     soap_note = capability_decisions(facts)["soap_note"]
 
     assert soap_note["decision"] == "denied"
-    assert soap_note["reason_codes"] == ["cohort_ineligible"]
+    assert _reason_codes(soap_note) == ["cohort_ineligible"]
 
 
 def test_unknown_rollout_fails_closed_as_policy_unavailable() -> None:
@@ -138,7 +145,7 @@ def test_unknown_rollout_fails_closed_as_policy_unavailable() -> None:
     for key, decision in decisions.items():
         assert decision["decision"] == "denied", key
         assert decision["rollout"] == "disabled", key
-        assert "policy_unavailable" in decision["reason_codes"], key
+        assert "policy_unavailable" in _reason_codes(decision), key
 
 
 def test_unrecognized_role_fails_closed_rather_than_assuming_workforce() -> None:
@@ -147,7 +154,7 @@ def test_unrecognized_role_fails_closed_rather_than_assuming_workforce() -> None
     soap_note = capability_decisions(facts)["soap_note"]
 
     assert soap_note["decision"] == "denied"
-    assert "owner_authority_required" in soap_note["reason_codes"]
+    assert "owner_authority_required" in _reason_codes(soap_note)
 
 
 def test_no_credential_gate_in_capability_policy() -> None:
@@ -158,7 +165,7 @@ def test_no_credential_gate_in_capability_policy() -> None:
 
     for decision in capability_decisions(_authorized()).values():
         assert not any(
-            str(code).startswith("credential_") for code in decision["reason_codes"]
+            str(code).startswith("credential_") for code in _reason_codes(decision)
         )
 
 
