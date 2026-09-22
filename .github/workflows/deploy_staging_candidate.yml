@@ -74,7 +74,7 @@ jobs:
       recovery_digest: ${{ steps.verify.outputs.recovery_digest }}
     steps:
       - name: Check out protected-master controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -157,7 +157,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -272,7 +272,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -356,7 +356,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -413,7 +413,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out protected-master configuration controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -500,7 +500,7 @@ jobs:
       contents: read
     steps:
       - name: Check out protected-master build controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -516,7 +516,7 @@ jobs:
         uses: ./.github/actions/install-nixpacks
 
       - name: Check out exact candidate for image build
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           path: candidate
@@ -630,7 +630,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out protected-master deployment controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -883,7 +883,7 @@ jobs:
       id-token: write
     steps:
       - name: Check out protected-master deployment controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
