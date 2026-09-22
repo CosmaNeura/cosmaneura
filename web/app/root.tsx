@@ -23,7 +23,7 @@ import {
   ViewAsProtectedErrorGuard,
 } from "~/components/ViewAsRouteGuard"
 import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
-import { SIGN_IN_LOAD_ERROR_COPY } from "~/lib/channel"
+import { APP_LOADING_DELAY_COPY } from "~/lib/channel"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
@@ -92,8 +92,12 @@ export function HydrateFallback() {
   if (timedOut) {
     return (
       <div className="flex h-screen w-screen items-center justify-center">
-        <div className="space-y-4 text-center" role="alert">
-          <p className="text-foreground">{SIGN_IN_LOAD_ERROR_COPY}</p>
+        <div className="space-y-4 text-center" role="status">
+          <Loader2 className="text-primary mx-auto h-8 w-8 animate-spin" />
+          <p className="text-foreground">{APP_LOADING_DELAY_COPY}</p>
+          <p className="text-muted-foreground text-sm">
+            You can keep waiting or refresh to try again.
+          </p>
           <Button type="button" onClick={() => window.location.reload()}>
             Refresh
           </Button>

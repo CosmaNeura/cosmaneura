@@ -40,7 +40,7 @@ describe("resolveVisibleChannel", () => {
 })
 
 describe("ChannelAuthChrome", () => {
-  it("shows MCD passwordless chrome copy above the stock Clerk controls", () => {
+  it("shows MCD sign-in guidance above the stock Clerk controls", () => {
     const copy = loginCopy("mcd")
 
     render(
@@ -57,7 +57,7 @@ describe("ChannelAuthChrome", () => {
     expect(screen.getByText("Clerk sign-in controls")).toBeInTheDocument()
   })
 
-  it("keeps non-MCD chrome free of the passwordless hint", () => {
+  it("keeps non-MCD chrome free of the MCD guidance", () => {
     render(
       <MemoryRouter>
         <ChannelAuthChrome channel="direct">
@@ -67,8 +67,8 @@ describe("ChannelAuthChrome", () => {
     )
 
     expect(
-      screen.queryByText(/password box is a dead end/i),
+      screen.queryByText(/request another code when available/i),
     ).not.toBeInTheDocument()
-    expect(screen.queryByText(/Do not tap resend/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/newest message/i)).not.toBeInTheDocument()
   })
 })

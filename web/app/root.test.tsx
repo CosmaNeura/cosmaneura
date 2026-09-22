@@ -340,7 +340,7 @@ describe("HydrateFallback", () => {
     vi.unstubAllGlobals()
   })
 
-  it("keeps spinning until the login timeout", () => {
+  it("keeps the initial loading indicator before the delay", () => {
     vi.useFakeTimers()
     render(<HydrateFallback />)
 
@@ -352,21 +352,37 @@ describe("HydrateFallback", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument()
   })
 
-  it("fails loud when Clerk or login is not ready after a few seconds", () => {
+  it.each(["/sign-in", "/sign-up", "/notes", "/settings"])(
+    "offers neutral loading guidance on %s without declaring sign-in failure",
+    (path) => {
+      window.history.replaceState({}, "", path)
+      vi.useFakeTimers()
+      render(<HydrateFallback />)
+
+      act(() => {
+        vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
+      })
+
+      expect(
+        screen.queryByText("Loading application..."),
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "The application is taking longer than usual to load.",
+      )
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+      expect(screen.queryByText(/sign-in didn.t load/i)).not.toBeInTheDocument()
+    },
+  )
+
+  it("clears the delay timer when loading completes", () => {
     vi.useFakeTimers()
-    render(<HydrateFallback />)
-
-    act(() => {
-      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
-    })
-
-    expect(screen.queryByText("Loading application...")).not.toBeInTheDocument()
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "sign-in didn’t load — refresh",
-    )
+    const { unmount } = render(<HydrateFallback />)
+    expect(vi.getTimerCount()).toBe(1)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("reloads from the fail-loud refresh control", () => {
+  it("refreshes only when the user chooses the control", () => {
     vi.useFakeTimers()
     const reload = vi.fn()
     vi.stubGlobal("location", { reload })
@@ -375,6 +391,7 @@ describe("HydrateFallback", () => {
     act(() => {
       vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
     })
+    expect(reload).not.toHaveBeenCalled()
     screen.getByRole("button", { name: "Refresh" }).click()
 
     expect(reload).toHaveBeenCalledTimes(1)

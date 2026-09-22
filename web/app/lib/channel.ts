@@ -35,7 +35,8 @@ export function resolveChannel(fromSearch?: string | null): Channel {
   return readStoredChannel()
 }
 
-export const SIGN_IN_LOAD_ERROR_COPY = "sign-in didn’t load — refresh"
+export const APP_LOADING_DELAY_COPY =
+  "The application is taking longer than usual to load."
 
 export type LoginCopy = {
   kicker: string
@@ -51,7 +52,7 @@ export function loginCopy(channel: Channel): LoginCopy {
       title: "Continue in Cosmas — MyCatholicDoctor",
       body: "Sign in with the @mycatholicdoctor.com address MCD has on file. Same Cosmas. Same Cosmaneura Inc BAA on the practice.",
       methodHint:
-        "Use Google or one email code (use the newest mail). Do not tap resend. There is no password for this group — the password box is a dead end.",
+        "Choose a sign-in method shown below, such as Google or an email code. For email codes, use the newest message. If it has not arrived, check spam or request another code when available.",
     }
   }
   if (channel === "catholic") {
