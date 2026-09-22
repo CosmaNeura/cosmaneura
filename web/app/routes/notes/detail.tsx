@@ -44,6 +44,8 @@ export function EmptyNotes() {
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   try {
     const result = await noteDetail({
+      throwOnError: false,
+      signal: loaderArgs.request.signal,
       path: {
         appointment_id: loaderArgs.params.id,
       },

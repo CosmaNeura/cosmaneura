@@ -1,102 +1,108 @@
+import { data } from "react-router"
 import { describe, expect, it } from "vitest"
 
 import {
   PRACTICE_BAA_REQUIRED_DETAIL,
   PRACTICE_MEMBERSHIP_REQUIRED_DETAIL,
+  PracticeAgreementError,
   practiceAgreementBlockFromClientResult,
   practiceAgreementBlockFromRouteFailure,
   practiceAgreementBlockFromUnknown,
 } from "./practice-gate-error"
 
-describe("practiceAgreementBlockFromUnknown", () => {
-  it("maps the join-practice 403 detail from a hey-api error body", () => {
-    const block = practiceAgreementBlockFromUnknown({
-      detail: PRACTICE_MEMBERSHIP_REQUIRED_DETAIL,
-    })
+describe("practice agreement failures", () => {
+  it.each([
+    [PRACTICE_MEMBERSHIP_REQUIRED_DETAIL, "join_practice", "Join the practice"],
+    [
+      PRACTICE_BAA_REQUIRED_DETAIL,
+      "accept_agreement",
+      "Accept the updated agreement",
+    ],
+  ])(
+    "maps the known 403 detail %s to its recovery action",
+    (detail, kind, headline) => {
+      const block = practiceAgreementBlockFromUnknown({ status: 403, detail })
+      expect(block).toMatchObject({ kind, headline, detail })
+    },
+  )
 
-    expect(block?.kind).toBe("join_practice")
-    expect(block?.headline).toBe("Join the practice")
-    expect(block?.instruction).toMatch(/join the practice/i)
-    expect(block?.instruction).not.toMatch(/updated agreement/i)
-    expect(block?.detail).toBe(PRACTICE_MEMBERSHIP_REQUIRED_DETAIL)
+  it("recognizes a returned SDK error without throwing", () => {
+    expect(
+      practiceAgreementBlockFromClientResult({
+        error: { detail: PRACTICE_MEMBERSHIP_REQUIRED_DETAIL },
+        response: { status: 403 },
+      })?.kind,
+    ).toBe("join_practice")
   })
 
-  it("maps Maura's live BAA v2.3 reaccept 403, not empty-practice", () => {
-    const block = practiceAgreementBlockFromUnknown({
-      detail: PRACTICE_BAA_REQUIRED_DETAIL,
-      status: 403,
-    })
-
-    expect(block?.kind).toBe("accept_agreement")
-    expect(block?.headline).toBe("Accept the updated agreement")
-    expect(block?.instruction).toMatch(/accept the updated agreement/i)
-    expect(block?.instruction).not.toMatch(/join the practice/i)
-    expect(block?.detail).toBe(PRACTICE_BAA_REQUIRED_DETAIL)
-    expect(block?.kind).not.toBe("join_practice")
-  })
-
-  it("reads a nested hey-api { error: { detail } } payload", () => {
+  it("recognizes a nested thrown SDK error", () => {
     expect(
       practiceAgreementBlockFromUnknown({
         error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
+        response: { status: 403 },
       })?.kind,
     ).toBe("accept_agreement")
   })
 
-  it("ignores unrelated failures", () => {
-    expect(practiceAgreementBlockFromUnknown(new Error("network down"))).toBe(
-      null,
-    )
-    expect(practiceAgreementBlockFromUnknown({ status: 403 })).toBe(null)
-  })
-})
+  it.each([undefined, 200, 401, 402, 500])(
+    "rejects matching copy with status %s",
+    (status) => {
+      const error = { detail: PRACTICE_BAA_REQUIRED_DETAIL }
+      expect(practiceAgreementBlockFromUnknown({ status, error })).toBeNull()
+      expect(
+        practiceAgreementBlockFromClientResult({ error, response: { status } }),
+      ).toBeNull()
+      expect(
+        practiceAgreementBlockFromRouteFailure({ status, data: error }),
+      ).toBeNull()
+    },
+  )
 
-describe("practiceAgreementBlockFromClientResult", () => {
+  it.each([
+    { status: 403 },
+    { status: 403, detail: "Some unrelated denial" },
+    {
+      status: 403,
+      detail: `Unrelated failure: ${PRACTICE_BAA_REQUIRED_DETAIL}`,
+    },
+    { status: 403, message: PRACTICE_BAA_REQUIRED_DETAIL },
+    {
+      status: 500,
+      response: { status: 403 },
+      error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
+    },
+    new Error(PRACTICE_BAA_REQUIRED_DETAIL),
+  ])(
+    "does not infer an agreement problem from an unrelated error: %j",
+    (error) => {
+      expect(practiceAgreementBlockFromUnknown(error)).toBeNull()
+    },
+  )
+
   it("does not treat a successful notes payload as blocked", () => {
     expect(
       practiceAgreementBlockFromClientResult({
         data: { appointments: [] },
-        error: undefined,
+        error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
         response: { status: 200 },
       }),
-    ).toBe(null)
+    ).toBeNull()
   })
 
-  it("surfaces a 403 that hey-api returned without throwing", () => {
-    const block = practiceAgreementBlockFromClientResult({
-      data: undefined,
-      error: { detail: PRACTICE_MEMBERSHIP_REQUIRED_DETAIL },
-      response: { status: 403 },
-    })
-
-    expect(block?.kind).toBe("join_practice")
-  })
-
-  it("surfaces Maura's notes 403 (BAA in force required) without calling it empty-practice", () => {
-    const block = practiceAgreementBlockFromClientResult({
-      data: undefined,
-      error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
-      response: { status: 403 },
-    })
-
-    expect(block?.kind).toBe("accept_agreement")
-    expect(block?.headline).toBe("Accept the updated agreement")
-    expect(block?.kind).not.toBe("join_practice")
-  })
-})
-
-describe("practiceAgreementBlockFromRouteFailure", () => {
-  it("reads a React Router 403 data payload", () => {
+  it("retains the block through typed errors and React Router wrappers", () => {
     const block = practiceAgreementBlockFromUnknown({
+      status: 403,
       detail: PRACTICE_BAA_REQUIRED_DETAIL,
-    })
-
+    })!
+    for (const error of [
+      new PracticeAgreementError(block),
+      { status: 403, statusText: "Forbidden", data: block },
+      data(block, { status: 403 }),
+    ]) {
+      expect(practiceAgreementBlockFromRouteFailure(error)).toEqual(block)
+    }
     expect(
-      practiceAgreementBlockFromRouteFailure({
-        status: 403,
-        statusText: "Forbidden",
-        data: block,
-      })?.headline,
-    ).toBe("Accept the updated agreement")
+      practiceAgreementBlockFromRouteFailure(data(block, { status: 500 })),
+    ).toBeNull()
   })
 })

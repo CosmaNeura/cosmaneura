@@ -17,11 +17,9 @@ export const queryClient = new QueryClient()
 // invalidateQueries (e.g. after zoom-revoked-ack) still forces a refetch.
 export const SETTINGS_STALE_TIME = 60_000
 
-// Same dedup rationale as SETTINGS_STALE_TIME but for the notes list. The
-// notes-layout loader seeds the shared cache after a successful noteList();
-// any component that later mounts and calls useQuery({...noteListOptions()})
-// with this same staleTime reads that cache instead of issuing a second
-// /internal/v1/notes request.
+// Notes consumers may reuse a successful list for a short window. The layout
+// loader always rechecks access through the shared query, so concurrent loads
+// deduplicate and a newly denied request does not reuse a cached success.
 export const NOTES_STALE_TIME = 60_000
 
 export default function withTanstackQueryProvider(

@@ -10,6 +10,7 @@ import { queryClient } from "~/configuration/tanstack-query"
 import { appointmentsToSidebarEntries } from "~/lib/appointment"
 import {
   type PracticeAgreementBlock,
+  PracticeAgreementError,
   practiceAgreementBlockFromClientResult,
   practiceAgreementBlockFromRouteFailure,
 } from "~/lib/practice-gate-error"
@@ -28,25 +29,34 @@ function blockedNotesData(blocked: PracticeAgreementBlock): NotesLayoutData {
 
 export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
   try {
-    const result = await noteList()
-    const blocked = practiceAgreementBlockFromClientResult(result)
-    if (blocked) return blockedNotesData(blocked)
-
-    invariant(result.data, "data failed to load")
-    queryClient.setQueryData(noteListOptions().queryKey, result.data)
-    return { appointments: result.data.appointments, blocked: null }
+    const result = await queryClient.fetchQuery({
+      ...noteListOptions(),
+      // Recheck access on navigation while sharing any request already in flight.
+      staleTime: 0,
+      retry: false,
+      queryFn: async ({ signal }) => {
+        const result = await noteList({ signal, throwOnError: false })
+        const blocked = practiceAgreementBlockFromClientResult(result)
+        if (blocked) throw new PracticeAgreementError(blocked)
+        invariant(result.data, "data failed to load")
+        return result.data
+      },
+    })
+    return { appointments: result.appointments, blocked: null }
   } catch (error) {
     const blocked = practiceAgreementBlockFromRouteFailure(error)
-    if (blocked) return blockedNotesData(blocked)
+    if (blocked) {
+      queryClient.removeQueries({
+        queryKey: noteListOptions().queryKey,
+        exact: true,
+      })
+      return blockedNotesData(blocked)
+    }
     throw error
   }
 }
 
-// Inspect the raw noteList() result so a practice-gate 403 keeps its server
-// detail. The live post-Google notes 403 is BAA v2.3 reaccept (detail:
-// "The Cosmaneura Inc BAA must be in force..."), not empty-practice.
-// Successful lists still seed the shared query cache that later
-// useQuery({...noteListOptions()}) callers read.
+// Successful lists retain the generated query's cache shape for notes consumers.
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   return loadNotesLayoutData()
 }

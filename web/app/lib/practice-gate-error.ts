@@ -20,9 +20,6 @@ const JOIN_PRACTICE_BLOCK: PracticeAgreementBlock = {
   instruction: "Join the practice before notes will appear.",
 }
 
-// Measured live 403 after Google (Maura, 2026-08-31): practice/settings 200,
-// notes 403. practice.baa_in_force requires CN-BAA-CUST-CW v2.3. An old v2.2
-// acceptance is not empty-practice; empty-practice uses JOIN_PRACTICE_BLOCK.
 const ACCEPT_AGREEMENT_BLOCK: PracticeAgreementBlock = {
   kind: "accept_agreement",
   detail: PRACTICE_BAA_REQUIRED_DETAIL,
@@ -30,38 +27,49 @@ const ACCEPT_AGREEMENT_BLOCK: PracticeAgreementBlock = {
   instruction: "Accept the updated agreement before notes will appear.",
 }
 
-function collectStrings(value: unknown, into: string[], depth = 0): void {
-  if (depth > 4 || value == null) return
-  if (typeof value === "string") {
-    into.push(value)
-    return
-  }
-  if (value instanceof Error) {
-    into.push(value.message)
-    return
-  }
-  if (typeof value !== "object") return
+/** Retain the HTTP status and safe recovery detail through the query cache. */
+export class PracticeAgreementError extends Error {
+  readonly status = 403
 
-  const record = value as Record<string, unknown>
-  for (const key of ["detail", "statusText", "message", "error", "data"]) {
-    if (key in record) collectStrings(record[key], into, depth + 1)
+  constructor(readonly data: PracticeAgreementBlock) {
+    super(data.detail)
+    this.name = "PracticeAgreementError"
   }
 }
 
-function blockFromStrings(strings: string[]): PracticeAgreementBlock | null {
-  const blob = strings.join(" ")
-  if (blob.includes("Name or join a practice")) return JOIN_PRACTICE_BLOCK
-  if (blob.includes("BAA must be in force")) return ACCEPT_AGREEMENT_BLOCK
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+function blockFromBody(
+  value: unknown,
+  depth = 0,
+): PracticeAgreementBlock | null {
+  if (depth > 4) return null
+  if (value === PRACTICE_MEMBERSHIP_REQUIRED_DETAIL) return JOIN_PRACTICE_BLOCK
+  if (value === PRACTICE_BAA_REQUIRED_DETAIL) return ACCEPT_AGREEMENT_BLOCK
+  const record = asRecord(value)
+  if (!record) return null
+  for (const key of ["detail", "error", "data"]) {
+    const block = blockFromBody(record[key], depth + 1)
+    if (block) return block
+  }
   return null
 }
 
-/** Recognize the two practice-gate 403s the notes API already returns. */
+/** Recognize only HTTP 403s with an exact detail emitted by practice_gate.py. */
 export function practiceAgreementBlockFromUnknown(
   error: unknown,
 ): PracticeAgreementBlock | null {
-  const strings: string[] = []
-  collectStrings(error, strings)
-  return blockFromStrings(strings)
+  const record = asRecord(error)
+  if (!record) return null
+  const status =
+    record.status ??
+    asRecord(record.response)?.status ??
+    asRecord(record.init)?.status
+  return status === 403 ? blockFromBody(record) : null
 }
 
 export function practiceAgreementBlockFromClientResult(result: {
@@ -69,33 +77,12 @@ export function practiceAgreementBlockFromClientResult(result: {
   error?: unknown
   response?: { status?: number }
 }): PracticeAgreementBlock | null {
-  if (result.data) return null
-  return practiceAgreementBlockFromUnknown({
-    error: result.error,
-    response: result.response,
-    status: result.response?.status,
-  })
-}
-
-function isRouteErrorLike(
-  error: unknown,
-): error is { status: number; statusText?: string; data: unknown } {
-  return Boolean(
-    error && typeof error === "object" && "status" in error && "data" in error,
-  )
+  if (result.data != null || result.response?.status !== 403) return null
+  return blockFromBody(result.error)
 }
 
 export function practiceAgreementBlockFromRouteFailure(
   error: unknown,
 ): PracticeAgreementBlock | null {
-  if (isRouteErrorLike(error)) {
-    return (
-      practiceAgreementBlockFromUnknown(error.data) ??
-      practiceAgreementBlockFromUnknown({
-        status: error.status,
-        detail: error.data ?? error.statusText,
-      })
-    )
-  }
   return practiceAgreementBlockFromUnknown(error)
 }
