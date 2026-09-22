@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-sanitizer-target-role-database-observation-plan-v1",
+  "closed_world": true,
+  "upstream_policies": {
+    "database_capability": {
+      "policy_id": "cosmaneura-staging-restore-sanitizer-database-capability-v1",
+      "sha256": "sha256:40684569cbf34d80e144565db73b6f1e81505eb4509c9403797fc0a1114eb98d"
+    },
+    "sanitizer": {
+      "policy_id": "cosmaneura-isolated-restore-sanitizer-contract-v1",
+      "sha256": "sha256:233476e83f8f45419735052a334ea06aa0153d9b463e599c849c1f212e34dad3"
+    },
+    "controller_database_observation": {
+      "policy_id": "cosmaneura-staging-controller-receipt-v2-database-observation-v1",
+      "sha256": "sha256:66dd80c22dd9f21021ec0c4cf604af5ec6afc5fb5d53bd8e946b72abcf8f43bb"
+    }
+  },
+  "input": {
+    "only_public_data_inputs": [
+      "target_binding",
+      "database_observation"
+    ],
+    "target_binding_type": "scripts.staging_restore_sanitizer.SanitizerTargetBinding",
+    "database_observation_type": "scripts.observe_staging_controller_receipt_v2_database.ControllerReceiptV2DatabaseObservationAuthority",
+    "exact_type_and_process_local_seal_required": true,
+    "database_observation_must_be_identical_retained_ancestor": true,
+    "caller_bytes_maps_paths_urls_dsns_hosts_roles_identity_ids_digests_policies_timestamps_credentials_tokens_connectors_callbacks_sql_or_runtime_overrides_permitted": false
+  },
+  "reauthentication": {
+    "reviewed_private_clock_only": true,
+    "whole_second_utc_required": true,
+    "clock_regression_rejected": true,
+    "full_target_binding_projection_required_at_start_and_end": true,
+    "database_observation_required_at_start_and_end": true,
+    "retained_ancestry_identity_required_at_start_and_end": true,
+    "plan_may_not_extend_input_expiry": true,
+    "placeholder_target_or_identity_values_permitted": false
+  },
+  "lineage": {
+    "retained_database_observation_path": "target_binding._written_receipt._built_receipt._isolation_inventory._database_observation",
+    "database_observation_digest_path": "target_binding._written_receipt._built_receipt.database_observation_sha256",
+    "cross_bound_fields": [
+      "rehearsal_id",
+      "execution_resource_id",
+      "target_fqdn",
+      "target_postgres_server_id",
+      "database_name",
+      "approved_database_role",
+      "controller_receipt_sha256",
+      "database_observation_sha256"
+    ],
+    "content_or_digest_equality_cannot_replace_retained_object_identity": true
+  },
+  "plan": {
+    "kind": "sealed-sanitizer-target-role-observation-plan-v1",
+    "public_fields": [
+      "kind",
+      "observation_plan_sha256",
+      "observation_plan_contract_sha256",
+      "database_capability_contract_sha256",
+      "sanitizer_policy_sha256",
+      "database_observation_policy_sha256",
+      "controller_receipt_sha256",
+      "database_observation_sha256",
+      "rehearsal_id",
+      "planned_at",
+      "expires_at",
+      "target_binding_authenticated",
+      "retained_database_observation_authenticated",
+      "target_role_observation_plan_authenticated",
+      "database_connection_authority",
+      "database_mutation_authority",
+      "database_role_state_authenticated",
+      "effective_session_settings_authenticated",
+      "evidence_publication_authority",
+      "executable",
+      "live_database_calls_enabled",
+      "password_authentication_absence_proven",
+      "post_provision_schema_descriptor_authenticated",
+      "provider_calls_permitted",
+      "provider_facts_authenticated",
+      "provision_job_identity_bound",
+      "role_or_privilege_mutation_authority",
+      "runtime_authority",
+      "sanitizer_authority",
+      "server_wide_authorization_stability_authenticated",
+      "transaction_committed",
+      "transaction_executed",
+      "workflow_integrated",
+      "write_path_effects_authenticated"
+    ],
+    "private_fields": [
+      "_target_binding",
+      "_database_observation",
+      "_contract_bytes",
+      "_proof_sha256",
+      "_seal"
+    ],
+    "non_serializable": true,
+    "copy_permitted": false,
+    "repr_redacted": true,
+    "no_capability_material": true,
+    "retains_no": [
+      "access-token",
+      "credential",
+      "dsn",
+      "connection",
+      "cursor",
+      "connector",
+      "callback",
+      "sql-text",
+      "detached-or-newly-copied-catalog-row",
+      "post-provision-descriptor"
+    ]
+  },
+  "requirement_partition": {
+    "source": "database_capability.verification.must_authenticate",
+    "exact_disjoint_exhaustive_partition_required": true,
+    "target_role_observer": [
+      "exact-database-role-name",
+      "role-flags-and-connection-limit",
+      "empty-outbound-memberships",
+      "empty-inbound-members",
+      "set-role-escalation-unavailable",
+      "exact-direct-and-effective-schema-privileges",
+      "exact-direct-and-effective-table-privileges",
+      "empty-explicit-column-acls",
+      "column-effective-privileges-derived-only-from-exact-table-privileges",
+      "empty-sequence-privileges",
+      "empty-public-schema-routine-execute-privileges",
+      "exact-fourteen-acl-manageable-custom-enum-types",
+      "empty-acl-and-effective-usage-for-acl-manageable-custom-enums",
+      "postgresql16-intrinsic-relation-row-and-row-array-usage-baseline",
+      "postgresql16-enum-array-usage-derived-from-element-enum-acl",
+      "empty-language-usage-privileges",
+      "empty-foreign-data-wrapper-and-server-usage-privileges",
+      "empty-user-mappings",
+      "all-pg-db-role-setting-source-rows-including-setrole-zero",
+      "session-replication-role-origin",
+      "all-grant-options-absent",
+      "public-role-acl-sources-included-for-every-object-class"
+    ],
+    "privileged_global_observer": [
+      "exact-provision-job-uami-mapping",
+      "null-password-state",
+      "empty-ownership-sets",
+      "no-database-or-shared-object-ownership-dependencies",
+      "closed-world-every-pg-database-entry-and-datallowconn",
+      "exact-direct-public-membership-and-effective-database-privileges",
+      "target-only-effective-connect-and-no-create-or-temporary-anywhere",
+      "empty-tablespace-create-privileges",
+      "empty-parameter-set-and-alter-system-privileges",
+      "empty-publication-subscription-extension-and-event-trigger-authority",
+      "system-object-explicit-and-public-acl-deltas-absent"
+    ],
+    "external_stability_authorities": [
+      "server-wide-authorization-state-freeze-from-final-observation-through-transaction"
+    ],
+    "post_provision_descriptor_authority": [
+      "revision-and-post-provision-schema-descriptor-revalidated-under-held-windows"
+    ],
+    "final_adapter_authenticator_join": [
+      "closed-world-write-path-effects-and-no-competing-sessions-under-held-stability-windows",
+      "zero-large-objects-and-fixed-grammar-confinement-of-ambient-large-object-routines",
+      "zero-prepared-transactions-and-max-prepared-transactions-zero",
+      "all-effective-session-setting-sources-and-exact-safe-values",
+      "shared-session-advisory-lock-cooperation-across-every-migration-path-and-sanitizer",
+      "empty-default-privilege-entries-and-no-future-user-object-creation-under-exclusive-ddl-window"
+    ]
+  },
+  "post_provision_descriptor": {
+    "accepted_as_public_input": false,
+    "selected_by_this_plan": false,
+    "selection_implemented": false,
+    "selection_source": "separately-reviewed-provisioning-output",
+    "observer_output_may_select_expected_digest": false,
+    "pre_provision_descriptor_substitution_permitted": false
+  },
+  "claims": {
+    "target_binding_authenticated": true,
+    "retained_database_observation_authenticated": true,
+    "target_role_observation_plan_authenticated": true,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "database_role_state_authenticated": false,
+    "effective_session_settings_authenticated": false,
+    "evidence_publication_authority": false,
+    "executable": false,
+    "live_database_calls_enabled": false,
+    "password_authentication_absence_proven": false,
+    "post_provision_schema_descriptor_authenticated": false,
+    "provider_calls_permitted": false,
+    "provider_facts_authenticated": false,
+    "provision_job_identity_bound": false,
+    "role_or_privilege_mutation_authority": false,
+    "runtime_authority": false,
+    "sanitizer_authority": false,
+    "server_wide_authorization_stability_authenticated": false,
+    "transaction_committed": false,
+    "transaction_executed": false,
+    "workflow_integrated": false,
+    "write_path_effects_authenticated": false
+  },
+  "status": {
+    "contract_validator_implemented": true,
+    "observation_plan_binder_implemented": true,
+    "database_observer_implemented": false,
+    "offline_authenticator_implemented": false,
+    "adapter_join_implemented": false,
+    "live_database_calls_enabled": false,
+    "provider_calls_permitted": false,
+    "database_connection_authority": false,
+    "database_mutation_authority": false,
+    "runtime_authority": false,
+    "sanitizer_authority": false,
+    "workflow_integrated": false,
+    "executable": false,
+    "activation_ready": false,
+    "public_activation_failure": "activation.sanitizer_target_role_database_observer_unimplemented",
+    "activation_blockers": [
+      "exact_database_role_unselected",
+      "provision_job_identity_exact_ids_unpinned",
+      "post_provision_schema_descriptor_unselected",
+      "target_role_database_observer_unimplemented",
+      "privileged_global_observer_unimplemented",
+      "stability_authorities_unimplemented",
+      "offline_authenticator_unimplemented",
+      "adapter_join_unimplemented"
+    ]
+  }
+}

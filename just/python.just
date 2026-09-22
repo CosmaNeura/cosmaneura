@@ -18,14 +18,10 @@ py_setup:
 		uv sync; \
 	fi
 
-	# important for CI to install browsers for playwright
-	# the installation process is fast enough (<10s) to eliminate the need for attempting to cache via GHA
-	# if this turns out not to be true, we should implement: https://github.com/hirasso/thumbhash-custom-element/blob/main/.github/workflows/tests.yml
-
+	# Local setup retains the full browser. CI workflows install the headless
+	# shell explicitly and only in the integration worker that uses it.
 	if [ -z "${CI:-}" ]; then \
 		uv run playwright install chromium; \
-	else \
-		uv run playwright install chromium --only-shell; \
 	fi
 
 # clean entire py project without rebuilding
@@ -142,6 +138,245 @@ py_js-build:
 		just js_build
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
+
+# CI runs these explicit selectors on isolated runners. Keep every boundary explicit
+# so every Python test belongs to exactly one shard and `py_test` remains the
+# single combined local/CI-compatible entry point. Application and integration
+# tests both require built web assets; only integration requires browser routing.
+[script]
+py_test-ci-application:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-application is CI-only" >&2; exit 1; }
+	just _banner_echo "Building Javascript for Application Tests"
+	just py_js-build
+	uv run pytest tests --verbosity=2 \
+		--ignore=tests/infrastructure \
+		--ignore=tests/integration \
+		{{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-general:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-general is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure --verbosity=2 \
+		--ignore-glob='tests/infrastructure/test_staging_controller_receipt_v2*.py' \
+		--ignore-glob='tests/infrastructure/test_staging_restore_*.py' \
+		{{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-controller:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-controller is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2.py tests/infrastructure/test_staging_controller_receipt_v2_{arm_observation,database_observation}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-receipt-io:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-receipt-io is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2_{builder,writer}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-foundation:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-foundation is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-state-authority:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-state-authority is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_fixed_catalog_source_state_authority.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-state-context:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-state-context is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_fixed_catalog_source_state_context.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-state-integrity:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-state-integrity is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_fixed_catalog_source_state_integrity.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-evidence:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-evidence is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_policy_is_hash_pinned_closed_world_and_dark \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_trusted_evidence_policy_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_every_evidence_digest_is_bound_to_the_controller_intent \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_exact_api_rejects_mappings_partials_subclasses_and_forged_seals \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_module_has_no_runtime_or_mutation_surface \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-evidence-integrity:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-evidence-integrity is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_real_chain_joins_final_evidence_after_historical_expiry \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_source_restore_and_run_context_cannot_be_substituted \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_mixed_real_chains_and_tampered_outputs_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_clock_shape_regression_and_target_expiry_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_output_cannot_be_constructed_or_serialized \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-executor:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-executor is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{database_capability,executor,transaction_plan}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_database_observation_must_be_identical_retained_ancestor \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_tampered_target_observation_and_retained_ancestry_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_placeholder_target_values_cannot_enable_planning \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_public_factory_remains_terminal_before_observer_access \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_real_chain_mints_only_a_sealed_metadata_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observer_contract.py \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_query_grammar.py \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_frames.py \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_observer_contract.py \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_query_grammar.py \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_observation_frames.py \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-runtime:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-runtime is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_database_observer.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-output is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_output_is_sealed_redacted_nonserializable_and_tamper_evident \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_contract_is_hash_pinned_closed_world_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_connection_strategy_is_exact_bounded_and_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_real_chain_mints_only_sealed_public_metadata \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_plan_api_accepts_only_one_keyword_only_exact_sealed_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_target_plan_identity_and_nested_lineage_are_retained \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-state:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-state is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-output is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_output_is_redacted_nonserializable_and_tamper_evident \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_public_factory_remains_terminal \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_contract_is_hash_pinned_closed_world_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_bootstrap_design_is_separate_ephemeral_and_teardown_bound \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_real_chain_mints_only_redacted_binding_metadata \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_api_accepts_only_two_keyword_only_exact_inputs \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_public_factory_remains_terminal \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_job_attachment_contract.py \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_job_live_provider.py \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_binding_digest_is_domain_separated_and_exact --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_connection_plan_identity_and_nested_ancestry_are_retained \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_bootstrap_identity_evidence_exact_object_is_retained \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-state:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-state is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_refuses_serialization_and_direct_construction --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_duplicated_output_cannot_authenticate --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_mutated_output_cannot_authenticate --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-integrity:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-integrity is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_offline_authenticator.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-data-contract-executor:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-data-contract-executor is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{data_contract_executor,fixed_catalog_post_projection}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-snapshot:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-snapshot is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_source_snapshot.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-restore:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-restore is CI-only" >&2; exit 1; }
+	restore_tests=(tests/infrastructure/test_staging_restore_*.py)
+	dedicated_restore_tests=(tests/infrastructure/test_staging_restore_sanitizer.py tests/infrastructure/test_staging_restore_fixed_catalog_source_state*.py tests/infrastructure/test_staging_restore_sanitizer_*.py)
+	restore_tests=("${(@)restore_tests:|dedicated_restore_tests}")
+	uv run pytest "${restore_tests[@]}" tests/infrastructure/test_staging_controller_receipt_v2_{isolation_inventory,private_reader,production_authority}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-integration:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-integration is CI-only" >&2; exit 1; }
+	just _banner_echo "Building Javascript for Integration Tests"
+	just py_js-build
+	just _banner_echo "Running Integration"
+	uv run pytest tests/integration --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 # run tests with the exact same environment that will be used on CI
 [script]

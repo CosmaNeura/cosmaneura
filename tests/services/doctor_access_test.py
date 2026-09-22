@@ -26,6 +26,7 @@ def _grant(
     *,
     practice: Practice | None = None,
     revoked: bool = False,
+    email_sha256: str | None = None,
 ) -> PilotAccessGrandfatherGrant:
     now = datetime.now(timezone.utc)
     email = doctor.email.lower()
@@ -34,7 +35,7 @@ def _grant(
         doctor_id_snapshot=doctor.id,
         practice_id_snapshot=practice.id if practice else None,
         email_snapshot=email,
-        email_sha256=hashlib.sha256(email.encode()).hexdigest(),
+        email_sha256=email_sha256 or hashlib.sha256(email.encode()).hexdigest(),
         source_ref="test:doctor-access",
         source_sha256="a" * 64,
         grant_plan_sha256="b" * 64,
@@ -67,31 +68,35 @@ def _practice(
     return practice, member
 
 
-def test_active_pilot_grant_does_not_bypass_membership():
+def test_active_pilot_grant_allows_access_without_membership_or_mutation():
     doctor = _doctor("grant")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
     _grant(doctor)
 
     decision = resolve_doctor_access(doctor)
 
-    assert decision.allowed is False
-    assert decision.authorization_basis is None
-    assert decision.denial_reason == "practice_membership_required"
+    assert decision.allowed is True
+    assert decision.authorization_basis == "pilot_grant"
+    assert decision.denial_reason is None
     assert decision.baa_in_force is False
     assert decision.entitlement_in_force is False
     doctor.refresh()
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-def test_active_pilot_grant_does_not_bypass_membership_authorization():
+def test_active_pilot_grant_allows_access_without_baa_or_attestation():
     doctor = _doctor("existing-member")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
     practice, member = _practice(doctor, attested=False)
     _grant(doctor, practice=practice)
 
     decision = resolve_doctor_access(doctor)
 
-    assert decision.allowed is False
-    assert decision.authorization_basis is None
-    assert decision.denial_reason == "practice_access_not_authorized"
+    assert decision.allowed is True
+    assert decision.authorization_basis == "pilot_grant"
+    assert decision.denial_reason is None
     assert decision.baa_in_force is False
     assert decision.entitlement_in_force is True
     member.refresh()
@@ -100,14 +105,40 @@ def test_active_pilot_grant_does_not_bypass_membership_authorization():
     assert member.attested_at is None
 
 
-def test_practice_bound_pilot_grant_is_entitlement_only_after_other_gates():
-    doctor = _doctor("bound-grant")
+def test_non_grant_user_without_membership_remains_denied():
+    doctor = _doctor("non-grant")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.authorization_basis is None
+    assert decision.denial_reason == "practice_membership_required"
+    assert decision.baa_in_force is False
+    assert decision.entitlement_in_force is False
+
+
+def test_active_pilot_grant_does_not_authorize_an_unonboarded_account():
+    doctor = _doctor("unonboarded-grant")
+    _grant(doctor)
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.authorization_basis is None
+    assert decision.denial_reason == "practice_membership_required"
+
+
+def test_unonboarded_practice_bound_grant_remains_entitlement_only():
+    doctor = _doctor("unonboarded-bound-grant")
     practice, _ = _practice(doctor)
     _grant(doctor, practice=practice)
 
     no_baa = resolve_doctor_access(doctor)
     assert no_baa.allowed is False
     assert no_baa.denial_reason == "baa_not_in_force"
+    assert no_baa.entitlement_in_force is True
 
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(
@@ -123,8 +154,38 @@ def test_practice_bound_pilot_grant_is_entitlement_only_after_other_gates():
     assert entitled.entitlement_in_force is True
 
 
+def test_integrity_mismatched_pilot_grant_does_not_bypass_membership():
+    doctor = _doctor("grant-integrity")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+    _grant(doctor, email_sha256="f" * 64)
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.authorization_basis is None
+    assert decision.denial_reason == "practice_membership_required"
+
+
+def test_disabled_doctor_outranks_active_pilot_grant():
+    doctor = _doctor("disabled-grant")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+    _grant(doctor)
+    doctor.deleted_at = datetime.now(timezone.utc)
+    doctor.save()
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.denial_reason == "doctor_disabled"
+    assert decision.authorization_basis is None
+
+
 def test_revoked_membership_outranks_active_pilot_grant():
     doctor = _doctor("revoked-member")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
     practice, member = _practice(doctor)
     now = datetime.now(timezone.utc)
     member.access_revoked_at = now
@@ -143,6 +204,8 @@ def test_revoked_membership_outranks_active_pilot_grant():
 
 def test_inactive_membership_outranks_active_pilot_grant():
     doctor = _doctor("inactive-member")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
     practice, member = _practice(doctor)
     member.seat_state = "inactive"
     member.save()
@@ -157,6 +220,8 @@ def test_inactive_membership_outranks_active_pilot_grant():
 
 def test_revoked_grant_tombstone_outranks_otherwise_valid_practice():
     doctor = _doctor("revoked-grant")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
     practice, _ = _practice(doctor)
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(

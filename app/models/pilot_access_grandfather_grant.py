@@ -1,9 +1,10 @@
-"""Durable, per-Clerk-account evidence for a legacy pilot entitlement.
+"""Durable, per-Clerk-account evidence for legacy pilot access.
 
-The record never authorizes access by itself. Runtime authorization still
-requires verified identity, an active authorized practice membership, a BAA,
-and exact tenant binding; a matching practice snapshot may satisfy only the
-entitlement gate.
+Runtime authorization requires an exact active identity match. A practice-bound
+grant may satisfy entitlement; a durable completed-onboarding marker promotes
+it to the reviewed existing cohort's legacy access basis. Explicit account,
+membership, and grant tombstones remain fail-closed, and no practice, BAA, or
+billing state is rewritten.
 """
 
 from datetime import datetime

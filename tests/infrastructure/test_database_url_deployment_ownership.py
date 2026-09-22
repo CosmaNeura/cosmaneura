@@ -122,9 +122,7 @@ def test_deploy_adopts_selection_and_never_recreates_migration_job() -> None:
     assert '"database-url-v2": .DATABASE_URL_V2' in migrations
 
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    production_deploy = workflow[
-        workflow.index("  deploy:\n") : workflow.index("  deploy-staging:\n")
-    ]
+    production_deploy = workflow[workflow.index("  deploy:\n") :]
     assert "AZURE_SUBSCRIPTION_ID:" in production_deploy
     assert "vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID" in (
         production_deploy

@@ -219,7 +219,7 @@ that use a protected deployment environment.
 | `infra_apply.yml` (manual attested-plan apply) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 | `infra_production_plan.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 | `build_and_publish_manual.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish_manual.yml` (staging deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
+| `deploy_staging_candidate.yml` (staging candidate deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
 
 The three production rows share the production environment subject, so one
 matching production federated credential is sufficient. Staging requires its

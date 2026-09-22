@@ -1,0 +1,154 @@
+{
+  "schema_version": 4,
+  "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
+  "envelope_policy_id": "cosmaneura-staging-restore-envelope-v1",
+  "envelope_policy_sha256": "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92",
+  "evidence_binding": {
+    "schema_version": 1,
+    "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+    "manifest_policy_id": "cosmaneura-staging-evidence-manifest-v2",
+    "manifest_policy_sha256": "sha256:8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53",
+    "repository": "CosmaNeura/cosmaneura",
+    "protected_ref": "refs/heads/master",
+    "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+    "event_name": "workflow_dispatch",
+    "signer_issuer": "https://token.actions.githubusercontent.com",
+    "signer_subject": "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision",
+    "source_database_name": "staging",
+    "maximum_lifetime_seconds": 900
+  },
+  "activation": {
+    "blob_marker_store_implemented": false,
+    "blob_marker_provider_fidelity_proven": false,
+    "private_runner_binding_implemented": false,
+    "workflow_integrated": false,
+    "trusted_evidence_binding_implemented": false
+  },
+  "arm": {
+    "management_host": "management.azure.com",
+    "postgres_api_version": "2024-08-01",
+    "request_timeout_seconds": 30,
+    "poll_interval_seconds": 15,
+    "restore_poll_attempts": 480,
+    "cleanup_poll_attempts": 120,
+    "binding_clock_skew_seconds": 300,
+    "late_materialization_watch_hours": 48
+  },
+  "marker_store": {
+    "kind": "azure-blob-immutable-create-only-v1",
+    "account_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_STORAGE_ACCOUNT_RESOURCE_ID",
+    "account_host": "CONFIGURE_EXACT_RESTORE_MARKER_STORAGE_ACCOUNT_HOST",
+    "oauth_resource": "https://storage.azure.com/",
+    "blob_service_version": "2021-12-02",
+    "containers": {
+      "intent": "restore-intents-v4",
+      "submission": "restore-submissions-v4",
+      "cleanup": "restore-cleanups-v4"
+    },
+    "blob_name_suffix": ".json",
+    "request_timeout_seconds": 30,
+    "read_poll_attempts": 20,
+    "read_poll_interval_seconds": 15,
+    "max_record_bytes": 65536,
+    "list_page_size": 500,
+    "list_max_pages": 20,
+    "list_max_records": 10000,
+    "max_list_response_bytes": 1048576,
+    "account_posture": {
+      "resource_group_id": "CONFIGURE_EXACT_RESTORE_MARKER_CONTROL_RESOURCE_GROUP_ID",
+      "sku": "Standard_ZRS",
+      "kind": "StorageV2",
+      "public_network_access": "Disabled",
+      "shared_key_access": false,
+      "allow_blob_public_access": false,
+      "default_to_oauth_authentication": true,
+      "https_only": true,
+      "minimum_tls_version": "TLS1_2",
+      "hierarchical_namespace": false,
+      "blob_versioning": false,
+      "nfs_v3": false,
+      "sftp": false,
+      "local_users": false,
+      "point_in_time_restore": false,
+      "last_access_time_tracking": false,
+      "management_lock_id": "CONFIGURE_EXACT_RESTORE_MARKER_MANAGEMENT_LOCK_ID",
+      "management_lock_level": "ReadOnly"
+    },
+    "network": {
+      "private_endpoint_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_ENDPOINT_RESOURCE_ID",
+      "private_dns_zone_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_DNS_ZONE_RESOURCE_ID",
+      "private_dns_link_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_DNS_LINK_RESOURCE_ID",
+      "runner_subnet_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_RUNNER_SUBNET_RESOURCE_ID",
+      "runner_environment": "CONFIGURE_EXACT_RESTORE_MARKER_RUNNER_ENVIRONMENT"
+    },
+    "rbac": {
+      "actions": [],
+      "create_read_data_actions": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_DATA_ACTIONS",
+      "read_data_actions": [
+        "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+      ],
+      "create_read_role_definition_id": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_ROLE_DEFINITION_ID",
+      "create_read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_ROLE_PERMISSIONS_SHA256",
+      "read_role_definition_id": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_DEFINITION_ID",
+      "read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_PERMISSIONS_SHA256",
+      "provision_intent_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_INTENT_ROLE_ASSIGNMENT_ID",
+      "provision_submission_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_SUBMISSION_ROLE_ASSIGNMENT_ID",
+      "provision_cleanup_tombstone_assignment_id": "CONFIGURE_EXACT_RESTORE_PROVISION_CLEANUP_TOMBSTONE_ROLE_ASSIGNMENT_ID",
+      "cleanup_intent_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_INTENT_READ_ROLE_ASSIGNMENT_ID",
+      "cleanup_submission_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_SUBMISSION_READ_ROLE_ASSIGNMENT_ID",
+      "cleanup_marker_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_MARKER_ROLE_ASSIGNMENT_ID"
+    },
+    "immutability": {
+      "scope": "container",
+      "mode": "Locked",
+      "minimum_retention_days": 90,
+      "legal_hold_tag": "restorecontrolactive",
+      "allow_protected_append_writes": false,
+      "allow_protected_append_writes_all": false,
+      "intent_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_INTENT_IMMUTABILITY_POLICY_RESOURCE_ID",
+      "submission_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_SUBMISSION_IMMUTABILITY_POLICY_RESOURCE_ID",
+      "cleanup_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_IMMUTABILITY_POLICY_RESOURCE_ID",
+      "configuration_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_IMMUTABILITY_CONFIGURATION_EVIDENCE_SHA256"
+    },
+    "provider_fidelity": {
+      "openapi_commit_sha": "CONFIGURE_EXACT_RESTORE_MARKER_OPENAPI_COMMIT_SHA",
+      "conditional_create_concurrency_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_CONDITIONAL_CREATE_CONCURRENCY_EVIDENCE_SHA256",
+      "strong_consistency_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_STRONG_CONSISTENCY_EVIDENCE_SHA256",
+      "timeout_reconciliation_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_TIMEOUT_RECONCILIATION_EVIDENCE_SHA256",
+      "identity_authorization_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_IDENTITY_AUTHORIZATION_EVIDENCE_SHA256",
+      "block_blob_create_authorization_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_BLOCK_BLOB_CREATE_AUTHORIZATION_EVIDENCE_SHA256",
+      "overwrite_delete_denial_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_OVERWRITE_DELETE_DENIAL_EVIDENCE_SHA256",
+      "private_reachability_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_REACHABILITY_EVIDENCE_SHA256",
+      "review_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PROVIDER_FIDELITY_REVIEW_SHA256"
+    }
+  },
+  "operation_authority": {
+    "provision": {
+      "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.submit",
+      "arm_resource_delete_permitted": false,
+      "cleanup_handoff": "exact_dominant_tombstone_create_and_read_back",
+      "cleanup_tombstone_required_after_partial_or_unknown_outcome": true
+    },
+    "cleanup": {
+      "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent",
+      "arm_resource_delete_permitted": true,
+      "exact_dominant_tombstone_required_before_delete": true
+    }
+  },
+  "outcomes": {
+    "ready_state": "Ready",
+    "failed_states": [
+      "Disabled",
+      "Failed"
+    ]
+  },
+  "retention": {
+    "delete_markers_automatically": false,
+    "protected_kinds": [
+      "intent",
+      "submission",
+      "cleanup"
+    ],
+    "reason": "Preserve every authorization and cleanup tombstone; deleting a current cleanup marker could permit a later retry to submit the deterministic target."
+  }
+}

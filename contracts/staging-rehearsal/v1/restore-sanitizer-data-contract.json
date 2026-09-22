@@ -1,0 +1,642 @@
+{
+  "schema_version": 1,
+  "contract_id": "cosmaneura-isolated-restore-sanitizer-data-v1",
+  "closed_world": true,
+  "source_profile": "pre",
+  "retained_table_count": 29,
+  "retained_column_count": 343,
+  "row_actions": {
+    "discard_rows": [
+      "authority_person_origin",
+      "baa_acceptance",
+      "organization_roster_approval",
+      "pilot_access_continuity_amendment",
+      "pilot_access_continuity_amendment_identity",
+      "pilot_access_grandfather_grant",
+      "practice_access_audit",
+      "practice_member",
+      "superadmin_capability_audit",
+      "superadmin_capability_grant"
+    ],
+    "rewrite_rows": [
+      "appointment",
+      "authority_actor",
+      "authority_actor_external_identity",
+      "authority_person",
+      "authority_person_binding",
+      "authority_tenant",
+      "authority_tenant_membership",
+      "baa_version",
+      "doctor",
+      "doctor_note_schema",
+      "drug_reference",
+      "ehr_sandbox_patient_designation",
+      "ehr_sandbox_record_mapping",
+      "lab_range_set",
+      "note_type_customization",
+      "patient",
+      "practice",
+      "provider_organization",
+      "synthetic_preview_appointment_fixture"
+    ]
+  },
+  "tables": {
+    "appointment": {
+      "disposition": "synthetic_lineage",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:appointment",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "patient_id": "hmac_uuid7:typeid:patient",
+        "appointment_date": "preserve_approved",
+        "appointment_name": "preserve_approved",
+        "appointment_notes_preview": "preserve_approved",
+        "created_by_system": "preserve_approved",
+        "external_id": "hmac_text:synthetic_external_id"
+      }
+    },
+    "authority_actor": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:authority_actor",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "actor_kind": "preserve_approved",
+        "status": "preserve_approved"
+      }
+    },
+    "authority_actor_external_identity": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:actor_identity",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "actor_id": "hmac_uuid7:typeid:authority_actor",
+        "issuer": "hmac_issuer",
+        "subject": "hmac_subject",
+        "verified_at": "preserve_approved",
+        "revoked_at": "preserve_approved"
+      }
+    },
+    "authority_person": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:authority_person",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "lifecycle_state": "preserve_approved",
+        "status": "preserve_approved",
+        "merged_into_person_id": "hmac_uuid7:typeid:authority_person"
+      }
+    },
+    "authority_person_binding": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:person_binding",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "person_id": "hmac_uuid7:typeid:authority_person",
+        "tenant_id": "hmac_uuid7:typeid:authority_tenant",
+        "actor_id": "hmac_uuid7:typeid:authority_actor",
+        "binding_ref": "derive_typeid_text:appointment",
+        "binding_kind": "preserve_approved",
+        "status": "preserve_approved",
+        "verified_at": "preserve_approved",
+        "revoked_at": "preserve_approved"
+      }
+    },
+    "authority_person_origin": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "person_id": "discard_row",
+        "origin": "discard_row",
+        "source_ref": "discard_row"
+      }
+    },
+    "authority_tenant": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:authority_tenant",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "status": "preserve_approved"
+      }
+    },
+    "authority_tenant_membership": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:tenant_membership",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "tenant_id": "hmac_uuid7:typeid:authority_tenant",
+        "actor_id": "hmac_uuid7:typeid:authority_actor",
+        "membership_kind": "preserve_approved",
+        "status": "preserve_approved"
+      }
+    },
+    "baa_acceptance": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "practice_id": "discard_row",
+        "baa_version_id": "discard_row",
+        "covered_entity_legal_name": "discard_row",
+        "accepted_by_doctor_id": "discard_row",
+        "accepted_by_name": "discard_row",
+        "accepted_by_title": "discard_row",
+        "accepted_by_email": "discard_row",
+        "accepted_at_utc": "discard_row",
+        "ip_address": "discard_row",
+        "user_agent": "discard_row",
+        "content_sha256": "discard_row"
+      }
+    },
+    "baa_version": {
+      "disposition": "fixed_catalog",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:baa_version",
+        "created_at": "preserve_verified_catalog",
+        "updated_at": "preserve_verified_catalog",
+        "doc_id": "preserve_verified_catalog",
+        "version": "preserve_verified_catalog",
+        "sha256": "preserve_verified_catalog",
+        "content_path": "preserve_verified_catalog",
+        "published_at": "preserve_verified_catalog",
+        "is_current": "preserve_verified_catalog"
+      }
+    },
+    "doctor": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:doctor",
+        "deleted_at": "preserve_approved",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "clerk_id": "hmac_subject",
+        "email": "hmac_email",
+        "role": "preserve_approved",
+        "last_active_at": "preserve_approved",
+        "api_key": "set_null",
+        "biography": "set_null",
+        "onboarding_completed_at": "preserve_approved",
+        "terminology": "preserve_approved",
+        "has_natmed_subscription": "preserve_approved"
+      }
+    },
+    "doctor_note_schema": {
+      "disposition": "fixed_catalog",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "deleted_at": "preserve_verified_catalog",
+        "created_at": "preserve_verified_catalog",
+        "updated_at": "preserve_verified_catalog",
+        "id": "hmac_uuid7:typeid:doctor_note_schema",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "note_type": "preserve_verified_catalog",
+        "fields": "preserve_verified_catalog"
+      }
+    },
+    "drug_reference": {
+      "disposition": "fixed_catalog",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:drug_reference",
+        "created_at": "preserve_verified_catalog",
+        "updated_at": "preserve_verified_catalog",
+        "normalized_name": "preserve_verified_catalog",
+        "sections": "preserve_verified_catalog",
+        "found": "preserve_verified_catalog",
+        "fetched_at": "preserve_verified_catalog"
+      }
+    },
+    "ehr_sandbox_patient_designation": {
+      "disposition": "synthetic_lineage",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:ehr_sandbox_designation",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "patient_id": "hmac_uuid7:typeid:patient",
+        "adapter": "preserve_approved",
+        "environment": "preserve_approved",
+        "practice_ref": "preserve_approved",
+        "synthetic_only": "preserve_approved",
+        "designated_by": "hmac_text:operator_ref",
+        "revoked_at": "preserve_approved",
+        "revoked_by": "hmac_text:operator_ref"
+      }
+    },
+    "ehr_sandbox_record_mapping": {
+      "disposition": "synthetic_lineage",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:ehr_sandbox_mapping",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "patient_id": "hmac_uuid7:typeid:patient",
+        "designation_id": "hmac_uuid7:typeid:ehr_sandbox_designation",
+        "adapter": "preserve_approved",
+        "environment": "preserve_approved",
+        "practice_ref": "preserve_approved",
+        "record_ref": "hmac_text:ehr_record_ref",
+        "synthetic_only": "preserve_approved",
+        "provisioned_by": "hmac_text:operator_ref",
+        "revoked_at": "preserve_approved",
+        "revoked_by": "hmac_text:operator_ref"
+      }
+    },
+    "lab_range_set": {
+      "disposition": "fixed_catalog",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:lab_range_set",
+        "created_at": "preserve_verified_catalog",
+        "updated_at": "preserve_verified_catalog",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "biomarker": "preserve_verified_catalog",
+        "unit": "preserve_verified_catalog",
+        "standard_low": "preserve_verified_catalog",
+        "standard_high": "preserve_verified_catalog",
+        "optimal_low": "preserve_verified_catalog",
+        "optimal_high": "preserve_verified_catalog",
+        "source_url": "preserve_verified_catalog"
+      }
+    },
+    "note_type_customization": {
+      "disposition": "fixed_catalog",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:note_type_customization",
+        "deleted_at": "preserve_verified_catalog",
+        "created_at": "preserve_verified_catalog",
+        "updated_at": "preserve_verified_catalog",
+        "doctor_note_schema_id": "hmac_uuid7:typeid:doctor_note_schema",
+        "subjective_source": "preserve_verified_catalog",
+        "pronoun_style": "preserve_verified_catalog",
+        "plan_ordering": "preserve_verified_catalog",
+        "flag_new_medications": "preserve_verified_catalog",
+        "require_plan_reason": "preserve_verified_catalog",
+        "ros_distinct_from_subjective": "preserve_verified_catalog",
+        "custom_instructions": "preserve_verified_catalog"
+      }
+    },
+    "organization_roster_approval": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "organization_id": "discard_row",
+        "target_practice_id": "discard_row",
+        "approved_email": "discard_row",
+        "approved_at": "discard_row",
+        "approved_by_ref": "discard_row",
+        "source_ref": "discard_row",
+        "source_sha256": "discard_row",
+        "expires_at": "discard_row",
+        "claimed_doctor_id": "discard_row",
+        "claimed_at": "discard_row",
+        "claimed_code_version": "discard_row",
+        "revoked_at": "discard_row",
+        "revoked_by_ref": "discard_row",
+        "revocation_reason": "discard_row",
+        "retain_until": "discard_row"
+      }
+    },
+    "patient": {
+      "disposition": "synthetic_lineage",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:patient",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "name": "hmac_text:synthetic_patient_name",
+        "date_of_birth": "preserve_approved"
+      }
+    },
+    "pilot_access_continuity_amendment": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "environment": "discard_row",
+        "clerk_issuer": "discard_row",
+        "source_ref": "discard_row",
+        "manifest_sha256": "discard_row",
+        "plan_sha256": "discard_row",
+        "applied_by_ref": "discard_row",
+        "reason": "discard_row",
+        "account_count": "discard_row",
+        "applied_at": "discard_row"
+      }
+    },
+    "pilot_access_continuity_amendment_identity": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "amendment_id": "discard_row",
+        "grant_id": "discard_row",
+        "clerk_issuer": "discard_row",
+        "clerk_subject": "discard_row",
+        "email_sha256": "discard_row",
+        "doctor_id_snapshot": "discard_row",
+        "practice_id_snapshot": "discard_row",
+        "safe_prelogin": "discard_row",
+        "continuity_basis": "discard_row"
+      }
+    },
+    "pilot_access_grandfather_grant": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "clerk_id": "discard_row",
+        "doctor_id_snapshot": "discard_row",
+        "practice_id_snapshot": "discard_row",
+        "email_snapshot": "discard_row",
+        "email_sha256": "discard_row",
+        "source_ref": "discard_row",
+        "source_sha256": "discard_row",
+        "grant_plan_sha256": "discard_row",
+        "granted_by_ref": "discard_row",
+        "grant_reason": "discard_row",
+        "granted_at": "discard_row",
+        "revoked_at": "discard_row",
+        "revoked_by_ref": "discard_row",
+        "revocation_reason": "discard_row",
+        "revocation_plan_sha256": "discard_row",
+        "retain_until": "discard_row"
+      }
+    },
+    "practice": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:practice",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "legal_name": "hmac_text:practice_legal_name",
+        "npi": "set_null",
+        "city": "set_null",
+        "region": "set_null",
+        "is_solo": "preserve_approved",
+        "join_code": "rotate_join_code",
+        "email_domain": "hmac_domain",
+        "origin_channel": "preserve_approved",
+        "pastoral_pack": "preserve_approved",
+        "baa_version": "set_null",
+        "baa_accepted_at": "set_null",
+        "baa_accepted_by_doctor_id": "set_null",
+        "baa_signature_name": "set_null",
+        "baa_signature_title": "set_null",
+        "trial_ends_at": "preserve_approved",
+        "billing_exempt": "preserve_approved",
+        "billing_exempt_until": "preserve_approved",
+        "stripe_customer_id": "set_null",
+        "stripe_subscription_id": "set_null",
+        "subscription_status": "set_null",
+        "negotiated_baa_on_file": "preserve_approved",
+        "negotiated_baa_effective_date": "preserve_approved",
+        "negotiated_baa_reference": "hmac_text:negotiated_baa_reference",
+        "stripe_last_event_created_at": "set_null",
+        "stripe_last_event_id": "set_null",
+        "stripe_state_version": "preserve_approved",
+        "stripe_checkout_attempt": "preserve_approved",
+        "stripe_checkout_state_version": "preserve_approved",
+        "stripe_checkout_session_id": "set_null",
+        "stripe_checkout_session_url": "set_null",
+        "stripe_checkout_session_expires_at": "set_null",
+        "stripe_quantity_sync_required": "preserve_approved",
+        "stripe_quantity_sync_target": "set_null",
+        "stripe_quantity_sync_version": "preserve_approved",
+        "stripe_quantity_sync_attempts": "preserve_approved",
+        "stripe_quantity_sync_error": "set_null",
+        "stripe_quantity_synced_at": "set_null",
+        "organization_id": "hmac_uuid7:typeid:provider_organization",
+        "negotiated_baa_required": "preserve_approved"
+      }
+    },
+    "practice_access_audit": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "practice_id": "discard_row",
+        "action": "discard_row",
+        "operator_ref": "discard_row",
+        "reason": "discard_row",
+        "effective_at": "discard_row",
+        "expires_at": "discard_row",
+        "document_reference": "discard_row",
+        "evidence_sha256": "discard_row"
+      }
+    },
+    "practice_member": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "practice_id": "discard_row",
+        "doctor_id": "discard_row",
+        "role": "discard_row",
+        "attested_at": "discard_row",
+        "attestation_name": "discard_row",
+        "organization_roster_approval_id": "discard_row",
+        "organization_authorized_at": "discard_row",
+        "access_revoked_at": "discard_row",
+        "access_revoked_by_ref": "discard_row",
+        "access_revocation_reason": "discard_row",
+        "access_records_retain_until": "discard_row"
+      }
+    },
+    "provider_organization": {
+      "disposition": "workforce_allowlist",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:provider_organization",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "legal_name": "hmac_text:provider_organization_legal_name",
+        "slug": "hmac_text:provider_organization_slug",
+        "email_domain": "hmac_domain",
+        "status": "preserve_approved",
+        "access_code_salt": "derive_access_code_salt",
+        "access_code_digest": "derive_access_code_digest",
+        "access_code_version": "preserve_approved",
+        "access_code_created_at": "preserve_approved"
+      }
+    },
+    "superadmin_capability_audit": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "grant_id": "discard_row",
+        "action": "discard_row",
+        "environment": "discard_row",
+        "capability_kind": "discard_row",
+        "identity_binding_sha256": "discard_row",
+        "evidence_sha256": "discard_row",
+        "operator_ref": "discard_row",
+        "reason_code": "discard_row",
+        "occurred_at": "discard_row",
+        "recorded_at": "discard_row"
+      }
+    },
+    "superadmin_capability_grant": {
+      "disposition": "workforce_allowlist",
+      "row_action": "discard_rows",
+      "columns": {
+        "id": "discard_row",
+        "created_at": "discard_row",
+        "updated_at": "discard_row",
+        "environment": "discard_row",
+        "capability_kind": "discard_row",
+        "clerk_issuer": "discard_row",
+        "clerk_subject": "discard_row",
+        "doctor_id": "discard_row",
+        "issuer_sha256": "discard_row",
+        "subject_sha256": "discard_row",
+        "verified_primary_email_sha256": "discard_row",
+        "source_ref": "discard_row",
+        "source_sha256": "discard_row",
+        "grant_plan_sha256": "discard_row",
+        "granted_by_ref": "discard_row",
+        "grant_reason_code": "discard_row",
+        "granted_at": "discard_row",
+        "revoked_at": "discard_row",
+        "revoked_by_ref": "discard_row",
+        "revocation_reason_code": "discard_row",
+        "revocation_plan_sha256": "discard_row",
+        "retain_until": "discard_row"
+      }
+    },
+    "synthetic_preview_appointment_fixture": {
+      "disposition": "synthetic_lineage",
+      "row_action": "rewrite_rows",
+      "columns": {
+        "id": "hmac_uuid7:typeid:synthetic_preview_fixture",
+        "created_at": "preserve_approved",
+        "updated_at": "preserve_approved",
+        "doctor_id": "hmac_uuid7:typeid:doctor",
+        "patient_id": "hmac_uuid7:typeid:patient",
+        "appointment_id": "hmac_uuid7:typeid:appointment",
+        "fixture_version": "preserve_approved",
+        "synthetic_only": "preserve_approved",
+        "provisioned_by": "hmac_text:operator_ref"
+      }
+    }
+  },
+  "foreign_keys": [
+    {"source": ["appointment.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["appointment.patient_id"], "target": ["patient.id"]},
+    {"source": ["authority_actor_external_identity.actor_id"], "target": ["authority_actor.id"]},
+    {"source": ["authority_person.merged_into_person_id"], "target": ["authority_person.id"]},
+    {"source": ["authority_person_binding.person_id"], "target": ["authority_person.id"]},
+    {"source": ["authority_person_binding.tenant_id"], "target": ["authority_tenant.id"]},
+    {"source": ["authority_person_binding.actor_id"], "target": ["authority_actor.id"]},
+    {"source": ["authority_person_origin.person_id"], "target": ["authority_person.id"]},
+    {"source": ["authority_tenant_membership.tenant_id"], "target": ["authority_tenant.id"]},
+    {"source": ["authority_tenant_membership.actor_id"], "target": ["authority_actor.id"]},
+    {"source": ["baa_acceptance.accepted_by_doctor_id"], "target": ["doctor.id"]},
+    {"source": ["baa_acceptance.baa_version_id"], "target": ["baa_version.id"]},
+    {"source": ["baa_acceptance.practice_id"], "target": ["practice.id"]},
+    {"source": ["doctor_note_schema.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["ehr_sandbox_patient_designation.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["ehr_sandbox_patient_designation.patient_id"], "target": ["patient.id"]},
+    {"source": ["ehr_sandbox_patient_designation.patient_id", "ehr_sandbox_patient_designation.doctor_id"], "target": ["patient.id", "patient.doctor_id"]},
+    {"source": ["ehr_sandbox_record_mapping.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["ehr_sandbox_record_mapping.patient_id"], "target": ["patient.id"]},
+    {"source": ["ehr_sandbox_record_mapping.designation_id"], "target": ["ehr_sandbox_patient_designation.id"]},
+    {"source": ["ehr_sandbox_record_mapping.designation_id", "ehr_sandbox_record_mapping.doctor_id", "ehr_sandbox_record_mapping.patient_id"], "target": ["ehr_sandbox_patient_designation.id", "ehr_sandbox_patient_designation.doctor_id", "ehr_sandbox_patient_designation.patient_id"]},
+    {"source": ["lab_range_set.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["note_type_customization.doctor_note_schema_id"], "target": ["doctor_note_schema.id"]},
+    {"source": ["organization_roster_approval.claimed_doctor_id"], "target": ["doctor.id"]},
+    {"source": ["organization_roster_approval.organization_id"], "target": ["provider_organization.id"]},
+    {"source": ["organization_roster_approval.target_practice_id", "organization_roster_approval.organization_id"], "target": ["practice.id", "practice.organization_id"]},
+    {"source": ["patient.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["pilot_access_continuity_amendment_identity.amendment_id"], "target": ["pilot_access_continuity_amendment.id"]},
+    {"source": ["pilot_access_continuity_amendment_identity.doctor_id_snapshot"], "target": ["doctor.id"]},
+    {"source": ["pilot_access_continuity_amendment_identity.grant_id"], "target": ["pilot_access_grandfather_grant.id"]},
+    {"source": ["pilot_access_continuity_amendment_identity.practice_id_snapshot"], "target": ["practice.id"]},
+    {"source": ["pilot_access_grandfather_grant.doctor_id_snapshot"], "target": ["doctor.id"]},
+    {"source": ["pilot_access_grandfather_grant.practice_id_snapshot"], "target": ["practice.id"]},
+    {"source": ["practice.organization_id"], "target": ["provider_organization.id"]},
+    {"source": ["practice.organization_id", "practice.email_domain"], "target": ["provider_organization.id", "provider_organization.email_domain"]},
+    {"source": ["practice_access_audit.practice_id"], "target": ["practice.id"]},
+    {"source": ["practice_member.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["practice_member.organization_roster_approval_id"], "target": ["organization_roster_approval.id"]},
+    {"source": ["practice_member.organization_roster_approval_id", "practice_member.practice_id", "practice_member.doctor_id"], "target": ["organization_roster_approval.id", "organization_roster_approval.target_practice_id", "organization_roster_approval.claimed_doctor_id"]},
+    {"source": ["practice_member.practice_id"], "target": ["practice.id"]},
+    {"source": ["superadmin_capability_audit.grant_id"], "target": ["superadmin_capability_grant.id"]},
+    {"source": ["superadmin_capability_grant.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["synthetic_preview_appointment_fixture.doctor_id"], "target": ["doctor.id"]},
+    {"source": ["synthetic_preview_appointment_fixture.patient_id"], "target": ["patient.id"]},
+    {"source": ["synthetic_preview_appointment_fixture.appointment_id"], "target": ["appointment.id"]},
+    {"source": ["synthetic_preview_appointment_fixture.patient_id", "synthetic_preview_appointment_fixture.doctor_id"], "target": ["patient.id", "patient.doctor_id"]}
+  ],
+  "derived_values": {
+    "authority_person_binding.binding_ref": {
+      "recipe": "typeid_text_from_transformed_uuid",
+      "source": ["appointment.id"],
+      "required_source_values": {
+        "authority_person_binding.binding_kind": ["provider_record"]
+      },
+      "typeid_prefix": "appointment"
+    },
+    "practice.join_code": {
+      "recipe": "hmac_join_code_from_transformed_uuid",
+      "source": ["practice.id"],
+      "alphabet": "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+      "length": 12
+    },
+    "provider_organization.access_code_salt": {
+      "recipe": "hmac_salt_from_transformed_uuid",
+      "source": ["provider_organization.id"],
+      "bytes": 16
+    },
+    "provider_organization.access_code_digest": {
+      "recipe": "scrypt_of_hidden_hmac_code",
+      "source": ["provider_organization.id", "provider_organization.access_code_salt"],
+      "code_alphabet": "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+      "code_length": 12,
+      "scrypt_n": 16384,
+      "scrypt_r": 8,
+      "scrypt_p": 1,
+      "digest_bytes": 32,
+      "plaintext_emitted": false
+    }
+  }
+}
