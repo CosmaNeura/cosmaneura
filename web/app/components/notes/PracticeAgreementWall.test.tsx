@@ -11,7 +11,7 @@ import { PracticeAgreementWall } from "./PracticeAgreementWall"
 import { render, screen } from "@testing-library/react"
 
 function renderWall(detail: string) {
-  const block = practiceAgreementBlockFromUnknown({ detail })
+  const block = practiceAgreementBlockFromUnknown({ status: 403, detail })
   if (!block) throw new Error("expected a practice-gate block")
   return render(
     <MemoryRouter>
@@ -45,7 +45,7 @@ describe("PracticeAgreementWall", () => {
     ).toHaveAttribute("href", "/settings")
   })
 
-  it("shows accept-the-updated-agreement words for Maura's BAA v2.3 403", () => {
+  it("shows accept-the-updated-agreement words for a BAA-in-force 403", () => {
     renderWall(PRACTICE_BAA_REQUIRED_DETAIL)
 
     expect(screen.getByRole("alert")).toBeInTheDocument()
