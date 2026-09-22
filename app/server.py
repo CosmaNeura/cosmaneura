@@ -27,6 +27,7 @@ from app.routes.zoom_auth import zoom_auth_app
 
 from app.models.doctor import Doctor
 
+from .configuration.public_onboarding import public_onboarding_configured
 from .environments import is_production
 from .routes.agent import agent_api_app
 from .routes.authority_errors import (
@@ -38,6 +39,7 @@ from .routes.chat import chat_api_app
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
+from .routes.public_onboarding import public_onboarding_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 
@@ -87,6 +89,24 @@ api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
 api_app.include_router(zoom_auth_app)
 api_app.include_router(recall_callbacks_app)
+
+
+def register_public_onboarding_routes(app) -> bool:
+    """Include the public self-serve lane only when its latch allows it.
+
+    While the latch is false the router is never included, so its paths are
+    absent from the application and from the generated OpenAPI schema rather
+    than merely refusing at runtime. Kept a function so the latch can be
+    exercised against a throwaway app instead of reimporting this module.
+    """
+
+    if not public_onboarding_configured():
+        return False
+    app.include_router(public_onboarding_api_app)
+    return True
+
+
+register_public_onboarding_routes(api_app)
 
 add_middleware(api_app)
 
