@@ -67,14 +67,18 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert api_only.count(GRANT_SECRET) == 1
 
     deploy = _read("infra-staging/deploy.sh")
-    control_default = (
-        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"'
+    control_capture = (
+        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-}"'
     )
-    assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
+    resolver = deploy.index("if ! ENV_JSON=")
+    assert deploy.index(control_capture) < resolver
+    assert (
+        deploy.index('if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]') < resolver
+    )
     assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
-    # Recall's always-configured API-only secret is separate from the optional
-    # record-grant capability, which is appended only behind its feature gate.
+    # Recall's always-configured API-only secret is separate from the
+    # record-grant capability, which remains scoped behind its feature gate.
     assert GRANT_SECRET not in _shell_array(deploy, "API_ONLY_SECRET_VARS")
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy
     assert '"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true"' in deploy
@@ -184,12 +188,10 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
 
     authorization_start = workflow.index("\n  authorize-production:")
-    staging_authorization_start = workflow.index("\n  authorize-staging:")
-    authorization_job = workflow[authorization_start:staging_authorization_start]
+    deployment_scope_start = workflow.index("\n  deployment-scope:")
+    authorization_job = workflow[authorization_start:deployment_scope_start]
 
-    production_start = workflow.index("\n  deploy:")
-    staging_start = workflow.index("\n  deploy-staging:")
-    production_job = workflow[production_start:staging_start]
+    production_job = workflow[workflow.index("\n  deploy:") :]
 
     assert "github.event_name == 'workflow_dispatch'" in authorization_job
     assert "github.ref == 'refs/heads/master'" in authorization_job
@@ -211,45 +213,18 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     assert "needs.authorize-production.result == 'success'" in production_job
 
 
-def test_staging_deployment_requires_founder_manual_dispatch() -> None:
+def test_legacy_staging_branch_deployment_path_is_absent() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
 
-    authorization_start = workflow.index("\n  authorize-staging:")
-    deployment_scope_start = workflow.index("\n  deployment-scope:")
-    authorization_job = workflow[authorization_start:deployment_scope_start]
-    staging_job = workflow[workflow.index("\n  deploy-staging:") :]
-
-    # Pushes still run validation, but they cannot satisfy either deployment job.
-    assert "branches: [master, staging]" in workflow_scope
-    assert "github.event_name == 'workflow_dispatch'" in authorization_job
-    assert "github.ref == 'refs/heads/staging'" in authorization_job
-    assert "permissions: {}" in authorization_job
-    assert '"$DEPLOYMENT_REF" != "refs/heads/staging"' in authorization_job
-    assert '"$DEPLOYMENT_ACTOR" != "JohnClem"' in authorization_job
-    assert '"$DEPLOYMENT_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
-
-    assert "needs: [web, app, authorize-staging]" in staging_job
-    assert "github.event_name == 'workflow_dispatch'" in staging_job
-    assert "github.ref == 'refs/heads/staging'" in staging_job
-    assert "github.actor == 'JohnClem'" in staging_job
-    assert "github.triggering_actor == 'JohnClem'" in staging_job
-    assert "needs.authorize-staging.result == 'success'" in staging_job
-    assert "github.event_name == 'push'" not in staging_job
-    assert "environment: staging" in staging_job
-    assert staging_job.count("repos/$GITHUB_REPOSITORY/git/ref/heads/staging") == 3
-    assert 'current_staging_sha" != "$TARGET_SHA' in staging_job
-    early_recheck = staging_job.index(
-        "Reverify current staging before binding credentials"
-    )
-    publish_recheck = staging_job.index(
-        "Reverify current staging before publishing images"
-    )
-    azure_recheck = staging_job.index("Reverify current staging before Azure mutation")
-    assert early_recheck < staging_job.index("actions/checkout@")
-    assert early_recheck < staging_job.index("OP_STAGING_SERVICE_ACCOUNT_TOKEN")
-    assert publish_recheck < staging_job.index("- run: just build_push")
-    assert azure_recheck < staging_job.index("name: Deploy to Azure Staging")
+    # The founder-only, dispatch-only staging guarantees belong to
+    # deploy_staging_candidate.yml, which promotes a reviewed master SHA.
+    assert "  workflow_dispatch:" in workflow_scope
+    assert "\n  push:" not in workflow_scope
+    assert "\n  authorize-staging:" not in workflow
+    assert "\n  deploy-staging:" not in workflow
+    assert "refs/heads/staging" not in workflow
+    assert "environment: staging" not in workflow
 
 
 def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
@@ -286,14 +261,10 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
 
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    production_start = workflow.index("\n  deploy:")
-    staging_start = workflow.index("\n  deploy-staging:")
-    production_job = workflow[production_start:staging_start]
-    staging_job = workflow[staging_start:]
+    production_job = workflow[workflow.index("\n  deploy:") :]
 
     assert "cancel-in-progress: false" in workflow[: workflow.index("jobs:\n")]
     assert "timeout-minutes: 60" in production_job
-    assert "timeout-minutes: 60" in staging_job
 
 
 def test_terraform_plan_installs_only_required_host_package() -> None:

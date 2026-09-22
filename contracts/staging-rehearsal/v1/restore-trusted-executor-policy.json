@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-restore-trusted-executor-v1",
+  "closed_world": true,
+  "activation_ready": false,
+  "activation": {
+    "trusted_executor_implemented": false,
+    "runtime_adapter_implemented": false,
+    "launch_binding_validator_implemented": false,
+    "launch_mailbox_adapter_implemented": false,
+    "launch_broker_adapter_implemented": false,
+    "launch_receipt_validation_integrated": false,
+    "source_provider_adapter_implemented": false,
+    "offline_attestation_verifier_adapter_implemented": false,
+    "safe_submit_adapter_implemented": false,
+    "private_runner_binding_implemented": false,
+    "workflow_integrated": false,
+    "restore_activation_authorized": false
+  },
+  "policy_pins": {
+    "evidence_manifest": {
+      "path": "contracts/staging-rehearsal/v1/evidence-manifest-policy.json",
+      "policy_id": "cosmaneura-staging-evidence-manifest-v2",
+      "sha256": "sha256:8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
+    },
+    "server_scope_evidence": {
+      "path": "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json",
+      "policy_id": "cosmaneura-staging-server-scope-evidence-v1",
+      "sha256": "sha256:4f91a206c81cc2a0b239ef48d55e5b3249dff944a80b3df28128ef62c9e8adc5"
+    },
+    "server_scope_authentication": {
+      "path": "contracts/staging-rehearsal/v1/server-scope-authentication-policy.json",
+      "policy_id": "cosmaneura-staging-server-scope-authentication-v1",
+      "sha256": "sha256:ad4b5ddd3e7cf8f6c50e34f63f1d2bd1d46d36f418fcd64b262b514daa2a28d5"
+    },
+    "source_provider_observation": {
+      "path": "contracts/staging-rehearsal/v1/source-provider-observation-policy.json",
+      "policy_id": "cosmaneura-staging-source-provider-observation-v1",
+      "sha256": "sha256:5a5774b26852421e01388317d89fb64d093fdf5d1e49ad04165c88bdf6f3fb52"
+    },
+    "github_attestation_authentication": {
+      "path": "contracts/staging-rehearsal/v1/github-attestation-authentication-policy.json",
+      "policy_id": "cosmaneura-staging-github-attestation-authentication-v1",
+      "sha256": "sha256:df7c2a2fca20dc05b3814d0762a286d6a9ff695e1ee7527ad9bd995f39b3fc1d"
+    },
+    "restore_evidence_composition": {
+      "path": "contracts/staging-rehearsal/v1/restore-evidence-composition-policy.json",
+      "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+      "sha256": "sha256:ba97547aa95686af448c169949379bb8ed1c20d4683adc3b1c6a70114ca6c1c3"
+    },
+    "restore_envelope": {
+      "path": "contracts/staging-rehearsal/v1/restore-envelope-policy.json",
+      "policy_id": "cosmaneura-staging-restore-envelope-v1",
+      "sha256": "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
+    },
+    "restore_safe_submit": {
+      "path": "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json",
+      "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
+      "sha256": "sha256:dd437ff02e201f01e8ec097345b444f8fc7786a7964b9345af097d3e1464f501"
+    },
+    "restore_runtime_binding": {
+      "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
+      "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
+      "sha256": "sha256:8b5854323f2e783674f510ee63c0d030bb51d2ec35ff85c511b88514f9b1c8f3"
+    }
+  },
+  "entrypoints": {
+    "public": "scripts.staging_restore_trusted_executor.execute_trusted_restore",
+    "private": "scripts.staging_restore_trusted_executor._execute_trusted_restore_with_dependencies",
+    "public_arguments": [],
+    "additional_public_inputs_permitted": false
+  },
+  "private_runtime_ingress": {
+    "status": "dormant_dependency_assembly_implemented_unintegrated",
+    "authority_preservation_implemented": true,
+    "in_memory_evidence_validator_available": true,
+    "dependency_assembly_implemented": true,
+    "workflow_integrated": false,
+    "evidence_bundle": {
+      "type": "exact_builtin_dict_of_immutable_bytes",
+      "validator": "scripts.validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
+      "selector_source": "validated_provision_launch_record.evidence_file_authorities"
+    },
+    "github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
+    "server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
+    "trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
+    "future_cleanup_mode_source": "validated_cleanup_launch_record.cleanup_mode",
+    "parent_launch_record_validation_required_before_selector_use": true,
+    "caller_path_or_uri_override_permitted": false
+  },
+  "inputs": {
+    "one_read_required": true,
+    "private_provision_inputs": {
+      "exact_type": "scripts.read_staging_restore_evidence_material.PrivateProvisionInputs",
+      "builder": "scripts.read_staging_restore_evidence_material.build_private_evidence_material_reader",
+      "reader": "ManagedIdentityPrivateEvidenceMaterialReader.read_provision_inputs",
+      "maximum_invocations": 1,
+      "exact_seal_required": true,
+      "receipt_launch_and_execution_binding_revalidated": true
+    },
+    "evidence_bundle": {
+      "type": "exact_builtin_dict_of_immutable_bytes",
+      "required_files": [
+        "SHA256SUMS",
+        "candidate.json",
+        "evidence-manifest.json",
+        "inventory.json",
+        "quiescence.json",
+        "server-scope.json"
+      ],
+      "exact_file_set_required": true,
+      "detached_mapping_copies": 1,
+      "maximum_bytes_per_file": 8388608,
+      "maximum_total_bytes": 50331648,
+      "expected_sha256_source": "validated_provision_launch_record.payload.evidence_files"
+    },
+    "hmac_key": {
+      "type": "sealed_immutable_bytes",
+      "source": "private_provision_inputs.server_scope_hmac_key_bytes",
+      "minimum_bytes": 32,
+      "maximum_bytes": 4096,
+      "expected_sha256_source": "validated_provision_launch_record.payload.server_scope_hmac_key.decoded_sha256"
+    },
+    "attestation_bundle": {
+      "type": "sealed_immutable_bytes",
+      "source": "private_provision_inputs.attestation_bundle_bytes",
+      "minimum_bytes": 1,
+      "maximum_bytes": 2097152,
+      "expected_sha256_source": "validated_provision_launch_record.payload.github_attestation_bundle.sha256"
+    },
+    "trusted_root": {
+      "type": "authenticated_runtime_record_material_bytes",
+      "source": "provision_launch_material.authenticated_runtime_record.trusted_root_bytes",
+      "additional_remote_reads": 0,
+      "minimum_bytes": 1,
+      "maximum_bytes": 25600,
+      "expected_sha256_source": "validated_provision_launch_record.github_trusted_root.sha256"
+    },
+    "ttl_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 24,
+      "source": "validated_provision_launch_record.payload.ttl_hours",
+      "caller_override_permitted": false
+    },
+    "caller_authority_overrides_permitted": [],
+    "environment_authority_inputs_permitted": false
+  },
+  "snapshot_rules": {
+    "path_inputs_permitted": false,
+    "in_memory_mapping_snapshotted_before_validation": true,
+    "detached_mapping_rechecked_after_validation": true,
+    "sealed_input_authority_rechecked_before_and_after_submit": true,
+    "retain_exact_bytes_until_submit_returns": [
+      "validated_result",
+      "evidence_manifest",
+      "server_scope_receipt",
+      "server_scope_hmac_key",
+      "github_attestation_bundle",
+      "github_only_trusted_root"
+    ],
+    "launch_digest_binding_proof_required": true,
+    "launch_digest_binding_proof_exact_map_match_required": true,
+    "serialized_reconstruction_permitted": false
+  },
+  "execution": {
+    "single_process_required": true,
+    "single_interpreter_required": true,
+    "same_module_instances_required": true,
+    "opaque_seals_must_remain_in_process": true,
+    "unsigned_trusted_executor_step_or_job_handoff_permitted": false,
+    "unsigned_artifact_or_json_handoff_permitted": false,
+    "broker_process_is_separate": true,
+    "broker_handoff": "authenticated-signed-canonical-receipt-bytes",
+    "subprocesses_permitted_only_for": [
+      "digest_pinned_offline_github_attestation_verifier"
+    ],
+    "stage_order": [
+      "validate_staging_restore_launch_binding.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter",
+      "validate_staging_restore_runtime_binding.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt",
+      "validate_staging_restore_launch_binding.validate_launch_record",
+      "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
+      "validate_staging_restore_launch_binding.validate_received_launch_receipt",
+      "read_staging_restore_evidence_material.ManagedIdentityPrivateEvidenceMaterialReader.read_provision_inputs",
+      "validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
+      "authenticate_staging_server_scope_receipt._authenticate_validated_bundle_with_binding_and_receipt",
+      "verify_staging_source_provider_observation._verify_provider_observation_with_document",
+      "authenticate_staging_github_attestation._authenticate_github_attestation_with_document",
+      "compose_staging_restore_evidence_binding._compose_restore_evidence_binding_with_document",
+      "staging_restore_safe_submit.request_from_binding",
+      "staging_restore_safe_submit.SafeRestoreSubmitter.submit"
+    ],
+    "validated_provision_launch_required_before_input_reads": true,
+    "request_identity_bound_to_validated_provision_launch": [
+      "rehearsal_id",
+      "workflow_sha",
+      "run_id",
+      "run_attempt"
+    ],
+    "exact_validated_snapshot_reused": true,
+    "exact_server_binding_reused": true,
+    "server_authentication_receipt_bytes_revalidated_at_composition": true,
+    "provider_and_attestation_receipts_bound_to_same_server_binding": true,
+    "direct_safe_submit_required": true,
+    "maximum_submit_invocations": 1,
+    "provision_cleanup_handoff": {
+      "kind": "exact-dominant-tombstone-v1",
+      "create_and_read_back_required": true,
+      "resource_delete_permitted": false,
+      "cleanup_entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent"
+    },
+    "side_effects_before_safe_submit_permitted": false
+  },
+  "trusted_clock": {
+    "dependency_instances": 1,
+    "shared_across_all_stages_and_safe_submit": true,
+    "timezone_aware_utc_required": true,
+    "whole_second_normalization_required": true,
+    "non_regressing_required": true,
+    "launch_receipt_validation_freshness_reads": 1,
+    "launch_authorization_final_pre_submit_reads": 1,
+    "launch_authorization_fresh_at_submit_start_required": true,
+    "composition_final_freshness_reads": 1,
+    "composition_final_freshness_after_all_receipts_and_digests": true,
+    "safe_submit_freshness_rechecks_required": true
+  },
+  "adapters": {
+    "runtime": {
+      "implemented": false,
+      "policy_pin": "policy_pins.restore_runtime_binding",
+      "external_record_source": "authenticated_broker_launch_receipt_runtime_pointer",
+      "image_digest_source": "verified_external_runtime_record",
+      "caller_override_permitted": false
+    },
+    "launch_binding": {
+      "implemented": false,
+      "validator": "scripts.validate_staging_restore_launch_binding",
+      "launch_record_source": "signed_receipt-bound-content-addressed-exact-object-read",
+      "broker_receipt_source": "execution-name-derived-immutable-mailbox-object",
+      "broker_receipt_authentication": "pinned-key-signature-over-canonical-bytes",
+      "broker_side_validation_runs_in_trusted_executor": false,
+      "caller_job_start_permitted": false,
+      "mailbox_transport_implemented": false,
+      "broker_adapter_implemented": false,
+      "launch_receipt_integration_implemented": false
+    },
+    "source_provider": {
+      "implemented": false,
+      "interface": "verify_staging_source_provider_observation.SourceObservationProvider",
+      "oauth_resource": "https://management.azure.com/",
+      "http_method": "GET",
+      "maximum_requests": 1,
+      "maximum_response_bytes": 1048576,
+      "redirects_permitted": false
+    },
+    "offline_attestation_verifier": {
+      "implemented": false,
+      "interface": "authenticate_staging_github_attestation.OfflineAttestationVerifier",
+      "network_access_permitted": false,
+      "maximum_invocations": 1,
+      "maximum_output_bytes": 4194304,
+      "executable_sha256": "CONFIGURE_EXACT_LINUX_GH_2_97_0_EXECUTABLE_SHA256",
+      "trusted_root_sha256": "CONFIGURE_EXACT_INDEPENDENTLY_DELIVERED_GITHUB_ONLY_TRUSTED_ROOT_SHA256"
+    },
+    "safe_submit": {
+      "implemented": false,
+      "submitter_type": "staging_restore_safe_submit.SafeRestoreSubmitter",
+      "transport_interface": "staging_restore_safe_submit.ArmTransport",
+      "marker_store_interface": "staging_restore_safe_submit.MarkerStore",
+      "configuration_source": "pinned_restore_envelope_and_restore_safe_submit_policies"
+    }
+  },
+  "request_derivation": {
+    "function": "staging_restore_safe_submit.request_from_binding",
+    "rehearsal_id": "first_12_hex_of_sha256(canonical({schema_version:1,safe_submit_policy_id,evidence_binding}))",
+    "approved_restore_time": "evidence_binding.approved_restore_time",
+    "cleanup_not_after": "evidence_binding.observed_at_plus_ttl_hours",
+    "repository": "evidence_binding.repository",
+    "workflow_sha": "evidence_binding.workflow_sha",
+    "run_id": "evidence_binding.run_id",
+    "run_attempt": "evidence_binding.run_attempt",
+    "caller_supplied_restore_or_identity_fields_permitted": false
+  },
+  "output": {
+    "type": "staging_restore_safe_submit.SubmitOutcome",
+    "exact_type_required": true,
+    "fields": [
+      "status",
+      "target_resource_id",
+      "intent_sha256",
+      "target_observed",
+      "cleanup_required"
+    ],
+    "allowed_statuses": [
+      "ready",
+      "cleanup_marker_unproven",
+      "cleanup_pending",
+      "pending_late_materialization"
+    ],
+    "target_resource_id": "exact_pinned_config_and_request_derived_intent_target",
+    "intent_sha256": "sha256_of_exact_canonical_pinned_config_and_request_derived_intent",
+    "unknown_fields_permitted": false,
+    "raw_inputs_or_secrets_permitted": false
+  },
+  "activation_blockers": [
+    "restore_trusted_executor_policy_disabled",
+    "upstream_policies_disabled",
+    "trusted_executor_unimplemented",
+    "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
+    "source_provider_adapter_unimplemented",
+    "offline_attestation_verifier_adapter_unimplemented",
+    "safe_submit_adapter_unimplemented",
+    "private_runner_binding_unimplemented",
+    "restore_runtime_binding_policy_disabled",
+    "external_runtime_record_unconfigured",
+    "attestation_verifier_and_root_pins_unconfigured",
+    "restore_envelope_policy_unconfigured",
+    "restore_safe_submit_policy_unconfigured",
+    "workflow_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ]
+}

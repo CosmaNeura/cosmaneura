@@ -311,6 +311,20 @@ function ViewAsPublicRouteGuard({
       : null
   const bannerStatus = current ?? lastActive
 
+  // Once Clerk has established that this browser is signed out, routine
+  // revalidation must not remount external identity controls. Clerk prepares
+  // one-time-code factors on mount, so replacing an in-progress sign-in or
+  // sign-up form can supersede a code the user is still retrieving. Hard
+  // revalidation replaces the check with `unavailable` and still blocks here.
+  if (
+    live.pending &&
+    live.lastVerified === null &&
+    live.check.state === "signed_out" &&
+    exposesExternalIdentityControls(pathname)
+  ) {
+    return children
+  }
+
   if (live.pending && live.lastVerified === null) {
     if (requiresStrictPublicViewAsVerification(pathname)) {
       return <PublicRouteVerificationPending />

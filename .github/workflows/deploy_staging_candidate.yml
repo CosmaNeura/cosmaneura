@@ -1,0 +1,1685 @@
+name: Deploy Staging Candidate
+
+# This workflow is a protected-master control plane for an immutable staging
+# candidate. The candidate is tested and built from its exact approved commit;
+# moving master is never deployed implicitly.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        type: string
+        description: "Full lowercase 40-character SHA of the approved master merge commit"
+        required: true
+      approval_pr_number:
+        type: string
+        description: "Merged master PR whose merge commit is the candidate SHA"
+        required: true
+      synthetic_only_confirmed:
+        type: boolean
+        description: "Confirm that all staging migration and smoke evidence is synthetic-only"
+        required: true
+        default: false
+      synthetic_evidence_sha256:
+        type: string
+        description: "SHA-256 of the reviewed sanitized-restore/synthetic evidence (sha256:<64 lowercase hex>)"
+        required: true
+      staging_identity_fingerprints_sha256:
+        type: string
+        description: "SHA-256 of the independently reviewed staging Clerk/Zoom/Recall/Stripe-test fingerprint set"
+        required: true
+      expected_schema_before:
+        type: string
+        description: "Reviewed 12-character Alembic revision currently on staging"
+        required: true
+      expected_schema_after:
+        type: string
+        description: "Reviewed 12-character Alembic revision expected after migration"
+        required: true
+      recovery_digest:
+        type: string
+        description: "Reviewed digest currently shared by staging recovery workloads (sha256:<64 lowercase hex>)"
+        required: true
+
+permissions: {}
+
+concurrency:
+  # A deployment can outlive GitHub's cancellation signal while migrations or
+  # Container App reconciliation continue. Always queue, never cancel.
+  group: cosmaneura-staging-container-apps
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  VITE_CLERK_PUBLIC_KEY: pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
+  DATABASE_HOST: localhost
+  REDIS_HOST: localhost
+  SMTP_HOST: localhost
+  COLUMNS: 120
+
+jobs:
+  authorize:
+    name: Authorize immutable staging candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      verified_revision: ${{ steps.verify.outputs.verified_revision }}
+      approval_pr_number: ${{ steps.verify.outputs.approval_pr_number }}
+      synthetic_evidence_sha256: ${{ steps.verify.outputs.synthetic_evidence_sha256 }}
+      staging_identity_fingerprints_sha256: ${{ steps.verify.outputs.staging_identity_fingerprints_sha256 }}
+      expected_schema_before: ${{ steps.verify.outputs.expected_schema_before }}
+      expected_schema_after: ${{ steps.verify.outputs.expected_schema_after }}
+      recovery_digest: ${{ steps.verify.outputs.recovery_digest }}
+    steps:
+      - name: Check out protected-master controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify founder dispatch, evidence, and candidate provenance
+        id: verify
+        env:
+          APPROVAL_PR_NUMBER: ${{ inputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          EXPECTED_SCHEMA_AFTER: ${{ inputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE: ${{ inputs.expected_schema_before }}
+          GH_TOKEN: ${{ github.token }}
+          RECOVERY_DIGEST: ${{ inputs.recovery_digest }}
+          SYNTHETIC_EVIDENCE_SHA256: ${{ inputs.synthetic_evidence_sha256 }}
+          SYNTHETIC_ONLY_CONFIRMED: ${{ inputs.synthetic_only_confirmed }}
+          STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ inputs.staging_identity_fingerprints_sha256 }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse HEAD)" != "$WORKFLOW_SHA" ]]; then
+            echo "::error::The control checkout is not the dispatched master commit."
+            exit 1
+          fi
+          if [[ "$SYNTHETIC_ONLY_CONFIRMED" != "true" ]]; then
+            echo "::error::Staging deployment requires an explicit synthetic-only confirmation."
+            exit 1
+          fi
+          if [[ ! "$SYNTHETIC_EVIDENCE_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Synthetic evidence must use the canonical sha256:<64 lowercase hex> form."
+            exit 1
+          fi
+          if [[ ! "$STAGING_IDENTITY_FINGERPRINTS_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Staging identity evidence must use the canonical sha256 form."
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ || \
+                ! "$EXPECTED_SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]; then
+            echo "::error::Expected schema revisions must be 12 lowercase hexadecimal characters."
+            exit 1
+          fi
+          if [[ ! "$RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The recovery digest must use the canonical sha256 form."
+            exit 1
+          fi
+
+          verification_result=$(python3 scripts/verify_staging_candidate.py)
+          verified_revision=$(
+            jq -er '.candidate_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              <<< "$verification_result"
+          )
+          if [[ "$verified_revision" != "$CANDIDATE_SHA" ]]; then
+            echo "::error::Verified candidate output does not match the requested candidate."
+            exit 1
+          fi
+
+          {
+            echo "verified_revision=$verified_revision"
+            echo "approval_pr_number=$APPROVAL_PR_NUMBER"
+            echo "synthetic_evidence_sha256=$SYNTHETIC_EVIDENCE_SHA256"
+            echo "staging_identity_fingerprints_sha256=$STAGING_IDENTITY_FINGERPRINTS_SHA256"
+            echo "expected_schema_before=$EXPECTED_SCHEMA_BEFORE"
+            echo "expected_schema_after=$EXPECTED_SCHEMA_AFTER"
+            echo "recovery_digest=$RECOVERY_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+  backend-quality:
+    name: Candidate backend quality
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Install protected-master backend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: "zsh"
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+      - name: Check out exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
+      - run: just up --fast
+      - run: just py_setup
+      - run: just py_lint
+      - run: just db_migrate
+      - run: just db_lint
+
+  backend-tests:
+    name: Candidate backend tests (${{ matrix.shard }})
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: application
+            apt-packages: zsh
+          - shard: infrastructure-general
+            apt-packages: zsh
+          - shard: infrastructure-controller
+            apt-packages: zsh
+          - shard: infrastructure-receipt-io
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-foundation
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-authority
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-context
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-evidence-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-runtime
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-contract
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-digest
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-output
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-duplicate
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-tamper
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-failure
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-integrity
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-data-contract-executor
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-snapshot
+            apt-packages: zsh
+          - shard: infrastructure-restore
+            apt-packages: zsh
+          - shard: integration
+            apt-packages: zsh libnss3-tools
+    steps:
+      - name: Install protected-master backend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: ${{ matrix.apt-packages }}
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+      - name: Check out exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Install SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/install_pinned_localias.sh
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
+      - run: just up --fast
+      - run: just py_setup
+      - name: Install integration Chromium headless shell
+        if: ${{ matrix.shard == 'integration' }}
+        run: uv run playwright install chromium --only-shell
+      - name: Start exact candidate SHA-verified local test routing
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/start_pinned_localias_ci.sh
+      - run: just db_migrate
+      - id: py_test
+        run: just py_test-ci-${{ matrix.shard }}
+      - name: Upload candidate backend shard test artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.TEST_RESULTS_DIRECTORY }}
+            ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  app:
+    name: Candidate Backend
+    needs: [backend-quality, backend-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every backend prerequisite to succeed
+        env:
+          BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
+            echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+            exit 1
+          fi
+
+  web:
+    name: Candidate Frontend
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Install protected-master frontend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: "zsh libnss3-tools poppler-utils ffmpeg"
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+      - name: Check out exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
+      - run: just js_setup
+      - name: Generate OpenAPI client
+        run: cd web && pnpm run openapi
+      - run: just js_lint
+      - run: just js_test
+
+  config:
+    name: Resolve reviewed public staging build configuration
+    needs: [authorize, app, web]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.ref_protected == true &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize.result == 'success' &&
+        needs.app.result == 'success' &&
+        needs.web.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging
+    outputs:
+      frontend_config_sha256: ${{ steps.resolve.outputs.frontend_config_sha256 }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out protected-master configuration controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: zsh
+
+      - name: Reverify candidate before protected configuration credentials
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          python3 scripts/verify_staging_candidate.py
+
+      - name: Resolve allowlisted public staging frontend configuration
+        id: resolve
+        env:
+          ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
+          FRONTEND_ENV_SOURCE: .env.staging.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED,
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if
+              all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and
+              .NODE_ENV == "staging" and
+              .VITE_PYTHON_URL == "https://staging-app.cosmaneura.com/" and
+              .VITE_INTAKE_CHAT_DOMAIN == "staging-chat.cosmaneura.com" and
+              (.VITE_CLERK_PUBLIC_KEY | startswith("pk_test_")) and
+              (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or
+               .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false")
+            then . else error("staging frontend build configuration is incomplete or cross-environment") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+          frontend_config_sha256="sha256:$(sha256sum "$JAVASCRIPT_BUILD_ENV_JSON" | cut -d' ' -f1)"
+          echo "frontend_config_sha256=$frontend_config_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload allowlisted public staging frontend configuration
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-frontend-config-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/staging-frontend-build.json
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 1
+
+  build:
+    name: Build exact candidate without protected credentials
+    needs: [authorize, app, web, config]
+    if: >-
+      ${{
+        needs.authorize.result == 'success' &&
+        needs.app.result == 'success' &&
+        needs.web.result == 'success' &&
+        needs.config.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      archive_sha256: ${{ steps.package.outputs.archive_sha256 }}
+      image_id: ${{ steps.package.outputs.image_id }}
+    permissions:
+      contents: read
+    steps:
+      - name: Check out protected-master build controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up protected-master build runner without shared caches
+        uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: zsh
+          enable_cache: "false"
+      - name: Install protected-master Nixpacks tooling
+        uses: ./.github/actions/install-nixpacks
+
+      - name: Check out exact candidate for image build
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download allowlisted public staging frontend configuration
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canonical-staging-frontend-config-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/candidate-build-config
+
+      - name: Verify exact candidate and public build configuration
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_FRONTEND_CONFIG_SHA256: ${{ needs.config.outputs.frontend_config_sha256 }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/candidate-build-config/staging-frontend-build.json
+        run: |
+          set -euo pipefail
+          test "$(git -C candidate rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git -C candidate status --porcelain)" = ""
+          actual_config_sha256="sha256:$(sha256sum "$JAVASCRIPT_BUILD_ENV_JSON" | cut -d' ' -f1)"
+          test "$actual_config_sha256" = "$EXPECTED_FRONTEND_CONFIG_SHA256"
+          jq -e '.NODE_ENV == "staging" and
+            .VITE_PYTHON_URL == "https://staging-app.cosmaneura.com/" and
+            .VITE_INTAKE_CHAT_DOMAIN == "staging-chat.cosmaneura.com" and
+            (.VITE_CLERK_PUBLIC_KEY | startswith("pk_test_"))' \
+            "$JAVASCRIPT_BUILD_ENV_JSON" >/dev/null
+
+      - name: Build exact candidate image without protected credentials
+        working-directory: candidate
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          CONTAINER_REGISTRY_HOST: cache.invalid
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/candidate-build-config/staging-frontend-build.json
+          JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
+          PYTHON_ENV: staging
+        run: |
+          set -euo pipefail
+          just build
+          docker image inspect "cosmaneura:$CANDIDATE_SHA" >/dev/null
+
+      - name: Package content-addressed candidate image archive
+        id: package
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/canonical-staging-image
+        run: |
+          set -euo pipefail
+          umask 077
+          image="cosmaneura:$CANDIDATE_SHA"
+          image_id=$(docker image inspect --format '{{.Id}}' "$image")
+          revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+          source=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")
+          if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ || "$revision" != "$CANDIDATE_SHA" || \
+                "$source" != "https://github.com/CosmaNeura/cosmaneura" ]]; then
+            echo "::error::Candidate image provenance labels are invalid."
+            exit 1
+          fi
+          mkdir -p "$IMAGE_ARCHIVE_DIR"
+          docker save --output "$IMAGE_ARCHIVE_DIR/candidate-image.tar" "$image"
+          archive_sha256="sha256:$(sha256sum "$IMAGE_ARCHIVE_DIR/candidate-image.tar" | cut -d' ' -f1)"
+          jq -n \
+            --arg archive_sha256 "$archive_sha256" \
+            --arg image_id "$image_id" \
+            --arg source_sha "$CANDIDATE_SHA" \
+            --arg source_repository "$source" \
+            '{archive_sha256:$archive_sha256,image_id:$image_id,source_sha:$source_sha,source_repository:$source_repository}' \
+            > "$IMAGE_ARCHIVE_DIR/metadata.json"
+          (
+            cd "$IMAGE_ARCHIVE_DIR"
+            sha256sum candidate-image.tar metadata.json > SHA256SUMS
+          )
+          echo "archive_sha256=$archive_sha256" >> "$GITHUB_OUTPUT"
+          echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
+
+      - name: Upload content-addressed candidate image archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canonical-staging-image
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish credential-free candidate archive
+    needs: [authorize, app, web, config, build]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.ref_protected == true &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize.result == 'success' &&
+        needs.app.result == 'success' &&
+        needs.web.result == 'success' &&
+        needs.config.result == 'success' &&
+        needs.build.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    outputs:
+      image_digest: ${{ steps.publish.outputs.image_digest }}
+      image_reference: ${{ steps.publish.outputs.image_reference }}
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check out protected-master deployment controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reverify candidate before protected credentials
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          python3 scripts/verify_staging_candidate.py
+
+      - name: Validate staging publication controls
+        id: staging_contract
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED || 'false' }}
+          ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
+          ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
+          ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
+          ZOOM_WATCHDOG_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          registry_host=${CONTAINER_REGISTRY_HOST#http://}
+          registry_host=${registry_host#https://}
+          registry_host=${registry_host%/}
+          if [[ "$registry_host" != "cosmaneurastagingregistry.azurecr.io" ]]; then
+            echo "::error::The staging workflow may use only the staging registry."
+            exit 1
+          fi
+          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP" "$SENTRY_STAGING_ENABLED" "$ZOOM_WATCHDOG_ENABLED"; do
+            if [[ "$flag" != "true" && "$flag" != "false" ]]; then
+              echo "::error::Staging release flags must be explicit booleans."
+              exit 1
+            fi
+          done
+          if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false."
+            exit 1
+          fi
+          if [[ "$SENTRY_STAGING_ENABLED" != "false" ]]; then
+            echo "::error::SENTRY_STAGING_ENABLED is source-locked false."
+            exit 1
+          fi
+          if [[ "$ZOOM_WATCHDOG_ENABLED" != "false" ]]; then
+            echo "::error::ZOOM_WATCHDOG_ENABLED is source-locked false."
+            exit 1
+          fi
+          if [[ "$ENABLE_PROVIDER_V7" != "true" || \
+                "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]; then
+            echo "::error::Established staging capabilities must remain enabled."
+            exit 1
+          fi
+          if [[ "$ENABLE_STAGING_PILOT_ZOOM_SKIP" != "false" ]]; then
+            echo "::error::The separate Zoom pilot path must remain disabled."
+            exit 1
+          fi
+          echo "registry_host=$registry_host" >> "$GITHUB_OUTPUT"
+
+      - name: Download content-addressed candidate image archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canonical-staging-image
+
+      - name: Verify and load candidate image archive without executing it
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+          EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/canonical-staging-image
+        run: |
+          set -euo pipefail
+          cd "$IMAGE_ARCHIVE_DIR"
+          sha256sum --check SHA256SUMS
+          metadata_archive_sha256=$(jq -er '.archive_sha256 | select(test("^sha256:[0-9a-f]{64}$"))' metadata.json)
+          metadata_image_id=$(jq -er '.image_id | select(test("^sha256:[0-9a-f]{64}$"))' metadata.json)
+          metadata_source_sha=$(jq -er '.source_sha | select(test("^[0-9a-f]{40}$"))' metadata.json)
+          metadata_source_repository=$(jq -er '.source_repository' metadata.json)
+          actual_archive_sha256="sha256:$(sha256sum candidate-image.tar | cut -d' ' -f1)"
+          if [[ "$actual_archive_sha256" != "$EXPECTED_ARCHIVE_SHA256" || \
+                "$metadata_archive_sha256" != "$EXPECTED_ARCHIVE_SHA256" || \
+                "$metadata_image_id" != "$EXPECTED_IMAGE_ID" || \
+                "$metadata_source_sha" != "$CANDIDATE_SHA" || \
+                "$metadata_source_repository" != "https://github.com/CosmaNeura/cosmaneura" ]]; then
+            echo "::error::Candidate image archive metadata is inconsistent."
+            exit 1
+          fi
+          docker load --input candidate-image.tar >/dev/null
+          image="cosmaneura:$CANDIDATE_SHA"
+          loaded_image_id=$(docker image inspect --format '{{.Id}}' "$image")
+          loaded_revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$image")
+          loaded_source=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$image")
+          if [[ "$loaded_image_id" != "$EXPECTED_IMAGE_ID" || \
+                "$loaded_revision" != "$CANDIDATE_SHA" || \
+                "$loaded_source" != "https://github.com/CosmaNeura/cosmaneura" ]]; then
+            echo "::error::Loaded candidate image does not match the reviewed archive."
+            exit 1
+          fi
+
+      - name: Reverify candidate before immutable image publication
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_staging_candidate.py
+
+      - name: Log in to staging registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ steps.staging_contract.outputs.registry_host }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+
+      - name: Publish candidate SHA tag and resolve immutable digest
+        id: publish
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          REGISTRY_HOST: ${{ steps.staging_contract.outputs.registry_host }}
+        run: |
+          set -euo pipefail
+          local_image="cosmaneura:$CANDIDATE_SHA"
+          candidate_image="$REGISTRY_HOST/cosmaneura/cosmaneura:$CANDIDATE_SHA"
+          docker image inspect "$local_image" >/dev/null
+
+          set +e
+          existing_manifest=$(docker buildx imagetools inspect "$candidate_image" 2>&1)
+          manifest_status=$?
+          set -e
+          if [[ $manifest_status -eq 0 ]]; then
+            echo "::error::The immutable candidate tag already exists; refusing to overwrite it."
+            exit 1
+          fi
+          if ! grep -Eqi 'manifest unknown|no such manifest|not found' <<< "$existing_manifest"; then
+            echo "::error::The registry could not prove that the candidate tag is absent."
+            exit 1
+          fi
+
+          docker tag "$local_image" "$candidate_image"
+          push_output=$(docker push "$candidate_image" 2>&1)
+          printf '%s\n' "$push_output"
+          image_digest=$(printf '%s\n' "$push_output" |
+            sed -nE 's/^digest: (sha256:[0-9a-f]{64}) size: [0-9]+$/\1/p' |
+            tail -n 1)
+          if [[ ! "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::The published candidate did not resolve to an immutable digest."
+            exit 1
+          fi
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
+          echo "image_reference=$REGISTRY_HOST/cosmaneura/cosmaneura@$image_digest" >> "$GITHUB_OUTPUT"
+          remote_digest="sha256:$(docker buildx imagetools inspect \
+            "$candidate_image" --raw | sha256sum | cut -d' ' -f1)"
+          if [[ "$remote_digest" != "$image_digest" ]]; then
+            echo "::error::The published registry manifest does not match the push digest."
+            exit 1
+          fi
+
+      - name: Record immutable publication result
+        if: always()
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
+          IMAGE_REFERENCE: ${{ steps.publish.outputs.image_reference }}
+          PUBLICATION_OUTCOME: ${{ steps.publish.outcome }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p staging-publication-evidence
+          jq -n \
+            --arg recorded_at "$(date -u +%FT%TZ)" \
+            --arg workflow_control_sha "$WORKFLOW_SHA" \
+            --arg source_sha "$CANDIDATE_SHA" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg image_reference "$IMAGE_REFERENCE" \
+            --arg publication_outcome "$PUBLICATION_OUTCOME" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              recorded_at: $recorded_at,
+              workflow_control_sha: $workflow_control_sha,
+              source_sha: $source_sha,
+              image: {
+                digest: (if $image_digest == "" then null else $image_digest end),
+                reference: (if $image_reference == "" then null else $image_reference end)
+              },
+              publication_outcome: $publication_outcome,
+              run_id: ($run_id | tonumber),
+              run_attempt: ($run_attempt | tonumber)
+            }' > staging-publication-evidence/publication.json
+          (
+            cd staging-publication-evidence
+            sha256sum publication.json > SHA256SUMS
+          )
+
+      - name: Upload immutable publication evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-publication-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staging-publication-evidence
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  deploy:
+    name: Deploy exact candidate to persistent staging
+    needs: [authorize, app, web, config, build, publish]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.ref_protected == true &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize.result == 'success' &&
+        needs.app.result == 'success' &&
+        needs.web.result == 'success' &&
+        needs.config.result == 'success' &&
+        needs.build.result == 'success' &&
+        needs.publish.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: staging
+    outputs:
+      configuration_evidence: ${{ steps.deploy.outputs.configuration_evidence }}
+      healthcheck_http_status: ${{ steps.smoke.outputs.http_status }}
+      recovery_digest: ${{ steps.deploy.outputs.recovery_digest }}
+      release_contract_result: ${{ steps.evidence.outputs.release_contract_result }}
+      schema_after: ${{ steps.deploy.outputs.schema_after }}
+      schema_before: ${{ steps.deploy.outputs.schema_before }}
+      smoke_result: ${{ steps.smoke.outputs.result }}
+      source_sha: ${{ steps.deploy.outputs.source_sha }}
+      workloads_after: ${{ steps.deploy.outputs.workloads_after }}
+      workloads_before: ${{ steps.deploy.outputs.workloads_before }}
+    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+    steps:
+      - name: Check out protected-master deployment controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: zsh
+
+      - name: Record reviewed staging request
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          DISPATCH_ACTOR: ${{ github.actor }}
+          DISPATCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          SYNTHETIC_EVIDENCE_SHA256: ${{ needs.authorize.outputs.synthetic_evidence_sha256 }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p staging-release-evidence
+          jq -n \
+            --arg workflow_control_sha "$WORKFLOW_SHA" \
+            --arg source_sha "$CANDIDATE_SHA" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg staging_identity_fingerprints_sha256 "$STAGING_IDENTITY_FINGERPRINTS_SHA256" \
+            --arg dispatch_actor "$DISPATCH_ACTOR" \
+            --arg dispatch_triggering_actor "$DISPATCH_TRIGGERING_ACTOR" \
+            --argjson approval_pr_number "$APPROVAL_PR_NUMBER" \
+            --arg synthetic_evidence_sha256 "$SYNTHETIC_EVIDENCE_SHA256" \
+            --arg expected_schema_before "$EXPECTED_SCHEMA_BEFORE" \
+            --arg expected_schema_after "$EXPECTED_SCHEMA_AFTER" \
+            --arg expected_recovery_digest "$EXPECTED_RECOVERY_DIGEST" \
+            '{
+              workflow_control_sha: $workflow_control_sha,
+              source_sha: $source_sha,
+              image_digest: $image_digest,
+              approval_pr_number: $approval_pr_number,
+              dispatch: {
+                actor: $dispatch_actor,
+                triggering_actor: $dispatch_triggering_actor,
+                ref: "refs/heads/master",
+                ref_protected: true
+              },
+              synthetic_only_confirmed: true,
+              synthetic_evidence_sha256: $synthetic_evidence_sha256,
+              staging_identity_fingerprints_sha256: $staging_identity_fingerprints_sha256,
+              expected_schema_before: $expected_schema_before,
+              expected_schema_after: $expected_schema_after,
+              expected_recovery_digest: $expected_recovery_digest
+            }' > staging-release-evidence/request.json
+
+      - name: Reverify candidate before Azure credentials
+        id: pre_credentials
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          python3 scripts/verify_staging_candidate.py
+
+      - name: Validate exact staging identity inputs and release controls
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED || 'false' }}
+          ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
+          ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
+          ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
+          ZOOM_WATCHDOG_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          if [[ "$AZURE_CLIENT_ID" != "45b940bf-2f4f-4b10-bcc3-4679d8855a6f" || \
+                "$AZURE_TENANT_ID" != "d51754d0-bba5-4810-820e-afac542844d6" || \
+                "$AZURE_SUBSCRIPTION_ID" != "bab2a709-1fcb-4c87-a9fc-802f7477ec13" ]]; then
+            echo "::error::The workflow is not bound to the reviewed staging Azure identity."
+            exit 1
+          fi
+          registry_host=${CONTAINER_REGISTRY_HOST#http://}
+          registry_host=${registry_host#https://}
+          registry_host=${registry_host%/}
+          if [[ "$registry_host" != "cosmaneurastagingregistry.azurecr.io" ]]; then
+            echo "::error::The workflow may use only the staging registry."
+            exit 1
+          fi
+          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP" "$SENTRY_STAGING_ENABLED" "$ZOOM_WATCHDOG_ENABLED"; do
+            if [[ "$flag" != "true" && "$flag" != "false" ]]; then
+              echo "::error::Staging release flags must be explicit booleans."
+              exit 1
+            fi
+          done
+          if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" || \
+                "$SENTRY_STAGING_ENABLED" != "false" || \
+                "$ZOOM_WATCHDOG_ENABLED" != "false" || \
+                "$ENABLE_STAGING_PILOT_ZOOM_SKIP" != "false" ]]; then
+            echo "::error::Excluded staging capabilities must remain disabled."
+            exit 1
+          fi
+          if [[ "$ENABLE_PROVIDER_V7" != "true" || \
+                "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]; then
+            echo "::error::Established staging capabilities must remain enabled."
+            exit 1
+          fi
+
+      - name: Log in to staging Azure identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify observed staging Azure identity, trust, and scope
+        id: azure_identity
+        env:
+          EXPECTED_CLIENT_ID: 45b940bf-2f4f-4b10-bcc3-4679d8855a6f
+          EXPECTED_PRINCIPAL_ID: a94600b7-c854-4121-bbcb-a0fa7baae14a
+          EXPECTED_SUBSCRIPTION_ID: bab2a709-1fcb-4c87-a9fc-802f7477ec13
+          EXPECTED_TENANT_ID: d51754d0-bba5-4810-820e-afac542844d6
+        run: |
+          set -euo pipefail
+          identity_json=$(az identity show \
+            --name cosmaneura-staging-gha-identity \
+            --resource-group cosmaneura-staging \
+            --query '{clientId:clientId,principalId:principalId,tenantId:tenantId,id:id}' \
+            --output json)
+          account_json=$(az account show \
+            --query '{subscriptionId:id,tenantId:tenantId,userName:user.name,userType:user.type}' \
+            --output json)
+          federated_json=$(az identity federated-credential list \
+            --identity-name cosmaneura-staging-gha-identity \
+            --resource-group cosmaneura-staging \
+            --query '[].{issuer:issuer,subject:subject,audiences:audiences}' \
+            --output json)
+          staging_scope="/subscriptions/$EXPECTED_SUBSCRIPTION_ID/resourceGroups/cosmaneura-staging"
+          subscriptions_json=$(az account list \
+            --refresh --all \
+            --query '[].{subscriptionId:id,tenantId:tenantId,state:state}' \
+            --output json)
+          roles_json=$(az role assignment list \
+            --assignee-object-id "$EXPECTED_PRINCIPAL_ID" \
+            --include-groups \
+            --include-inherited \
+            --all \
+            --subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --fill-principal-name false \
+            --fill-role-definition-name false \
+            --query '[].{principalId:principalId,principalType:principalType,roleDefinitionId:roleDefinitionId,scope:scope}' \
+            --output json)
+          jq -n \
+            --argjson account "$account_json" \
+            --argjson identity "$identity_json" \
+            --argjson federated_credentials "$federated_json" \
+            --argjson role_assignments "$roles_json" \
+            --argjson subscriptions "$subscriptions_json" \
+            '{$account,$identity,$federated_credentials,$role_assignments,$subscriptions}' \
+            > staging-release-evidence/azure-identity.json
+
+          printf '%s' "$identity_json" | jq -e \
+            --arg client "$EXPECTED_CLIENT_ID" --arg principal "$EXPECTED_PRINCIPAL_ID" \
+            --arg tenant "$EXPECTED_TENANT_ID" \
+            '.clientId == $client and .principalId == $principal and .tenantId == $tenant and
+             (.id | ascii_downcase | endswith("/resourcegroups/cosmaneura-staging/providers/microsoft.managedidentity/userassignedidentities/cosmaneura-staging-gha-identity"))' >/dev/null
+          printf '%s' "$account_json" | jq -e \
+            --arg client "$EXPECTED_CLIENT_ID" --arg subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --arg tenant "$EXPECTED_TENANT_ID" \
+            '.subscriptionId == $subscription and .tenantId == $tenant and
+             .userType == "servicePrincipal" and .userName == $client' >/dev/null
+          printf '%s' "$federated_json" | jq -e '
+            length == 1 and .[0].issuer == "https://token.actions.githubusercontent.com" and
+            .[0].subject == "repo:CosmaNeura/cosmaneura:environment:staging" and
+            .[0].audiences == ["api://AzureADTokenExchange"]' >/dev/null
+          printf '%s' "$subscriptions_json" | jq -e \
+            --arg subscription "$EXPECTED_SUBSCRIPTION_ID" --arg tenant "$EXPECTED_TENANT_ID" '
+            length == 1 and .[0].subscriptionId == $subscription and
+            .[0].tenantId == $tenant and .[0].state == "Enabled"' >/dev/null
+          acr_scope="$staging_scope/providers/Microsoft.ContainerRegistry/registries/cosmaneurastagingregistry"
+          environment_scope="$staging_scope/providers/Microsoft.App/managedEnvironments/cosmaneura-staging-app-environment"
+          printf '%s' "$roles_json" | jq -e \
+            --arg principal "$EXPECTED_PRINCIPAL_ID" \
+            --arg subscription "$EXPECTED_SUBSCRIPTION_ID" \
+            --arg staging_scope "$staging_scope" \
+            --arg acr_scope "$acr_scope" \
+            --arg environment_scope "$environment_scope" '
+            def normalized:
+              map({
+                principalId: (.principalId | ascii_downcase),
+                principalType,
+                roleDefinitionId: (.roleDefinitionId | ascii_downcase),
+                scope: (.scope | ascii_downcase)
+              }) | sort_by(.roleDefinitionId, .scope);
+            normalized == ([
+              {
+                principalId: ($principal | ascii_downcase),
+                principalType: "ServicePrincipal",
+                roleDefinitionId: (("/subscriptions/" + $subscription +
+                  "/providers/Microsoft.Authorization/roleDefinitions/8311e382-0749-4cb8-b61a-304f252e45ec") | ascii_downcase),
+                scope: ($acr_scope | ascii_downcase)
+              },
+              {
+                principalId: ($principal | ascii_downcase),
+                principalType: "ServicePrincipal",
+                roleDefinitionId: (("/subscriptions/" + $subscription +
+                  "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c") | ascii_downcase),
+                scope: ($environment_scope | ascii_downcase)
+              },
+              {
+                principalId: ($principal | ascii_downcase),
+                principalType: "ServicePrincipal",
+                roleDefinitionId: (("/subscriptions/" + $subscription +
+                  "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c") | ascii_downcase),
+                scope: ($staging_scope | ascii_downcase)
+              }
+            ] | sort_by(.roleDefinitionId, .scope))' >/dev/null
+
+      - name: Reverify candidate before migrations and Azure mutation
+        id: pre_mutation
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_staging_candidate.py
+
+      - name: Deploy candidate digest with protected-master controls
+        id: deploy
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+          ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
+          ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
+          ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
+          EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
+          EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}
+          PYTHON_ENV: staging
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+          ZOOM_WATCHDOG_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          bash infra-staging/deploy.sh "$CANDIDATE_SHA" "$IMAGE_DIGEST"
+
+      - name: Run bounded staging health smoke
+        id: smoke
+        if: always()
+        env:
+          HEALTHCHECK_URL: https://staging-app.cosmaneura.com/healthcheck
+        run: |
+          set -euo pipefail
+          set +e
+          http_status=$(curl \
+            --fail \
+            --max-time 30 \
+            --output /dev/null \
+            --retry 3 \
+            --retry-all-errors \
+            --show-error \
+            --silent \
+            --write-out '%{http_code}' \
+            "$HEALTHCHECK_URL")
+          curl_status=$?
+          set -e
+          if [[ ! "$http_status" =~ ^[0-9]{3}$ ]]; then
+            http_status=000
+          fi
+          smoke_result=failed
+          if [[ $curl_status -eq 0 && "$http_status" == "200" ]]; then
+            smoke_result=passed
+          fi
+          echo "healthcheck_url=$HEALTHCHECK_URL" >> "$GITHUB_OUTPUT"
+          echo "http_status=$http_status" >> "$GITHUB_OUTPUT"
+          echo "result=$smoke_result" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble non-secret staging release evidence
+        id: evidence
+        if: always()
+        env:
+          APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
+          AUTHORIZATION_RESULT: ${{ needs.authorize.result }}
+          AZURE_IDENTITY_OUTCOME: ${{ steps.azure_identity.outcome }}
+          BACKEND_TEST_RESULT: ${{ needs.app.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+          CONFIG_RESULT: ${{ needs.config.result }}
+          CONFIGURATION_EVIDENCE: ${{ steps.deploy.outputs.configuration_evidence }}
+          DEPLOYMENT_OUTCOME: ${{ steps.deploy.outcome }}
+          DISPATCH_ACTOR: ${{ github.actor }}
+          DISPATCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
+          ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
+          ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
+          EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
+          EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
+          EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256: ${{ needs.authorize.outputs.staging_identity_fingerprints_sha256 }}
+          FRONTEND_TEST_RESULT: ${{ needs.web.result }}
+          HEALTHCHECK_HTTP_STATUS: ${{ steps.smoke.outputs.http_status }}
+          HEALTHCHECK_URL: ${{ steps.smoke.outputs.healthcheck_url }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          IMAGE_REFERENCE: ${{ needs.publish.outputs.image_reference }}
+          OBSERVED_RECOVERY_DIGEST: ${{ steps.deploy.outputs.recovery_digest }}
+          OBSERVED_SCHEMA_AFTER: ${{ steps.deploy.outputs.schema_after }}
+          OBSERVED_SCHEMA_BEFORE: ${{ steps.deploy.outputs.schema_before }}
+          OBSERVED_SOURCE_SHA: ${{ steps.deploy.outputs.source_sha }}
+          PRE_CREDENTIALS_OUTCOME: ${{ steps.pre_credentials.outcome }}
+          PRE_MUTATION_OUTCOME: ${{ steps.pre_mutation.outcome }}
+          PUBLICATION_RESULT: ${{ needs.publish.result }}
+          SMOKE_RESULT: ${{ steps.smoke.outputs.result }}
+          SYNTHETIC_EVIDENCE_SHA256: ${{ needs.authorize.outputs.synthetic_evidence_sha256 }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          WORKLOADS_AFTER: ${{ steps.deploy.outputs.workloads_after }}
+          WORKLOADS_BEFORE: ${{ steps.deploy.outputs.workloads_before }}
+          ZOOM_WATCHDOG_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          umask 077
+          json_or_null() {
+            local value=$1
+            local filter=$2
+            if [[ -z "$value" ]]; then
+              printf 'null\n'
+            else
+              printf '%s' "$value" | jq -ce "$filter"
+            fi
+          }
+
+          workload_filter='if type == "array" and all(.[];
+            type == "object" and
+            (.name | type == "string") and
+            (.latestRevision | type == "string") and
+            (.latestReadyRevision | type == "string") and
+            (.readyRevisionImage | type == "string") and
+            .containerCount == 1 and
+            (.readyRevisionArgs | type == "array") and
+            (.activeRevisionsMode | type == "string") and
+            (.publicConfig | type == "object") and
+            (.secretRefs | type == "object"))
+            then sort_by(.name) else error("invalid workload evidence") end'
+          workloads_before=$(json_or_null "$WORKLOADS_BEFORE" "$workload_filter")
+          workloads_after=$(json_or_null "$WORKLOADS_AFTER" "$workload_filter")
+          configuration_evidence=$(json_or_null "$CONFIGURATION_EVIDENCE" \
+            'if type == "object" then . else error("invalid configuration evidence") end')
+          configuration_blockers=-1
+          observed_identity_fingerprints_sha256=""
+          observed_sentry_staging_enabled=""
+          observed_zoom_watchdog_enabled=""
+          if [[ "$configuration_evidence" != "null" ]]; then
+            if ! configuration_blockers=$(printf '%s' "$configuration_evidence" |
+              jq -er '.deployment_blockers | arrays | length'); then
+              configuration_blockers=-1
+            fi
+            observed_identity_fingerprints_sha256=$(printf '%s' "$configuration_evidence" |
+              jq -er '.identity_fingerprint_set_sha256 // empty' || true)
+            observed_sentry_staging_enabled=$(printf '%s' "$configuration_evidence" |
+              jq -er '.flags.SENTRY_STAGING_ENABLED // empty' || true)
+            observed_zoom_watchdog_enabled=$(printf '%s' "$configuration_evidence" |
+              jq -er '.flags.ZOOM_WATCHDOG_ENABLED // empty' || true)
+          fi
+          azure_identity_evidence=null
+          if [[ -f staging-release-evidence/azure-identity.json ]]; then
+            azure_identity_evidence=$(jq -ce '.' staging-release-evidence/azure-identity.json)
+          fi
+
+          release_contract_result=failed
+          if [[ "$AUTHORIZATION_RESULT" == "success" && \
+                "$BACKEND_TEST_RESULT" == "success" && \
+                "$FRONTEND_TEST_RESULT" == "success" && \
+                "$CONFIG_RESULT" == "success" && \
+                "$BUILD_RESULT" == "success" && \
+                "$PUBLICATION_RESULT" == "success" && \
+                "$PRE_CREDENTIALS_OUTCOME" == "success" && \
+                "$AZURE_IDENTITY_OUTCOME" == "success" && \
+                "$PRE_MUTATION_OUTCOME" == "success" && \
+                "$DEPLOYMENT_OUTCOME" == "success" && \
+                "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ && \
+                "$SMOKE_RESULT" == "passed" && \
+                "$HEALTHCHECK_HTTP_STATUS" == "200" && \
+                "$OBSERVED_SOURCE_SHA" == "$CANDIDATE_SHA" && \
+                "$OBSERVED_SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_BEFORE" && \
+                "$OBSERVED_SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER" && \
+                "$OBSERVED_RECOVERY_DIGEST" == "$EXPECTED_RECOVERY_DIGEST" && \
+                "$observed_identity_fingerprints_sha256" == "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" && \
+                "$observed_sentry_staging_enabled" == "false" && \
+                "$observed_zoom_watchdog_enabled" == "false" && \
+                "$workloads_before" != "null" && \
+                "$workloads_after" != "null" && \
+                "$configuration_blockers" == "0" ]]; then
+            release_contract_result=passed
+          fi
+
+          jq -n \
+            --arg recorded_at "$(date -u +%FT%TZ)" \
+            --arg workflow_control_sha "$WORKFLOW_SHA" \
+            --arg source_sha "$CANDIDATE_SHA" \
+            --arg observed_source_sha "$OBSERVED_SOURCE_SHA" \
+            --argjson approval_pr_number "$APPROVAL_PR_NUMBER" \
+            --arg synthetic_evidence_sha256 "$SYNTHETIC_EVIDENCE_SHA256" \
+            --arg expected_staging_identity_fingerprints_sha256 "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" \
+            --arg observed_staging_identity_fingerprints_sha256 "$observed_identity_fingerprints_sha256" \
+            --arg backend_test_result "$BACKEND_TEST_RESULT" \
+            --arg frontend_test_result "$FRONTEND_TEST_RESULT" \
+            --arg config_result "$CONFIG_RESULT" \
+            --arg build_result "$BUILD_RESULT" \
+            --arg dispatch_actor "$DISPATCH_ACTOR" \
+            --arg dispatch_triggering_actor "$DISPATCH_TRIGGERING_ACTOR" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg image_reference "$IMAGE_REFERENCE" \
+            --arg schema_before "$OBSERVED_SCHEMA_BEFORE" \
+            --arg schema_after "$OBSERVED_SCHEMA_AFTER" \
+            --arg recovery_digest "$OBSERVED_RECOVERY_DIGEST" \
+            --argjson workloads_before "$workloads_before" \
+            --argjson workloads_after "$workloads_after" \
+            --argjson configuration_evidence "$configuration_evidence" \
+            --argjson azure_identity_evidence "$azure_identity_evidence" \
+            --arg enable_provider_v7 "$ENABLE_PROVIDER_V7" \
+            --arg enable_sovereign_record_grants "$ENABLE_SOVEREIGN_RECORD_GRANTS" \
+            --arg enable_staging_pilot_zoom_skip "$ENABLE_STAGING_PILOT_ZOOM_SKIP" \
+            --arg sentry_staging_enabled "$SENTRY_STAGING_ENABLED" \
+            --arg zoom_watchdog_enabled "$ZOOM_WATCHDOG_ENABLED" \
+            --arg healthcheck_url "$HEALTHCHECK_URL" \
+            --arg healthcheck_http_status "$HEALTHCHECK_HTTP_STATUS" \
+            --arg smoke_result "$SMOKE_RESULT" \
+            --arg authorization_result "$AUTHORIZATION_RESULT" \
+            --arg publication_result "$PUBLICATION_RESULT" \
+            --arg pre_credentials_outcome "$PRE_CREDENTIALS_OUTCOME" \
+            --arg azure_identity_outcome "$AZURE_IDENTITY_OUTCOME" \
+            --arg pre_mutation_outcome "$PRE_MUTATION_OUTCOME" \
+            --arg deployment_outcome "$DEPLOYMENT_OUTCOME" \
+            --arg release_contract_result "$release_contract_result" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              recorded_at: $recorded_at,
+              workflow_control_sha: $workflow_control_sha,
+              source_sha: $source_sha,
+              observed_source_sha: (if $observed_source_sha == "" then null else $observed_source_sha end),
+              approval_pr_number: $approval_pr_number,
+              synthetic_only_confirmed: true,
+              synthetic_evidence_sha256: $synthetic_evidence_sha256,
+              staging_identity_fingerprints: {
+                expected_sha256: $expected_staging_identity_fingerprints_sha256,
+                observed_sha256: (if $observed_staging_identity_fingerprints_sha256 == "" then null else $observed_staging_identity_fingerprints_sha256 end)
+              },
+              candidate_tests: {
+                backend: $backend_test_result,
+                frontend: $frontend_test_result,
+                public_configuration: $config_result,
+                credentialless_image_build: $build_result
+              },
+              provenance_checks: {
+                authorization: $authorization_result,
+                pre_credentials: $pre_credentials_outcome,
+                publication: $publication_result,
+                azure_identity: $azure_identity_outcome,
+                pre_migration_and_azure_mutation: $pre_mutation_outcome
+              },
+              image: {
+                reference: (if $image_reference == "" then null else $image_reference end),
+                digest: (if $image_digest == "" then null else $image_digest end)
+              },
+              schema: {
+                before: (if $schema_before == "" then null else $schema_before end),
+                after: (if $schema_after == "" then null else $schema_after end)
+              },
+              workloads: {before: $workloads_before, after: $workloads_after},
+              recovery_digest: (if $recovery_digest == "" then null else $recovery_digest end),
+              observed_configuration: $configuration_evidence,
+              flags: {
+                ENABLE_PROVIDER_V7: $enable_provider_v7,
+                ENABLE_SOVEREIGN_RECORD_GRANTS: $enable_sovereign_record_grants,
+                ENABLE_STAGING_PILOT_ZOOM_SKIP: $enable_staging_pilot_zoom_skip,
+                SENTRY_STAGING_ENABLED: $sentry_staging_enabled,
+                DURABLE_WEBHOOK_INBOX_ENABLED: "false",
+                SCRIBE_WORKFLOW_ENABLED: "false",
+                SESSION_PREP_SYNTHETIC_ENABLED: "false",
+                ZOOM_WATCHDOG_ENABLED: $zoom_watchdog_enabled
+              },
+              staging_identity: $azure_identity_evidence,
+              staging_urls: {
+                application: "https://staging-app.cosmaneura.com/",
+                intake_chat_domain: "staging-chat.cosmaneura.com",
+                healthcheck: $healthcheck_url
+              },
+              smoke: {
+                healthcheck: {
+                  result: $smoke_result,
+                  http_status: (if $healthcheck_http_status == "" then null else ($healthcheck_http_status | tonumber) end)
+                }
+              },
+              deployment_outcome: $deployment_outcome,
+              release_contract_result: $release_contract_result,
+              github: {
+                repository: $repository,
+                run_id: ($run_id | tonumber),
+                run_attempt: ($run_attempt | tonumber),
+                actor: $dispatch_actor,
+                triggering_actor: $dispatch_triggering_actor,
+                ref: "refs/heads/master",
+                ref_protected: true
+              }
+            }' > staging-release-evidence/release.json
+          echo "release_contract_result=$release_contract_result" >> "$GITHUB_OUTPUT"
+          echo "path=staging-release-evidence/release.json" >> "$GITHUB_OUTPUT"
+
+      - name: Require staging health smoke to pass
+        if: always()
+        env:
+          DEPLOYMENT_OUTCOME: ${{ steps.deploy.outcome }}
+          HEALTHCHECK_HTTP_STATUS: ${{ steps.smoke.outputs.http_status }}
+          RELEASE_CONTRACT_RESULT: ${{ steps.evidence.outputs.release_contract_result }}
+          SMOKE_RESULT: ${{ steps.smoke.outputs.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOYMENT_OUTCOME" != "success" || \
+                "$SMOKE_RESULT" != "passed" || \
+                "$HEALTHCHECK_HTTP_STATUS" != "200" || \
+                "$RELEASE_CONTRACT_RESULT" != "passed" ]]; then
+            echo "::error::The canonical staging release contract did not pass."
+            exit 1
+          fi
+
+      - name: Record workflow result for the evidence bundle
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p staging-release-evidence
+          jq -n \
+            --arg recorded_at "$(date -u +%FT%TZ)" \
+            --arg job_status "$JOB_STATUS" \
+            --arg workflow_control_sha "$WORKFLOW_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              recorded_at: $recorded_at,
+              job_status: $job_status,
+              workflow_control_sha: $workflow_control_sha,
+              run_id: ($run_id | tonumber),
+              run_attempt: ($run_attempt | tonumber)
+            }' > staging-release-evidence/workflow-result.json
+          evidence_files=(request.json workflow-result.json)
+          if [[ -f staging-release-evidence/release.json ]]; then
+            evidence_files+=(release.json)
+          fi
+          if [[ -f staging-release-evidence/azure-identity.json ]]; then
+            evidence_files+=(azure-identity.json)
+          fi
+          (
+            cd staging-release-evidence
+            sha256sum "${evidence_files[@]}" > SHA256SUMS
+          )
+
+      - name: Upload non-secret staging release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-release-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staging-release-evidence
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
+
+  attempt_evidence:
+    name: Record complete staging workflow attempt
+    needs: [authorize, app, web, config, build, publish, deploy]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Assemble credentialless workflow-attempt evidence
+        env:
+          APPROVAL_PR_NUMBER_INPUT: ${{ inputs.approval_pr_number }}
+          AUTHORIZATION_RESULT: ${{ needs.authorize.result }}
+          BACKEND_TEST_RESULT: ${{ needs.app.result }}
+          BUILD_ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+          BUILD_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CANDIDATE_SHA_INPUT: ${{ inputs.candidate_sha }}
+          CONFIG_RESULT: ${{ needs.config.result }}
+          DEPLOYMENT_RESULT: ${{ needs.deploy.result }}
+          DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deploy.outputs.release_contract_result }}
+          DEPLOYMENT_SMOKE_RESULT: ${{ needs.deploy.outputs.smoke_result }}
+          EXPECTED_SCHEMA_AFTER_INPUT: ${{ inputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE_INPUT: ${{ inputs.expected_schema_before }}
+          FRONTEND_CONFIG_SHA256: ${{ needs.config.outputs.frontend_config_sha256 }}
+          FRONTEND_TEST_RESULT: ${{ needs.web.result }}
+          HEALTHCHECK_HTTP_STATUS: ${{ needs.deploy.outputs.healthcheck_http_status }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          IMAGE_REFERENCE: ${{ needs.publish.outputs.image_reference }}
+          OBSERVED_CONFIGURATION: ${{ needs.deploy.outputs.configuration_evidence }}
+          OBSERVED_RECOVERY_DIGEST: ${{ needs.deploy.outputs.recovery_digest }}
+          OBSERVED_SCHEMA_AFTER: ${{ needs.deploy.outputs.schema_after }}
+          OBSERVED_SCHEMA_BEFORE: ${{ needs.deploy.outputs.schema_before }}
+          OBSERVED_SOURCE_SHA: ${{ needs.deploy.outputs.source_sha }}
+          OBSERVED_WORKLOADS_AFTER: ${{ needs.deploy.outputs.workloads_after }}
+          OBSERVED_WORKLOADS_BEFORE: ${{ needs.deploy.outputs.workloads_before }}
+          PUBLICATION_RESULT: ${{ needs.publish.result }}
+          RECOVERY_DIGEST_INPUT: ${{ inputs.recovery_digest }}
+          STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT: ${{ inputs.staging_identity_fingerprints_sha256 }}
+          SYNTHETIC_EVIDENCE_SHA256_INPUT: ${{ inputs.synthetic_evidence_sha256 }}
+          SYNTHETIC_ONLY_CONFIRMED_INPUT: ${{ inputs.synthetic_only_confirmed }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p staging-attempt-evidence
+          jq -n \
+            --arg recorded_at "$(date -u +%FT%TZ)" \
+            --arg workflow_control_sha "$WORKFLOW_SHA" \
+            --arg candidate_sha_input "$CANDIDATE_SHA_INPUT" \
+            --arg approval_pr_number_input "$APPROVAL_PR_NUMBER_INPUT" \
+            --arg synthetic_only_confirmed_input "$SYNTHETIC_ONLY_CONFIRMED_INPUT" \
+            --arg synthetic_evidence_sha256_input "$SYNTHETIC_EVIDENCE_SHA256_INPUT" \
+            --arg staging_identity_fingerprints_sha256_input "$STAGING_IDENTITY_FINGERPRINTS_SHA256_INPUT" \
+            --arg recovery_digest_input "$RECOVERY_DIGEST_INPUT" \
+            --arg expected_schema_before_input "$EXPECTED_SCHEMA_BEFORE_INPUT" \
+            --arg expected_schema_after_input "$EXPECTED_SCHEMA_AFTER_INPUT" \
+            --arg authorization "$AUTHORIZATION_RESULT" \
+            --arg backend "$BACKEND_TEST_RESULT" \
+            --arg frontend "$FRONTEND_TEST_RESULT" \
+            --arg frontend_config_sha256 "$FRONTEND_CONFIG_SHA256" \
+            --arg configuration "$CONFIG_RESULT" \
+            --arg build "$BUILD_RESULT" \
+            --arg build_archive_sha256 "$BUILD_ARCHIVE_SHA256" \
+            --arg build_image_id "$BUILD_IMAGE_ID" \
+            --arg publication "$PUBLICATION_RESULT" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg image_reference "$IMAGE_REFERENCE" \
+            --arg deployment "$DEPLOYMENT_RESULT" \
+            --arg deployment_contract_result "$DEPLOYMENT_CONTRACT_RESULT" \
+            --arg deployment_smoke_result "$DEPLOYMENT_SMOKE_RESULT" \
+            --arg healthcheck_http_status "$HEALTHCHECK_HTTP_STATUS" \
+            --arg observed_source_sha "$OBSERVED_SOURCE_SHA" \
+            --arg observed_schema_before "$OBSERVED_SCHEMA_BEFORE" \
+            --arg observed_schema_after "$OBSERVED_SCHEMA_AFTER" \
+            --arg observed_recovery_digest "$OBSERVED_RECOVERY_DIGEST" \
+            --arg observed_configuration "$OBSERVED_CONFIGURATION" \
+            --arg observed_workloads_before "$OBSERVED_WORKLOADS_BEFORE" \
+            --arg observed_workloads_after "$OBSERVED_WORKLOADS_AFTER" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$GITHUB_REF" \
+            --arg ref_protected "$GITHUB_REF_PROTECTED" \
+            --arg actor "$GITHUB_ACTOR" \
+            --arg triggering_actor "$GITHUB_TRIGGERING_ACTOR" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            '{
+              recorded_at: $recorded_at,
+              workflow_control_sha: $workflow_control_sha,
+              requested: {
+                candidate_sha: $candidate_sha_input,
+                approval_pr_number: $approval_pr_number_input,
+                synthetic_only_confirmed: ($synthetic_only_confirmed_input == "true"),
+                synthetic_evidence_sha256: $synthetic_evidence_sha256_input,
+                staging_identity_fingerprints_sha256: $staging_identity_fingerprints_sha256_input,
+                recovery_digest: $recovery_digest_input,
+                expected_schema_before: $expected_schema_before_input,
+                expected_schema_after: $expected_schema_after_input
+              },
+              jobs: {
+                authorization: $authorization,
+                backend: $backend,
+                frontend: $frontend,
+                public_configuration: $configuration,
+                credentialless_image_build: $build,
+                publication: $publication,
+                deployment: $deployment
+              },
+              available_evidence: {
+                frontend_config_sha256: (if $frontend_config_sha256 == "" then null else $frontend_config_sha256 end),
+                build_archive_sha256: (if $build_archive_sha256 == "" then null else $build_archive_sha256 end),
+                build_image_id: (if $build_image_id == "" then null else $build_image_id end),
+                image_digest: (if $image_digest == "" then null else $image_digest end),
+                image_reference: (if $image_reference == "" then null else $image_reference end),
+                observed_source_sha: (if $observed_source_sha == "" then null else $observed_source_sha end),
+                schema_before: (if $observed_schema_before == "" then null else $observed_schema_before end),
+                schema_after: (if $observed_schema_after == "" then null else $observed_schema_after end),
+                recovery_digest: (if $observed_recovery_digest == "" then null else $observed_recovery_digest end),
+                configuration_json: (if $observed_configuration == "" then null else $observed_configuration end),
+                workloads_before_json: (if $observed_workloads_before == "" then null else $observed_workloads_before end),
+                workloads_after_json: (if $observed_workloads_after == "" then null else $observed_workloads_after end),
+                smoke_result: (if $deployment_smoke_result == "" then null else $deployment_smoke_result end),
+                healthcheck_http_status: (if $healthcheck_http_status == "" then null else $healthcheck_http_status end),
+                release_contract_result: (if $deployment_contract_result == "" then null else $deployment_contract_result end)
+              },
+              github: {
+                repository: $repository,
+                ref: $ref,
+                ref_protected: ($ref_protected == "true"),
+                actor: $actor,
+                triggering_actor: $triggering_actor,
+                run_id: ($run_id | tonumber),
+                run_attempt: ($run_attempt | tonumber)
+              }
+            }' > staging-attempt-evidence/attempt.json
+          (
+            cd staging-attempt-evidence
+            sha256sum attempt.json > SHA256SUMS
+          )
+
+      - name: Require a complete successful staging attempt
+        env:
+          AUTHORIZATION_RESULT: ${{ needs.authorize.result }}
+          BACKEND_TEST_RESULT: ${{ needs.app.result }}
+          BUILD_ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+          BUILD_IMAGE_ID: ${{ needs.build.outputs.image_id }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          CANDIDATE_SHA_INPUT: ${{ inputs.candidate_sha }}
+          CONFIG_RESULT: ${{ needs.config.result }}
+          DEPLOYMENT_CONTRACT_RESULT: ${{ needs.deploy.outputs.release_contract_result }}
+          DEPLOYMENT_RESULT: ${{ needs.deploy.result }}
+          EXPECTED_SCHEMA_AFTER_INPUT: ${{ inputs.expected_schema_after }}
+          EXPECTED_SCHEMA_BEFORE_INPUT: ${{ inputs.expected_schema_before }}
+          FRONTEND_CONFIG_SHA256: ${{ needs.config.outputs.frontend_config_sha256 }}
+          FRONTEND_TEST_RESULT: ${{ needs.web.result }}
+          HEALTHCHECK_HTTP_STATUS: ${{ needs.deploy.outputs.healthcheck_http_status }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.image_digest }}
+          IMAGE_REFERENCE: ${{ needs.publish.outputs.image_reference }}
+          OBSERVED_CONFIGURATION: ${{ needs.deploy.outputs.configuration_evidence }}
+          PUBLICATION_RESULT: ${{ needs.publish.result }}
+          RECOVERY_DIGEST: ${{ needs.deploy.outputs.recovery_digest }}
+          RECOVERY_DIGEST_INPUT: ${{ inputs.recovery_digest }}
+          SCHEMA_AFTER: ${{ needs.deploy.outputs.schema_after }}
+          SCHEMA_BEFORE: ${{ needs.deploy.outputs.schema_before }}
+          SMOKE_RESULT: ${{ needs.deploy.outputs.smoke_result }}
+          SOURCE_SHA: ${{ needs.deploy.outputs.source_sha }}
+          WORKLOADS_AFTER: ${{ needs.deploy.outputs.workloads_after }}
+          WORKLOADS_BEFORE: ${{ needs.deploy.outputs.workloads_before }}
+        run: |
+          set -euo pipefail
+          for result in \
+            "$AUTHORIZATION_RESULT" "$BACKEND_TEST_RESULT" "$FRONTEND_TEST_RESULT" \
+            "$CONFIG_RESULT" "$BUILD_RESULT" "$PUBLICATION_RESULT" "$DEPLOYMENT_RESULT"; do
+            [[ "$result" == "success" ]] || exit 1
+          done
+          [[ "$BUILD_ARCHIVE_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$BUILD_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$FRONTEND_CONFIG_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$IMAGE_REFERENCE" == "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@$IMAGE_DIGEST" ]]
+          [[ "$RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$RECOVERY_DIGEST" == "$RECOVERY_DIGEST_INPUT" ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" == "$CANDIDATE_SHA_INPUT" ]]
+          [[ "$SCHEMA_BEFORE" =~ ^[0-9a-f]{12}$ ]]
+          [[ "$SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_BEFORE_INPUT" ]]
+          [[ "$SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]
+          [[ "$SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER_INPUT" ]]
+          jq -e 'type == "object" and
+            .flags.SENTRY_STAGING_ENABLED == "false" and
+            .flags.ZOOM_WATCHDOG_ENABLED == "false"' \
+            <<< "$OBSERVED_CONFIGURATION" >/dev/null
+          jq -e 'type == "array" and length == 3' <<< "$WORKLOADS_BEFORE" >/dev/null
+          jq -e 'type == "array" and length == 3 and
+            all(.[];
+              .publicConfig.SENTRY_STAGING_ENABLED == "false" and
+              .publicConfig.ZOOM_WATCHDOG_ENABLED == "false")' \
+            <<< "$WORKLOADS_AFTER" >/dev/null
+          [[ "$HEALTHCHECK_HTTP_STATUS" == "200" ]]
+          [[ "$SMOKE_RESULT" == "passed" ]]
+          [[ "$DEPLOYMENT_CONTRACT_RESULT" == "passed" ]]
+
+      - name: Upload complete staging workflow-attempt evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: canonical-staging-attempt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: staging-attempt-evidence
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 90
