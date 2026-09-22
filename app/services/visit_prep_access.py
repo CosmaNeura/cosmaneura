@@ -21,6 +21,7 @@ VisitPrepAccessDenialReason = Literal[
     "pilot_grant_revoked",
     "practice_membership_required",
     "practice_membership_revoked",
+    "practice_membership_inactive",
     "practice_not_found",
     "practice_access_not_authorized",
     "baa_not_in_force",
