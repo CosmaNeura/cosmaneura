@@ -3728,28 +3728,6 @@
         ],
         "title": "JoinCodeBody"
       },
-      "JoinMismatch": {
-        "properties": {
-          "signed_in_domain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Signed In Domain"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "signed_in_domain"
-        ],
-        "title": "JoinMismatch",
-        "description": "A valid code whose practice requires a different email domain.\n\nCarries no practice identity on purpose. A legal name and email domain\nidentify a covered entity, and everyone who reaches this branch holds a\ncode for a practice they are provably not workforce of. `signed_in_domain`\nis the caller's own address, so it discloses nothing they did not supply."
-      },
       "JoinPracticeBody": {
         "properties": {
           "join_code": {
@@ -4786,14 +4764,9 @@
             ]
           },
           "mismatch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/JoinMismatch"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean",
+            "title": "Mismatch",
+            "default": false
           }
         },
         "additionalProperties": false,

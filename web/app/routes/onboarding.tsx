@@ -58,7 +58,6 @@ import {
 } from "~/lib/example-note-upload"
 import {
   type BaaDocument,
-  type JoinMismatch,
   type OrganizationAccessOpportunity,
   type PracticeStatus,
   acceptPracticeBaa,
@@ -378,10 +377,10 @@ function PracticeFlow({
     if (practice?.role === "workforce") return "workforce"
     return "undecided"
   })
-  const [mismatch, setMismatch] = useState<JoinMismatch | null>(null)
+  const [mismatch, setMismatch] = useState(false)
 
-  function goSolo(reason?: JoinMismatch | null) {
-    if (reason) setMismatch(reason)
+  function goSolo(wrongDomain = false) {
+    setMismatch(wrongDomain)
     setPath("owner")
   }
 
@@ -389,7 +388,7 @@ function PracticeFlow({
     return (
       <ChoosePath
         onChoose={setPath}
-        onSolo={() => goSolo(null)}
+        onSolo={() => goSolo()}
         channel={channel}
         email={email}
       />
@@ -401,7 +400,7 @@ function PracticeFlow({
         practice={practice}
         onPractice={onPractice}
         onBack={() => {
-          setMismatch(null)
+          setMismatch(false)
           setPath("undecided")
         }}
         channel={channel}
@@ -547,7 +546,7 @@ function OwnerFlow({
   onPractice: (practice: PracticeStatus) => void
   onBack: () => void
   channel: Channel
-  mismatch: JoinMismatch | null
+  mismatch: boolean
   email: string | null
 }) {
   if (!practice) {
@@ -580,7 +579,7 @@ export function PracticeForm({
   onPractice: (practice: PracticeStatus) => void
   onBack: () => void
   channel: Channel
-  mismatch: JoinMismatch | null
+  mismatch: boolean
   email: string | null
 }) {
   const mcdOk = channel === "mcd" && isMcdEmail(email)
@@ -598,6 +597,9 @@ export function PracticeForm({
   const [busy, setBusy] = useState(false)
   const controllingDomain = mcdOk ? MCD_EMAIL_DOMAIN : extractEmailDomain(email)
   const publicEmailDomain = isPublicEmailDomain(controllingDomain)
+  // Not `controllingDomain`, which substitutes the MCD domain: the mismatch
+  // banner has to report the inbox the caller actually signed in with.
+  const signedInDomain = extractEmailDomain(email)
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!isSolo && !domainConfirmed) {
@@ -633,11 +635,8 @@ export function PracticeForm({
           <p className="font-medium">That code did not accept this inbox.</p>
           <p className="mt-1 opacity-80">
             Joining requires the work address that practice recognizes
-            {mismatch.signed_in_domain
-              ? ` — you’re on @${mismatch.signed_in_domain}`
-              : ""}
-            . Sign in with your work email, or name your own covered entity
-            below.
+            {signedInDomain ? ` — you’re on @${signedInDomain}` : ""}. Sign in
+            with your work email, or name your own covered entity below.
           </p>
         </div>
       ) : channel === "mcd" && !mcdOk ? (
@@ -940,7 +939,7 @@ function WorkforceFlow({
 }: {
   onPractice: (practice: PracticeStatus) => void
   onBack: () => void
-  onSolo: (reason: JoinMismatch) => void
+  onSolo: () => void
   channel: Channel
 }) {
   const [code, setCode] = useState("")
@@ -958,7 +957,7 @@ function WorkforceFlow({
     try {
       const res = await lookupPractice(code)
       if (res.mismatch) {
-        onSolo(res.mismatch)
+        onSolo()
         return
       }
       if (!res.practice) {

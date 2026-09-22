@@ -125,7 +125,7 @@ def test_verified_primary_email_and_code_open_gate_without_attestation(
         json={"join_code": practice.join_code},
     )
     assert legacy_lookup.status_code == status.HTTP_200_OK, legacy_lookup.text
-    assert legacy_lookup.json() == {"practice": None, "mismatch": None}
+    assert legacy_lookup.json() == {"practice": None, "mismatch": False}
     legacy_join = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
         json={
@@ -324,7 +324,7 @@ def test_unprovisioned_managed_identity_gets_pending_and_cannot_self_enroll(
         json={"join_code": "ANYCODE1"},
     )
     assert lookup.status_code == status.HTTP_200_OK
-    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert lookup.json() == {"practice": None, "mismatch": False}
 
     # The managed-path guard runs before the legacy acknowledgement validator;
     # managed users are never invited into that personal/workforce clickwrap.
@@ -571,7 +571,7 @@ def test_rostered_identity_cannot_escape_into_legacy_create_or_join(
         json={"join_code": standalone.join_code},
     )
     assert lookup.status_code == status.HTTP_200_OK
-    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert lookup.json() == {"practice": None, "mismatch": False}
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),

@@ -178,7 +178,7 @@ describe("PracticeForm onboarding guardrails", () => {
         onPractice={vi.fn()}
         onBack={vi.fn()}
         channel="direct"
-        mismatch={null}
+        mismatch={false}
         email="doctor@clinic.example"
       />,
     )
@@ -212,7 +212,7 @@ describe("PracticeForm onboarding guardrails", () => {
         onPractice={vi.fn()}
         onBack={vi.fn()}
         channel="direct"
-        mismatch={null}
+        mismatch={false}
         email="doctor@gmail.com"
       />,
     )
@@ -234,7 +234,7 @@ describe("PracticeForm onboarding guardrails", () => {
         onPractice={onPractice}
         onBack={vi.fn()}
         channel="direct"
-        mismatch={null}
+        mismatch={false}
         email="doctor@clinic.example"
       />,
     )

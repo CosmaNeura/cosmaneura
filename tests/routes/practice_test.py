@@ -583,7 +583,7 @@ def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
         json={"join_code": practice.join_code},
     )
     assert lookup.status_code == status.HTTP_200_OK
-    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert lookup.json() == {"practice": None, "mismatch": False}
 
     join = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -712,7 +712,7 @@ def test_baa_acceptance_database_rejects_update_and_delete(
 
 
 def test_join_requires_matching_email_domain(bare_authenticated_client: TestClient):
-    doctor = _authed_doctor()
+    _authed_doctor()
     Practice(
         legal_name="MyCatholicDoctor Nashua",
         join_code="MCDNASHU",
@@ -731,8 +731,8 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
     assert lookup.status_code == status.HTTP_200_OK, lookup.text
     body = lookup.json()
     assert body["practice"] is None
-    # The caller learns that their own inbox is the problem, and nothing else.
-    assert body["mismatch"] == {"signed_in_domain": extract_email_domain(doctor.email)}
+    # A bare flag. The client derives the signed-in domain from its own session.
+    assert body["mismatch"] is True
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -758,7 +758,7 @@ def test_wrong_domain_lookup_and_join_disclose_no_practice_identity(
     """
 
     _authed_doctor()
-    Practice(
+    practice = Practice(
         legal_name="MyCatholicDoctor Nashua",
         join_code="MCDNASHU",
         email_domain="mycatholicdoctor.com",
@@ -784,9 +784,11 @@ def test_wrong_domain_lookup_and_join_disclose_no_practice_identity(
         ),
     ]
 
+    # Bound to the record, not to repeated literals: renaming the fixture must
+    # not leave these assertions passing against a name nobody serves.
     for response in responses:
-        assert "MyCatholicDoctor" not in response.text, response.text
-        assert "mycatholicdoctor.com" not in response.text, response.text
+        assert practice.legal_name not in response.text, response.text
+        assert practice.email_domain not in response.text, response.text
 
 
 def test_unknown_and_wrong_domain_join_codes_are_indistinguishable(
@@ -845,7 +847,7 @@ def test_solo_practice_code_is_never_disclosed_or_accepted(
         json={"join_code": practice.join_code},
     )
     assert lookup.status_code == status.HTTP_200_OK
-    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert lookup.json() == {"practice": None, "mismatch": False}
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -881,7 +883,7 @@ def test_legacy_public_domain_group_code_is_not_usable(
         json={"join_code": practice.join_code},
     )
     assert lookup.status_code == status.HTTP_200_OK
-    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert lookup.json() == {"practice": None, "mismatch": False}
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
