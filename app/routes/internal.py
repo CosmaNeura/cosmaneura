@@ -29,6 +29,7 @@ import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.stripe_billing as stripe_billing
+import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
 import app.services.zoom_capture_authorization as zoom_capture_authorization
 import app.services.zoom_oauth_state as zoom_oauth_state
@@ -765,6 +766,13 @@ def _customization_data(
     )
 
 
+class VisitPrepSettingsData(BaseModel, extra="forbid"):
+    eligible: bool
+    can_manage: bool
+    can_send_email: bool
+    can_send_sms: bool
+
+
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
@@ -785,6 +793,7 @@ class SettingsData(BaseModel, extra="forbid"):
     note_customizations: list[NoteTypeCustomizationData]
     has_natmed_subscription: bool
     terminology: Terminology
+    visit_prep: VisitPrepSettingsData
 
 
 def _platform_admin_capability_active(request: Request) -> bool:
@@ -818,6 +827,10 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    visit_prep_decision = visit_prep_access.resolve_visit_prep_access(
+        doctor,
+        view_as_active=getattr(request.state, "view_as", None) is not None,
+    )
 
     zoom_integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
@@ -876,6 +889,12 @@ def settings_data(request: Request) -> SettingsData:
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
         terminology=doctor.terminology,
+        visit_prep=VisitPrepSettingsData(
+            eligible=visit_prep_decision.eligible,
+            can_manage=visit_prep_decision.can_manage,
+            can_send_email=visit_prep_decision.can_send_email,
+            can_send_sms=visit_prep_decision.can_send_sms,
+        ),
     )
 
 

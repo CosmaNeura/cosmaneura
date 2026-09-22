@@ -5164,6 +5164,9 @@
           },
           "terminology": {
             "$ref": "#/components/schemas/Terminology"
+          },
+          "visit_prep": {
+            "$ref": "#/components/schemas/VisitPrepSettingsData"
           }
         },
         "additionalProperties": false,
@@ -5181,7 +5184,8 @@
           "is_admin",
           "note_customizations",
           "has_natmed_subscription",
-          "terminology"
+          "terminology",
+          "visit_prep"
         ],
         "title": "SettingsData"
       },
@@ -5790,6 +5794,35 @@
           "date_of_birth"
         ],
         "title": "VisitAudioUploadRequest"
+      },
+      "VisitPrepSettingsData": {
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "can_manage": {
+            "type": "boolean",
+            "title": "Can Manage"
+          },
+          "can_send_email": {
+            "type": "boolean",
+            "title": "Can Send Email"
+          },
+          "can_send_sms": {
+            "type": "boolean",
+            "title": "Can Send Sms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "eligible",
+          "can_manage",
+          "can_send_email",
+          "can_send_sms"
+        ],
+        "title": "VisitPrepSettingsData"
       },
       "ZoomAuthUrlResponse": {
         "properties": {
