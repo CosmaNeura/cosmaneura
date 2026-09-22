@@ -1,7 +1,7 @@
 """add_visit_prep_question_sets
 
 Revision ID: 271e4439bff6
-Revises: 89c31f0ae275
+Revises: 9a2399212488
 Create Date: 2026-08-25 19:25:33.363443
 
 """
@@ -16,7 +16,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "271e4439bff6"
-down_revision: Union[str, None] = "89c31f0ae275"
+down_revision: Union[str, None] = "9a2399212488"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
