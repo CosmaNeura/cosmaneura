@@ -85,8 +85,13 @@ def test_authorized_api_credentials(client: TestClient):
     assert response.json() == {"status": "ok"}
 
 
-def test_grandfather_grant_allows_api_credentials(client: TestClient):
-    user = DoctorFactory.build(email="grandfather-api@example.com")
+def test_existing_grandfather_grant_allows_api_credentials_without_practice(
+    client: TestClient,
+):
+    user = DoctorFactory.build(
+        email="grandfather-api@example.com",
+        onboarding_completed_at=datetime.now(timezone.utc),
+    )
     user.generate_api_key()
     user.save()
     _grant_pilot_access(user)
@@ -97,6 +102,7 @@ def test_grandfather_grant_allows_api_credentials(client: TestClient):
     )
 
     assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"status": "ok"}
 
 
 def test_revoked_grandfather_grant_denies_api_credentials(client: TestClient):

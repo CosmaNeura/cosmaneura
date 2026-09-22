@@ -8,6 +8,35 @@ variable "tags" {
   }
 }
 
+variable "enable_public_phi_observability" {
+  description = "Create PHI-free public-pilot metrics, alerts, diagnostics, and routing after staging approval."
+  type        = bool
+  default     = false
+}
+
+variable "public_phi_alert_email" {
+  description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.public_phi_alert_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.public_phi_alert_email))
+    error_message = "public_phi_alert_email must be empty or a valid role mailbox"
+  }
+}
+
+variable "public_phi_support_owner" {
+  description = "Approved non-personal support-owner role slug; required only when observability is enabled."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.public_phi_support_owner == "" || can(regex("^[a-z0-9][a-z0-9-]{2,62}$", var.public_phi_support_owner))
+    error_message = "public_phi_support_owner must be empty or a 3-63 character lowercase role slug"
+  }
+}
+
 variable "onepassword_tags" {
   description = "A map of tags to add to all opentofu-generated 1p items"
   type        = list(string)
@@ -15,6 +44,25 @@ variable "onepassword_tags" {
   default = [
     "terraform-managed"
   ]
+}
+
+variable "production_container_apps_egress_ipv4" {
+  description = "Operator-supplied outbound IPv4 address shared by the production Container Apps; required for each plan and checked against refreshed scheduler state."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", var.production_container_apps_egress_ipv4)) &&
+      can(cidrhost("${var.production_container_apps_egress_ipv4}/32", 0))
+    )
+    error_message = "production_container_apps_egress_ipv4 must be a valid IPv4 address"
+  }
+}
+
+variable "adopt_existing_production_postgres_egress_rule" {
+  description = "Adopt the exact production ACA PostgreSQL firewall rule created before the broad live rule was removed. Disable only in provider-mocked tests, where imports are unsupported."
+  type        = bool
+  default     = true
 }
 
 # variables which should be exposed publicly in the azure ui
@@ -42,7 +90,7 @@ variable "python_secret_vars" {
 }
 
 # Secrets used only by the HTTP API. Keep capability-bearing values out of
-# worker, scheduler, job-monitor, and migration workloads.
+# worker, scheduler, and migration workloads.
 variable "python_api_only_secret_vars" {
   description = "Secret ENV vars exposed only to the API Container App"
   type        = set(string)
@@ -54,7 +102,7 @@ variable "python_api_only_secret_vars" {
 
 # Stripe's maintenance key is needed by the API and worker, while the webhook
 # signing secret is API-only. Neither capability belongs in migrations,
-# scheduler, or job-monitor.
+# scheduler.
 variable "python_billing_secret_vars" {
   description = "Stripe secret ENV vars exposed only to API and worker"
   type        = set(string)
@@ -91,8 +139,8 @@ variable "python_public_vars" {
     "AZURE_OPENAI_ENDPOINT",
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-    # zoom oauth redirects
-    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
+    # zoom oauth redirects and the source-controlled watchdog rollout gate
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT", "ZOOM_WATCHDOG_ENABLED",
     # public origin of this backend, used to build the zak_url that Recall
     # bots fetch on join
     "API_BASE_URL", "RECALL_API_BASE",
@@ -147,6 +195,23 @@ variable "scribe_service_timeout_seconds" {
   validation {
     condition     = var.scribe_service_timeout_seconds >= 1 && var.scribe_service_timeout_seconds <= 60
     error_message = "scribe_service_timeout_seconds must be between 1 and 60"
+  }
+}
+
+variable "enable_deid_managed_identity" {
+  description = "Switch the production worker from the retained client-secret rollback path to its preflight-verified DeID managed identity."
+  type        = bool
+  default     = false
+}
+
+variable "deid_managed_identity_compatible_worker_image_tag" {
+  description = "Exact reviewed Core commit tag that is live on the worker before managed-identity activation; leave not-deployed while the gate is off."
+  type        = string
+  default     = "not-deployed"
+
+  validation {
+    condition     = var.deid_managed_identity_compatible_worker_image_tag == "not-deployed" || can(regex("^[0-9a-f]{40}$", var.deid_managed_identity_compatible_worker_image_tag))
+    error_message = "deid_managed_identity_compatible_worker_image_tag must be not-deployed or an exact 40-character lowercase Git SHA"
   }
 }
 
@@ -269,7 +334,7 @@ data "external" "secrets" {
 # This read-only guard makes the selector an adoption mechanism, never a bulk
 # cutover mechanism.  Phase A may add the unused v2 value while all workloads
 # still select database-url.  Selecting v2 is accepted only after the staged
-# operator has already moved all five live workloads and retained the old
+# operator has already moved all four live workloads and retained the old
 # rollback secret.
 data "external" "database_url_live_guard" {
   program = ["python", "${path.module}/database_url_live_guard.py"]
@@ -278,5 +343,22 @@ data "external" "database_url_live_guard" {
     selected_secret = local.database_url_secret_name
     subscription_id = local.azure_subscription_id
     v2_enabled      = local.database_url_v2_enabled_text
+  }
+}
+
+# Activation is adoption-only. The first default-off apply attaches and grants
+# the identity; a later reviewed plan may switch authentication only after this
+# read-only guard verifies that exact live prerequisite state.
+data "external" "deid_managed_identity_live_guard" {
+  program = ["python", "${path.module}/deid_managed_identity_live_guard.py"]
+  query = {
+    compatible_worker_image_tag = var.deid_managed_identity_compatible_worker_image_tag
+    enabled                     = tostring(var.enable_deid_managed_identity)
+    expected_deid_endpoint      = data.external.secrets.result["AZURE_DEID_ENDPOINT"]
+    identity_name               = "${local.base_name}-health-services"
+    resource_group              = azurerm_resource_group.main.name
+    service_name                = local.deid_service_name
+    subscription_id             = local.azure_subscription_id
+    worker_name                 = "${local.base_name}-worker"
   }
 }

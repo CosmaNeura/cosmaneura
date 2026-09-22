@@ -85,7 +85,13 @@ export function HydrateFallback() {
   )
 }
 
-export default withProviders(App)
+const AppWithProviders = withProviders(App)
+
+// React Router 7.9+ requires route modules to export a function component.
+// Keep the existing provider composition while presenting that stable shape.
+export default function Root() {
+  return <AppWithProviders />
+}
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   if (isBillingRecoveryRedirectError(error)) {

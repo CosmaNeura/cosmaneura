@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import (
@@ -14,7 +14,8 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
+from redis.exceptions import RedisError
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -22,12 +23,15 @@ import app.jobs.extract
 import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
+import app.jobs.start_zoom_capture as start_zoom_capture_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.stripe_billing as stripe_billing
+import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
+import app.services.zoom_capture_authorization as zoom_capture_authorization
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
@@ -66,6 +70,12 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
+from app.services.public_entitlements import (
+    ActiveClinicianSeatLimitReached,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+    require_active_clinician_seat_capacity,
+)
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -89,7 +99,6 @@ from app.utils.email_domain import (
     is_mcd_email,
     is_public_email_domain,
 )
-from app.utils.npi import is_valid_npi
 
 from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
@@ -130,6 +139,7 @@ from app.models.practice import (
     TRIAL_LENGTH,
     OriginChannel,
     Practice,
+    PracticeAcquisitionSource,
     PracticeMember,
     PracticeRole,
 )
@@ -144,7 +154,7 @@ from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
-from .dependencies.view_as import apply_view_as
+from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -294,7 +304,6 @@ def note_detail(
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
-
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
@@ -757,6 +766,13 @@ def _customization_data(
     )
 
 
+class VisitPrepSettingsData(BaseModel, extra="forbid"):
+    eligible: bool
+    can_manage: bool
+    can_send_email: bool
+    can_send_sms: bool
+
+
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
@@ -777,6 +793,7 @@ class SettingsData(BaseModel, extra="forbid"):
     note_customizations: list[NoteTypeCustomizationData]
     has_natmed_subscription: bool
     terminology: Terminology
+    visit_prep: VisitPrepSettingsData
 
 
 def _platform_admin_capability_active(request: Request) -> bool:
@@ -810,6 +827,10 @@ def _platform_admin_capability_active(request: Request) -> bool:
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    visit_prep_decision = visit_prep_access.resolve_visit_prep_access(
+        doctor,
+        view_as_active=getattr(request.state, "view_as", None) is not None,
+    )
 
     zoom_integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
@@ -868,6 +889,12 @@ def settings_data(request: Request) -> SettingsData:
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
         terminology=doctor.terminology,
+        visit_prep=VisitPrepSettingsData(
+            eligible=visit_prep_decision.eligible,
+            can_manage=visit_prep_decision.can_manage,
+            can_send_email=visit_prep_decision.can_send_email,
+            can_send_sms=visit_prep_decision.can_send_sms,
+        ),
     )
 
 
@@ -1240,32 +1267,11 @@ def claim_organization_access(
 
 class CreatePracticeBody(BaseModel, extra="forbid"):
     legal_name: str = Field(min_length=3, max_length=160)
-    npi: str | None = Field(default=None, max_length=10)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=40)
     is_solo: bool = True
     channel: str = "direct"
     pastoral_pack: bool = False
-
-    @field_validator("npi", mode="before")
-    @classmethod
-    def validate_npi(cls, value: object) -> object:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise ValueError("NPI must be exactly 10 digits.")
-        normalized = value.strip()
-        if not normalized:
-            return None
-        if (
-            len(normalized) != 10
-            or not normalized.isascii()
-            or not normalized.isdigit()
-        ):
-            raise ValueError("NPI must be exactly 10 digits.")
-        if not is_valid_npi(normalized):
-            raise ValueError("NPI checksum is invalid.")
-        return normalized
 
 
 @internal_api_app.post("/practice", name="create_practice")
@@ -1415,7 +1421,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
 
         practice = Practice(
             legal_name=data.legal_name.strip(),
-            npi=data.npi,
+            npi=None,
             city=(data.city or "").strip() or None,
             region=(data.region or "").strip() or None,
             is_solo=data.is_solo,
@@ -1425,6 +1431,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
             # The future feature flag remains in the schema, but onboarding
             # must not imply that a not-yet-built capability is active.
             pastoral_pack=False,
+            acquisition_source=PracticeAcquisitionSource.public_self_service.value,
         )
         session.add(practice)
         session.flush()
@@ -1468,6 +1475,9 @@ def baa_current(request: Request) -> BaaDocument:
 
 
 class AcceptBaaBody(BaseModel, extra="forbid"):
+    doc_id: str
+    version: str
+    sha256: str
     signature_name: str = Field(min_length=2, max_length=120)
     signature_title: str = Field(min_length=2, max_length=120)
     checks: list[str]
@@ -1508,10 +1518,27 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
             detail="Only the practice owner can accept the BAA.",
         )
     version = _current_baa_version()
+    if (
+        data.doc_id != version.doc_id
+        or data.version != version.version
+        or data.sha256 != version.sha256
+    ):
+        # Bind the execution record to the exact document the browser rendered.
+        # In particular, a tab that loaded an earlier version must reload rather
+        # than accidentally accepting whichever version is current at submit time.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The BAA changed after it was displayed. Reload and review the "
+                "current agreement before accepting."
+            ),
+        )
     # Serialize acceptance per practice. The legal execution record, its gate
-    # mirror, promised trial, and owner attestation commit atomically. Retrying
-    # an execution that predates this invariant repairs mirrors from the
-    # original acceptance timestamp instead of creating a second record.
+    # mirror, any legacy managed-practice trial, and owner attestation commit
+    # atomically. Public self-service trials start only after card collection
+    # at Checkout. Retrying an execution that predates this invariant repairs
+    # mirrors from the original acceptance timestamp instead of creating a
+    # second record.
     with get_session() as session:
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
@@ -1557,7 +1584,11 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice.baa_accepted_by_doctor_id = acceptance.accepted_by_doctor_id
         practice.baa_signature_name = acceptance.accepted_by_name
         practice.baa_signature_title = acceptance.accepted_by_title
-        if practice.trial_ends_at is None:
+        if (
+            practice.acquisition_source
+            != PracticeAcquisitionSource.public_self_service.value
+            and practice.trial_ends_at is None
+        ):
             practice.trial_ends_at = accepted_at + TRIAL_LENGTH
 
         locked_member.attested_at = locked_member.attested_at or accepted_at
@@ -1797,9 +1828,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         # Serialize against organization conversion. A lookup that began while
         # this was a standalone practice must not complete a legacy join after
         # the practice becomes roster-managed.
-        locked_practice = session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        locked_practice = lock_practice_for_active_seat_mutation(session, practice.id)
         normalized_email = (doctor.email or "").strip().lower()
         lock_roster_enrollment_email(session, normalized_email)
         locked_doctor = session.exec(
@@ -1866,6 +1895,13 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
             )
+        try:
+            require_active_clinician_seat_capacity(session, locked_practice)
+        except ActiveClinicianSeatLimitReached as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from None
         member = PracticeMember(
             practice_id=locked_practice.id,
             doctor_id=locked_doctor.id,
@@ -1874,14 +1910,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             attestation_name=data.attestation_name.strip(),
         )
         session.add(member)
+        record_active_clinician_seat_quantity(session, locked_practice)
         session.commit()
         session.refresh(locked_practice)
         session.refresh(member)
         practice = locked_practice
-    # Persist the desired $89/clinician quantity and return immediately. The
-    # 15-minute reconciler performs all Stripe I/O; onboarding must never wait
-    # through multiple external 20-second timeouts.
-    stripe_billing.mark_quantity_sync_required(practice)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -1999,6 +2032,14 @@ def create_billing_checkout(
         )
     try:
         stripe_billing.refresh_subscription_state(practice)
+    except stripe_billing.StripeCoreBindingInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The billing account requires reconciliation before Checkout "
+                "can continue."
+            ),
+        ) from exc
     except stripe_billing.StripeStateConflict as exc:
         log.warning(
             "stripe subscription changed repeatedly before checkout",
@@ -2067,6 +2108,23 @@ def create_billing_checkout(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=CHECKOUT_RETIREMENT_PENDING_DETAIL,
+        ) from exc
+    except (
+        stripe_billing.StripeCheckoutReconciliationRequired,
+        stripe_billing.StripeCoreBindingInvalid,
+        stripe_billing.StripeTrialClockReconciliationRequired,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The billing account requires reconciliation before Checkout "
+                "can continue."
+            ),
+        ) from exc
+    except stripe_billing.StripeManagedBilling as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Billing for this practice is managed by its organization.",
         ) from exc
     except stripe_billing.StripeStateConflict as exc:
         raise HTTPException(
@@ -2164,10 +2222,12 @@ class ZoomMeetingResponse(BaseModel, extra="forbid"):
     join_url: str | None
     status: ZoomMeetingStatus
     appointment_id: str | None
+    capture_authorized: bool
 
 
 class ScheduleResponse(BaseModel, extra="forbid"):
     zoom_connected: bool
+    capture_available: bool
     meetings: list[ZoomMeetingResponse]
 
 
@@ -2177,7 +2237,11 @@ def schedule_list(request: Request) -> ScheduleResponse:
 
     zoom_integration = get_zoom_integration(doctor)
     if not zoom_integration:
-        return ScheduleResponse(zoom_connected=False, meetings=[])
+        return ScheduleResponse(
+            zoom_connected=False,
+            capture_available=False,
+            meetings=[],
+        )
 
     # A support view may inspect the already-synchronized schedule, but it
     # must not trigger provider-side reconciliation or any write-like work.
@@ -2201,6 +2265,10 @@ def schedule_list(request: Request) -> ScheduleResponse:
 
     return ScheduleResponse(
         zoom_connected=True,
+        capture_available=(
+            request.state.view_as is None
+            and zoom_capture_authorization.capture_available_for_doctor(doctor)
+        ),
         meetings=[
             ZoomMeetingResponse(
                 id=str(m.id),
@@ -2211,9 +2279,81 @@ def schedule_list(request: Request) -> ScheduleResponse:
                 join_url=m.join_url if request.state.view_as is None else None,
                 status=m.status,
                 appointment_id=str(m.appointment_id) if m.appointment_id else None,
+                capture_authorized=zoom_capture_authorization.capture_is_authorized(m),
             )
             for m in cast(list[ZoomMeeting], list(meetings))
         ],
+    )
+
+
+class AuthorizeZoomCaptureRequest(BaseModel, extra="forbid"):
+    appointment_id: str = Field(min_length=1, max_length=128)
+
+
+class ZoomCaptureAuthorizationResponse(BaseModel, extra="forbid"):
+    appointment_id: str
+    state: Literal["pending", "armed"]
+
+
+@internal_api_app.post(
+    "/schedule/{zoom_meeting_id}/authorize-capture",
+    name="authorize_zoom_capture",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Meeting unavailable"},
+        status.HTTP_409_CONFLICT: {"description": "Capture cannot be authorized"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Authorization service unavailable"
+        },
+    },
+)
+def authorize_zoom_capture(
+    request: Request,
+    zoom_meeting_id: Annotated[str, Path()],
+    data: AuthorizeZoomCaptureRequest,
+) -> ZoomCaptureAuthorizationResponse:
+    """Bind a provider-selected appointment and arm this meeting's bot once."""
+
+    deny_view_as_browser_activity(request)
+    doctor: Doctor = request.state.doctor
+    try:
+        result = zoom_capture_authorization.authorize_capture_for_appointment(
+            doctor_id=doctor.id,
+            zoom_meeting_id=zoom_meeting_id,
+            appointment_id=data.appointment_id,
+        )
+    except zoom_capture_authorization.ZoomCaptureAuthorizationNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found",
+        ) from None
+    except zoom_capture_authorization.ZoomCaptureAuthorizationConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This meeting cannot be enabled for capture.",
+        ) from None
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Meeting bot authorization is temporarily unavailable.",
+        ) from None
+
+    if result.armed:
+        from app.services import zoom_webhooks
+
+        try:
+            zoom_webhooks.arm_join_watchdog(
+                zoom_meeting_id, result.occurrence_digest, result.meeting_record_id
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Capture monitoring is temporarily unavailable.",
+            ) from None
+        start_zoom_capture_job.queue(result.meeting_record_id)
+
+    return ZoomCaptureAuthorizationResponse(
+        appointment_id=result.appointment_id,
+        state="armed" if result.armed else "pending",
     )
 
 

@@ -5,14 +5,16 @@ from azure.health.deidentification.models import (
     DeidentificationContent,
     DeidentificationResult,
 )
-from azure.identity import ClientSecretCredential
+from azure.identity import ClientSecretCredential, ManagedIdentityCredential
 
 from app import log
 from app.celery import celery_app
 from app.configuration.azure import (
+    AZURE_DEID_AUTH_MODE,
     AZURE_DEID_CLIENT_ID,
     AZURE_DEID_CLIENT_SECRET,
     AZURE_DEID_ENDPOINT,
+    AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID,
     AZURE_DEID_TENANT_ID,
 )
 from app.services.external_webhook_inbox import provider_log_ref
@@ -86,19 +88,25 @@ def deidentify(phi_text: str) -> str:
     if not text:
         return text
 
-    # The Deidentification Service requires a service principal to authenticate.
-    # Create one through the Entra portal.
-    #   https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal
-    # Make sure that your application has the "DeID Data Owner" role.
-    credential = ClientSecretCredential(
-        client_id=AZURE_DEID_CLIENT_ID,
-        tenant_id=AZURE_DEID_TENANT_ID,
-        client_secret=AZURE_DEID_CLIENT_SECRET,
-    )
+    if AZURE_DEID_AUTH_MODE == "managed_identity":
+        # Pin the exact user-assigned identity. Do not silently fall through to
+        # another developer or workload credential if its attachment is lost.
+        credential = ManagedIdentityCredential(
+            client_id=AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID
+        )
+    else:
+        # Temporary rollback path retained until the managed-identity
+        # observation window closes and the app-registration secret is revoked.
+        credential = ClientSecretCredential(
+            client_id=AZURE_DEID_CLIENT_ID,
+            tenant_id=AZURE_DEID_TENANT_ID,
+            client_secret=AZURE_DEID_CLIENT_SECRET,
+        )
 
     log.info(
         "deidentification provider request started",
         event_code="deidentification_request_started",
+        credential_mode=AZURE_DEID_AUTH_MODE,
     )
 
     # The supported API versions are: 2024-11-15, 2025-07-15-preview
@@ -118,12 +126,14 @@ def deidentify(phi_text: str) -> str:
         log.error(
             "deidentification provider request failed",
             event_code="deidentification_request_failed",
+            credential_mode=AZURE_DEID_AUTH_MODE,
         )
         raise
 
     log.info(
         "deidentification provider request completed",
         event_code="deidentification_request_completed",
+        credential_mode=AZURE_DEID_AUTH_MODE,
     )
 
     return result.output_text

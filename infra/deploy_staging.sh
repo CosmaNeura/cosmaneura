@@ -7,7 +7,7 @@ set -euo pipefail
 GIT_SHA="$1"
 
 RESOURCE_GROUP="cosmaneura-staging"
-CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
+CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 if [[ -z "$GIT_SHA" ]]; then

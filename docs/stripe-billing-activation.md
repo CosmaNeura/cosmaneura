@@ -121,3 +121,36 @@ clears the dead hosted-session cache, and returns a retryable conflict. It does
 not cancel a possibly billable Stripe object or create a second subscription.
 Once Stripe reports `incomplete_expired` or another terminal status, the next
 attempt can safely create a card-required replacement.
+
+### Frozen request without a cached Session
+
+If Core froze a Checkout request but lost the provider response, do not clear
+the request or create a new attempt manually. First retain a PHI-free copy of
+the Stripe Checkout Session inventory used for the decision and hash it. Then
+preview the bounded recovery action:
+
+```sh
+python -m app.cli reconcile-stripe-checkout \
+  --practice-id 'practice_...' \
+  --operator-ref '<incident-or-change-id>' \
+  --reason '<reason for recovery>' \
+  --evidence-reference '<retained-evidence-reference>' \
+  --evidence-sha256 '<64-character-sha256>'
+```
+
+The command verifies the configured Stripe account, mode, and price; searches
+at most ten 100-item pages beginning five minutes before the frozen request;
+and refuses partial, duplicate, or conflicting practice matches. Preview mode
+does not mutate Core or Stripe.
+
+After checking the preview, repeat the same command with `--apply`. An exact
+open Session is bound and expired; a completion race is bound to its
+authoritative subscription; and an expired Session is resolved before Core
+rotates the attempt. Every applied action writes append-only operator evidence.
+
+If the result is `no_matching_session`, keep
+`STRIPE_BILLING_ENABLED=false`, wait until the frozen request is at least 24
+hours old, and add both `--apply` and `--confirm-absent`. This is the only path
+that may attest the provider Session absent and rotate the attempt without a
+remote Session id. The integration/webhook flag must remain enabled throughout
+recovery.

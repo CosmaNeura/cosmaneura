@@ -743,11 +743,14 @@ def active_pilot_access_grant(
     *,
     at: datetime | None = None,
 ) -> PilotAccessGrandfatherGrant | None:
-    """Return the Doctor's grant only while stable subject and email still match.
+    """Return a candidate record while stable subject and email still match.
 
     The email check intentionally fails closed after a Clerk/Doctor email
     change. An operator must review the new Clerk export and explicitly issue
-    replacement authorization rather than silently transferring the bypass.
+    replacement evidence rather than silently transferring it. Callers may use
+    the grant as an entitlement for its snapshotted practice; treating it as
+    the legacy access basis additionally requires the Doctor's durable
+    completed-onboarding marker.
     """
 
     current = _aware(at)

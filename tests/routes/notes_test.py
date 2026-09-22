@@ -3,7 +3,11 @@ from datetime import UTC, datetime
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import app.services.staging_synthetic_appointment as staging_fixture_service
 from app.server import api_app
+from app.services.staging_synthetic_appointment import (
+    ensure_staging_synthetic_appointment,
+)
 
 from activemodel.session_manager import get_engine
 from app.models.ai_visit_note import AIVisitNote
@@ -115,6 +119,56 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["id"] == str(appointment.id)
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
+    assert "context_snapshot_ref" not in result
+
+
+def test_note_detail_never_projects_context_ref_for_synthetic_fixture(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    if not doctor.email:
+        assert clerk_user.email_addresses
+        doctor.email = clerk_user.email_addresses[0].email_address
+    doctor.last_active_at = datetime.now(UTC)
+    doctor.save()
+    monkeypatch.setattr(staging_fixture_service, "is_staging", lambda: True)
+    fixture = ensure_staging_synthetic_appointment(
+        doctor_id=doctor.id,
+        doctor_email=doctor.email,
+        operator_ref="operator_note_detail_session_prep",
+    )
+    eligible = authenticated_client.get(
+        api_app.url_path_for(
+            "note_detail",
+            appointment_id=fixture.appointment.id,
+        )
+    )
+
+    assert eligible.status_code == status.HTTP_200_OK
+    assert "context_snapshot_ref" not in eligible.json()
+
+    ordinary_patient = Patient(
+        doctor_id=doctor.id,
+        name="Synthetic ordinary route record",
+        date_of_birth=datetime(2001, 1, 1),
+    ).save()
+    ordinary_appointment = Appointment(
+        doctor_id=doctor.id,
+        patient_id=ordinary_patient.id,
+        appointment_date=datetime(2098, 1, 1),
+        external_id=None,
+    ).save()
+    ordinary = authenticated_client.get(
+        api_app.url_path_for(
+            "note_detail",
+            appointment_id=ordinary_appointment.id,
+        )
+    )
+
+    assert ordinary.status_code == status.HTTP_200_OK
+    assert "context_snapshot_ref" not in ordinary.json()
 
 
 def test_note_detail_returns_only_current_note_version(

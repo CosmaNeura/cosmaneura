@@ -61,13 +61,6 @@ class Workload:
 
 WORKLOADS = (
     Workload(
-        label="jmon",
-        name="cosmaneura-prod-app-jmon",
-        resource_type="containerApps",
-        cli_group=("containerapp",),
-        revisioned=True,
-    ),
-    Workload(
         label="worker",
         name="cosmaneura-prod-worker",
         resource_type="containerApps",
@@ -876,7 +869,6 @@ class CutoverOperator:
             raise CutoverError("refusing to select an unknown database secret")
         label_code = {
             "api": "ap",
-            "jmon": "jm",
             "scheduler": "sc",
             "worker": "wo",
         }.get(workload.label, "mg")

@@ -104,7 +104,7 @@ State lives in the `cosmaneuratfstate` Azure storage account (see
    Confirm HTTP 200 and the expected metadata-only receipt, with no body,
    signature, or provider identifier in logs. No required production
    environment reviewer is configured. The founder self-authorizes the manual
-   **Build & Publish** run, must verify that evidence, and must check
+   **Build & Publish (manual)** run, must verify that evidence, and must check
    `provider_signed_recall_callback_verified`. Never paste the callback body,
    signature, URL parameters, or provider IDs into GitHub inputs or comments.
 
@@ -218,8 +218,8 @@ that use a protected deployment environment.
 | --- | --- | --- |
 | `infra_apply.yml` (manual attested-plan apply) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 | `infra_production_plan.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish.yml` (staging deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
+| `build_and_publish_manual.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `deploy_staging_candidate.yml` (staging candidate deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
 
 The three production rows share the production environment subject, so one
 matching production federated credential is sufficient. Staging requires its
@@ -287,7 +287,7 @@ For a change that includes both infrastructure and application code:
 4. Send and verify the real provider-signed non-PHI Recall callback described
    above.
 5. Copy the successful apply run's numeric ID from its Actions URL.
-6. Manually run **Build & Publish** on `master`, supplying the ID as
+6. Manually run **Build & Publish (manual)** on `master`, supplying the ID as
    `terraform_apply_run_id` and checking
    `provider_signed_recall_callback_verified`. The workflow verifies the apply
    run, its ancestry, and that no later production-infrastructure change exists
@@ -295,7 +295,7 @@ For a change that includes both infrastructure and application code:
 
 Application-only pushes still run validation and build jobs, but they cannot
 enter the production deploy job. The founder must manually dispatch **Build &
-Publish** on the exact current `master`; the deploy first resolves the latest
+Publish (manual)** on the exact current `master`; the deploy first resolves the latest
 successful Terraform Apply and performs the same ancestry/no-drift
 verification. An unknown push comparison fails closed and requires the same
 manual run.
@@ -309,7 +309,7 @@ apply is in flight.
 `SOVEREIGN_RECORD_GRANT_SECRET` is a capability-bearing key used only by the
 HTTP API to mint short-lived synthetic Preview record grants. OpenTofu exposes
 it only to `cosmaneura-prod-app`; it is excluded from the worker, scheduler,
-job-monitor, and migration job. Staging's deployment script enforces the same
+and migration job. Staging's deployment script enforces the same
 API-only split for `cosmaneura-staging-app`. Staging remains off by default;
 provision its separate 1Password item first, then set the staging GitHub
 environment variable `ENABLE_SOVEREIGN_RECORD_GRANTS=true` only for the
@@ -327,7 +327,7 @@ source-controlled old/v2 secret selection, adoption-only live-state guard,
 cluster-database ACL audit, and value-free migration preflight. The current
 inline-secret model places encrypted values in protected OpenTofu state; moving
 them to Key Vault references remains a separate architecture change.
-OpenTofu owns the four long-running apps; the deploy script owns the already-
+OpenTofu owns the three long-running apps; the deploy script owns the already-
 provisioned migration job and now fails rather than creating it implicitly.
 
 ## Scribe workflow identity

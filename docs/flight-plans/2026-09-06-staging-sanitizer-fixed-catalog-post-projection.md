@@ -1,0 +1,7 @@
+# Staging sanitizer fixed-catalog post-projection authentication
+
+Tier 2, based on exact protected `master` `3299134b482b478da41fd79e1f50678a9a3a826f`. This dormant leaf accepts only the exact sealed source snapshot and its exact sealed sanitizer candidate. The executor owns a transform-keyed, fixed-only candidate copy; the verifier independently derives all five fixed-catalog tables and 46 columns from the source, canonically orders transformed identities, and constant-time compares keyed expected and observed projection proofs. A separate keyed domain seals the scalar-only authority.
+
+The authority retains exact evidence plus scalar source/candidate lineage, never snapshots, candidates, rows, frames, fragments, or keys. It grants only fixed-catalog post-projection authentication; database, mutation, provider, runtime, sanitizer, executable, workflow, and publication authority remain false. This slice atomically rolls the source-snapshot contract pin to mark the new proof implemented and leave the transaction adapter as its sole blocker. The existing public preflight still refuses with `activation.data_contract_executor_unimplemented`.
+
+No adapter, database, filesystem, environment, network, subprocess, provider, workflow, mutation, publication, deployment, or production surface is added. Remaining activation work is the separately reviewed serializable transaction adapter, rollback/final-precommit/post-commit controls, and deliberate live rehearsal. Recovery is code-only revert; no data or infrastructure rollback is needed.

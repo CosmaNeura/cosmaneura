@@ -1,0 +1,179 @@
+name: Staging Restore Rehearsal
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Check the dormant provision gate or clean up one exact rehearsal
+        required: true
+        default: cleanup
+        type: choice
+        options: [provision, cleanup]
+      rehearsal_id:
+        description: Cleanup only; exact 12-lowercase-hex rehearsal ID from the receipt
+        required: false
+        type: string
+  schedule:
+    - cron: "17 * * * *"
+permissions:
+  contents: read
+concurrency:
+  group: staging-restore-rehearsal
+  cancel-in-progress: false
+jobs:
+  authorize:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.action == 'cleanup' || inputs.action == 'provision')) ||
+      (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require protected repository, ref, and action
+        env:
+          EXPECTED_REPOSITORY: CosmaNeura/cosmaneura
+          EXPECTED_REF: refs/heads/master
+          EXPECTED_ACTOR: JohnClem
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ inputs.action }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$REF" = "$EXPECTED_REF"
+          test "$REF_PROTECTED" = "true"
+          test "$WORKFLOW_SHA" = "$(gh api "repos/$REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$ACTOR" = "$EXPECTED_ACTOR"
+            test "$TRIGGERING_ACTOR" = "$EXPECTED_ACTOR"
+            test "$ACTION" = "cleanup" -o "$ACTION" = "provision"
+          else
+            test "$EVENT_NAME" = "schedule"
+          fi
+      - name: Check out policy from exact protected commit
+        if: github.event_name == 'schedule' || inputs.action == 'cleanup'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Fail closed while policy contains placeholders
+        if: github.event_name == 'schedule' || inputs.action == 'cleanup'
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ inputs.action }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          intended="$ACTION"
+          if [ "$EVENT_NAME" = "schedule" ]; then intended=sweep; fi
+          python scripts/staging_restore_envelope.py validate-policy \
+            --repository "$REPOSITORY" --ref "$REF" --workflow-sha "$WORKFLOW_SHA" \
+            --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+            --event-name "$EVENT_NAME" --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
+            --intended-action "$intended"
+  provision:
+    needs: [authorize]
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'provision'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    permissions: {}
+    steps:
+      - name: Refuse provision until the trusted in-process coordinator exists
+        run: |
+          echo "::error::Provision is disabled. Activation requires one trusted process to authenticate server, provider, and GitHub proofs, compose their opaque seals, and directly invoke safe-submit."
+          exit 1
+  cleanup:
+    needs: [authorize]
+    if: >-
+      always() &&
+      needs.authorize.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.action == 'cleanup') ||
+       (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: staging-restore-cleanup
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out exact protected master commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Reauthorize protected head after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY:$GITHUB_REF:$GITHUB_REF_PROTECTED" = "CosmaNeura/cosmaneura:refs/heads/master:true"
+          current_master="$(gh api repos/CosmaNeura/cosmaneura/git/ref/heads/master --jq .object.sha)"
+          comparison="$(gh api "repos/CosmaNeura/cosmaneura/compare/${GITHUB_SHA}...${current_master}" --jq .status)"
+          test "$comparison" = "identical" -o "$comparison" = "ahead"
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then test "$GITHUB_ACTOR:$GITHUB_TRIGGERING_ACTOR" = "JohnClem:JohnClem"; fi
+      - name: Authenticate dedicated cleanup identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.STAGING_RESTORE_CLEANUP_CLIENT_ID }}
+          tenant-id: ${{ vars.STAGING_RESTORE_TENANT_ID }}
+          subscription-id: ${{ vars.STAGING_RESTORE_SUBSCRIPTION_ID }}
+      - name: Remove failed, selected, or expired restore set
+        id: execute
+        continue-on-error: true
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_ACTION: ${{ inputs.action }}
+          REQUESTED_ID: ${{ inputs.rehearsal_id }}
+          REPOSITORY: ${{ github.repository }}
+          REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir evidence
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            python scripts/staging_restore_envelope.py sweep \
+              --repository "$REPOSITORY" --ref "$REF" --workflow-sha "$WORKFLOW_SHA" \
+              --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+              --event-name "$EVENT_NAME" --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
+              --receipt evidence/cleanup-envelope.json
+          else
+            test "$REQUESTED_ACTION" = "cleanup"
+            python scripts/staging_restore_envelope.py cleanup \
+              --repository "$REPOSITORY" --ref "$REF" --workflow-sha "$WORKFLOW_SHA" \
+              --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
+              --event-name "$EVENT_NAME" --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
+              --rehearsal-id "$REQUESTED_ID" --force \
+              --receipt evidence/cleanup-envelope.json
+          fi
+      - name: Sign cleanup receipt provenance
+        if: always() && hashFiles('evidence/cleanup-envelope.json') != ''
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: evidence/cleanup-envelope.json
+      - name: Preserve aggregate cleanup receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-restore-cleanup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Enforce cleanup result
+        if: always() && steps.execute.outcome != 'success'
+        run: exit 1

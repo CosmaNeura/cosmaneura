@@ -23,7 +23,6 @@ MIGRATION_JOB="cosmaneura-prod-migrate"
 WORKER_SCHEDULER_CONTAINERS="cosmaneura-prod-worker cosmaneura-prod-scheduler"
 WORKER_CONTAINER="cosmaneura-prod-worker"
 API_CONTAINER="cosmaneura-prod-app"
-JMON_CONTAINER="cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Resolve protected configuration before invoking git, Docker, Azure, or any
@@ -61,7 +60,7 @@ if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 	exit 1
 fi
 if ! validate_deploy_revision_suffix "$REVISION_STRING" \
-	$WORKER_SCHEDULER_CONTAINERS "$API_CONTAINER" "$JMON_CONTAINER"; then
+	$WORKER_SCHEDULER_CONTAINERS "$API_CONTAINER"; then
 	exit 1
 fi
 
@@ -94,8 +93,8 @@ if [[ "$DATABASE_SECRET_NAME" == "database-url-v2" && "$DATABASE_URL_V2_ENABLED"
 fi
 
 # A deploy may adopt an already-staged selection, but must never become the
-# mechanism that moves all workloads at once.  The guard is value-free and
-# requires all five live references to match the source-controlled selector.
+# mechanism that moves all workloads at once. The guard is value-free and
+# requires all four live references to match the source-controlled selector.
 if ! jq -n \
 	--arg resource_group "$RESOURCE_GROUP" \
 	--arg selected_secret "$DATABASE_SECRET_NAME" \
@@ -108,7 +107,7 @@ if ! jq -n \
 fi
 
 # Verify only secret names and references: the Recall signing credential must
-# exist exactly once on the API and nowhere on workers, beat, Flower or the
+# exist exactly once on the API and nowhere on workers, beat, or the
 # migration job. The guard never requests or prints secret values.
 if ! RECALL_WEBHOOK_SECRET_GUARD=$(printf '%s' "$ENV_JSON" |
 	jq -er '.RECALL_WEBHOOK_SECRET | select(type == "string")'); then
@@ -420,7 +419,7 @@ check_deployment() {
 		fi
 
 		# Healthy is the actual signal we care about — it means probes pass.
-		# runningState varies by container (Running for jmon/app, RunningAtMaxScale
+		# runningState varies by container (Running for app, RunningAtMaxScale
 		# for worker/scheduler), so we don't pin a specific value here.
 		if [[ "$health_state" == "Healthy" && "$provisioning_state" == "Provisioned" ]]; then
 			echo "$container_name deployment is successful."
@@ -524,7 +523,7 @@ fi
 # Deploy and verify consumers/recovery before exposing the new API revision.
 # This preserves rolling compatibility: migrations land first, then workers
 # and the scheduler can consume both old and new work before the API produces
-# anything new.  Job Monitor is observational and updates last.
+# anything new.
 for container in $WORKER_SCHEDULER_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
@@ -543,9 +542,6 @@ done
 
 initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
-
-initiate_deployment "$JMON_CONTAINER" "$GIT_SHA" || exit 1
-check_deployment "$JMON_CONTAINER" "$GIT_SHA" || exit 1
 
 echo "All deployments are successful for Git SHA $GIT_SHA."
 exit 0

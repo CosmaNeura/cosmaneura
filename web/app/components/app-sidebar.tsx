@@ -5,6 +5,7 @@ import { Calendar, File, Inbox, Settings } from "lucide-react"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
+import { SheetDescription, SheetTitle } from "@/components/ui/sheet"
 import {
   Sidebar,
   SidebarContent,
@@ -116,6 +117,7 @@ function SelectionList({
 }) {
   // TODO loading state is not used here, consider
   const navigate = useNavigate()
+  const { isMobile, setOpenMobile } = useSidebar()
 
   const location = useLocation()
   const currentUrl = location.pathname
@@ -128,7 +130,14 @@ function SelectionList({
         entries.map((entry) => (
           <button
             key={entry.id}
-            onClick={() => currentUrl !== entry.url && navigate(entry.url)}
+            onClick={() => {
+              if (currentUrl !== entry.url) {
+                navigate(entry.url)
+              }
+              if (isMobile) {
+                setOpenMobile(false)
+              }
+            }}
             className={cn(
               "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight",
               currentUrl === entry.url &&
@@ -189,7 +198,63 @@ function SelectionSidebar({
     return matchesSearch
   })
 
-  const { open } = useSidebar()
+  const { isMobile, open } = useSidebar()
+
+  const content = (
+    <>
+      {/* title with filters */}
+      <SidebarHeader className="gap-3.5 border-b p-4">
+        <div className="flex w-full items-center justify-between">
+          <div className="text-sidebar-foreground text-base font-medium">
+            {header ?? "Appointments"}
+          </div>
+          <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
+            <span>This Week</span>
+            <Switch
+              className="shadow-none"
+              checked={showThisWeek}
+              onCheckedChange={setShowThisWeek}
+            />
+          </Label>
+        </div>
+        <SidebarInput
+          placeholder="Type to search..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup className="px-0">
+          {entries.length === 0 && (
+            <div className="text-on-navy-muted p-4 text-center text-sm">
+              <p>No Appointments</p>
+              <p className="mt-2">Upload a visit recording to get started.</p>
+            </div>
+          )}
+          {entries.length > 0 && filteredEntries.length === 0 ? (
+            <div className="text-on-navy-muted p-4 text-center text-sm">
+              <p>No results found.</p>
+              <p className="mt-2">Try adjusting your filters.</p>
+            </div>
+          ) : (
+            <SelectionList isLoading={isLoading} entries={filteredEntries} />
+          )}
+        </SidebarGroup>
+      </SidebarContent>
+    </>
+  )
+
+  if (isMobile) {
+    return (
+      <Sidebar>
+        <SheetTitle className="sr-only">{header ?? "Appointments"}</SheetTitle>
+        <SheetDescription className="sr-only">
+          Select an appointment to view its details.
+        </SheetDescription>
+        {content}
+      </Sidebar>
+    )
+  }
 
   return (
     <motion.div
@@ -198,45 +263,7 @@ function SelectionSidebar({
       className="hidden shrink-0 overflow-hidden md:block"
     >
       <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
-        {/* title with filters */}
-        <SidebarHeader className="gap-3.5 border-b p-4">
-          <div className="flex w-full items-center justify-between">
-            <div className="text-sidebar-foreground text-base font-medium">
-              {header ?? "Appointments"}
-            </div>
-            <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
-              <span>This Week</span>
-              <Switch
-                className="shadow-none"
-                checked={showThisWeek}
-                onCheckedChange={setShowThisWeek}
-              />
-            </Label>
-          </div>
-          <SidebarInput
-            placeholder="Type to search..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </SidebarHeader>
-        <SidebarContent>
-          <SidebarGroup className="px-0">
-            {entries.length === 0 && (
-              <div className="text-on-navy-muted p-4 text-center text-sm">
-                <p>No Appointments</p>
-                <p className="mt-2">Upload a visit recording to get started.</p>
-              </div>
-            )}
-            {entries.length > 0 && filteredEntries.length === 0 ? (
-              <div className="text-on-navy-muted p-4 text-center text-sm">
-                <p>No results found.</p>
-                <p className="mt-2">Try adjusting your filters.</p>
-              </div>
-            ) : (
-              <SelectionList isLoading={isLoading} entries={filteredEntries} />
-            )}
-          </SidebarGroup>
-        </SidebarContent>
+        {content}
       </Sidebar>
     </motion.div>
   )

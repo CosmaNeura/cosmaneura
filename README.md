@@ -4,16 +4,35 @@ This is the primary repo for cosmaneura.com.
 
 [Generated from python-starter-template.](http://github.com/iloveitaly/python-starter-template)
 
-[Architecture is detailed out here.](https://docs.google.com/document/d/1bns3FMWLCi5pjl6jDLrHJ4HgR0SN89VsijqnDYtxMY4/edit?userstoinvite=shawn.coe@me.com&sharingaction=manageaccess&role=writer&tab=t.0#heading=h.qo9mfb5vnadm)
+Architecture source of truth: the `cosmaneura-architecture` repository (`ARCHITECTURE.md`, `adr/`, `contracts/`). Any Google Doc overview is historical/summary only and is not authoritative.
 
 ## Deployment
 
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
 * `infra/` contains all terraform logic. `cd infra && just install && just azure_apply` will setup infrastructure.
-- Pushes to `master` and `staging` run the backend and frontend checks; a push does not deploy either environment.
-- Pull requests have a source-defined `change-budget` check that rejects more than 2,000 changed lines or 50 changed files. Merging this workflow does not make it blocking: repository administration must separately configure `change-budget` as a required status context, without changing the current human-approval requirement.
-- Deployments use a founder-started `Build & Publish` manual run on the exact target branch. A staging run still executes both checks and verifies that its SHA remains the current `staging` head before checkout or credential use, image publication, and Azure mutation. Because production and staging currently share this dispatcher, GitHub requests the production-only inputs on a staging run; enter `staging` for the Terraform run ID and leave the callback attestation false. The staging job ignores both values.
-- A manual run is a real deployment, not a dry run. Before starting one, compare the target environment's deployed SHA, configuration, and schema with the branch and resolve any drift deliberately. This source gate does not prove that staging is synthetic-only or non-PHI.
+- `master` is the trunk. Staging and production are environments promoted to an explicit reviewed `master` SHA; merging never deploys. The vestigial `staging` branch no longer has a deployment path and is being retired.
+- Pull requests have a required `change-budget` check that rejects more than 2,000 changed lines or 50 changed files. The repository ruleset enforces that exact context without changing the current human-approval requirement.
+- Each environment has its own founder-started workflow, and both run from `master`:
+  - Production: `Build & Publish (manual)`, dispatched on `master`. It requires the Terraform apply run ID and the provider-signed Recall callback attestation.
+  - Staging: `Deploy Staging Candidate`, which takes an explicit `candidate_sha` contained in protected `master` and deploys that candidate rather than the moving tip.
+- A manual run is a real deployment, not a dry run. Before starting one, compare the target environment's deployed SHA, configuration, and schema with the candidate and resolve any drift deliberately. This source gate does not prove that staging is synthetic-only or non-PHI.
+
+### Staging-rehearsal base recovery
+
+The base-recovery apply is a separate founder-operated incident procedure, not
+a deployment workflow. After a fresh serial-8 plan and GET-only handoff receipt
+have been independently reviewed, the operator may use
+`scripts/consume_staging_rehearsal_base_recovery_handoff.py` from the exact
+current protected `master` commit. The consumer accepts only the four external
+digests/identities documented by its `--help`, requires five exact entries on a
+foreground controlling terminal—including the exact 28-no-op/11-create
+statement—then repeats remote-state and complete ARM readback. It pins the
+reviewed plan to an inherited descriptor. The post-confirmation ARM pass resets
+its isolated response-date and byte accounting but inherits the ceremony's
+already-running 120-second absolute deadline. The consumer then claims the
+handoff once and passes only `/dev/fd/<n>` to OpenTofu. Never invoke it from CI,
+an agent, a wrapper, or a noninteractive shell. A failed run after the claim
+file exists requires a new plan, execution directory, and handoff.
 
 ---
 

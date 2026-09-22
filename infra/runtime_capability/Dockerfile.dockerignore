@@ -1,0 +1,7 @@
+**
+!scripts
+!scripts/staging_runtime_capability_probe.py
+!scripts/staging_offline_verifier_diagnostics.py
+!infra
+!infra/runtime_capability
+!infra/runtime_capability/Dockerfile

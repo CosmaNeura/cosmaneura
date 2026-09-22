@@ -1,9 +1,10 @@
 """Durable, per-Clerk-account evidence for legacy pilot access.
 
-The grant is deliberately independent of practice membership, BAA execution,
-and practice billing state.  A nullable Doctor/practice association records
-what existed when the operator applied the reviewed plan; authorization is
-always rooted in the stable Clerk subject and the approved email snapshot.
+Runtime authorization requires an exact active identity match. A practice-bound
+grant may satisfy entitlement; a durable completed-onboarding marker promotes
+it to the reviewed existing cohort's legacy access basis. Explicit account,
+membership, and grant tombstones remain fail-closed, and no practice, BAA, or
+billing state is rewritten.
 """
 
 from datetime import datetime
