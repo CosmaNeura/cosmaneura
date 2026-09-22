@@ -72,7 +72,7 @@ Stop the test suite from ever operating on the instance staging runtime uses.
    `CLERK_TEST_PRIVATE_KEY` and `CLERK_TEST_PUBLISHABLE_KEY`, then use them for the
    workflow-level `CLERK_PRIVATE_KEY`, `VITE_CLERK_PUBLIC_KEY`, and
    `CLERK_PUBLISHABLE_KEY` values consumed by the Backend/Frontend test jobs in
-   `.github/workflows/build_and_publish.yml`. Keep the deploy jobs' job-level,
+   `.github/workflows/build_and_publish_manual.yml`. Keep the deploy jobs' job-level,
    environment-scoped `CLERK_PRIVATE_KEY` and publishable-key overrides unchanged, so
    staging and production continue to receive their own runtime instances. The composite
    `.github/actions/common-setup` action does not export Clerk credentials from direnv.

@@ -8,6 +8,18 @@ from ..environments import is_development, is_production, is_staging, is_testing
 from ..setup import get_root_path
 
 
+def should_auto_migrate_on_startup() -> bool:
+    """Return whether production-like runtimes should migrate at startup.
+
+    This is a transitional cutover gate for moving migrations to a dedicated
+    identity. It defaults to the deployed behavior and does not itself make a
+    runtime identity least-privileged. Direct migration jobs call Alembic
+    independently and are not controlled by this setting.
+    """
+
+    return config("AUTO_MIGRATE_ON_STARTUP", default=True, cast=bool)
+
+
 def database_url():
     """
     This is also used by alembic logic as well, which is why it's extracted out
@@ -42,7 +54,11 @@ def configure_database():
     except AttributeError:
         _in_alembic = False
 
-    if not _in_alembic and (is_production() or is_staging()):
+    if (
+        not _in_alembic
+        and (is_production() or is_staging())
+        and should_auto_migrate_on_startup()
+    ):
         run_migrations()
 
     activemodel.init(database_url())

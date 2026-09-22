@@ -79,7 +79,7 @@ def _normalized_naive_utc(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None)
 
 
-def _validate_existing_fixture(
+def validate_exact_synthetic_fixture(
     *,
     doctor: Doctor,
     fixture: SyntheticPreviewAppointmentFixture,
@@ -167,7 +167,7 @@ def ensure_staging_synthetic_appointment(
                     Appointment.patient_id == fixture.patient_id,
                 )
             ).one_or_none()
-            _validate_existing_fixture(
+            validate_exact_synthetic_fixture(
                 doctor=doctor,
                 fixture=fixture,
                 patient=patient,

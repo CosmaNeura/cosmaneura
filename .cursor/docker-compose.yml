@@ -1,0 +1,9 @@
+services:
+  postgres:
+    image: postgres:16.9@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc
+
+  redis:
+    image: redis:6.2.18@sha256:f3f3a0e0fc82db539bf84aed94f03d8cab9e2b57e2348512f8a1b0aae1d24444
+
+  mailpit:
+    image: axllent/mailpit:v1.31.0@sha256:29154cb86d35bcff4c0f82f185fc6720e89248b2cd2bc43f312a2b31fddd34ad

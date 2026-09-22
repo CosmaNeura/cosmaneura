@@ -1,0 +1,184 @@
+# Read-only snapshot source collection (Tier 2)
+
+## Review48 deadline correction — September15
+
+Require the original process-read deadline immediately after native ps returns
+and again after post-read executable revalidation. Final cleanup also checks
+its original two-second deadline after the empty group read. A subprocess timeout
+alone does not include all native creation/return/hash time. New invented tests
+cover just-before, exactly-at and after expiry in both native read and tool hash,
+plus final cleanup read. No runtime18 file, network route, credential, resource
+operation or human gate changes. Original48FAIL remains; exact re-review is owed.
+Two new and two directly affected methods PASS0.182s, including actual dedicated
+credentialless-child output/timeout cleanup; Ruff/format/Pyright/diff PASS.
+
+## Review43 documentation correction — September15
+
+Actual PR411 base: `34650cc8b3d9a408c5573943b2032473be2cf793` (PR410).
+Code head evaluated by review43: `496bb61e7f5523a64cf783dd5a0abf84068c1374`.
+Review43 response: `resp_0d3038609829de25006aa916cd78f88190b3c9080ba79f65e6`.
+That review passed the implementation and public-helper integration, but failed
+the PR because this flight plan still named a historical base and review state.
+This documentation correction preserves those code bytes. Its exact new head
+is supplied by the Git review manifest, not by a self-referential hash here.
+Packaging checks must compare this base, reviewed-code head and review identifier
+with the exact manifest and retained review43 response before transmission.
+No historical source review is current plan, merge or execution authority.
+
+## Review42 correction — September15
+
+The empty pre-reap process list was ambiguous, not proof of absence. Cleanup now
+makes one cancellation attempt against the owned, still-unreaped group unless
+inspection proves it contains only its zombie leader (macOS can reject signalling
+that already-dead group). Every pre-reap read must contain the leader and unique PIDs;
+success requires exactly one zombie leader, followed by reaping and an empty
+post-reap group. Empty, duplicate, missing-leader or denied pre-reap reads refuse,
+even if later cleanup succeeds. No signal follows reaping on any path. Existing
+two-second cleanup and original accepted-evidence deadlines remain unchanged.
+Tests cover ambiguous reads with/without active survivors, duplicate zombie
+rows, missing leaders, denied inspection and a post-reap survivor, plus affected
+real descendant/timeout cleanup. This is only a public source-helper correction;
+the sealed snapshot runtime, human-only gates and cloud operations are unchanged.
+
+Six selected new/affected methods passed in0.341s, including real dedicated
+descendant absence and timeout/output cleanup. The first candidate's unconditional
+signal failed one selected test with macOS EPERM on a lone zombie; that failure
+was retained and fixed by the exact lone-zombie proof above, not by accepting a
+denied signal. A test-only parameter-name warning was corrected separately.
+No full-suite, unchanged-test, paid-CI or human-consumer execution occurred.
+
+## Review41 correction — September15
+
+Observe a finished leader with waitid/WNOWAIT, keeping its PID allocated while
+retiring its owned process group. The pinned system ps selects only that PGID;
+unknown/denied reads are not absence. Cancel surviving active members, require
+only the unreaped zombie leader to remain, reap it, then read back an empty group.
+Never signal after reaping. Retain the shared two-second cleanup bound and reject
+accepted evidence beyond the original command deadline. No new network route,
+credential operation, human consumer or sealed-runtime change is introduced.
+New regressions cover a successful leader leaving a sleeping child that closes
+standard streams and the kill-before-reap ordering. Fresh exact review is owed.
+
+## One outcome
+
+Collect actual GitHub readbacks and local Git object bytes for the snapshot's
+exact18-file source bundle. Stack on the actual PR410 base recorded above.
+The earlier `8af123a56a2262f62b3cb7b27ad7f26e70951a8d` was a historical PR410
+head, not this correction's base. This is public preparation, outside the
+human consumer; no bootstrap dependency/pin or deployment policy changes.
+
+The expected PR head and every file digest MUST come from an actual independent
+review of the WHOLE bundle, not only a patch, a locally computed hash or an
+implementer's assertion. A source-review record and external provenance remain
+necessary; this module cannot independently establish the review. Historical
+review40 failed an earlier runtime. Review43's source-code PASS is limited to
+the code head above; the corrected PR still requires independent review, and
+the final runtime/plan/handoff retain their separate exact-review gates.
+
+The selected final PR must be merged to this repository's protected master.
+All18 files are attributed to that reviewed final head as REVIEW COVERAGE, not
+as their original introduction/author. Earlier component PR review requirements
+remain and are not waived. The final head and protected source must have exactly
+the reviewed bytes for every loaded file. Unrelated later master changes cannot
+silently change a loaded source file; any mismatch refuses.
+
+## Closed read-only transport
+
+Only the recorded GitHub CLI2.97.0 and macOS Git executable are used. Check their
+fixed canonical leaf, owner/mode/size/content and retained metadata before/after
+each command. The Git leaf is root-owned and has system hard links; this is not
+the snapshot runtime's one-link file policy. Source constants pin these exact
+observed public binaries; updating either requires a new reviewed source pin.
+This is a cooperative trusted-CLI interface, not a malicious same-UID/root/native
+code sandbox or a defense against all executable-path races.
+
+Use a closed environment with the effective user's ordinary GitHub configuration,
+no inherited token/proxy/config overrides, explicit github.com, disabled prompts,
+no system/global Git config, no replacement objects or optional Git locks.
+Do not change sign-in, roles, scopes, tokens or credential configuration.
+
+Allowed GitHub calls are GET only: master, master protection, the existing exact
+ruleset, Actions permission, one exact PR, exact-head statuses and exact-head
+check runs. Routes cannot escape this repository or change pagination. Only
+local Git origin/shallow/common-directory metadata, exact commit/blob reads and
+one ancestry query are allowed. Fetch, push, checkout, status publication, merge,
+arbitrary paths/commands, and arbitrary GitHub GET/POST routes are rejected.
+
+Each child has an original30-second ceiling within the collection's180-second
+deadline. Stdout is bounded while reading (128KiB per source/commit,8MiB per API
+reply); stderr is discarded, not logged. Children run in owned process groups.
+Failure kills/reaps the still-unreaped owned group; PID reuse cannot occur before
+that wait. No retry or background child is launched. There is a separate bounded
+two-second cleanup wait, never an extension of accepted evidence time.
+
+## Exact checks and preserved evidence
+
+Require the expected origin, complete local history and no legacy graft file.
+Missing Git objects refuse; any ordinary fetch must be a separate authorized
+preparation step. Current master must equal the external expected source commit
+and remain protected. Preserve strict Backend/Frontend/change-budget, issuer-null
+policy, admin enforcement, stale-review/conversation settings, zero existing
+native approvals, no force/deletion, exact active ruleset and empty bypass list.
+Actions must remain disabled. This collector never changes those settings.
+
+Require the exact reviewed PR head, same head/base repository and master target,
+closed/merged state and provider merge SHA. Recompute that local Git commit's
+object ID and require its normal two-parent shape with reviewed head second;
+require it contained in the current source commit. This proves content/ancestry
+and compatible merge structure, not an audit of historical branch settings or
+the user's separate merge consent. Preserve the actual normal-merge action and
+independent-review evidence for the final plan reviewer too.
+
+Require genuine successful current required statuses/checks at the exact head.
+Reject missing/pending/failing results and same-name non-success check runs even
+if a status says success. Reject incomplete pagination or duplicate status names.
+The approved issuer-neutral policy is not cryptographic local-test attestation;
+the durable actual test commands/results and unchanged-input reuse evidence must
+still support any success report. No review text is treated as test execution.
+
+Read every source file at both reviewed head and protected source. Compare bytes
+and the external SHA256; the expected name catalog is closed. Refresh required
+statuses/checks, master, full protection, ruleset and Actions state afterward.
+Changed source/policy or failed checks refuse. Use the original observation time,
+not completion time, so collection work cannot renew the ten-minute source
+evidence age. Reject total-time excess and wall/monotonic clock divergence.
+
+Return immutable tuples of original public evidence and source bytes, their hash
+map, and the exact existing artifact-reader provenance schema. No file is written,
+source loaded, authorization minted, or evidence signed. The caller must preserve
+original records with exclusive protected writes and retain producer/transport
+provenance for independent review. Collection is not an atomic lock against later
+GitHub changes; recheck at the required handoff/merge gates. No source record,
+plan or handoff may be fabricated, relabeled, extended or reused after change.
+
+## Verification and remaining work
+
+Sixteen new fixture methods passed, then one new tool-pin test passed:17 distinct
+methods. Cases include complete schema/file coverage, external digest validation,
+input-map snapshotting, unmerged/foreign/wrong-head PRs, master/file drift, shallow/
+grafted/missing history, corrupt or non-normal merge objects, policy and check
+drift, collisions/pagination, elapsed/clock bounds, invalid JSON, closed commands,
+clean environment and tool content/type/mode changes. All GitHub/Git collection
+facts are invented. The schema check reads the existing artifact-reader AST,
+never imports or invokes the human consumer.
+
+Dedicated real local Python children verified successful bounded stdout, oversized
+stdout refusal, timeout cancellation, descriptor closure and reaping. No network,
+credentials, encrypted workspace or live snapshot ran. Ruff/format, explicit-
+interpreter Pyright and whitespace checks pass. An AST fixture type-narrowing
+correction added assertions without changing the executed acceptance logic.
+
+A separate public read-only diagnostic verified the actual pinned Git/GitHub
+tool bytes and read the already-merged407Git object. Its object ID and two exact
+parents matched the recorded normal merge. It made NO GitHub network call and
+did NOT invoke collect_provenance or produce any source/plan/handoff artifact.
+It is tool/Git-read compatibility evidence, not live acceptance of the snapshot.
+
+Independent review of this documentation correction is pending. Transmission
+allowance and expiry belong to the actual same-task authorization ledger, not
+this historical flight plan. No submission/merge authority is inferred.
+Source recovery is a normal reviewed
+revert or leaving this dormant; no deployed state or user data was changed.
+Next finish the reviewed public artifact producer and actual human-return gates,
+then snapshot/isolated restore/four migrations and the separately authorized
+human staging release. Clerk and ordered Zoom acceptance follow usable staging.

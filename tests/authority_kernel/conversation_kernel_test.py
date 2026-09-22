@@ -3,7 +3,9 @@ from uuid import UUID, uuid4
 
 import pytest
 
+import app.services.authority as authority_service
 import app.services.authority_conversation as conversation_service
+import app.services.session_prep as session_prep_service
 from app.configuration.authority import AuthorityKernelSettings
 from app.services.authority import (
     AuthorityRequestDeniedError,
@@ -439,6 +441,67 @@ def test_provider_ui_action_requires_current_provider_context(
         )
 
     assert not authority_session.exec(select(CanonicalConversationTurn)).all()
+
+
+def test_session_prep_accepts_a_fresh_canonical_open_action(
+    authority_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert "session-prep:read" not in authority_service.PROVIDER_CAPABILITIES
+    monkeypatch.setattr(
+        authority_service,
+        "PROVIDER_CAPABILITIES",
+        (*authority_service.PROVIDER_CAPABILITIES, "session-prep:read"),
+    )
+    token, client_turn_id, interaction_ref, _ = _provider_context(authority_session)
+    accepted = _write(
+        authority_session,
+        context_token=token,
+        client_turn_id=client_turn_id,
+        interaction_ref=interaction_ref,
+        idempotency_key="idem-session-prep-open-0001",
+        payload={
+            "phase": "user_accepted",
+            "ingress_kind": "provider_ui_action",
+            "action_code": "session-prep.open",
+            "message": {
+                "content_type": "text/plain",
+                "content": "Open Session Prep",
+            },
+        },
+    )
+
+    authorized = session_prep_service.authorize_session_prep_read(
+        workload_client_id=WORKLOAD_CLIENT_ID,
+        mount_context_token=token,
+        interaction_ref=interaction_ref,
+        client_turn_id=client_turn_id,
+        source_turn_ref=accepted.turn_ref,
+        settings=ENABLED_SETTINGS,
+        session=authority_session,
+    )
+
+    assert authorized.authorized.lineage.interaction_ref == interaction_ref
+    assert authorized.turn_closed is False
+
+    _write(
+        authority_session,
+        context_token=token,
+        client_turn_id=client_turn_id,
+        interaction_ref=interaction_ref,
+        idempotency_key="idem-session-prep-final-0001",
+        payload=_final_payload("Synthetic Session Prep response."),
+    )
+    closed = session_prep_service.authorize_session_prep_read(
+        workload_client_id=WORKLOAD_CLIENT_ID,
+        mount_context_token=token,
+        interaction_ref=interaction_ref,
+        client_turn_id=client_turn_id,
+        source_turn_ref=accepted.turn_ref,
+        settings=ENABLED_SETTINGS,
+        session=authority_session,
+    )
+    assert closed.turn_closed is True
 
 
 def test_audit_insert_failure_rolls_back_the_canonical_phase(

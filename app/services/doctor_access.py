@@ -1,9 +1,10 @@
 """One fail-closed authorization decision for Doctor-facing product access.
 
-The decision is deliberately read-only.  In particular, a legacy pilot grant
-does not create or repair a practice membership, change a tenant, or elevate a
-Doctor's role.  It is only an additional, revocable basis for bypassing the
-personal BAA and practice-entitlement gates.
+The decision is deliberately read-only. An exact, active legacy-pilot grant on
+an already-onboarded Doctor is an independent authorization basis: it preserves
+the reviewed cohort's access without creating or rewriting membership, BAA, or
+billing state. Disabled Doctors and explicit grant or membership revocations
+remain hard denials.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from app.services.pilot_access_grandfather import (
 )
 
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import ClinicianSeatState, Practice, PracticeMember
 
 DoctorAccessBasis = Literal[
     "pilot_grant",
@@ -31,6 +32,7 @@ DoctorAccessDenialReason = Literal[
     "pilot_grant_revoked",
     "practice_membership_required",
     "practice_membership_revoked",
+    "practice_membership_inactive",
     "practice_not_found",
     "practice_access_not_authorized",
     "baa_not_in_force",
@@ -64,6 +66,22 @@ def _denied(
     )
 
 
+def _has_valid_legacy_pilot_access(
+    doctor: Doctor,
+    *,
+    has_active_grant: bool,
+) -> bool:
+    """Recognize an active pilot grant for a completed-onboarding Doctor.
+
+    The current fixed cohort's grants all belong to Doctors whose onboarding
+    was already complete before the access regression. Requiring that durable
+    marker excludes pre-login grant rows without adding an aggregate cohort
+    scan to every authorized request.
+    """
+
+    return doctor.onboarding_completed_at is not None and has_active_grant
+
+
 def resolve_doctor_access(
     doctor: Doctor,
     *,
@@ -72,12 +90,12 @@ def resolve_doctor_access(
 ) -> DoctorAccessDecision:
     """Resolve effective product access without mutating identity or tenancy.
 
-    A disabled Doctor, a revoked grandfather grant, or a revoked existing
+    A disabled Doctor, a revoked grandfather grant, or a revoked or inactive
     membership is an explicit tombstone and therefore outranks every positive
-    authorization basis.  An active exact-account pilot grant then permits
-    access without requiring a membership, BAA, trial, subscription, or
-    billing exemption.  Everyone else continues through the existing
-    practice/member authorization rules.
+    authorization basis. An active exact-account pilot grant on an
+    already-onboarded Doctor then permits access without requiring a membership,
+    BAA, trial, subscription, or billing exemption. Everyone else continues
+    through the normal practice/member authorization rules.
     """
 
     if doctor.deleted_at is not None:
@@ -89,7 +107,13 @@ def resolve_doctor_access(
     member = PracticeMember.get(doctor_id=doctor.id)
     practice = Practice.get(id=member.practice_id) if member is not None else None
     baa_in_force = bool(practice and practice.baa_in_force(at=at))
-    entitlement_in_force = bool(practice and practice.entitled(at=at))
+    pilot_grant = active_pilot_access_grant(doctor, at=at)
+    pilot_entitlement_in_force = bool(
+        practice and pilot_grant and pilot_grant.practice_id_snapshot == practice.id
+    )
+    entitlement_in_force = bool(
+        practice and (practice.entitled(at=at) or pilot_entitlement_in_force)
+    )
 
     if member is not None and member.access_revoked_at is not None:
         return _denied(
@@ -98,7 +122,17 @@ def resolve_doctor_access(
             entitlement_in_force=entitlement_in_force,
         )
 
-    if active_pilot_access_grant(doctor, at=at) is not None:
+    if member is not None and member.seat_state != ClinicianSeatState.active.value:
+        return _denied(
+            "practice_membership_inactive",
+            baa_in_force=baa_in_force,
+            entitlement_in_force=entitlement_in_force,
+        )
+
+    if _has_valid_legacy_pilot_access(
+        doctor,
+        has_active_grant=pilot_grant is not None,
+    ):
         return DoctorAccessDecision(
             allowed=True,
             authorization_basis="pilot_grant",
@@ -131,7 +165,7 @@ def resolve_doctor_access(
         )
     return DoctorAccessDecision(
         allowed=True,
-        authorization_basis=basis,
+        authorization_basis="pilot_grant" if pilot_entitlement_in_force else basis,
         denial_reason=None,
         baa_in_force=True,
         entitlement_in_force=entitlement_in_force,

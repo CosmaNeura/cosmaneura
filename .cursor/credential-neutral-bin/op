@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+echo "1Password access is disabled in the credential-neutral Cursor environment." >&2
+exit 127

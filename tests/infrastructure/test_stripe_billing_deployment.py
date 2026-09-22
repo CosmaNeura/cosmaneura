@@ -51,7 +51,7 @@ def test_production_scopes_stripe_capabilities_to_api_and_worker() -> None:
     assert api.count("var.python_billing_api_only_secret_vars") == 2
     assert worker.count("var.python_billing_secret_vars") == 2
     assert "python_billing_api_only_secret_vars" not in worker
-    for workload in ("scheduler", "job-monitor"):
+    for workload in ("scheduler",):
         block = _hcl_block(main, f'resource "azurerm_container_app" "{workload}"')
         assert "python_billing" not in block
 

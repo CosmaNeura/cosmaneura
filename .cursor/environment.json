@@ -1,0 +1,25 @@
+{
+  "name": "cosmaneura",
+  "install": "/usr/bin/env -i /bin/bash --noprofile --norc -- .cursor/credential-neutral.sh install",
+  "start": "/usr/bin/env -i /bin/bash --noprofile --norc -- .cursor/credential-neutral.sh start",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "/usr/bin/env -i /bin/bash --noprofile --norc -- .cursor/credential-neutral.sh backend"
+    },
+    {
+      "name": "frontend",
+      "command": "/usr/bin/env -i /bin/bash --noprofile --norc -- .cursor/credential-neutral.sh frontend"
+    }
+  ],
+  "ports": [
+    {
+      "name": "backend",
+      "port": 8205
+    },
+    {
+      "name": "frontend",
+      "port": 8207
+    }
+  ]
+}

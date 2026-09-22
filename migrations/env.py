@@ -21,7 +21,9 @@ from sqlmodel import SQLModel
 from app.models import *
 from app.configuration.database import database_url
 
-config.set_main_option("sqlalchemy.url", database_url())
+# ConfigParser reserves percent signs for interpolation. Double them while
+# storing the URL so Alembic returns the original percent-encoded value.
+config.set_main_option("sqlalchemy.url", database_url().replace("%", "%%"))
 
 # add your model's MetaData object here
 # for 'autogenerate' support

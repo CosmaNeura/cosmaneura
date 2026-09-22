@@ -5,10 +5,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 from typing import Any
 
 ALEMBIC_ARGS = ["/opt/venv/bin/alembic upgrade head"]
+# The pinned staging image predates the migrations/env.py ConfigParser fix.
+# Patch only that boundary before Alembic imports the application: startup and
+# all other database clients must continue to receive the original URL.
+STAGING_ALEMBIC_BOOTSTRAP = (
+    "from alembic.config import Config,CommandLine;"
+    "original_set=Config.set_main_option;"
+    "Config.set_main_option=lambda self,name,value:original_set("
+    'self,name,value.replace("%","%%") if name=="sqlalchemy.url" else value);'
+    'CommandLine().main(argv=["upgrade","head"])'
+)
+STAGING_ALEMBIC_ARGS = [
+    "/opt/venv/bin/python -c " + shlex.quote(STAGING_ALEMBIC_BOOTSTRAP)
+]
 
 
 def _names(value: str) -> set[str]:
@@ -26,13 +40,36 @@ def validate_template(
     expected_name: str,
     expected_image: str,
     database_secret_name: str,
+    raw_database_secret_name: str | None,
     secret_env_names: set[str],
     public_env_names: set[str],
+    staging_alembic_compatibility: bool = False,
 ) -> str | None:
-    if not isinstance(payload, list) or len(payload) != 1:
+    if raw_database_secret_name is None:
+        containers = payload
+    else:
+        if raw_database_secret_name == database_secret_name:
+            return "database secret identities"
+        if not isinstance(payload, dict) or set(payload) != {
+            "containers",
+            "secretNames",
+        }:
+            return "provider response shape"
+        secret_names = payload["secretNames"]
+        if not isinstance(secret_names, list) or not all(
+            isinstance(name, str) and name for name in secret_names
+        ):
+            return "secret inventory shape"
+        if (
+            secret_names.count(database_secret_name) != 1
+            or secret_names.count(raw_database_secret_name) != 1
+        ):
+            return "database secret inventory"
+        containers = payload["containers"]
+    if not isinstance(containers, list) or len(containers) != 1:
         return "container cardinality"
 
-    container = payload[0]
+    container = containers[0]
     if not isinstance(container, dict):
         return "container shape"
     if container.get("name") != expected_name:
@@ -41,7 +78,10 @@ def validate_template(
         return "image identity"
     if container.get("command") not in (None, []):
         return "persistent command"
-    if container.get("args") != ALEMBIC_ARGS:
+    expected_args = (
+        STAGING_ALEMBIC_ARGS if staging_alembic_compatibility else ALEMBIC_ARGS
+    )
+    if container.get("args") != expected_args:
         return "persistent arguments"
 
     env = container.get("env")
@@ -86,12 +126,17 @@ def validate_template(
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--staging-alembic-command"]:
+        print(STAGING_ALEMBIC_ARGS[0])
+        return 0
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-name", required=True)
     parser.add_argument("--expected-image", required=True)
     parser.add_argument("--database-secret-name", required=True)
+    parser.add_argument("--raw-database-secret-name")
     parser.add_argument("--secret-env-names", required=True)
     parser.add_argument("--public-env-names", default="")
+    parser.add_argument("--staging-alembic-compatibility", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -104,8 +149,10 @@ def main() -> int:
         expected_name=args.expected_name,
         expected_image=args.expected_image,
         database_secret_name=args.database_secret_name,
+        raw_database_secret_name=args.raw_database_secret_name,
         secret_env_names=_names(args.secret_env_names),
         public_env_names=_names(args.public_env_names),
+        staging_alembic_compatibility=args.staging_alembic_compatibility,
     )
     return _fail(reason) if reason else 0
 

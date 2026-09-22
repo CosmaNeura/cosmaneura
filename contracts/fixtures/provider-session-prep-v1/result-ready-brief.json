@@ -1,0 +1,66 @@
+{
+  "schema_version": "1.0.0",
+  "state": "ready",
+  "detail": "brief",
+  "freshness": "current",
+  "completeness": "complete",
+  "current_through": "2026-09-02T12:00:00Z",
+  "snapshot_ref": "snapshot_synthetic_001",
+  "snapshot_version": 1,
+  "snapshot_generated_at": "2026-09-02T12:00:01Z",
+  "snapshot_supersedes_ref": null,
+  "source_version_digest": "sha256_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "brief_ref": "brief_synthetic_001",
+  "brief_version": 1,
+  "brief_generated_at": "2026-09-02T12:00:02Z",
+  "brief_supersedes_ref": null,
+  "brief_generator_version": "session_prep_generator_v1",
+  "brief_prompt_version": "session_prep_prompt_v1",
+  "brief_model_profile": null,
+  "source_count": 1,
+  "provenance": [
+    {
+      "source_class": "clinician_finalized_note",
+      "included": true,
+      "source_ref": "note_synthetic_001",
+      "source_version": 1,
+      "source_at": "2026-08-12T14:30:00Z",
+      "author_class": "clinician",
+      "reason_code": "eligible_finalized_note"
+    },
+    {
+      "source_class": "patient_reported_visit_prep",
+      "included": false,
+      "source_ref": null,
+      "source_version": null,
+      "source_at": null,
+      "author_class": null,
+      "reason_code": "source_not_enabled"
+    }
+  ],
+  "prepared_brief": {
+    "recap": {
+      "text": "A synthetic finalized note is available for review.",
+      "source_refs": ["note_synthetic_001"]
+    },
+    "trajectory_and_material_changes": [],
+    "talking_points": [
+      {
+        "text": "Confirm the prior plan and any interval changes.",
+        "source_refs": ["note_synthetic_001"]
+      }
+    ],
+    "open_threads": [],
+    "cautions": [],
+    "suggested_outline": [
+      {
+        "text": "Review progress against the documented prior plan.",
+        "source_refs": ["note_synthetic_001"]
+      }
+    ],
+    "patient_reported": null
+  },
+  "supporting_context": null,
+  "retry_after_seconds": null,
+  "reason_code": null
+}

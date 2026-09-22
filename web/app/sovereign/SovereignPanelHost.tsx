@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
@@ -11,7 +11,6 @@ import {
 type PanelContext = {
   clientId: string
   thread_ref?: string
-  context_snapshot_ref?: string
   digest_ref?: string
   terminology?: string
   care_model?: string
@@ -396,7 +395,7 @@ export function SovereignPanelHost({
   const config = resolveSovereignProviderConfig()
   const panelRef = useRef<PanelInstance | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!config) return
     let cancelled = false
     let mounted: PanelInstance | null = null
@@ -421,9 +420,9 @@ export function SovereignPanelHost({
             if (cancelled) {
               throw new Error("Open record changed while context was resolving")
             }
-            // No legacy raw history, note, patient, or labs grant crosses this
-            // boundary. Governed opaque refs can be added only when the platform
-            // exposes their ratified record-scoped read contract.
+            // The record-bound mount token is the only authority input. No raw
+            // history, note, patient, labs content, or Session Prep handle
+            // crosses this browser bridge.
             return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,

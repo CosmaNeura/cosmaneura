@@ -3,7 +3,7 @@ import sentry_sdk.integrations
 from decouple import config
 from posthog.sentry.posthog_integration import PostHogIntegration
 
-from ..environments import is_job_monitor, is_production, python_environment
+from ..environments import is_job_monitor, is_production, is_staging, python_environment
 
 _SAFE_SPAN_FIELDS = frozenset(
     {
@@ -42,6 +42,18 @@ _SAFE_SPAN_OPERATIONS = frozenset(
 )
 _SAFE_TRANSACTION_SOURCES = frozenset({"component", "route", "task", "view"})
 _REDACTED_TRANSACTION = "<redacted transaction>"
+
+
+def sentry_enabled() -> bool:
+    """Return whether this runtime is explicitly allowed to send to Sentry."""
+
+    if is_production():
+        return True
+    if not is_staging():
+        return False
+
+    # Keep staging fail-closed: only the exact managed value enables it.
+    return config("SENTRY_STAGING_ENABLED", default="false", cast=str) == "true"
 
 
 def scrub_event(event, _hint=None):
@@ -131,7 +143,7 @@ def scrub_event(event, _hint=None):
 def configure_sentry(integrations=None):
     from app import log
 
-    if not is_production():
+    if not sentry_enabled():
         return
 
     if is_job_monitor():
