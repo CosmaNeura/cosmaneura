@@ -1,6 +1,6 @@
-import type { MetaFunction } from "react-router"
+import { type MetaFunction, data, isRouteErrorResponse } from "react-router"
 
-import { Route } from "./+types/detail"
+import type { Route } from "./+types/detail"
 
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { Separator } from "@/components/ui/separator"
@@ -16,6 +16,10 @@ import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
+import {
+  practiceAgreementBlockFromClientResult,
+  practiceAgreementBlockFromUnknown,
+} from "~/lib/practice-gate-error"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
@@ -38,16 +42,27 @@ export function EmptyNotes() {
 }
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
-  const { data } = await noteDetail({
-    path: {
-      appointment_id: loaderArgs.params.id,
-    },
-  })
+  try {
+    const result = await noteDetail({
+      throwOnError: false,
+      signal: loaderArgs.request.signal,
+      path: {
+        appointment_id: loaderArgs.params.id,
+      },
+    })
+    const blocked = practiceAgreementBlockFromClientResult(result)
+    if (blocked) {
+      throw data(blocked, { status: 403 })
+    }
 
-  // TODO need idiomatic error handling here
-  invariant(data, "data should exist")
-
-  return data
+    invariant(result.data, "data should exist")
+    return result.data
+  } catch (error) {
+    if (isRouteErrorResponse(error)) throw error
+    const blocked = practiceAgreementBlockFromUnknown(error)
+    if (blocked) throw data(blocked, { status: 403 })
+    throw error
+  }
 }
 
 // TODO can we make this dynamic?
