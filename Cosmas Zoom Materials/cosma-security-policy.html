@@ -30,9 +30,9 @@
   <div class="doc-title">Security Policy</div>
   <div class="doc-subtitle">Cosmaneura, Inc. — Cosma application</div>
   <div class="doc-meta">
-    <div><strong>Version:</strong> 1.0</div>
-    <div><strong>Effective:</strong> 2026-04-20</div>
-    <div><strong>Next review:</strong> 2027-04-20</div>
+    <div><strong>Version:</strong> 1.1</div>
+    <div><strong>Effective:</strong> 2026-08-25</div>
+    <div><strong>Next review:</strong> 2027-08-25</div>
     <div><strong>Owner:</strong> CTO / Security Lead</div>
   </div>
 </div>
@@ -74,7 +74,7 @@
   <tr><td>Encryption in transit</td><td>TLS 1.2+ enforced for all ingress and outbound integrations.</td></tr>
   <tr><td>Encryption at rest</td><td>Azure-managed encryption for PostgreSQL and Azure Blob Storage; application-layer AES-128 (Fernet) on sensitive columns such as Zoom OAuth tokens.</td></tr>
   <tr><td>Webhook integrity</td><td>HMAC-SHA256 verification of Zoom webhook challenges; Redis-based replay protection (48 h dedup window).</td></tr>
-  <tr><td>Source control</td><td>Private GitHub repository; <code>master</code> protected; every change requires pull-request review before merge.</td></tr>
+  <tr><td>Source control</td><td>Private GitHub repository; protected default branch; every change uses a pull request. Strict Tier 0 changes may auto-merge only after all required CI passes. Every other change requires human review. Tier 0 excludes governance, CI/workflows, dependencies, security or environment configuration, auth, billing, patient data, and other sensitive paths.</td></tr>
   <tr><td>CI/CD gating</td><td>Automated lint (Ruff, ESLint), type checks (Pyright, TypeScript), migration safety (squawk-cli), and tests (pytest, Vitest) must pass before deploy.</td></tr>
   <tr><td>Monitoring</td><td>Sentry (errors, traces) + structlog (structured JSON logs) + PostHog (product analytics); on-call rotation triages alerts.</td></tr>
   <tr><td>Vulnerability management</td><td>See separate Vulnerability Management Policy.</td></tr>
@@ -94,7 +94,7 @@
 <p>Security questions and disclosures: <code>dev@cosmaneura.com</code> &nbsp;·&nbsp; General: <code>info@cosmaneura.com</code></p>
 
 <div class="footer">
-  Cosmaneura, Inc. · Security Policy · v1.0 · 2026-04-20
+  Cosmaneura, Inc. · Security Policy · v1.1 · 2026-08-25
 </div>
 
 </body>
