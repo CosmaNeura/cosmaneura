@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLATFORM_GROUP="cosmaneura-staging"
 PLATFORM_APP="cosmaneura-staging-app"
+EXPECTED_PLATFORM_CONTAINER_NAME="cosmaneura-staging-app-web"
 EXPECTED_PLATFORM_ORIGIN="https://staging-app.cosmaneura.com"
 EXPECTED_PLATFORM_IMAGE_DIGEST="${EXPECTED_PLATFORM_IMAGE_DIGEST:-}"
 SOVEREIGN_GROUP="cosmaneura-sovereign-staging"
@@ -51,9 +52,9 @@ PLATFORM_REVISION="$(az containerapp revision show \
 	--revision "$PLATFORM_READY_REVISION" \
 	--query "{containers:properties.template.containers[].{name:name,image:image,env:env[?name=='API_BASE_URL'].{name:name,value:value,secretRef:secretRef}},health:properties.healthState,running:properties.runningState,provisioning:properties.provisioningState}" \
 	--output json)"
-if ! PLATFORM_CONTRACT=$(jq -cer --arg app "$PLATFORM_APP" '
+if ! PLATFORM_CONTRACT=$(jq -cer --arg expected_container "$EXPECTED_PLATFORM_CONTAINER_NAME" '
 	select((.containers | type) == "array" and (.containers | length) == 1 and
-	 .containers[0].name == $app and .health == "Healthy" and
+	 .containers[0].name == $expected_container and .health == "Healthy" and
 	 .provisioning == "Provisioned" and
 	 (.running == "Running" or .running == "RunningAtMaxScale")) |
 	.containers[0] as $container |
@@ -86,10 +87,12 @@ run_probe() {
 	}
 }
 
-provider_command="PYTHONPATH=/app /opt/venv/bin/python /app/infra-staging/provider_v7_smoke.py"
+payload="$(python3 -c 'import base64,sys,zlib;print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$ROOT/infra-staging/provider_v7_acceptance.py")"
+provider_command="PYTHONPATH=/app /opt/venv/bin/python -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('$payload')))\""
 for argument in "$PLATFORM_ORIGIN" "https://$PROVIDER_FQDN" "https://$PUBLIC_FQDN"; do
 	provider_command+=" '$argument'"
 done
+[[ ${#provider_command} -lt 2000 ]] || fail
 run_probe "$PLATFORM_GROUP" "$PLATFORM_APP" "$provider_command" "V7_PROVIDER_SMOKE PASS"
 
 payload="$(python3 -c 'import base64,sys,zlib;print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$ROOT/infra-staging/provider_v7_public_probe.py")"

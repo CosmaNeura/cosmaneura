@@ -2620,5 +2620,54 @@ def restore_visit_note_version_command(
     )
 
 
+@app.command("verify-alert-delivery")
+def verify_alert_delivery(flush_seconds: float = 15.0):
+    """Fire a deliberate test alert and confirm a human receives it.
+
+    Everything in `tests/services/alerting_test.py` proves the alert is built
+    correctly and survives the PHI scrubber. None of it proves the last hop:
+    that Sentry is configured to notify a person for this issue type. An
+    alerting system nobody is subscribed to fails exactly the way the silent
+    logging it replaced did, and the only way to know is to send one and look.
+
+    Refuses to claim success it cannot back. Staging Sentry requires the
+    explicit SENTRY_STAGING_ENABLED control and an approved sink. An inactive
+    client reports that nothing was sent rather than printing a reassuring
+    message over a no-op. It also flushes explicitly: the SDK's atexit flush allows two
+    seconds, and a probe that exits before its own event is transmitted would
+    report delivery while proving none.
+    """
+
+    import sentry_sdk
+
+    from app.environments import python_environment
+    from app.services import alerting
+
+    environment = python_environment()
+    client = sentry_sdk.get_client()
+
+    if not client.is_active():
+        typer.secho(
+            f"Sentry is not initialised for PYTHON_ENV={environment!r}, so nothing "
+            "was sent.\n"
+            "Configure the approved Sentry sink for this environment before "
+            "rerunning. Staging additionally requires SENTRY_STAGING_ENABLED=true.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=1)
+
+    alerting.alert(alerting.AlertDeliveryProbe, environment=environment)
+    sentry_sdk.flush(timeout=flush_seconds)
+
+    typer.echo(
+        f"Fired AlertDeliveryProbe (environment={environment}) and flushed.\n"
+        "Now confirm two separate things:\n"
+        "  1. a Sentry issue titled AlertDeliveryProbe exists\n"
+        "  2. a notification for it reached a channel a human reads\n"
+        "Only the second one is the thing being tested. An issue with no "
+        "subscriber fails the same way the silent logging it replaces did."
+    )
+
+
 if __name__ == "__main__":
     app()

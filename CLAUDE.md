@@ -2,7 +2,7 @@
 
 > Architecture decisions for this system live in the `cosmaneura-architecture` repo, in `ARCHITECTURE.md`. Read it before making structural changes. If a change conflicts with it, stop and resolve the conflict rather than proceeding.
 
-Ese repo también contiene `AUDIT.md` (auditoría cross-repo contra `ARCHITECTURE.md` v2) y los ADRs en `adr/`. Léelos antes de mover código entre repos.
+That repo also contains the ADR index (`adr/README.md`) and ratified contracts. Read those before moving code between repos. Do not treat historical audit notes as current policy.
 
 ## Qué es
 
@@ -84,8 +84,12 @@ just js_generate-openapi
   `tests/migrations_graph_test.py` verifica el grafo (IDs únicos, sin ciclos, un solo head).
 - Worker y scheduler corren en **contenedores separados** a propósito.
 - Env se gestiona **exclusivamente vía direnv** (`.envrc` + `.env.*`), no en el Justfile.
-- Los pushes a `master` y `staging` ejecutan validación, pero no despliegan. Los despliegues de
-  ambos entornos requieren una ejecución manual iniciada por el fundador desde la rama exacta.
+- `master` es el tronco. Staging y producción son entornos que se promueven a un SHA de `master`
+  explícito y revisado; hacer merge nunca despliega. La rama vestigial `staging` ya no tiene
+  ninguna ruta de despliegue y está en proceso de retirarse. Los despliegues de ambos entornos
+  requieren una ejecución manual iniciada por el fundador: producción con
+  `Build & Publish (manual)` sobre `master`, y staging con `Deploy Staging Candidate`, que recibe
+  un `candidate_sha` contenido en `master`.
 - Aliases de paths frontend: `~/*` y `@/*` → `web/app/*`.
 
 ## Config

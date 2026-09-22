@@ -715,6 +715,7 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     for forbidden in ("docker build", "docker push", "az acr import", "az acr repository delete", "az containerapp update", "az containerapp secret", "az containerapp ingress", "revision deactivate", "alembic upgrade"):
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
-    assert hashlib.sha256(deploy).hexdigest() == "cc41f703af631001ff74269fb6ba32fbbc421b176dd318be85fa1282aaa22555"
+    # Protected-master baseline after e0691079's staging verifier correction.
+    assert hashlib.sha256(deploy).hexdigest() == "602b5f67d936055f25ae90a296f9bf1323e3d09eeeabdd5e05748523939404bd"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

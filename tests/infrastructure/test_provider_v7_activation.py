@@ -43,10 +43,6 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def _staging_job(workflow: str) -> str:
-    return workflow[workflow.index("\n  deploy-staging:") :]
-
-
 def _frontend_resolve_step(job: str, environment: str) -> str:
     start = job.index(f"Resolve {environment} frontend build configuration")
     end = job.index("uses: docker/login-action@", start)
@@ -168,12 +164,15 @@ def _decode_build_arguments(output: bytes) -> dict[str, str]:
 
 
 def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
-    staging_start = workflow.index("\n  deploy-staging:")
+    manual = _read(".github/workflows/build_and_publish_manual.yml")
+    canonical = _read(".github/workflows/deploy_staging_candidate.yml")
 
-    assert setting not in workflow[:staging_start]
-    assert _staging_job(workflow).count(setting) == 1
+    # Only the canonical candidate workflow deploys staging, so only it may
+    # carry this control.
+    assert CONTROL not in manual
+    assert canonical.count(f"vars.{CONTROL}") > 0
+    assert canonical.count(f"vars.{CONTROL}") == canonical.count(setting)
 
     for path in (".env.staging.backend", "just/direnv.just"):
         assert f'{CONTROL}="${{{CONTROL}:-false}}"' in _read(path)
@@ -183,19 +182,20 @@ def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak
     None
 ):
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    staging_start = workflow.index("\n  deploy-staging:")
-    production_job = workflow[:staging_start]
-    staging_job = workflow[staging_start:]
-    production_resolve = _frontend_resolve_step(production_job, "production")
-    staging_resolve = _frontend_resolve_step(staging_job, "staging")
+    canonical = _read(".github/workflows/deploy_staging_candidate.yml")
+    production_resolve = _frontend_resolve_step(workflow, "production")
     exact_boolean_check = f'(.{FRONTEND_FLAG} == "true" or .{FRONTEND_FLAG} == "false")'
 
     assert production_resolve.count(f'\n              {FRONTEND_FLAG}: "false",') == 1
-    assert staging_resolve.count(f"\n              {FRONTEND_FLAG},") == 1
+    assert canonical.count(f"\n              {FRONTEND_FLAG},") == 1
     assert exact_boolean_check in production_resolve
-    assert exact_boolean_check in staging_resolve
+    # Staging's resolver is in the candidate workflow and wraps the same check
+    # across two lines; compare with whitespace collapsed so reindenting the
+    # workflow cannot fail this for a reason unrelated to the contract.
+    assert exact_boolean_check in " ".join(canonical.split())
     assert CONTROL not in production_resolve
     assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in workflow
+    assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in canonical
 
 
 def test_frontend_environment_files_remove_legacy_clerk_token_template() -> None:
@@ -351,4 +351,4 @@ def test_provider_v7_control_does_not_leak_into_production_paths() -> None:
         assert PROVIDER_ORIGIN not in source
 
     workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    assert CONTROL not in workflow[: workflow.index("\n  deploy-staging:")]
+    assert CONTROL not in workflow

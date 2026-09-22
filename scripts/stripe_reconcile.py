@@ -4,7 +4,8 @@
 """One-time Stripe reconciliation for marketing-site subscribers.
 
 Before 2026-08-20 the marketing site sold $89/mo subscriptions whose only
-durable record was a Cloudflare Workers log line (AUDIT.md §3.6 #1). This
+durable record was a Cloudflare Workers log line (no durable platform subscription
+row yet). This
 lists every subscription and its customer straight from Stripe so each one
 can be matched to a Cosmas account, comped via billing_exempt, or refunded.
 

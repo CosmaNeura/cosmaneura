@@ -19,8 +19,8 @@ import zipfile
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
-from typing import Any
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -1053,13 +1053,26 @@ def test_file_permissions_and_ownership(
         recovery._read_protected_file(owner_only, label="artifact")
 
 
+@pytest.mark.parametrize("preserve_ctime", [False, True])
 def test_path_swap_after_open_is_rejected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, preserve_ctime: bool
 ) -> None:
     artifact = _protected_file(tmp_path / "artifact", b"reviewed")
     replacement = _protected_file(tmp_path / "replacement", b"different")
+    original = artifact.stat()
+    real_fstat = os.fstat
     real_read = os.read
     swapped = False
+
+    def unchanged_ctime(descriptor: int) -> os.stat_result:
+        metadata = real_fstat(descriptor)
+        if (metadata.st_dev, metadata.st_ino) != (original.st_dev, original.st_ino):
+            return metadata
+        # A real replacement may fall within the filesystem's timestamp
+        # granularity. Preserve that timestamp, but retain the real link count.
+        fields = {name: getattr(metadata, name) for name in dir(metadata) if name.startswith("st_")}
+        fields["st_ctime_ns"] = original.st_ctime_ns
+        return cast(os.stat_result, SimpleNamespace(**fields))
 
     def swap_then_read(descriptor: int, size: int) -> bytes:
         nonlocal swapped
@@ -1069,6 +1082,8 @@ def test_path_swap_after_open_is_rejected(
         return real_read(descriptor, size)
 
     monkeypatch.setattr(recovery.os, "read", swap_then_read)
+    if preserve_ctime:
+        monkeypatch.setattr(recovery.os, "fstat", unchanged_ctime)
 
     with pytest.raises(recovery.RecoveryPlanError, match="changed while"):
         recovery._read_protected_file(artifact, label="artifact")
