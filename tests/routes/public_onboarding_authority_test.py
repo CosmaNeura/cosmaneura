@@ -208,3 +208,24 @@ def test_managed_practice_requires_current_exact_roster(
     result = _preflight(doctor)
     assert not result.gates.membership_authorized
     assert result.capabilities["soap_note"]["decision"] == "denied"
+
+
+def test_preflight_rejects_changed_legal_bytes(
+    authorized_preflight, tmp_path, monkeypatch
+):
+    from app.services import public_legal
+
+    doctor, _ = authorized_preflight
+    source = tmp_path / "web/public"
+    source.mkdir(parents=True)
+    for document in public_legal.CURRENT_LEGAL_DOCUMENTS:
+        content = document.source.read_bytes()
+        if document.kind.value == "terms":
+            content += b"\n<!-- New legal edition with the same version string. -->\n"
+        (source / document.filename).write_bytes(content)
+    monkeypatch.setattr(public_legal, "root", tmp_path)
+    result = _preflight(doctor)
+    assert not result.gates.terms_accepted
+    assert result.gates.privacy_accepted
+    assert result.capabilities["soap_note"]["decision"] == "denied"
+    assert "legal_incomplete" in result.capabilities["soap_note"]["reason_codes"]

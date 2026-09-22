@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
+
+from app import root
+from app.environments import is_production, is_staging
 
 from app.models.public_onboarding import LegalDocumentKind, PublicLegalAcceptance
 from sqlmodel import Session, select
@@ -29,7 +31,13 @@ PUBLIC_LEGAL_CONTRACT_VERSION = "public-legal-documents.v1"
 # and must still be acknowledged by updating the pinned digest in the tests.
 PUBLIC_LEGAL_VERSION = "2026-04-16"
 
-_PUBLIC_DIRECTORY = Path(__file__).resolve().parents[2] / "web" / "public"
+
+def _public_directory() -> Path:
+    # The frontend build copies its static files here before the Python image
+    # is assembled. /web is excluded from that image by .dockerignore.
+    if is_production() or is_staging():
+        return root / "public"
+    return root / "web" / "public"
 
 
 @dataclass(frozen=True)
@@ -37,16 +45,15 @@ class CurrentLegalDocument:
     kind: LegalDocumentKind
     version: str
     path: str
-    source: Path
+    filename: str
+
+    @property
+    def source(self) -> Path:
+        return _public_directory() / self.filename
 
     @property
     def sha256(self) -> str:
-        return _document_digest(self.source)
-
-
-@lru_cache(maxsize=None)
-def _document_digest(source: Path) -> str:
-    return hashlib.sha256(source.read_bytes()).hexdigest()
+        return hashlib.sha256(self.source.read_bytes()).hexdigest()
 
 
 CURRENT_LEGAL_DOCUMENTS = (
@@ -54,13 +61,13 @@ CURRENT_LEGAL_DOCUMENTS = (
         kind=LegalDocumentKind.terms,
         version=PUBLIC_LEGAL_VERSION,
         path="/terms-of-service",
-        source=_PUBLIC_DIRECTORY / "terms-of-service.html",
+        filename="terms-of-service.html",
     ),
     CurrentLegalDocument(
         kind=LegalDocumentKind.privacy,
         version=PUBLIC_LEGAL_VERSION,
         path="/privacy-policy",
-        source=_PUBLIC_DIRECTORY / "privacy-policy.html",
+        filename="privacy-policy.html",
     ),
 )
 
@@ -86,30 +93,27 @@ def current_legal_documents() -> tuple[dict[str, str], ...]:
 def legal_submission_is_current(submitted: Iterable[tuple[str, str, str]]) -> bool:
     """Require one exact current Terms and Privacy tuple, with no extras.
 
-    Set equality rather than a subset check: an acceptance that omits a document,
-    duplicates one, or carries an unknown extra is rejected rather than partially
-    honoured.
+    Compare both cardinality and exact tuples so duplicate entries cannot be
+    silently collapsed into an otherwise valid submission.
     """
 
-    normalized = {(kind, version, digest) for kind, version, digest in submitted}
+    entries = list(submitted)
+
     expected = {
         (document.kind.value, document.version, document.sha256)
         for document in CURRENT_LEGAL_DOCUMENTS
     }
-    return normalized == expected
+    return len(entries) == len(expected) and set(entries) == expected
 
 
 def current_legal_acceptance_flags(
     session: Session,
     practice_id: Any,
 ) -> tuple[bool, bool]:
-    """Return whether the current Terms and Privacy versions are accepted.
+    """Match the exact current edition against append-only stored evidence.
 
-    Matched on (kind, version). The accepted document's digest is validated at
-    submission by :func:`legal_submission_is_current` but is not persisted —
-    `PublicLegalAcceptance` has no digest column — so a later audit can prove
-    which *version* was accepted but not which exact bytes. Closing that gap
-    needs a schema change and belongs in its own slice.
+    Kind and version alone cannot identify bytes when text changes without a
+    version bump. The existing content_sha256 column preserves that distinction.
     """
 
     rows = session.exec(
@@ -117,11 +121,13 @@ def current_legal_acceptance_flags(
             PublicLegalAcceptance.practice_id == practice_id
         )
     ).all()
-    accepted = {(row.document_kind, row.document_version) for row in rows}
+    accepted = {
+        (row.document_kind, row.document_version, row.content_sha256) for row in rows
+    }
 
     terms = CURRENT_LEGAL_BY_KIND[LegalDocumentKind.terms]
     privacy = CURRENT_LEGAL_BY_KIND[LegalDocumentKind.privacy]
     return (
-        (terms.kind.value, terms.version) in accepted,
-        (privacy.kind.value, privacy.version) in accepted,
+        (terms.kind.value, terms.version, terms.sha256) in accepted,
+        (privacy.kind.value, privacy.version, privacy.sha256) in accepted,
     )
