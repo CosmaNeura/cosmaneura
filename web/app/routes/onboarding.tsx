@@ -413,7 +413,7 @@ function PracticeFlow({
     <WorkforceFlow
       onPractice={onPractice}
       onBack={() => setPath("undecided")}
-      onSolo={goSolo}
+      onSolo={() => goSolo(true)}
       channel={channel}
     />
   )
