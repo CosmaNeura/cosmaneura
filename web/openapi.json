@@ -3728,37 +3728,6 @@
         ],
         "title": "JoinCodeBody"
       },
-      "JoinMismatch": {
-        "properties": {
-          "practice_name": {
-            "type": "string",
-            "title": "Practice Name"
-          },
-          "required_domain": {
-            "type": "string",
-            "title": "Required Domain"
-          },
-          "signed_in_domain": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Signed In Domain"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "practice_name",
-          "required_domain",
-          "signed_in_domain"
-        ],
-        "title": "JoinMismatch"
-      },
       "JoinPracticeBody": {
         "properties": {
           "join_code": {
@@ -4795,14 +4764,9 @@
             ]
           },
           "mismatch": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/JoinMismatch"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "type": "boolean",
+            "title": "Mismatch",
+            "default": false
           }
         },
         "additionalProperties": false,

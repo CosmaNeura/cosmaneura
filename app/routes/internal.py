@@ -1141,15 +1141,12 @@ class PracticeStatus(BaseModel, extra="forbid"):
     subscription_status: str | None
 
 
-class JoinMismatch(BaseModel, extra="forbid"):
-    practice_name: str
-    required_domain: str
-    signed_in_domain: str | None
-
-
 class PracticeLookupResult(BaseModel, extra="forbid"):
     practice: PracticeStatus | None = None
-    mismatch: JoinMismatch | None = None
+    # A bare flag, not a record: everyone who sets it holds a code for a
+    # practice they are provably not workforce of, and a legal name or email
+    # domain would identify that covered entity to them.
+    mismatch: bool = False
 
 
 @internal_api_app.get("/practice", name="practice_status")
@@ -1697,13 +1694,13 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
     ):
         return PracticeLookupResult()
     if not email_matches_domain(verified_email, practice.email_domain):
-        return PracticeLookupResult(
-            mismatch=JoinMismatch(
-                practice_name=practice.legal_name,
-                required_domain=practice.email_domain,
-                signed_in_domain=extract_email_domain(verified_email),
-            )
-        )
+        # Deliberately distinguishable from an unknown code, unlike the
+        # matching branch in `join_practice`, which answers every non-joinable
+        # case with one 404. The client has to route this caller to the solo
+        # path and say why, and it cannot do that from an empty result. The
+        # cost is confirming to a code-holder that their code is real; it is
+        # not the practice's identity, which is what this branch used to leak.
+        return PracticeLookupResult(mismatch=True)
     return PracticeLookupResult(
         practice=PracticeStatus(
             legal_name=practice.legal_name,
@@ -1882,13 +1879,12 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         if not email_matches_domain(
             locked_verified_email, locked_practice.email_domain
         ):
+            # Byte-identical to the unknown-code response above: a caller who
+            # is not workforce must not be able to tell a real practice from a
+            # code that matches nothing.
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"{locked_practice.legal_name} is for "
-                    f"@{locked_practice.email_domain} inboxes. "
-                    "Start your own Cosmas practice instead."
-                ),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No practice matches that join code.",
             )
         if not locked_practice.baa_in_force():
             raise HTTPException(

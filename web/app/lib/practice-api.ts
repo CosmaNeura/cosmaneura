@@ -29,15 +29,9 @@ export type PracticeStatus = {
   subscription_status: string | null
 }
 
-export type JoinMismatch = {
-  practice_name: string
-  required_domain: string
-  signed_in_domain: string | null
-}
-
 export type PracticeLookupResult = {
   practice: PracticeStatus | null
-  mismatch: JoinMismatch | null
+  mismatch: boolean
 }
 
 export type OrganizationAccessOpportunity = {
