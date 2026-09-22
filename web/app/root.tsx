@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import {
   Links,
   Meta,
@@ -15,12 +16,14 @@ import { Loader2 } from "lucide-react"
 
 import type { Route } from "./+types/root"
 
+import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/toaster"
 import {
   ViewAsGlobalRouteGuard,
   ViewAsProtectedErrorGuard,
 } from "~/components/ViewAsRouteGuard"
 import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
+import { APP_LOADING_DELAY_COPY } from "~/lib/channel"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
@@ -74,7 +77,35 @@ function App() {
   )
 }
 
+export const HYDRATE_FALLBACK_TIMEOUT_MS = 5_000
+
 export function HydrateFallback() {
+  const [timedOut, setTimedOut] = useState(false)
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setTimedOut(true)
+    }, HYDRATE_FALLBACK_TIMEOUT_MS)
+    return () => window.clearTimeout(timeoutId)
+  }, [])
+
+  if (timedOut) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center">
+        <div className="space-y-4 text-center" role="status">
+          <Loader2 className="text-primary mx-auto h-8 w-8 animate-spin" />
+          <p className="text-foreground">{APP_LOADING_DELAY_COPY}</p>
+          <p className="text-muted-foreground text-sm">
+            You can keep waiting or refresh to try again.
+          </p>
+          <Button type="button" onClick={() => window.location.reload()}>
+            Refresh
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-screen w-screen items-center justify-center">
       <div className="space-y-4 text-center">

@@ -4,6 +4,7 @@ import { useSearchParams } from "react-router"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { AppFooter } from "~/components/shared/AppFooter"
 import {
+  CHANNELS,
   type Channel,
   loginCopy,
   parseChannel,
@@ -11,14 +12,46 @@ import {
 } from "~/lib/channel"
 import { MCD_EMAIL_DOMAIN } from "~/lib/email-domain"
 
+const MCD_HOSTNAME = "mycatholicdoctor.com"
+
+export function isMcdHostname(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase()
+  return host === MCD_HOSTNAME || host.endsWith(`.${MCD_HOSTNAME}`)
+}
+
+/** Search param wins. Otherwise mycatholicdoctor.com (or a subdomain) is MCD. */
+export function resolveVisibleChannel(
+  fromSearch: string | null,
+  hostname: string,
+): Channel {
+  if (fromSearch && CHANNELS.includes(fromSearch as Channel)) {
+    return fromSearch as Channel
+  }
+  if (isMcdHostname(hostname)) {
+    return "mcd"
+  }
+  return parseChannel(fromSearch)
+}
+
 export function useAuthChannel() {
   const [params] = useSearchParams()
   const fromSearch = params.get("channel")
   const [channel, setChannel] = useState<Channel>(() =>
-    parseChannel(fromSearch),
+    resolveVisibleChannel(
+      fromSearch,
+      typeof window === "undefined" ? "" : window.location.hostname,
+    ),
   )
 
   useEffect(() => {
+    if (fromSearch && CHANNELS.includes(fromSearch as Channel)) {
+      setChannel(resolveChannel(fromSearch))
+      return
+    }
+    if (isMcdHostname(window.location.hostname)) {
+      setChannel("mcd")
+      return
+    }
     setChannel(resolveChannel(fromSearch))
   }, [fromSearch])
 
@@ -52,6 +85,11 @@ export function ChannelAuthChrome({
           >
             {copy.title}
           </h1>
+          {copy.methodHint ? (
+            <p className="mt-3 text-sm leading-relaxed font-medium text-[var(--brand-navy-deep)]">
+              {copy.methodHint}
+            </p>
+          ) : null}
           <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
             {copy.body}
           </p>
