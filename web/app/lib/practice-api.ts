@@ -30,8 +30,6 @@ export type PracticeStatus = {
 }
 
 export type JoinMismatch = {
-  practice_name: string
-  required_domain: string
   signed_in_domain: string | null
 }
 

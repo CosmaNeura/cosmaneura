@@ -162,5 +162,5 @@ def test_v1_schema_and_fixture_are_byte_pinned() -> None:
         "9695b1a93b0c422467e46a93f587af2224b5b8c40b3c4951fc3bfc432e678530"
     )
     assert hashlib.sha256(OPENAPI_PATH.read_bytes()).hexdigest() == (
-        "69ec58152b73f501ad137f101f710f3834722457b9ebc062be7c4348af13f125"
+        "788733f0c67db26f095a390fceee56198eb4c79eb09dd8ed204420a050c112f1"
     )

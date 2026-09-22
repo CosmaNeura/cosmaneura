@@ -630,15 +630,14 @@ export function PracticeForm({
       <BackButton onClick={onBack} />
       {mismatch ? (
         <div className="mt-4 rounded-xl border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          <p className="font-medium">
-            {mismatch.practice_name} did not accept this inbox.
-          </p>
+          <p className="font-medium">That code did not accept this inbox.</p>
           <p className="mt-1 opacity-80">
-            Joining requires an @{mismatch.required_domain} address
+            Joining requires the work address that practice recognizes
             {mismatch.signed_in_domain
               ? ` — you’re on @${mismatch.signed_in_domain}`
               : ""}
-            . Name your own covered entity below.
+            . Sign in with your work email, or name your own covered entity
+            below.
           </p>
         </div>
       ) : channel === "mcd" && !mcdOk ? (

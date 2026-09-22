@@ -731,8 +731,8 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
     assert lookup.status_code == status.HTTP_200_OK, lookup.text
     body = lookup.json()
     assert body["practice"] is None
-    assert body["mismatch"]["required_domain"] == "mycatholicdoctor.com"
-    assert body["mismatch"]["signed_in_domain"] == extract_email_domain(doctor.email)
+    # The caller learns that their own inbox is the problem, and nothing else.
+    assert body["mismatch"] == {"signed_in_domain": extract_email_domain(doctor.email)}
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -742,7 +742,85 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
             "checks": ["workforce", "not-party", "direction", "phi"],
         },
     )
-    assert joined.status_code == status.HTTP_403_FORBIDDEN
+    assert joined.status_code == status.HTTP_404_NOT_FOUND
+    assert joined.json()["detail"] == "No practice matches that join code."
+
+
+def test_wrong_domain_lookup_and_join_disclose_no_practice_identity(
+    bare_authenticated_client: TestClient,
+):
+    """A join code must not identify the covered entity that issued it.
+
+    Everyone reaching these branches holds a code for a practice they are
+    provably not workforce of. A legal name plus an email domain identifies a
+    covered entity, so neither may appear in either response — including in an
+    error detail, which is the easier of the two to reintroduce by accident.
+    """
+
+    _authed_doctor()
+    Practice(
+        legal_name="MyCatholicDoctor Nashua",
+        join_code="MCDNASHU",
+        email_domain="mycatholicdoctor.com",
+        origin_channel="mcd",
+        pastoral_pack=True,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+    ).save()
+
+    responses = [
+        bare_authenticated_client.post(
+            api_app.url_path_for("lookup_practice"),
+            json={"join_code": "MCDNASHU"},
+        ),
+        bare_authenticated_client.post(
+            api_app.url_path_for("join_practice"),
+            json={
+                "join_code": "MCDNASHU",
+                "attestation_name": "Pat Clinician",
+                "checks": ["workforce", "not-party", "direction", "phi"],
+            },
+        ),
+    ]
+
+    for response in responses:
+        assert "MyCatholicDoctor" not in response.text, response.text
+        assert "mycatholicdoctor.com" not in response.text, response.text
+
+
+def test_unknown_and_wrong_domain_join_codes_are_indistinguishable(
+    bare_authenticated_client: TestClient,
+):
+    """Otherwise the 404 body itself confirms which codes are real."""
+
+    _authed_doctor()
+    Practice(
+        legal_name="MyCatholicDoctor Nashua",
+        join_code="MCDNASHU",
+        email_domain="mycatholicdoctor.com",
+        origin_channel="mcd",
+        pastoral_pack=True,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+    ).save()
+
+    def join(code: str):
+        return bare_authenticated_client.post(
+            api_app.url_path_for("join_practice"),
+            json={
+                "join_code": code,
+                "attestation_name": "Pat Clinician",
+                "checks": ["workforce", "not-party", "direction", "phi"],
+            },
+        )
+
+    real_but_wrong_domain = join("MCDNASHU")
+    no_such_practice = join("ZZZZZZZZ")
+
+    assert real_but_wrong_domain.status_code == no_such_practice.status_code
+    assert real_but_wrong_domain.json() == no_such_practice.json()
 
 
 def test_solo_practice_code_is_never_disclosed_or_accepted(

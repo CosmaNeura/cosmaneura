@@ -1142,8 +1142,14 @@ class PracticeStatus(BaseModel, extra="forbid"):
 
 
 class JoinMismatch(BaseModel, extra="forbid"):
-    practice_name: str
-    required_domain: str
+    """A valid code whose practice requires a different email domain.
+
+    Carries no practice identity on purpose. A legal name and email domain
+    identify a covered entity, and everyone who reaches this branch holds a
+    code for a practice they are provably not workforce of. `signed_in_domain`
+    is the caller's own address, so it discloses nothing they did not supply.
+    """
+
     signed_in_domain: str | None
 
 
@@ -1699,8 +1705,6 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
     if not email_matches_domain(verified_email, practice.email_domain):
         return PracticeLookupResult(
             mismatch=JoinMismatch(
-                practice_name=practice.legal_name,
-                required_domain=practice.email_domain,
                 signed_in_domain=extract_email_domain(verified_email),
             )
         )
@@ -1882,13 +1886,12 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         if not email_matches_domain(
             locked_verified_email, locked_practice.email_domain
         ):
+            # Byte-identical to the unknown-code response above: a caller who
+            # is not workforce must not be able to tell a real practice from a
+            # code that matches nothing.
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"{locked_practice.legal_name} is for "
-                    f"@{locked_practice.email_domain} inboxes. "
-                    "Start your own Cosmas practice instead."
-                ),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No practice matches that join code.",
             )
         if not locked_practice.baa_in_force():
             raise HTTPException(

@@ -3730,14 +3730,6 @@
       },
       "JoinMismatch": {
         "properties": {
-          "practice_name": {
-            "type": "string",
-            "title": "Practice Name"
-          },
-          "required_domain": {
-            "type": "string",
-            "title": "Required Domain"
-          },
           "signed_in_domain": {
             "anyOf": [
               {
@@ -3753,11 +3745,10 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "practice_name",
-          "required_domain",
           "signed_in_domain"
         ],
-        "title": "JoinMismatch"
+        "title": "JoinMismatch",
+        "description": "A valid code whose practice requires a different email domain.\n\nCarries no practice identity on purpose. A legal name and email domain\nidentify a covered entity, and everyone who reaches this branch holds a\ncode for a practice they are provably not workforce of. `signed_in_domain`\nis the caller's own address, so it discloses nothing they did not supply."
       },
       "JoinPracticeBody": {
         "properties": {
