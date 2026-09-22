@@ -315,7 +315,7 @@ jobs:
         run: just py_test-ci-${{ matrix.shard }}
       - name: Upload candidate backend shard test artifacts
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -473,7 +473,7 @@ jobs:
           echo "frontend_config_sha256=$frontend_config_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload allowlisted public staging frontend configuration
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-frontend-config-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/staging-frontend-build.json
@@ -594,7 +594,7 @@ jobs:
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
 
       - name: Upload content-addressed candidate image archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canonical-staging-image
@@ -838,7 +838,7 @@ jobs:
 
       - name: Upload immutable publication evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-publication-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-publication-evidence
@@ -1465,7 +1465,7 @@ jobs:
 
       - name: Upload non-secret staging release evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-release-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-release-evidence
@@ -1676,7 +1676,7 @@ jobs:
 
       - name: Upload complete staging workflow-attempt evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-attempt-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-attempt-evidence
