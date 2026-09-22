@@ -14,10 +14,8 @@ from app.routes import public_onboarding
 from app.routes.dependencies import doctor as doctor_dependency
 from app.services.doctor_access import resolve_doctor_access
 from app.services.organization_access import (
-    RosterApprovalInput,
     claim_roster_access,
     configure_provider_organization,
-    import_roster_approvals,
 )
 
 from activemodel.session_manager import get_session
@@ -186,29 +184,27 @@ def test_managed_practice_requires_current_exact_roster(
     )
     # The pre-cutover attestation cannot substitute for an exact roster row.
     assert not _preflight(doctor).gates.membership_authorized
-    imported = import_roster_approvals(
-        practice,
-        [RosterApprovalInput(email=doctor.email or "")],
-        operator_ref="test-operator",
-        reason="Synthetic roster test",
-        source_ref="test://roster",
+    # Construct historical provenance with its original expiry. Current roster
+    # imports disallow scheduled expiry and persisted provenance is immutable.
+    approval = OrganizationRosterApproval(
+        organization_id=practice.organization_id,
+        target_practice_id=practice.id,
+        approved_email=doctor.email or "",
+        approved_at=now,
+        approved_by_ref="test-operator",
+        source_ref="test://historical-roster",
         source_sha256="a" * 64,
-        now=now,
-    )
+        expires_at=now + timedelta(days=1) if invalid_authority == "expired" else None,
+    ).save()
     claim_roster_access(doctor, supplied_code=code, now=now + timedelta(seconds=1))
-    assert _preflight(doctor).gates.membership_authorized
-    approval = OrganizationRosterApproval.get(id=imported.approval_ids[0])
-    assert approval is not None
-    # Exercise persisted stale roster evidence independently of membership
-    # revocation. Historical expiry rows must also fail closed on a fresh read.
     if invalid_authority == "revoked":
+        assert _preflight(doctor).gates.membership_authorized
+        # Revoke roster evidence independently of the still-active membership.
         approval.revoked_at = datetime.now(timezone.utc)
         approval.revoked_by_ref = "test-operator"
         approval.revocation_reason = "Synthetic revocation"
         approval.retain_until = approval.revoked_at + timedelta(days=8 * 366)
-    else:
-        approval.expires_at = now + timedelta(days=1)
-    approval.save()
+        approval.save()
     result = _preflight(doctor)
     assert not result.gates.membership_authorized
     assert result.capabilities["soap_note"]["decision"] == "denied"
