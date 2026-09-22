@@ -1,5 +1,6 @@
 import pytest
 from fastapi import FastAPI
+from starlette.routing import Route
 
 import app.server as server
 from app.configuration import public_onboarding as public_onboarding_configuration
@@ -20,7 +21,7 @@ def _app_with_latch(monkeypatch: pytest.MonkeyPatch, *, enabled: bool) -> FastAP
 
 
 def _paths(app: FastAPI) -> set[str]:
-    return {route.path for route in app.routes}
+    return {route.path for route in app.routes if isinstance(route, Route)}
 
 
 def test_latch_defaults_closed() -> None:
