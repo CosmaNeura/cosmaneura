@@ -18,6 +18,8 @@ from pydantic import BaseModel
 from app.configuration.clerk import CLERK_PRIVATE_KEY
 from app.routes.dependencies.clerk import AuthenticateClerkRequest
 from app.routes.dependencies.doctor import inject_doctor_record
+from app.services.clerk_identity import verified_primary_email
+from app.services.organization_access import member_authorization_basis
 from app.services.public_capabilities import (
     CapabilityPolicyFacts,
     capability_decisions,
@@ -43,8 +45,8 @@ authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_K
 
 # Deliberately without `require_practice_in_force`. This endpoint exists to
 # report *why* a practice cannot act, so it must stay reachable when the gates
-# it reports on are failing. Identity is still verified upstream:
-# `inject_doctor_record` rejects an unverified Clerk principal with 403.
+# it reports on are failing. Authentication binds the Clerk subject to the
+# Doctor; this preflight separately verifies live identity and membership facts.
 public_onboarding_api_app = APIRouter(
     prefix="/public-onboarding/v1",
     tags=["public-onboarding"],
@@ -142,12 +144,22 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
     membership_state = "revoked" if revoked else member.seat_state
     accepted = _accepted_legal_kinds(session, practice.id)
 
+    # A cached Doctor email is not live verification. Use the same normalized,
+    # fail-closed identity lookup as privileged enrollment and bind it to this
+    # authenticated Doctor before reporting a positive identity gate.
+    live_email = verified_primary_email(doctor.clerk_id)
+    identity_verified = bool(
+        doctor.deleted_at is None
+        and doctor.email
+        and live_email
+        and doctor.email.strip().lower() == live_email
+    )
+    membership_authorized = member_authorization_basis(member) is not None
+
     facts = CapabilityPolicyFacts(
-        # Enforced upstream: `inject_doctor_record` 403s an unverified principal,
-        # so reaching this line means the identity is verified.
-        identity_verified=True,
+        identity_verified=identity_verified,
         membership_state=membership_state,  # type: ignore[arg-type]
-        membership_authorized=not revoked,
+        membership_authorized=membership_authorized,
         role=member.role,  # type: ignore[arg-type]
         baa_accepted=practice.baa_in_force(),
         terms_accepted=LegalDocumentKind.terms.value in accepted,
@@ -170,8 +182,8 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
             membership_state=membership_state,
         ),
         gates=CapabilityGates(
-            identity_verified=True,
-            membership_authorized=not revoked,
+            identity_verified=facts.identity_verified,
+            membership_authorized=facts.membership_authorized,
             baa_accepted=facts.baa_accepted,
             terms_accepted=facts.terms_accepted,
             privacy_accepted=facts.privacy_accepted,
