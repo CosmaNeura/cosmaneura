@@ -28,15 +28,12 @@ from app.services.public_entitlements import (
     PUBLIC_ENTITLEMENT_POLICY_REVISION,
     active_clinician_seat_count,
 )
+from app.services.public_legal import current_legal_acceptance_flags
 
 from activemodel.session_manager import aglobal_session, get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
-from app.models.public_onboarding import (
-    LegalDocumentKind,
-    PracticeInvitation,
-    PublicLegalAcceptance,
-)
+from app.models.public_onboarding import PracticeInvitation
 from sqlmodel import col, func, select
 
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -90,15 +87,6 @@ class CapabilityEntitlement(BaseModel, extra="forbid"):
     capabilities: dict[str, dict]
 
 
-def _accepted_legal_kinds(session, practice_id) -> set[str]:
-    rows = session.exec(
-        select(col(PublicLegalAcceptance.document_kind)).where(
-            PublicLegalAcceptance.practice_id == practice_id
-        )
-    ).all()
-    return {str(kind) for kind in rows}
-
-
 def _pending_invitation_count(session, practice_id) -> int:
     count = session.exec(
         select(func.count())
@@ -140,7 +128,9 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
 
     revoked = member.access_revoked_at is not None
     membership_state = "revoked" if revoked else member.seat_state
-    accepted = _accepted_legal_kinds(session, practice.id)
+    terms_accepted, privacy_accepted = current_legal_acceptance_flags(
+        session, practice.id
+    )
 
     facts = CapabilityPolicyFacts(
         # Enforced upstream: `inject_doctor_record` 403s an unverified principal,
@@ -150,8 +140,8 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
         membership_authorized=not revoked,
         role=member.role,  # type: ignore[arg-type]
         baa_accepted=practice.baa_in_force(),
-        terms_accepted=LegalDocumentKind.terms.value in accepted,
-        privacy_accepted=LegalDocumentKind.privacy.value in accepted,
+        terms_accepted=terms_accepted,
+        privacy_accepted=privacy_accepted,
         subscription_in_force=practice.entitled(),
         # The membership row is the only path to this practice, so an actor can
         # never be answered for a tenant other than their own.
