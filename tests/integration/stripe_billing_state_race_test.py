@@ -10,7 +10,24 @@ import pytest
 import app.configuration.stripe as stripe_config
 from app.services import stripe_billing
 
-from app.models.practice import Practice
+from app.models.doctor import Doctor
+from app.models.practice import Practice, PracticeMember, PracticeRole
+
+
+def _practice_with_active_owner(**kwargs) -> Practice:
+    practice = Practice(**kwargs).save()
+    doctor = Doctor(
+        clerk_id=f"user_stripe_race_{secrets.token_hex(8)}",
+        email=f"stripe-race-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role=PracticeRole.owner.value,
+        attested_at=datetime.now(timezone.utc),
+    ).save()
+    return practice
 
 
 def test_cancel_commits_while_older_active_refresh_is_in_flight(
@@ -29,15 +46,18 @@ def test_cancel_commits_while_older_active_refresh_is_in_flight(
     }.items():
         monkeypatch.setattr(stripe_config, name, value)
 
-    practice = Practice(
+    practice = _practice_with_active_owner(
         legal_name="Stripe Race Practice, PLLC",
         join_code=f"R{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
         origin_channel="direct",
         stripe_customer_id="cus_race",
         stripe_subscription_id="sub_race",
+        stripe_subscription_entitlement_contract=(
+            stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+        ),
         subscription_status="active",
-    ).save()
+    )
     subscription = {
         "id": "sub_race",
         "customer": "cus_race",
@@ -143,15 +163,18 @@ def test_stale_invalid_contract_cannot_revoke_newer_valid_state(
     }.items():
         monkeypatch.setattr(stripe_config, name, value)
 
-    practice = Practice(
+    practice = _practice_with_active_owner(
         legal_name="Stripe Contract Race, PLLC",
         join_code=f"C{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
         origin_channel="direct",
         stripe_customer_id="cus_contract_race",
         stripe_subscription_id="sub_contract_race",
+        stripe_subscription_entitlement_contract=(
+            stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+        ),
         subscription_status="active",
-    ).save()
+    )
     subscription = {
         "id": "sub_contract_race",
         "customer": "cus_contract_race",

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+DIGEST = "sha256:" + "a" * 64
 
 
 def _shell_function(source: str, name: str) -> str:
@@ -32,6 +33,7 @@ def _run_worker_drain(
 set -u
 RESOURCE_GROUP=test-resource-group
 {image_variable}=registry.example/cosmaneura
+STAGING_IMAGE_REFERENCE=registry.example/cosmaneura@{DIGEST}
 az() {{
     if [[ "$1" == "containerapp" && "$2" == "show" ]]; then
         printf '%s\\n' "$TEST_ACTIVE_REVISIONS_MODE"
@@ -88,7 +90,12 @@ def test_deploy_blocks_api_until_old_worker_replicas_are_drained(
     assert '[[ "$active_revisions_mode" != "Single" ]]' in drain_function
     assert "az containerapp revision list" in drain_function
     assert "az containerapp replica list" in drain_function
-    assert f'expected_image="${{{image_variable}}}:${{git_sha}}"' in drain_function
+    expected_image = (
+        'expected_image="$STAGING_IMAGE_REFERENCE"'
+        if deploy_path == "infra-staging/deploy.sh"
+        else 'expected_image="${PRODUCTION_IMAGE}:${git_sha}"'
+    )
+    assert expected_image in drain_function
     assert ".image == $expected_image" in drain_function
     assert '"$expected_revision_count" -eq 0' in drain_function
     assert ".image != $expected_image" in drain_function
@@ -169,13 +176,18 @@ def test_worker_drain_accepts_the_expected_revision_after_old_replicas_drain(
     deploy_path: str,
     image_variable: str,
 ) -> None:
+    expected_image = (
+        f"registry.example/cosmaneura@{DIGEST}"
+        if deploy_path == "infra-staging/deploy.sh"
+        else "registry.example/cosmaneura:rollout-sha"
+    )
     result = _run_worker_drain(
         deploy_path,
         image_variable,
         revisions=[
             {
                 "name": "new-worker",
-                "image": "registry.example/cosmaneura:rollout-sha",
+                "image": expected_image,
             },
             {"name": "old-worker", "image": "registry.example/cosmaneura:old-sha"},
         ],

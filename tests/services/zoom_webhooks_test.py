@@ -3,6 +3,7 @@ from itertools import count
 from typing import Any, cast
 
 import pytest
+from typeid import TypeID
 
 from app.configuration.redis import get_redis
 from app.services.external_webhook_inbox import digest_provider_reference
@@ -48,6 +49,7 @@ def clean_redis():
         "merge_generation",
         "merge_release_intent_id",
         "occurrence_digest",
+        "capture_authorization_pending",
         "lifecycle_lock",
     ]
     for s in suffixes:
@@ -81,9 +83,14 @@ def clean_redis():
 
 @pytest.fixture
 def allow_doctor_access(monkeypatch):
-    from app.services import zoom_webhooks
+    from app.services import zoom_capture_authorization, zoom_webhooks
 
     monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        zoom_capture_authorization,
+        "doctor_access_in_force",
+        lambda _doctor: True,
+    )
 
 
 @pytest.fixture
@@ -381,6 +388,143 @@ def test_first_capture_fails_closed_without_occurrence_authorization(
     assert persisted.capture_authorization_consumed_at is None
 
 
+def test_clinician_binding_is_armed_by_signed_start_and_consumed_once(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    armed = ZoomMeeting.one(zoom_mtg.id)
+    assert armed.capture_authorization_occurrence_digest == (
+        digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    )
+    assert armed.capture_authorization_expires_at is not None
+    assert armed.capture_authorization_consumed_at is None
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Patient A")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1
+    consumed = ZoomMeeting.one(zoom_mtg.id)
+    assert consumed.capture_authorization_consumed_at is not None
+
+
+def test_duplicate_signed_start_retries_capture_when_participants_already_present(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.jobs import start_zoom_capture
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    occurrence_digest = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    clean_redis.set(_key("occurrence_digest"), occurrence_digest)
+    clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+    clean_redis.set(_key("doctor_present"), "1")
+    clean_redis.set(_key("patient_count"), "1")
+    queued: list[str] = []
+    monkeypatch.setattr(start_zoom_capture, "queue", queued.append)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert queued == [str(zoom_mtg.id)]
+    assert (
+        ZoomMeeting.one(zoom_mtg.id).capture_authorization_occurrence_digest
+        == occurrence_digest
+    )
+
+
+def test_future_pending_binding_cannot_arm_an_earlier_pmr_occurrence(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.start_time = datetime.now(timezone.utc) + timedelta(hours=2)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    zoom_webhooks.handle_meeting_started(_started_payload("earlier-pmr-occurrence"))
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Patient A")
+    )
+
+    persisted = ZoomMeeting.one(zoom_mtg.id)
+    assert persisted.capture_authorization_occurrence_digest is None
+    assert persisted.capture_authorization_expires_at is None
+    assert persisted.capture_authorization_consumed_at is None
+    assert mock_recall["create_bot"] == []
+
+
 @pytest.mark.parametrize("authorization_state", ["wrong_occurrence", "expired"])
 def test_first_capture_fails_closed_for_invalid_occurrence_authorization(
     clean_redis,
@@ -629,6 +773,30 @@ def test_durable_participant_waits_for_meeting_mapping_before_side_effects(
     operation = ExternalWebhookOperation.get(id=operation.id)
     assert operation is not None
     assert operation.state == "succeeded"
+
+
+def test_meeting_started_fences_before_its_first_redis_mutation(
+    clean_redis, monkeypatch
+):
+    from app.services import external_webhook_inbox as inbox
+    from app.services import zoom_webhooks
+
+    from app.models.external_webhook_operation import ExternalWebhookOperation
+
+    digest = inbox.digest_provider_reference("meeting-start-boundary")
+    monkeypatch.setattr(
+        zoom_webhooks,
+        "_lifecycle_lock",
+        lambda *_: (_ for _ in ()).throw(ConnectionError()),
+    )
+    with pytest.raises(inbox.PermanentWebhookError):
+        zoom_webhooks.dispatch(
+            "meeting.started", _started_payload(), provider_event_digest=digest
+        )
+    operation = ExternalWebhookOperation.get(
+        provider="zoom", provider_resource_digest=digest
+    )
+    assert operation is not None and operation.state == "uncertain"
 
 
 def test_duplicate_participant_join_is_idempotent_and_membership_is_hmac_only(
@@ -1373,6 +1541,7 @@ def test_doctor_return_with_patient_does_not_resume_same_bot(
     mock_recall,
     mock_zoom,
     monkeypatch,
+    captured_alerts,
 ):
     """Redis participant identity cannot authorize a second segment."""
     revoked = []
@@ -1410,10 +1579,16 @@ def test_doctor_return_with_patient_does_not_resume_same_bot(
     )
     # Doctor returns while the prior participant remains in Redis. That is not
     # strong enough identity to authorize recording another segment.
-    zoom_webhooks.handle_participant_joined(
-        _participant_joined_payload(HOST_ID, "Test Doctor")
-    )
+    for participant, name in (
+        (HOST_ID, "Test Doctor"),
+        ("patient-a", "Juan"),
+        ("patient-b", "Test Guest"),
+    ):
+        zoom_webhooks.handle_participant_joined(
+            _participant_joined_payload(participant, name)
+        )
 
+    assert captured_alerts == []
     assert revoked == []
     assert clean_redis.get(_key("merge_task_id")) == b"celery-task-99"
     assert clean_redis.get(_key("doctor_present")) == b"1"
@@ -1690,13 +1865,17 @@ def test_meeting_cleanup_preserves_generation_against_prior_session_tasks(
 ):
     from app.services import zoom_webhooks
 
+    occurrence_digest = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
     clean_redis.set(_key("bot_id"), BOT_ID)
     clean_redis.set(_key("merge_generation"), "7")
+    clean_redis.set(_key("occurrence_digest"), occurrence_digest)
+    clean_redis.set(_key(f"watchdog_alerted:{occurrence_digest}"), "alerted")
 
     zoom_webhooks._clear_meeting_keys(clean_redis, MEETING_ID)
 
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("merge_generation")) == b"7"
+    assert clean_redis.get(_key(f"watchdog_alerted:{occurrence_digest}")) is None
 
 
 def test_meeting_ended_with_no_bot_logs_no_recording(
@@ -2173,13 +2352,17 @@ def test_prod_blocks_non_allowlisted_doctor(
     """In production, an email NOT on the prod allowlist never gets a bot."""
     from app.services import zoom_webhooks
 
-    _doctor_with_zoom_email("random.doctor@clinic.com")
+    doctor = _doctor_with_zoom_email("random.doctor@clinic.com")
     monkeypatch.setattr(zoom_webhooks, "is_production", lambda: True, raising=False)
 
     _run_meeting_flow(zoom_webhooks)
 
     assert mock_recall["create_bot"] == []
     assert clean_redis.get(_key("bot_id")) is None
+    meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=MEETING_ID)
+    assert meeting is not None
+    assert meeting.capture_authorization_occurrence_digest is not None
+    assert meeting.capture_authorization_consumed_at is None
 
 
 def test_prod_blocks_staging_test_account(
@@ -2305,3 +2488,255 @@ def test_dispatch_logs_shape_even_for_unhandled_event_types():
     events = [e["event"] for e in logs]
     assert "zoom payload shape" in events
     assert "no handler for zoom event type" in events
+
+
+# --------- Monitoring is armed from capture-expected, and never blocks ---------
+
+
+def _doctor_with_unbound_meeting(allow_doctor_access):
+    "A tracked Zoom meeting that nothing bound to an appointment."
+    doctor = DoctorFactory.build().save()
+    DoctorVideoIntegration(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+        provider_user_id=HOST_ID,
+        access_token="tok",
+        refresh_token="rtok",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    ).save()
+    ZoomMeeting(
+        doctor_id=doctor.id,
+        zoom_meeting_id=MEETING_ID,
+        topic="Unbound visit",
+        start_time=datetime.now(timezone.utc),
+        duration=30,
+        join_url=f"https://zoom.us/j/{MEETING_ID}",
+        status=ZoomMeetingStatus.scheduled,
+        appointment_id=None,
+    ).save()
+    return doctor
+
+
+def test_watchdog_is_armed_when_capture_is_expected(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch
+):
+    """Arming keys off the authorization actually arming, not off the session
+    merely being registered."""
+    from app.jobs import verify_bot_joined
+    from app.services import zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+    tracked = ZoomMeeting.one(doctor_id=doctor_with_zoom.id, zoom_meeting_id=MEETING_ID)
+    expected_occurrence = digest_provider_reference(
+        f"zoom-occurrence:{OCCURRENCE_UUID}"
+    )
+    assert verify_bot_joined._capture_still_expected(
+        str(tracked.id), MEETING_ID, expected_occurrence
+    ), "the authorization is durable before the start-status save"
+    assert not any(
+        verify_bot_joined._capture_still_expected(*target)
+        for target in (
+            (str(tracked.id), "another-meeting", expected_occurrence),
+            (str(tracked.id), MEETING_ID, "b" * 64),
+            (str(TypeID("zmtg")), MEETING_ID, expected_occurrence),
+        )
+    )
+    armed: list[tuple] = []
+    monkeypatch.setattr(
+        verify_bot_joined,
+        "queue_durably",
+        lambda meeting_record_id, meeting_id, occurrence: armed.append(
+            (meeting_record_id, meeting_id, occurrence)
+        ),
+    )
+
+    zoom_webhooks.dispatch(
+        "meeting.started",
+        _started_payload(),
+        provider_event_digest=digest_provider_reference("watchdog-arm-test"),
+    )
+
+    assert len(armed) == 1
+    meeting_record_id, meeting_id, occurrence = armed[0]
+    assert meeting_id == MEETING_ID
+    assert meeting_record_id == str(tracked.id)
+    # The occurrence travels with the task so a check that fires after this
+    # visit ends cannot judge the next patient's.
+    assert occurrence is not None
+    tracked.status = ZoomMeetingStatus.ended
+    tracked.save()
+    assert not verify_bot_joined._capture_still_expected(
+        str(tracked.id), MEETING_ID, expected_occurrence
+    )
+
+
+def test_watchdog_posthook_distinguishes_missing_from_newer_session_state(
+    clean_redis, doctor_with_zoom, monkeypatch, captured_alerts
+):
+    from app.jobs import verify_bot_joined
+    from app.services import alerting, zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+    meeting = ZoomMeeting.one(doctor_id=doctor_with_zoom.id, zoom_meeting_id=MEETING_ID)
+    occurrence = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    armed: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        verify_bot_joined, "queue_durably", lambda *args: armed.append(args)
+    )
+
+    zoom_webhooks._arm_started_watchdog_after_success(_started_payload())
+
+    assert armed == [(str(meeting.id), MEETING_ID, occurrence)]
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest=occurrence,
+        meeting_record_id=str(meeting.id),
+    )
+    assert [call["type"] for call in captured_alerts] == [alerting.LostSessionState]
+    clean_redis.delete(_key(f"watchdog_alerted:{occurrence}"))
+
+    armed.clear()
+    clean_redis.set(_key("occurrence_digest"), "b" * 64)
+    clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+    zoom_webhooks._arm_started_watchdog_after_success(_started_payload())
+
+    assert armed == []
+    assert clean_redis.get(_key("occurrence_digest")) == b"b" * 64
+
+
+def test_watchdog_producer_is_dormant_until_enabled(monkeypatch):
+    from app.services import zoom_webhooks
+
+    armed: list[tuple] = []
+    monkeypatch.setattr(
+        zoom_webhooks.verify_bot_joined,
+        "queue_durably",
+        lambda *args: armed.append(args),
+    )
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", False)
+    zoom_webhooks.arm_join_watchdog(MEETING_ID, "a" * 64, "zmtg_invalid")
+
+    assert armed == []
+
+
+def test_unbound_start_waits_for_supported_late_authorization(
+    clean_redis,
+    allow_doctor_access,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+    captured_alerts,
+):
+    """An unbound start remains quiet while supported late authorization waits."""
+    from app.jobs import verify_bot_joined
+    from app.services import zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+    _doctor_with_unbound_meeting(allow_doctor_access)
+
+    armed: list = []
+    monkeypatch.setattr(
+        verify_bot_joined,
+        "queue_durably",
+        lambda meeting_id, occurrence: armed.append(meeting_id),
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert armed == []
+    assert captured_alerts == []
+
+
+def test_watchdog_publish_is_durable_and_post_success_persistence_retries(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch, captured_alerts
+):
+    """Broker loss preserves the intent; persistence loss retries its parent."""
+    from app.jobs import verify_bot_joined
+    from app.services import alerting, external_webhook_inbox, zoom_webhooks
+
+    from app.models.external_webhook_delivery import ExternalWebhookDelivery
+
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+
+    def explode(*_args, **_kwargs):
+        raise ConnectionError("broker unavailable")
+
+    monkeypatch.setattr(external_webhook_inbox, "publish_delivery", explode)
+
+    zoom_webhooks.dispatch(
+        "meeting.started",
+        _started_payload(),
+        provider_event_digest=digest_provider_reference("watchdog-publish-failure"),
+    )
+
+    assert clean_redis.get(_key("doctor_id")) is not None, "dispatch state was lost"
+    assert alerting.WatchdogArmingFailed in [c["type"] for c in captured_alerts]
+    intent = cast(
+        ExternalWebhookDelivery | None,
+        ExternalWebhookDelivery.where(
+            ExternalWebhookDelivery.event_type
+            == external_webhook_inbox.ZOOM_WATCHDOG_ARM_EVENT
+        ).first(),
+    )
+    assert intent is not None and intent.state == "pending"
+    assert intent.encrypted_payload is not None
+    assert MEETING_ID not in intent.encrypted_payload
+
+    attempts = 0
+    core_attempts = 0
+    core_handler = zoom_webhooks.HANDLERS["meeting.started"]
+
+    def persist_after_retry(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("database unavailable")
+
+    def count_core(payload, before_side_effect=None):
+        nonlocal core_attempts
+        core_attempts += 1
+        return core_handler(payload, before_side_effect)
+
+    monkeypatch.setattr(verify_bot_joined, "queue_durably", persist_after_retry)
+    monkeypatch.setitem(zoom_webhooks.HANDLERS, "meeting.started", count_core)
+    parent = external_webhook_inbox.store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id="watchdog-persistence-retry",
+        event_type="meeting.started",
+        payload=_started_payload(),
+    )
+    external_webhook_inbox.process_delivery(parent.delivery_id)
+    failed = ExternalWebhookDelivery.one(parent.delivery_id)
+    assert failed.state == "retry_wait"
+    failed.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    failed.save()
+    external_webhook_inbox.process_delivery(parent.delivery_id)
+
+    assert attempts == 2
+    assert core_attempts == 1
+    assert ExternalWebhookDelivery.one(parent.delivery_id).state == "completed"
+
+
+@pytest.mark.parametrize("capture_fence", ["bot_id", "capture_started"])
+def test_blocked_continuation_is_quiet_and_cannot_create_another_segment(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    captured_alerts,
+    capture_fence,
+):
+    """Expected no-resume behavior is not a newly missed capture."""
+    from app.services import zoom_webhooks
+
+    clean_redis.set(_key(capture_fence), "1")
+
+    for _ in range(3):
+        zoom_webhooks._resume_or_start_recording_locked(
+            clean_redis, MEETING_ID, "patient-b", "Synthetic Guest"
+        )
+
+    assert mock_recall["create_bot"] == []
+    assert mock_recall["start_recording"] == []
+    assert captured_alerts == []
+    assert clean_redis.get(_key(capture_fence)) == b"1"

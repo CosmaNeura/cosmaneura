@@ -1,11 +1,18 @@
+import { useEffect } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { checkViewAsStatus, getViewAsTargets } from "~/lib/view-as-api"
+import {
+  type ViewAsStatusCheck,
+  checkAuthenticatedViewAsStatus,
+  checkViewAsStatus,
+  getViewAsTargets,
+} from "~/lib/view-as-api"
 import { resetViewAsBindingStateForTests } from "~/lib/view-as-binding"
 
 import { ViewAsAccountControl } from "./ViewAsAccountControl"
 import {
   VIEW_AS_REVALIDATE_INTERVAL_MS,
+  ViewAsGlobalRouteGuard,
   ViewAsRouteGuard,
   requiresStrictPublicViewAsVerification,
   requiresViewAsProtection,
@@ -30,6 +37,7 @@ vi.mock("~/lib/view-as-api", async (importOriginal) => {
 
 beforeEach(() => {
   resetViewAsBindingStateForTests()
+  vi.mocked(checkAuthenticatedViewAsStatus).mockReset()
   vi.mocked(getViewAsTargets).mockResolvedValue([])
   vi.mocked(checkViewAsStatus).mockResolvedValue({
     state: "unavailable",
@@ -72,6 +80,41 @@ const inactiveStatus = {
     email: "actor@example.com",
   },
   target: null,
+}
+
+const signedOutCheck = {
+  state: "signed_out" as const,
+  status: null,
+}
+
+function deferredViewAsCheck() {
+  let settle:
+    | ((value: ViewAsStatusCheck | PromiseLike<ViewAsStatusCheck>) => void)
+    | undefined
+  const promise = new Promise<ViewAsStatusCheck>((resolve) => {
+    settle = resolve
+  })
+  return {
+    promise,
+    resolve(value: ViewAsStatusCheck) {
+      settle?.(value)
+    },
+  }
+}
+
+function AuthMountProbe({
+  onMount,
+  onUnmount,
+}: {
+  onMount: () => void
+  onUnmount: () => void
+}) {
+  useEffect(() => {
+    onMount()
+    return () => onUnmount()
+  }, [onMount, onUnmount])
+
+  return <p data-testid="auth-mount-probe">Sign-in controls</p>
 }
 
 describe("ViewAsRouteGuard", () => {
@@ -302,6 +345,256 @@ describe("ViewAsRouteGuard", () => {
     unmount()
     render(<ViewAsAccountControl />)
     expect(screen.getByText("Clerk account menu")).toBeInTheDocument()
+  })
+})
+
+describe("ViewAsGlobalRouteGuard identity controls", () => {
+  it.each([
+    ["interval", "/sign-in"],
+    ["focus", "/sign-in"],
+    ["visibility", "/sign-up/sso-callback"],
+  ] as const)(
+    "keeps the same auth mount during a delayed %s recheck on %s",
+    async (trigger, pathname) => {
+      vi.useFakeTimers()
+      const initial = deferredViewAsCheck()
+      const routine = deferredViewAsCheck()
+      vi.mocked(checkAuthenticatedViewAsStatus)
+        .mockReturnValueOnce(initial.promise)
+        .mockReturnValueOnce(routine.promise)
+      const onMount = vi.fn()
+      const onUnmount = vi.fn()
+
+      render(
+        <ViewAsGlobalRouteGuard pathname={pathname}>
+          <AuthMountProbe onMount={onMount} onUnmount={onUnmount} />
+        </ViewAsGlobalRouteGuard>,
+      )
+
+      expect(onMount).not.toHaveBeenCalled()
+      await act(async () => initial.resolve(signedOutCheck))
+      const authMount = screen.getByTestId("auth-mount-probe")
+      expect(onMount).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        if (trigger === "interval") {
+          vi.advanceTimersByTime(VIEW_AS_REVALIDATE_INTERVAL_MS)
+        } else if (trigger === "focus") {
+          window.dispatchEvent(new Event("focus"))
+        } else {
+          expect(document.visibilityState).toBe("visible")
+          document.dispatchEvent(new Event("visibilitychange"))
+        }
+      })
+
+      expect(checkAuthenticatedViewAsStatus).toHaveBeenCalledTimes(2)
+      expect(screen.getByTestId("auth-mount-probe")).toBe(authMount)
+      expect(onMount).toHaveBeenCalledTimes(1)
+      expect(onUnmount).not.toHaveBeenCalled()
+
+      await act(async () => routine.resolve(signedOutCheck))
+      expect(screen.getByTestId("auth-mount-probe")).toBe(authMount)
+      expect(onMount).toHaveBeenCalledTimes(1)
+      expect(onUnmount).not.toHaveBeenCalled()
+    },
+  )
+
+  it("removes auth controls when a routine recheck finds active view-as", async () => {
+    vi.useFakeTimers()
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+    const onMount = vi.fn()
+    const onUnmount = vi.fn()
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <AuthMountProbe onMount={onMount} onUnmount={onUnmount} />
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    const authMount = screen.getByTestId("auth-mount-probe")
+
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(screen.getByTestId("auth-mount-probe")).toBe(authMount)
+
+    await act(async () =>
+      routine.resolve({ state: "ready", status: activeStatus }),
+    )
+    expect(screen.getByText("Account controls unavailable")).toBeInTheDocument()
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+    expect(onMount).toHaveBeenCalledTimes(1)
+    expect(onUnmount).toHaveBeenCalledTimes(1)
+  })
+
+  it("fails closed when a routine auth-route recheck is inconsistent", async () => {
+    vi.useFakeTimers()
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <p data-testid="auth-mount-probe">Sign-in controls</p>
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(screen.getByTestId("auth-mount-probe")).toBeInTheDocument()
+
+    await act(async () =>
+      routine.resolve({
+        state: "ready",
+        status: { ...activeStatus, read_only: false },
+      }),
+    )
+    expect(
+      screen.getByText("Support-view status unavailable"),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+  })
+
+  it("fails closed when a routine auth-route recheck becomes unavailable", async () => {
+    vi.useFakeTimers()
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+    const onMount = vi.fn()
+    const onUnmount = vi.fn()
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <AuthMountProbe onMount={onMount} onUnmount={onUnmount} />
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(screen.getByTestId("auth-mount-probe")).toBeInTheDocument()
+
+    await act(async () =>
+      routine.resolve({ state: "unavailable", status: null }),
+    )
+    expect(
+      screen.getByText("Support-view status unavailable"),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+    expect(onUnmount).toHaveBeenCalledTimes(1)
+  })
+
+  it("removes auth controls immediately when another tab changes view-as", async () => {
+    vi.useFakeTimers()
+    const listeners = new Set<(event: MessageEvent) => void>()
+    class TestBroadcastChannel {
+      addEventListener(_type: string, listener: (event: MessageEvent) => void) {
+        listeners.add(listener)
+      }
+
+      close() {}
+    }
+    vi.stubGlobal("BroadcastChannel", TestBroadcastChannel)
+    const initial = deferredViewAsCheck()
+    const hardRecheck = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(hardRecheck.promise)
+    const onMount = vi.fn()
+    const onUnmount = vi.fn()
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <AuthMountProbe onMount={onMount} onUnmount={onUnmount} />
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+
+    await act(async () => {
+      listeners.forEach((listener) =>
+        listener({ data: { type: "state-changed" } } as MessageEvent),
+      )
+    })
+    expect(
+      screen.getByRole("status", { name: "Checking session security" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+    expect(onUnmount).toHaveBeenCalledTimes(1)
+
+    await act(async () =>
+      hardRecheck.resolve({ state: "ready", status: activeStatus }),
+    )
+    expect(screen.getByText("Account controls unavailable")).toBeInTheDocument()
+  })
+
+  it("does not let a stale routine result undo a newer hard recheck", async () => {
+    vi.useFakeTimers()
+    const listeners = new Set<(event: MessageEvent) => void>()
+    class TestBroadcastChannel {
+      addEventListener(_type: string, listener: (event: MessageEvent) => void) {
+        listeners.add(listener)
+      }
+
+      close() {}
+    }
+    vi.stubGlobal("BroadcastChannel", TestBroadcastChannel)
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    const hardRecheck = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+      .mockReturnValueOnce(hardRecheck.promise)
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <p data-testid="auth-mount-probe">Sign-in controls</p>
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(screen.getByTestId("auth-mount-probe")).toBeInTheDocument()
+
+    await act(async () => {
+      listeners.forEach((listener) =>
+        listener({ data: { type: "state-changed" } } as MessageEvent),
+      )
+    })
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+
+    await act(async () => routine.resolve(signedOutCheck))
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+
+    await act(async () =>
+      hardRecheck.resolve({ state: "ready", status: activeStatus }),
+    )
+    expect(screen.getByText("Account controls unavailable")).toBeInTheDocument()
+  })
+
+  it("keeps public patient intake fail-closed during a delayed recheck", async () => {
+    vi.useFakeTimers()
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/chat/intake/intake_private">
+        <p data-testid="public-intake">Patient intake controls</p>
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    expect(screen.getByTestId("public-intake")).toBeInTheDocument()
+
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(
+      screen.getByRole("status", { name: "Checking session security" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("public-intake")).not.toBeInTheDocument()
   })
 })
 

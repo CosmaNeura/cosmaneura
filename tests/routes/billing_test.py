@@ -84,10 +84,12 @@ class RouteStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "customer": data.get("customer"),
                 "payment_method_collection": data["payment_method_collection"],
                 "metadata": {
-                    "checkout_policy": data["metadata[checkout_policy]"],
-                    "practice_id": data["metadata[practice_id]"],
+                    key.removeprefix("metadata[").removesuffix("]"): value
+                    for key, value in data.items()
+                    if key.startswith("metadata[") and key.endswith("]")
                 },
             }
             self.sessions[session["id"]] = deepcopy(session)
@@ -213,6 +215,10 @@ def test_acquisition_kill_switch_keeps_existing_portal_and_webhooks_alive(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
     practice.subscription_status = "past_due"
     practice.save()
 
@@ -305,6 +311,78 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
 
 
 @pytest.mark.usefixtures("stripe_configured")
+@pytest.mark.parametrize(
+    ("checkout_error", "detail"),
+    [
+        (
+            stripe_billing.StripeCheckoutReconciliationRequired(),
+            "requires reconciliation",
+        ),
+        (
+            stripe_billing.StripeCoreBindingInvalid("partial binding"),
+            "requires reconciliation",
+        ),
+        (
+            stripe_billing.StripeManagedBilling("managed during Checkout"),
+            "managed by its organization",
+        ),
+        (
+            stripe_billing.StripeTrialClockReconciliationRequired(
+                datetime(2026, 8, 28, tzinfo=timezone.utc)
+            ),
+            "requires reconciliation",
+        ),
+    ],
+)
+def test_checkout_reconciliation_states_return_actionable_conflict(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    checkout_error: Exception,
+    detail: str,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+
+    def require_reconciliation(*_args, **_kwargs):
+        raise checkout_error
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "create_checkout_session",
+        require_reconciliation,
+    )
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert detail in response.json()["detail"]
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_partial_core_billing_binding_returns_conflict_before_provider_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    practice.stripe_customer_id = "cus_partial_route"
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "requires reconciliation" in response.json()["detail"]
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
 def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
     authenticated_client: TestClient,
     route_stripe: RouteStripe,
@@ -315,6 +393,10 @@ def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
     practice.subscription_status = "incomplete"
     practice.stripe_checkout_session_id = "cs_route_legacy_incomplete"
     practice.stripe_checkout_session_url = (
@@ -606,13 +688,17 @@ def test_portal_conflicts_without_billing_account(authenticated_client: TestClie
     assert response.status_code == status.HTTP_409_CONFLICT
 
 
-def test_stripe_webhook_unavailable_until_full_rollout_config(client: TestClient):
-    response = client.post(
-        STRIPE_WEBHOOK_PATH,
-        content=b'{"id":"evt_x","type":"customer.subscription.updated"}',
-        headers={"content-type": "application/json"},
-    )
+def test_stripe_webhook_unavailable_until_integration_is_configured(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(stripe_config, "STRIPE_INTEGRATION_ENABLED", False)
+    monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "")
+
+    response = client.post(STRIPE_WEBHOOK_PATH, content=b"")
+
     assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json() == {"status": "billing webhook not configured"}
 
 
 @pytest.mark.usefixtures("stripe_configured")
@@ -629,6 +715,56 @@ def test_stripe_webhook_rejects_bad_signature(client: TestClient):
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
+@pytest.mark.parametrize("event_type", ["invoice.paid", "invoice.payment_succeeded"])
+@pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_durably_accepts_paid_invoice_events(
+    client: TestClient,
+    event_type: str,
+):
+    event_id = f"evt_route_{event_type.replace('.', '_')}"
+    body = json.dumps(
+        {
+            "id": event_id,
+            "type": event_type,
+            "created": int(time.time()),
+            "api_version": "2025-09-30.clover",
+            "livemode": False,
+            "data": {
+                "object": {
+                    "id": f"in_route_{event_type.replace('.', '_')}",
+                    "customer": f"cus_route_{event_type.replace('.', '_')}",
+                    "customer_email": "sensitive-route-invoice@example.com",
+                    "livemode": False,
+                    "parent": {
+                        "type": "subscription_details",
+                        "subscription_details": {
+                            "subscription": (
+                                f"sub_route_{event_type.replace('.', '_')}"
+                            ),
+                            "metadata": {},
+                        },
+                    },
+                }
+            },
+        }
+    ).encode()
+
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "content-type": "application/json",
+            "stripe-signature": _sign(body),
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    inbox = StripeEventInbox.get(event_id=event_id)
+    assert inbox
+    assert inbox.event_type == event_type
+    assert "sensitive-route-invoice@example.com" not in inbox.payload_json
+
+
 @pytest.mark.usefixtures("stripe_configured")
 def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
     client: TestClient,
@@ -640,8 +776,28 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
         email_domain="example.com",
         origin_channel="direct",
     ).save()
+    owner = Doctor(
+        clerk_id=f"user_webhook_owner_{secrets.token_hex(8)}",
+        email=f"webhook-owner-{secrets.token_hex(4)}@example.com",
+        biography="",
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=owner.id,
+        role="owner",
+        attested_at=datetime.now(timezone.utc),
+    ).save()
     subscription = _subscription(practice, status_value="active")
     route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.subscription_status = "pending_verification"
+    practice.stripe_state_version = 1
+    practice.save()
     event_id = f"evt_{secrets.token_hex(8)}"
     body = json.dumps(
         {

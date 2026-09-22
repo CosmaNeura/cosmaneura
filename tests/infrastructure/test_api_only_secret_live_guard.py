@@ -67,7 +67,6 @@ def test_live_scope_requires_exactly_one_api_reference_and_no_leakage() -> None:
     for leaked_name in (
         "cosmaneura-prod-worker",
         "cosmaneura-prod-scheduler",
-        "cosmaneura-prod-app-jmon",
         "cosmaneura-prod-migrate",
     ):
 

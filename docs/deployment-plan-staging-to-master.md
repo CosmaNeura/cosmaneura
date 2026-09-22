@@ -5,7 +5,7 @@
 > behavior. Current pushes to `master` and `staging` validate only. Staging and
 > production deployment require a founder-triggered manual workflow from the
 > exact current target branch; see the root `README.md` and
-> `.github/workflows/build_and_publish.yml`. The database actions below are not
+> `.github/workflows/build_and_publish_manual.yml`. The database actions below are not
 > standing authorization: schema/data work requires its own reviewed migration
 > rung and rehearsal, and rollback leaves additive structures dormant rather
 > than running a destructive downgrade by default.

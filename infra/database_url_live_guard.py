@@ -4,8 +4,8 @@
 The external-data input and output contain only non-secret identifiers.  This
 guard deliberately permits phase A (declare an unused v2 secret while every
 workload still selects the old secret), but it refuses to let OpenTofu or the
-image deploy become the mechanism that moves workloads to v2.  Selecting v2 is
-valid only after the staged cutover operator has already moved all five live
+image deploy become the mechanism that moves workloads to v2. Selecting v2 is
+valid only after the staged cutover operator has already moved all four live
 workloads and retained the old rollback secret.
 """
 
@@ -38,7 +38,6 @@ class Workload:
 
 
 WORKLOADS = (
-    Workload("jmon", "cosmaneura-prod-app-jmon", ("containerapp",)),
     Workload("worker", "cosmaneura-prod-worker", ("containerapp",)),
     Workload("scheduler", "cosmaneura-prod-scheduler", ("containerapp",)),
     Workload("api", "cosmaneura-prod-app", ("containerapp",)),

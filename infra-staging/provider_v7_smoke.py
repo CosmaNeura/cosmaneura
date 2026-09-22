@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import sys
 import time
@@ -8,7 +7,6 @@ from typing import Any, cast
 from uuid import uuid4
 
 PROMPT = "Reply with one short greeting for this synthetic test."
-KNOWN_FAILED = "94527b2939fa327ee1a355c94749ef507e47db88445f3f8cabefc2befb44a340"
 
 
 class SmokeFailure(Exception):
@@ -110,22 +108,9 @@ def _problem(response, status: int, code: str) -> None:
 
 
 def _assert_status() -> None:
-    from app.services.authority_reconciliation import incomplete_ingestion_status
+    from provider_v7_acceptance import assert_status
 
-    report = incomplete_ingestion_status(older_than_minutes=15, limit=1000)
-    rows = report.interactions
-    if (
-        report.matching_interaction_count != 1
-        or report.pending_audit_count != 0
-        or report.pending_usage_count != 0
-        or report.failed_audit_count != 1
-        or report.failed_usage_count != 1
-        or len(rows) != 1
-        or rows[0].audit_status != "failed"
-        or rows[0].usage_status != "failed"
-        or hashlib.sha256(rows[0].interaction_ref.encode()).hexdigest() != KNOWN_FAILED
-    ):
-        raise SmokeFailure
+    assert_status()
 
 
 def _assert_health(client, provider_origin: str, public_origin: str) -> None:

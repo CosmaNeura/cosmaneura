@@ -40,7 +40,6 @@ def _workload_resource(secret_ref: str) -> dict[str, Any]:
 
 def test_cutover_sequence_is_deliberate() -> None:
     assert [workload.label for workload in cutover.WORKLOADS] == [
-        "jmon",
         "worker",
         "scheduler",
         "api",
@@ -618,12 +617,10 @@ def test_apply_rolls_back_completed_steps_in_reverse_order(
         operator.apply("opaque-secret")
 
     assert calls == [
-        ("jmon", "database-url-v2"),
         ("worker", "database-url-v2"),
         ("scheduler", "database-url-v2"),
         ("scheduler", "database-url"),
         ("worker", "database-url"),
-        ("jmon", "database-url"),
     ]
 
 
@@ -659,7 +656,7 @@ def test_explicit_rollback_attempts_every_workload_after_a_failure(
     with pytest.raises(cutover.CutoverError, match="incomplete"):
         operator.rollback()
 
-    assert calls == ["migration", "api", "scheduler", "worker", "jmon"]
+    assert calls == ["migration", "api", "scheduler", "worker"]
 
 
 def test_default_main_is_read_only(
@@ -675,7 +672,7 @@ def test_default_main_is_read_only(
     monkeypatch.setattr(
         cutover.CutoverOperator,
         "status",
-        lambda self: [{"state": "old", "workload": "jmon"}],
+        lambda self: [{"state": "old", "workload": "worker"}],
     )
     monkeypatch.setattr(
         cutover,

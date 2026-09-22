@@ -1,0 +1,991 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json",
+  "title": "Provider Session Prep context read result v1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "state",
+    "detail",
+    "freshness",
+    "completeness",
+    "current_through",
+    "snapshot_ref",
+    "snapshot_version",
+    "snapshot_generated_at",
+    "snapshot_supersedes_ref",
+    "source_version_digest",
+    "brief_ref",
+    "brief_version",
+    "brief_generated_at",
+    "brief_supersedes_ref",
+    "brief_generator_version",
+    "brief_prompt_version",
+    "brief_model_profile",
+    "source_count",
+    "provenance",
+    "prepared_brief",
+    "supporting_context",
+    "retry_after_seconds",
+    "reason_code"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "state": {
+      "enum": ["ready", "refreshing", "pending", "unavailable"]
+    },
+    "detail": {
+      "enum": ["brief", "supporting_context"]
+    },
+    "freshness": {
+      "enum": ["current", "stale", "none"]
+    },
+    "completeness": {
+      "enum": ["complete", "partial", "none"]
+    },
+    "current_through": {
+      "$ref": "#/$defs/nullableTimestamp"
+    },
+    "snapshot_ref": {
+      "$ref": "#/$defs/nullableOpaqueRef"
+    },
+    "snapshot_version": {
+      "$ref": "#/$defs/nullableVersion"
+    },
+    "snapshot_generated_at": {
+      "$ref": "#/$defs/nullableTimestamp"
+    },
+    "snapshot_supersedes_ref": {
+      "$ref": "#/$defs/nullableOpaqueRef"
+    },
+    "source_version_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256_[a-f0-9]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "brief_ref": {
+      "$ref": "#/$defs/nullableOpaqueRef"
+    },
+    "brief_version": {
+      "$ref": "#/$defs/nullableVersion"
+    },
+    "brief_generated_at": {
+      "$ref": "#/$defs/nullableTimestamp"
+    },
+    "brief_supersedes_ref": {
+      "$ref": "#/$defs/nullableOpaqueRef"
+    },
+    "brief_generator_version": {
+      "$ref": "#/$defs/nullableLineageVersion"
+    },
+    "brief_prompt_version": {
+      "$ref": "#/$defs/nullableLineageVersion"
+    },
+    "brief_model_profile": {
+      "$ref": "#/$defs/nullableLineageVersion"
+    },
+    "source_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "provenance": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/provenanceItem"
+      }
+    },
+    "prepared_brief": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/preparedBrief"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "supporting_context": {
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/supportingContextItem"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "retry_after_seconds": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reason_code": {
+      "oneOf": [
+        {
+          "enum": [
+            "refresh_in_progress",
+            "generation_pending",
+            "no_eligible_sources",
+            "context_not_available"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ready"
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "$ref": "#/$defs/readyState"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "refreshing"
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "$ref": "#/$defs/refreshingState"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "pending"
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "$ref": "#/$defs/pendingState"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "unavailable"
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "$ref": "#/$defs/unavailableState"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": ["ready", "refreshing"]
+          },
+          "detail": {
+            "const": "brief"
+          }
+        },
+        "required": ["state", "detail"]
+      },
+      "then": {
+        "properties": {
+          "supporting_context": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": ["ready", "refreshing"]
+          },
+          "detail": {
+            "const": "supporting_context"
+          }
+        },
+        "required": ["state", "detail"]
+      },
+      "then": {
+        "properties": {
+          "supporting_context": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "snapshot_version": {
+            "const": 1
+          }
+        },
+        "required": ["snapshot_version"]
+      },
+      "then": {
+        "properties": {
+          "snapshot_supersedes_ref": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "snapshot_version": {
+            "type": "integer",
+            "minimum": 2
+          }
+        },
+        "required": ["snapshot_version"]
+      },
+      "then": {
+        "properties": {
+          "snapshot_supersedes_ref": {
+            "$ref": "#/$defs/opaqueRef"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "brief_version": {
+            "const": 1
+          }
+        },
+        "required": ["brief_version"]
+      },
+      "then": {
+        "properties": {
+          "brief_supersedes_ref": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "brief_version": {
+            "type": "integer",
+            "minimum": 2
+          }
+        },
+        "required": ["brief_version"]
+      },
+      "then": {
+        "properties": {
+          "brief_supersedes_ref": {
+            "$ref": "#/$defs/opaqueRef"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "completeness": {
+            "const": "complete"
+          }
+        },
+        "required": ["completeness"]
+      },
+      "then": {
+        "properties": {
+          "provenance": {
+            "items": {
+              "not": {
+                "properties": {
+                  "reason_code": {
+                    "enum": ["selection_limit", "source_temporarily_unavailable"]
+                  }
+                },
+                "required": ["reason_code"]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "completeness": {
+            "const": "partial"
+          }
+        },
+        "required": ["completeness"]
+      },
+      "then": {
+        "properties": {
+          "provenance": {
+            "contains": {
+              "properties": {
+                "reason_code": {
+                  "enum": ["selection_limit", "source_temporarily_unavailable"]
+                }
+              },
+              "required": ["reason_code"]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._~-]{8,160}$"
+    },
+    "nullableOpaqueRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "minLength": 20,
+      "maxLength": 35
+    },
+    "nullableTimestamp": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "nullableVersion": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/version"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lineageVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "nullableLineageVersion": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/lineageVersion"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sourceRefs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/opaqueRef"
+      }
+    },
+    "briefText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "source_refs"],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "source_refs": {
+          "$ref": "#/$defs/sourceRefs"
+        }
+      }
+    },
+    "preparedBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "recap",
+        "trajectory_and_material_changes",
+        "talking_points",
+        "open_threads",
+        "cautions",
+        "suggested_outline",
+        "patient_reported"
+      ],
+      "properties": {
+        "recap": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "source_refs"],
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4000
+            },
+            "source_refs": {
+              "$ref": "#/$defs/sourceRefs"
+            }
+          }
+        },
+        "talking_points": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/briefText"
+          }
+        },
+        "trajectory_and_material_changes": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/briefText"
+          }
+        },
+        "open_threads": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/briefText"
+          }
+        },
+        "cautions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/briefText"
+          }
+        },
+        "suggested_outline": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/briefText"
+          }
+        },
+        "patient_reported": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "summary", "source_refs"],
+              "properties": {
+                "label": {
+                  "const": "Patient-reported Visit Prep"
+                },
+                "summary": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                },
+                "source_refs": {
+                  "$ref": "#/$defs/sourceRefs"
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "provenanceItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_class",
+        "included",
+        "source_ref",
+        "source_version",
+        "source_at",
+        "author_class",
+        "reason_code"
+      ],
+      "properties": {
+        "source_class": {
+          "enum": ["clinician_finalized_note", "patient_reported_visit_prep"]
+        },
+        "included": {
+          "type": "boolean"
+        },
+        "source_ref": {
+          "$ref": "#/$defs/nullableOpaqueRef"
+        },
+        "source_version": {
+          "$ref": "#/$defs/nullableVersion"
+        },
+        "source_at": {
+          "$ref": "#/$defs/nullableTimestamp"
+        },
+        "author_class": {
+          "oneOf": [
+            {
+              "enum": ["clinician", "patient"]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason_code": {
+          "enum": [
+            "eligible_finalized_note",
+            "eligible_patient_visit_prep",
+            "no_eligible_source",
+            "source_not_enabled",
+            "selection_limit",
+            "source_temporarily_unavailable"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "included": {
+                "const": true
+              }
+            },
+            "required": ["included"]
+          },
+          "then": {
+            "properties": {
+              "source_ref": {
+                "$ref": "#/$defs/opaqueRef"
+              },
+              "source_version": {
+                "$ref": "#/$defs/version"
+              },
+              "source_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "author_class": {
+                "enum": ["clinician", "patient"]
+              },
+              "reason_code": {
+                "enum": ["eligible_finalized_note", "eligible_patient_visit_prep"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "source_ref": {
+                "type": "null"
+              },
+              "source_version": {
+                "type": "null"
+              },
+              "source_at": {
+                "type": "null"
+              },
+              "author_class": {
+                "type": "null"
+              },
+              "reason_code": {
+                "enum": [
+                  "no_eligible_source",
+                  "source_not_enabled",
+                  "selection_limit",
+                  "source_temporarily_unavailable"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_class": {
+                "const": "clinician_finalized_note"
+              },
+              "included": {
+                "const": true
+              }
+            },
+            "required": ["source_class", "included"]
+          },
+          "then": {
+            "properties": {
+              "author_class": {
+                "const": "clinician"
+              },
+              "reason_code": {
+                "const": "eligible_finalized_note"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_class": {
+                "const": "patient_reported_visit_prep"
+              },
+              "included": {
+                "const": true
+              }
+            },
+            "required": ["source_class", "included"]
+          },
+          "then": {
+            "properties": {
+              "author_class": {
+                "const": "patient"
+              },
+              "reason_code": {
+                "const": "eligible_patient_visit_prep"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "source_class": {
+                "const": "clinician_finalized_note"
+              },
+              "included": {
+                "const": false
+              }
+            },
+            "required": ["source_class", "included"]
+          },
+          "then": {
+            "properties": {
+              "reason_code": {
+                "enum": ["no_eligible_source", "selection_limit", "source_temporarily_unavailable"]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "supportingContextItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_ref",
+        "source_class",
+        "author_class",
+        "source_version",
+        "source_at",
+        "summary",
+        "excerpts"
+      ],
+      "properties": {
+        "source_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "source_class": {
+          "enum": ["clinician_finalized_note", "patient_reported_visit_prep"]
+        },
+        "author_class": {
+          "enum": ["clinician", "patient"]
+        },
+        "source_version": {
+          "$ref": "#/$defs/version"
+        },
+        "source_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "excerpts": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["section", "text"],
+            "properties": {
+              "section": {
+                "enum": [
+                  "history",
+                  "assessment",
+                  "plan",
+                  "medication",
+                  "safety",
+                  "patient_concern",
+                  "other"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              }
+            }
+          }
+        }
+      }
+    },
+    "contentLineage": {
+      "properties": {
+        "completeness": {
+          "enum": ["complete", "partial"]
+        },
+        "current_through": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "snapshot_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "snapshot_version": {
+          "$ref": "#/$defs/version"
+        },
+        "snapshot_generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "source_version_digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71,
+          "pattern": "^sha256_[a-f0-9]{64}$"
+        },
+        "brief_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "brief_version": {
+          "$ref": "#/$defs/version"
+        },
+        "brief_generated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "brief_generator_version": {
+          "$ref": "#/$defs/lineageVersion"
+        },
+        "brief_prompt_version": {
+          "$ref": "#/$defs/lineageVersion"
+        },
+        "brief_model_profile": {
+          "$ref": "#/$defs/nullableLineageVersion"
+        },
+        "source_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "provenance": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8
+        },
+        "prepared_brief": {
+          "$ref": "#/$defs/preparedBrief"
+        }
+      }
+    },
+    "emptyLineage": {
+      "properties": {
+        "freshness": {
+          "const": "none"
+        },
+        "completeness": {
+          "const": "none"
+        },
+        "current_through": {
+          "type": "null"
+        },
+        "snapshot_ref": {
+          "type": "null"
+        },
+        "snapshot_version": {
+          "type": "null"
+        },
+        "snapshot_generated_at": {
+          "type": "null"
+        },
+        "snapshot_supersedes_ref": {
+          "type": "null"
+        },
+        "source_version_digest": {
+          "type": "null"
+        },
+        "brief_ref": {
+          "type": "null"
+        },
+        "brief_version": {
+          "type": "null"
+        },
+        "brief_generated_at": {
+          "type": "null"
+        },
+        "brief_supersedes_ref": {
+          "type": "null"
+        },
+        "brief_generator_version": {
+          "type": "null"
+        },
+        "brief_prompt_version": {
+          "type": "null"
+        },
+        "brief_model_profile": {
+          "type": "null"
+        },
+        "source_count": {
+          "const": 0
+        },
+        "provenance": {
+          "type": "array",
+          "maxItems": 0
+        },
+        "prepared_brief": {
+          "type": "null"
+        },
+        "supporting_context": {
+          "type": "null"
+        }
+      }
+    },
+    "readyState": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/contentLineage"
+        },
+        {
+          "properties": {
+            "freshness": {
+              "const": "current"
+            },
+            "retry_after_seconds": {
+              "type": "null"
+            },
+            "reason_code": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "refreshingState": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/contentLineage"
+        },
+        {
+          "properties": {
+            "freshness": {
+              "const": "stale"
+            },
+            "retry_after_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "reason_code": {
+              "const": "refresh_in_progress"
+            }
+          }
+        }
+      ]
+    },
+    "pendingState": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/emptyLineage"
+        },
+        {
+          "properties": {
+            "retry_after_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "reason_code": {
+              "const": "generation_pending"
+            }
+          }
+        }
+      ]
+    },
+    "unavailableState": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/emptyLineage"
+        },
+        {
+          "properties": {
+            "retry_after_seconds": {
+              "type": "null"
+            },
+            "reason_code": {
+              "enum": ["no_eligible_sources", "context_not_available"]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

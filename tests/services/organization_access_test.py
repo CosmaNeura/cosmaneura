@@ -150,14 +150,22 @@ def test_organization_configuration_requires_baa_and_billing_preconditions(
 
 
 @pytest.mark.parametrize(
-    ("checkout_session_id", "subscription_id", "subscription_status", "message"),
+    (
+        "checkout_session_id",
+        "checkout_request_json",
+        "subscription_id",
+        "subscription_status",
+        "message",
+    ),
     [
-        ("cs_existing", None, None, "Stripe checkout"),
-        (None, "sub_existing", "active", "Stripe subscription"),
+        ("cs_existing", None, None, None, "Stripe checkout"),
+        (None, "{}", None, None, "Stripe checkout"),
+        (None, None, "sub_existing", "active", "Stripe subscription"),
     ],
 )
 def test_organization_configuration_rejects_parallel_stripe_billing(
     checkout_session_id,
+    checkout_request_json,
     subscription_id,
     subscription_status,
     message,
@@ -175,6 +183,7 @@ def test_organization_configuration_rejects_parallel_stripe_billing(
         negotiated_baa_reference="executed-baa:test",
         billing_exempt=True,
         stripe_checkout_session_id=checkout_session_id,
+        stripe_checkout_request_json=checkout_request_json,
         stripe_subscription_id=subscription_id,
         subscription_status=subscription_status,
     ).save()
@@ -372,9 +381,9 @@ def test_old_clickwrap_cannot_rescue_invalid_negotiated_baa_for_org_access(
     practice, code = _configured_practice(domain, now=now)
     _approve(practice, approved.email or "", now=now)
 
-    # Simulate a clickwrap that predates the organization cutover. It keeps
-    # the generic practice BAA predicate true, but must never substitute for
-    # the organization's own negotiated instrument.
+    # Simulate a clickwrap that predates the organization cutover. Its old
+    # version is no longer in force and it must never substitute for the
+    # organization's own negotiated instrument.
     practice.baa_accepted_at = now - timedelta(days=90)
     practice.baa_version = "CN-BAA-CUST-CW v2.2"
     if invalid_negotiated_baa == "future":
@@ -383,7 +392,7 @@ def test_old_clickwrap_cannot_rescue_invalid_negotiated_baa_for_org_access(
         practice.negotiated_baa_reference = None
     practice.save()
 
-    assert practice.baa_in_force(at=now)
+    assert not practice.baa_in_force(at=now)
     assert not practice.negotiated_baa_in_force(at=now)
     with pytest.raises(OrganizationAccessError, match="negotiated BAA"):
         _approve(practice, later_candidate.email or "", now=now)

@@ -1382,6 +1382,73 @@
         ]
       }
     },
+    "/internal/v1/schedule/{zoom_meeting_id}/authorize-capture": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Authorize Zoom Capture",
+        "description": "Bind a provider-selected appointment and arm this meeting's bot once.",
+        "operationId": "authorize_zoom_capture",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "zoom_meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Zoom Meeting Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeZoomCaptureRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoomCaptureAuthorizationResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Meeting unavailable"
+          },
+          "409": {
+            "description": "Capture cannot be authorized"
+          },
+          "503": {
+            "description": "Authorization service unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/schedule/{zoom_meeting_id}": {
       "delete": {
         "tags": [
@@ -2406,6 +2473,18 @@
       },
       "AcceptBaaBody": {
         "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
           "signature_name": {
             "type": "string",
             "maxLength": 120,
@@ -2429,6 +2508,9 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "doc_id",
+          "version",
+          "sha256",
           "signature_name",
           "signature_title",
           "checks"
@@ -2551,6 +2633,22 @@
         ],
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
+      },
+      "AuthorizeZoomCaptureRequest": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment_id"
+        ],
+        "title": "AuthorizeZoomCaptureRequest"
       },
       "BaaAcceptanceRecord": {
         "properties": {
@@ -2829,18 +2927,6 @@
             "maxLength": 160,
             "minLength": 3,
             "title": "Legal Name"
-          },
-          "npi": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 10
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npi"
           },
           "city": {
             "anyOf": [
@@ -4985,6 +5071,10 @@
             "type": "boolean",
             "title": "Zoom Connected"
           },
+          "capture_available": {
+            "type": "boolean",
+            "title": "Capture Available"
+          },
           "meetings": {
             "items": {
               "$ref": "#/components/schemas/ZoomMeetingResponse"
@@ -4997,6 +5087,7 @@
         "type": "object",
         "required": [
           "zoom_connected",
+          "capture_available",
           "meetings"
         ],
         "title": "ScheduleResponse"
@@ -5747,6 +5838,29 @@
         ],
         "title": "ZoomAuthUrlResponse"
       },
+      "ZoomCaptureAuthorizationResponse": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "armed"
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment_id",
+          "state"
+        ],
+        "title": "ZoomCaptureAuthorizationResponse"
+      },
       "ZoomMeetingResponse": {
         "properties": {
           "id": {
@@ -5794,6 +5908,10 @@
               }
             ],
             "title": "Appointment Id"
+          },
+          "capture_authorized": {
+            "type": "boolean",
+            "title": "Capture Authorized"
           }
         },
         "additionalProperties": false,
@@ -5806,7 +5924,8 @@
           "duration",
           "join_url",
           "status",
-          "appointment_id"
+          "appointment_id",
+          "capture_authorized"
         ],
         "title": "ZoomMeetingResponse"
       },

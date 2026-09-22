@@ -17,7 +17,8 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_container_app" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/containerApps/mock"
+      id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/containerApps/mock"
+      outbound_ip_addresses = ["198.51.100.10"]
     }
   }
 
@@ -39,9 +40,45 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/actionGroups/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_activity_log_alert" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/activityLogAlerts/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_diagnostic_setting" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Insights/diagnosticSettings/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_metric_alert" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/metricAlerts/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_scheduled_query_rules_alert_v2" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/scheduledQueryRules/mock"
+    }
+  }
+
   mock_resource "azurerm_postgresql_flexible_server" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.DBforPostgreSQL/flexibleServers/mock"
+    }
+  }
+
+  mock_resource "azurerm_redis_cache" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Cache/Redis/mock"
     }
   }
 
@@ -60,16 +97,14 @@ mock_provider "azurerm" {
 
 mock_provider "external" {}
 mock_provider "onepassword" {}
-mock_provider "random" {}
 
 override_data {
   target = data.external.procfile
   values = {
     result = {
-      api         = "uv run uvicorn app.main:app"
-      job_monitor = "uv run celery --app app.celery flower --enable_events=False --persistent=False --tasks_columns=name,uuid,state,received,started,runtime,worker"
-      scheduler   = "uv run celery --app app.celery beat"
-      worker      = "uv run celery --app app.celery worker"
+      api       = "uv run uvicorn app.main:app"
+      scheduler = "uv run celery --app app.celery beat"
+      worker    = "uv run celery --app app.celery worker"
     }
   }
 }
@@ -135,6 +170,7 @@ override_data {
       ZOOM_REDIRECT_URI          = "https://example.invalid/callback"
       ZOOM_SECRET_TOKEN          = "not-a-secret"
       ZOOM_SUCCESS_REDIRECT      = "https://example.invalid/settings"
+      ZOOM_WATCHDOG_ENABLED      = "false"
     }
   }
 }
@@ -144,6 +180,16 @@ override_data {
   values = {
     result = {
       result = "verified"
+    }
+  }
+}
+
+override_data {
+  target = data.external.deid_managed_identity_live_guard
+  values = {
+    result = {
+      check_count = "5"
+      result      = "verified"
     }
   }
 }
@@ -159,4 +205,90 @@ override_data {
 
 run "secretless_static_plan" {
   command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+  }
+
+  assert {
+    condition     = length(module.public_phi_observability) == 0
+    error_message = "public-PHI observability must remain disabled by default"
+  }
+}
+
+run "public_phi_observability_static_plan" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    enable_public_phi_observability                = true
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    public_phi_alert_email                         = "launch-ops@example.invalid"
+    public_phi_support_owner                       = "platform-on-call"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].diagnostic_setting_count == 3
+    error_message = "the activation plan must contain three metric-only data-service diagnostic settings"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].log_alert_count == 4
+    error_message = "the activation plan must contain four fixed-event aggregate log alerts"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].metric_alert_count == 5
+    error_message = "the activation plan must contain five dependency-health/capacity metric alerts"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].activity_log_alert_count == 1
+    error_message = "the activation plan must contain one PostgreSQL administrative-failure alert"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].all_log_queries_are_aggregate_only
+    error_message = "every public-PHI log alert must emit only an aggregate count"
+  }
+
+  assert {
+    condition     = azurerm_storage_account.uploads.allow_nested_items_to_be_public == false
+    error_message = "the upload account must prohibit anonymous nested-item publication"
+  }
+}
+
+run "managed_identity_activation_static_plan" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule    = false
+    deid_managed_identity_compatible_worker_image_tag = "1111111111111111111111111111111111111111"
+    enable_deid_managed_identity                      = true
+    production_container_apps_egress_ipv4             = "198.51.100.10"
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.health_services_deid_access.role_definition_name == "DeID Realtime Data User"
+    error_message = "the DeID identity must retain only the realtime-user role"
+  }
+
+  assert {
+    condition     = endswith(azurerm_role_assignment.health_services_deid_access.scope, "/providers/Microsoft.HealthDataAIServices/deidServices/AnonymizerAPI")
+    error_message = "the DeID role must be scoped to the exact AnonymizerAPI resource"
+  }
+
+  assert {
+    condition     = contains(azurerm_container_app.worker.identity[0].identity_ids, azurerm_user_assigned_identity.health_services.id)
+    error_message = "the production worker must attach the exact DeID user-assigned identity"
+  }
+
+  assert {
+    condition = length([
+      for setting in azurerm_container_app.worker.template[0].container[0].env : setting
+      if setting.name == "AZURE_DEID_AUTH_MODE" && setting.value == "managed_identity"
+    ]) == 1
+    error_message = "managed-identity activation must select the explicit worker auth mode"
+  }
 }
