@@ -8,7 +8,11 @@ import {
   checkViewAsStatus,
 } from "~/lib/view-as-api"
 
-import App, { ErrorBoundary } from "./root"
+import App, {
+  ErrorBoundary,
+  HYDRATE_FALLBACK_TIMEOUT_MS,
+  HydrateFallback,
+} from "./root"
 import { act, render, screen, waitFor } from "@testing-library/react"
 
 vi.mock("~/lib/view-as-api", () => ({
@@ -328,6 +332,70 @@ describe("Root App", () => {
       }
     },
   )
+})
+
+describe("HydrateFallback", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it("keeps the initial loading indicator before the delay", () => {
+    vi.useFakeTimers()
+    render(<HydrateFallback />)
+
+    expect(screen.getByText("Loading application...")).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS - 1)
+    })
+    expect(screen.getByText("Loading application...")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it.each(["/sign-in", "/sign-up", "/notes", "/settings"])(
+    "offers neutral loading guidance on %s without declaring sign-in failure",
+    (path) => {
+      window.history.replaceState({}, "", path)
+      vi.useFakeTimers()
+      render(<HydrateFallback />)
+
+      act(() => {
+        vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
+      })
+
+      expect(
+        screen.queryByText("Loading application..."),
+      ).not.toBeInTheDocument()
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "The application is taking longer than usual to load.",
+      )
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+      expect(screen.queryByText(/sign-in didn.t load/i)).not.toBeInTheDocument()
+    },
+  )
+
+  it("clears the delay timer when loading completes", () => {
+    vi.useFakeTimers()
+    const { unmount } = render(<HydrateFallback />)
+    expect(vi.getTimerCount()).toBe(1)
+    unmount()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("refreshes only when the user chooses the control", () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    vi.stubGlobal("location", { reload })
+    render(<HydrateFallback />)
+
+    act(() => {
+      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
+    })
+    expect(reload).not.toHaveBeenCalled()
+    screen.getByRole("button", { name: "Refresh" }).click()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("root error boundary", () => {
