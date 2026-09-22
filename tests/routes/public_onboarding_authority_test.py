@@ -34,6 +34,7 @@ def authorized_preflight(monkeypatch):
     ).save()
     practice = provision_practice_in_force(doctor)
     practice.public_pilot_cohort = True
+    practice.subscription_status = "active"
     practice.save()
     for kind, filename in [
         ("terms", "terms-of-service.html"),
@@ -208,3 +209,47 @@ def test_managed_practice_requires_current_exact_roster(
     result = _preflight(doctor)
     assert not result.gates.membership_authorized
     assert result.capabilities["soap_note"]["decision"] == "denied"
+
+
+@pytest.mark.parametrize(
+    "subscription_state",
+    [None, "past_due", "canceled", "pending_verification", "invalid"],
+)
+def test_billing_exemption_cannot_bypass_public_subscription_contract(
+    authorized_preflight, subscription_state
+):
+    doctor, practice = authorized_preflight
+    assert practice.billing_exempt
+    practice.subscription_status = subscription_state
+    practice.save()
+    result = _preflight(doctor)
+    assert result.gates.subscription_state == (subscription_state or "none")
+    assert all(value["decision"] == "denied" for value in result.capabilities.values())
+    assert "subscription_inactive" in result.capabilities["soap_note"]["reason_codes"]
+
+
+@pytest.mark.parametrize("subscription_state", ["active", "trialing"])
+def test_allowed_preflight_satisfies_frozen_contract_gates(
+    authorized_preflight, subscription_state
+):
+    import json
+
+    doctor, practice = authorized_preflight
+    practice.subscription_status = subscription_state
+    practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=1)
+    practice.save()
+    result = _preflight(doctor)
+    assert result.capabilities["soap_note"]["decision"] == "allowed"
+    contract = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "contracts/public-entitlements/v1/capability-entitlement.schema.json"
+        ).read_text()
+    )
+    required_gates = contract["allOf"][0]["then"]["properties"]["gates"]["properties"]
+    gates = result.gates.model_dump()
+    for name, constraint in required_gates.items():
+        if "const" in constraint:
+            assert gates[name] == constraint["const"]
+        if "enum" in constraint:
+            assert gates[name] in constraint["enum"]

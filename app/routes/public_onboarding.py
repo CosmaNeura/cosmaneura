@@ -33,7 +33,7 @@ from app.services.public_entitlements import (
 
 from activemodel.session_manager import aglobal_session, get_session
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import ENTITLED_SUBSCRIPTION_STATUSES, Practice, PracticeMember
 from app.models.public_onboarding import (
     LegalDocumentKind,
     PracticeInvitation,
@@ -164,7 +164,13 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
         baa_accepted=practice.baa_in_force(),
         terms_accepted=LegalDocumentKind.terms.value in accepted,
         privacy_accepted=LegalDocumentKind.privacy.value in accepted,
-        subscription_in_force=practice.entitled(),
+        # The frozen public contract requires an explicit active/trialing
+        # projection for an allowed capability. A legacy billing exemption
+        # alone must not produce an allowed envelope with state "none".
+        subscription_in_force=(
+            practice.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES
+            and practice.entitled()
+        ),
         # The membership row is the only path to this practice, so an actor can
         # never be answered for a tenant other than their own.
         tenant_isolation_verified=member.practice_id == practice.id,
