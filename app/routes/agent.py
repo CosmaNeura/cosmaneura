@@ -964,6 +964,10 @@ def resolve_mount_context(
     response.headers["X-Cosmaneura-Interaction-Ref"] = result.interaction_ref
     response.headers["X-Cosmaneura-Client-Turn-ID"] = str(client_turn_id)
     response.headers["X-Cosmaneura-Interaction-Reused"] = str(result.reused).lower()
+    if result.context.session_prep_context_ref is not None:
+        response.headers["X-Cosmaneura-Session-Prep-Context"] = (
+            result.context.session_prep_context_ref
+        )
     response.headers["Cache-Control"] = "no-store"
     return MountContextResponse.model_validate(result.context.public_body())
 
