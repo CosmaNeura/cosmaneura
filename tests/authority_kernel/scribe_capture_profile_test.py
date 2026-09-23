@@ -77,7 +77,14 @@ class ProfileScribe(NativeScribe):
     profile = None
 
     async def capture_operation(
-        self, tenant_id, session_id, operation, *, idempotency_key
+        self,
+        tenant_id,
+        session_id,
+        operation,
+        *,
+        idempotency_key,
+        practitioner_id=None,
+        creator_actor_id=None,
     ):
         if operation.kind == "capture_profile":
             self.operation_calls.append(
@@ -117,6 +124,7 @@ async def test_select_recover_disable_and_use_exact_profile(admission_case):
     f = admission_case
     selected_scope = await ready(f)
     receipt = await gateway.execute_capture_operation(**arguments(f, selection()))
+    assert isinstance(receipt, p.CaptureProfileReceipt)
     assert receipt == f.client.profile
     f.caller = replace(
         f.caller,
@@ -137,6 +145,7 @@ async def test_select_recover_disable_and_use_exact_profile(admission_case):
             p.ReadOperation(kind="capabilities", profile_receipt_id=receipt.receipt_id),
         )
     )
+    assert isinstance(result, p.LongVisitCapabilities)
     assert result.max_chunks == 720
     assert [call[2].kind for call in f.client.operation_calls[-2:]] == [
         "capture_profile",
@@ -188,6 +197,7 @@ async def test_invalid_profile_stops_before_capability_or_reservation_call(
     f = admission_case
     selected_scope = await ready(f)
     receipt = await gateway.execute_capture_operation(**arguments(f, selection()))
+    assert isinstance(receipt, p.CaptureProfileReceipt)
     f.client.operation_calls.clear()
     operation = p.ReadOperation(
         kind="capabilities", profile_receipt_id=receipt.receipt_id
@@ -225,6 +235,7 @@ async def test_revocation_during_profile_flow_denies_next_step(admission_case, p
     f = admission_case
     selected_scope = await ready(f)
     receipt = await gateway.execute_capture_operation(**arguments(f, selection()))
+    assert isinstance(receipt, p.CaptureProfileReceipt)
     f.client.operation_calls.clear()
     f.client.result = capabilities(selected_scope)
 
@@ -234,6 +245,7 @@ async def test_revocation_during_profile_flow_denies_next_step(admission_case, p
         with Session(f.engine) as db:
             db.execute(text("SET LOCAL lock_timeout='1s'"))
             identity = db.get(AuthorityActorExternalIdentity, f.case.identity.id)
+            assert identity is not None
             identity.revoked_at = datetime.now(UTC)
             db.add(identity)
             db.commit()

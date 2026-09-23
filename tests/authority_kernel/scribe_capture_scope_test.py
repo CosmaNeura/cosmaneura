@@ -195,12 +195,21 @@ def capture_engine(monkeypatch):
     if not raw_url:
         pytest.skip("Explicit disposable W8 PostgreSQL URL required")
     url = make_url(raw_url)
-    original_scope = url.database in {"w8_core_capture_test", "w8_core_notebook_test", "w8x_core_prep_test"} and (
-        url.host, url.port, url.username) == ("127.0.0.1", 55439, "w1a_synth")
+    original_scope = url.database in {
+        "w8_core_capture_test",
+        "w8_core_notebook_test",
+        "w8x_core_prep_test",
+    } and (url.host, url.port, url.username) == ("127.0.0.1", 55439, "w1a_synth")
     resolution_scope = (url.database, url.host, url.port, url.username) == (
-        "w24_core_note_resolution_test", "127.0.0.1", 55445, "w11_synth")
-    operational_beta_scope = url.database in {"beta_scribe_integrated_test", "staging_release_test"} and (
-        url.host, url.port, url.username) == ("127.0.0.1", 32768, "beta_local")
+        "w24_core_note_resolution_test",
+        "127.0.0.1",
+        55445,
+        "w11_synth",
+    )
+    operational_beta_scope = url.database in {
+        "beta_scribe_integrated_test",
+        "staging_release_test",
+    } and (url.host, url.port, url.username) == ("127.0.0.1", 32768, "beta_local")
     if not (original_scope or resolution_scope or operational_beta_scope):
         pytest.fail("Refusing a database outside the disposable W8 scope")
     # Match Core's configured engine when exercising nested transcript entries.
@@ -351,7 +360,8 @@ def test_binding_and_request_lineage_cannot_be_reassigned(capture_case, change):
 def test_another_provider_cannot_adopt_existing_workspace(capture_case, same_practice):
     session, case = capture_case
     capture.resolve_capture_binding(**case.arguments)
-    other = make_scope_case(session,
+    other = make_scope_case(
+        session,
         existing_tenant=case.tenant if same_practice else None,
         existing_practice=case.practice if same_practice else None,
     )

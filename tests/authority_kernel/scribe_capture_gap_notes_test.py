@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import replace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -13,7 +14,10 @@ from app.services import scribe_capture_gap_source as gaps
 from app.services import scribe_capture_note_edits as edits
 from app.services import scribe_capture_notes as notes
 from app.services.scribe_capture_gateway import CaptureOperationUnavailable
-from app.services.scribe_capture_recovery_contract import CaptureRecoveryHistory
+from app.services.scribe_capture_recovery_contract import (
+    CaptureRecoveryHistory,
+    CaptureRecoveryReceipt,
+)
 from app.services.scribe_capture_working_contract import (
     canonical_document,
     canonical_hash,
@@ -55,6 +59,7 @@ async def setup(f, monkeypatch):
     )
     args["caller"] = f.caller
     _, receipt = recovery_pair(f.scope)
+    assert isinstance(receipt, CaptureRecoveryReceipt)
     f.history = CaptureRecoveryHistory(
         session_id=f.scope.session_id, recoveries=(receipt,)
     )
@@ -101,6 +106,7 @@ async def test_initial_gap_draft_replay_retains_raw_and_explicit_review_evidence
     f = admission_case
     args = await setup(f, monkeypatch)
     preview = await notes.capture_note(**{**args, "prepare": False})
+    assert preview.capture_gap_review is not None
     assert (
         preview.status == "not_prepared" and preview.capture_gap_review.review_required
     )
@@ -116,7 +122,9 @@ async def test_initial_gap_draft_replay_retains_raw_and_explicit_review_evidence
     assert str(manifest.initial_transcript_id) == first.transcript_ref
     assert manifest.initial_source_sha256 == first.source_sha256
     assert manifest.recovery_canonical == canonical_document(f.history)
+    assert first.capture_gap_review is not None
     assert manifest.recovery_sha256 == first.capture_gap_review.recovery_sha256
+    assert first.capture_gap_review is not None
     assert (
         first.capture_gap_review.observations[0].gap_id
         == f.history.recoveries[0].request.gap_id
@@ -157,6 +165,8 @@ async def test_gap_corrections_and_edits_preserve_manifest_and_reject_old_source
     )
     first = await notes.capture_note(**args)
     manifest_before = manifests(f)[0].model_dump()
+    assert first.note_ref is not None
+    assert first.note_sha256 is not None
     edit = edits.NoteEdit(
         client_key=uuid4(),
         expected_note_ref=first.note_ref,
@@ -316,7 +326,7 @@ async def test_legacy_raw_delivery_keeps_committed_import_before_dispatch(
         dispatched.append(str(transcript.id))
 
     monkeypatch.setattr(ingest, "_dispatch_pipeline_if_needed", dispatch)
-    args = dict(
+    args: dict[str, Any] = dict(
         encounter_id=f.case.appointment.id,
         caller_client_id=f.caller.workload_client_id,
         idempotency_key="invented-legacy-" + str(f.scope.session_id),
@@ -425,7 +435,7 @@ async def test_database_rejects_invalid_manifest_before_any_unique_conflict(
         body["recoveries"][0]["session_id"] = str(uuid4())
     if mutation == "shape":
         del body["recoveries"]
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         binding_id=f.binding.binding_ref,
         session_id=f.scope.session_id,
         raw_source_id=f.raw.id,

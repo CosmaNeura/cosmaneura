@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, computed_field
 import activemodel.base_model as active_base
 import activemodel.query_wrapper as active_query
 from activemodel import BaseModel as ActiveModel
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, Table, inspect
 from sqlalchemy.exc import NoResultFound
 from sqlmodel import Field as SqlField
 from sqlmodel import Session, SQLModel, create_engine
@@ -98,7 +98,11 @@ def load_route(root: Path):
         ),
     }
     exec(  # noqa: S102 — only the named, local source AST; no app bootstrap.
-        compile(ast.Module(body=selected, type_ignores=[]), "note_detail", "exec"),
+        compile(
+            ast.Module(body=list[ast.stmt](selected), type_ignores=[]),
+            "note_detail",
+            "exec",
+        ),
         namespace,
     )
     return namespace["note_detail"], namespace["NoteDetail"]
@@ -108,7 +112,13 @@ def load_route(root: Path):
 def rows(monkeypatch):
     engine = create_engine("sqlite://")
     tables = [
-        model.__table__ for model in (SourceAppointment, SourceNote, SourceTranscript, SourceCaptureBinding)
+        cast(Table, inspect(model).local_table)
+        for model in (
+            SourceAppointment,
+            SourceNote,
+            SourceTranscript,
+            SourceCaptureBinding,
+        )
     ]
     SQLModel.metadata.create_all(engine, tables=tables)
 
@@ -194,8 +204,10 @@ def test_several_notes_can_share_one_source(rows, detail):
 
 @pytest.mark.parametrize("scope", ["doctor_id", "patient_id", "appointment_id"])
 def test_foreign_scope_source_is_not_returned(rows, detail, scope):
+    foreign = SourceTranscript(id="foreign")
+    setattr(foreign, scope, "foreign_scope")
     rows(
-        SourceTranscript(id="foreign", **{scope: "foreign_scope"}),
+        foreign,
         SourceTranscript(id="unreferenced"),
         SourceNote(id="current", ai_transcript_id="foreign"),
     )
@@ -278,7 +290,18 @@ def test_appointment_owner_lookup_still_denies_other_provider(rows, detail):
         detail("appointment_b")
 
 
-@pytest.mark.parametrize("doctor,appointment,expected", [("doctor_a", "appointment_a", True), ("doctor_b", "appointment_a", False), ("doctor_a", "appointment_b", False)])
-def test_capture_preparation_feedback_is_bound_to_owned_visit(rows, detail, doctor, appointment, expected):
-    rows(SourceCaptureBinding(id="binding", doctor_id=doctor, appointment_id=appointment))
+@pytest.mark.parametrize(
+    "doctor,appointment,expected",
+    [
+        ("doctor_a", "appointment_a", True),
+        ("doctor_b", "appointment_a", False),
+        ("doctor_a", "appointment_b", False),
+    ],
+)
+def test_capture_preparation_feedback_is_bound_to_owned_visit(
+    rows, detail, doctor, appointment, expected
+):
+    rows(
+        SourceCaptureBinding(id="binding", doctor_id=doctor, appointment_id=appointment)
+    )
     assert detail().capture_workflow_required is expected

@@ -83,6 +83,7 @@ async def test_background_job_and_late_publication_preserve_capture_owner(
     with Session(f.engine) as session:
         if existing is not None:
             preserved = session.get(AIVisitNote, existing.id)
+            assert preserved is not None
             assert preserved.superseded_at is None and preserved.note == existing.note
         else:
             assert (

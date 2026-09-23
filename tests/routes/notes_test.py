@@ -11,7 +11,7 @@ from app.services.staging_synthetic_appointment import (
 
 from activemodel.session_manager import get_engine
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -259,12 +259,9 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
         appointment_id=appointment.id,
         duration=1,
         transcript_data=[
-            {
-                "speaker": "A",
-                "content": "Synthetic visit",
-                "startTime": 0,
-                "endTime": 1000,
-            }
+            TranscriptEntry(
+                speaker="A", content="Synthetic visit", startTime=0, endTime=1000
+            )
         ],
     ).save()
 

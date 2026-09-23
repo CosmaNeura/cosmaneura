@@ -3,6 +3,7 @@
 import os
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -55,16 +56,19 @@ def owned_url(name):
     if not raw:
         pytest.skip("Explicit owned configured-capture test database required")
     url = make_url(raw)
+    socket_host = url.query.get("host", "")
     private_scope = (
         url.database == "scribe_configured_core_test"
         and url.username == "scribe_configured_owner"
         and url.host is None
-        and url.query.get("host", "").startswith("/private/tmp/scribe-configured-core.")
+        and isinstance(socket_host, str)
+        and socket_host.startswith("/private/tmp/scribe-configured-core.")
         and url.query.get("port") == "55458"
     )
-    operational_beta_scope = url.database in {"scribe_configured_core_test", "staging_release_configured_test"} and (url.host, url.port, url.username) == (
-        "127.0.0.1", 32768, "beta_local"
-    )
+    operational_beta_scope = url.database in {
+        "scribe_configured_core_test",
+        "staging_release_configured_test",
+    } and (url.host, url.port, url.username) == ("127.0.0.1", 32768, "beta_local")
     assert private_scope or operational_beta_scope
     if url.database == "staging_release_configured_test":
         name = name.replace("scribe_configured_core", "staging_release_configured")
@@ -99,7 +103,9 @@ def install_configured(f):
 
     async def create(tenant, payload, *, creator_actor_id, idempotency_key):
         row = journal(f)
+        assert row.configured_capture is not None
         assert row.configured_capture["id"] == str(payload.id)
+        assert row.configured_capture is not None
         assert (
             row.configured_capture["creator_actor_id"]
             == creator_actor_id
@@ -126,7 +132,9 @@ def install_configured(f):
     f.client.create_configured_session = create
 
 
-async def admit(f, *, resume=False, selection=SELECTION):
+async def admit(
+    f, *, resume=False, selection: ConfiguredCaptureSelection | None = SELECTION
+):
     return await admission.admit_capture(
         **call_arguments(f, resume=resume), configured_capture=selection
     )
@@ -142,7 +150,9 @@ async def test_configured_reservation_survives_lost_reply_and_rejects_changed_re
     f.client.lose_response.add(phase)
     with pytest.raises(admission.AdmissionUnconfirmed):
         await admit(f)
-    reservation = journal(f).configured_capture.copy()
+    configured_capture = journal(f).configured_capture
+    assert configured_capture is not None
+    reservation = configured_capture.copy()
     for selection in (
         None,
         ConfiguredCaptureSelection(schema_version="1.0", language_mode="en-US"),
@@ -155,7 +165,10 @@ async def test_configured_reservation_survives_lost_reply_and_rejects_changed_re
     assert journal(f).configured_capture == reservation
     assert all(call == f.configured_calls[0] for call in f.configured_calls)
     assert len(f.client.sessions) == len(f.client.consents) == 1
-    with Session(f.engine) as session, pytest.raises(DBAPIError, match="configured admission is immutable"):
+    with (
+        Session(f.engine) as session,
+        pytest.raises(DBAPIError, match="configured admission is immutable"),
+    ):
         session.execute(
             text(
                 "UPDATE scribe_capture_admission SET configured_capture = NULL WHERE id = :id"
@@ -175,34 +188,48 @@ async def test_legacy_admission_cannot_convert(admission_case):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [
-    ("creator_actor_id", "wrong_creator"), ("id", uuid4()),
-    ("language_mode", "en-US"), ("transcription_adapter_id", "unexpected"),
-])
-async def test_mismatched_configured_receipt_is_never_admitted(admission_case, field, value):
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("creator_actor_id", "wrong_creator"),
+        ("id", uuid4()),
+        ("language_mode", "en-US"),
+        ("transcription_adapter_id", "unexpected"),
+    ],
+)
+async def test_mismatched_configured_receipt_is_never_admitted(
+    admission_case, field, value
+):
     f = admission_case
     install_configured(f)
     f.client.mutate = lambda phase, receipt: (
-        receipt.model_copy(update={field: value}) if phase == "session" else receipt)
+        receipt.model_copy(update={field: value}) if phase == "session" else receipt
+    )
     with pytest.raises(admission.AdmissionUnconfirmed):
         await admit(f)
     assert journal(f).session_id is None
 
 
 @pytest.mark.asyncio
-async def test_new_reviewed_version_preserves_old_source_and_requires_new_note(admission_case):
+async def test_new_reviewed_version_preserves_old_source_and_requires_new_note(
+    admission_case,
+):
     f = admission_case
     kwargs = await note_setup(f)
     first = await notes.capture_note(**kwargs)
     f.view["working"]["working_transcript_version"] += 1
     f.view["review_queue"]["working_transcript_version"] += 1
     f.view["working"]["segments"][0].update(
-        content="I have not had a fever.", translation_version=2,
-        translation_id=str(uuid4()), translation_review_id=str(uuid4()))
+        content="I have not had a fever.",
+        translation_version=2,
+        translation_id=str(uuid4()),
+        translation_review_id=str(uuid4()),
+    )
     current = await notes.capture_note(**{**kwargs, "prepare": False})
     assert current.status != "draft" and current.fields is None
     second = await notes.capture_note(**kwargs)
     assert second.note_ref != first.note_ref and second.review_required
+    assert second.reviewed_source is not None
     assert second.reviewed_source.working_version == 2
     assert len(rows(f, AIVisitTranscript)) == len(rows(f, AIVisitNote)) == 2
     assert len(f.model.calls) == 4
@@ -230,7 +257,7 @@ def reviewed_document(session_id):
     return view
 
 
-async def note_setup(f):
+async def note_setup(f) -> dict[str, Any]:
     install_configured(f)
     await admit(f)
     scope = admission.authorize_admitted_capture(
@@ -283,6 +310,7 @@ async def test_reviewed_english_import_note_edit_and_lost_reply_recovery(
     ).status == "not_prepared"
     first = await notes.capture_note(**kwargs)
     assert first == await notes.capture_note(**kwargs)
+    assert first.reviewed_source is not None
     assert first.review_required and first.reviewed_source.kind == "reviewed_english"
     assert len(f.model.calls) == 2
     assert all("No tengo fiebre" not in prompt for prompt, _ in f.model.calls)
@@ -305,6 +333,8 @@ async def test_reviewed_english_import_note_edit_and_lost_reply_recovery(
             )
             session.commit()
     request = {k: v for k, v in kwargs.items() if k not in ("prepare", "model")}
+    assert first.note_ref is not None
+    assert first.note_sha256 is not None
     edit = edits.NoteEdit(
         client_key=uuid4(),
         expected_note_ref=first.note_ref,
@@ -342,6 +372,7 @@ async def test_unready_or_changed_source_cannot_publish_note(admission_case, fau
                     identity = session.get(
                         AuthorityActorExternalIdentity, f.case.identity.id
                     )
+                    assert identity is not None
                     identity.revoked_at = datetime.now(UTC)
                     session.add(identity)
                     session.commit()

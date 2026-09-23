@@ -64,6 +64,7 @@ def test_real_scoped_read_on_the_facade_and_os_client(admission_case):
     # facade/authority/database. Only workload identity acquisition is a fixture.
     import sys
     from dataclasses import asdict
+    from importlib import import_module
     from pathlib import Path
 
     import httpx
@@ -78,12 +79,15 @@ def test_real_scoped_read_on_the_facade_and_os_client(admission_case):
         )
     sys.path.insert(0, str(os_source))
     try:
-        from cosmas_os.adapters.core_capture_admission import HttpCoreCaptureAdmission
-        from cosmas_os.ports.bot_capabilities import ConnectorUnavailable
-        from cosmas_os.ports.core_capture import (
-            CoreCaptureBindingSnapshot,
-            CoreInteractionCredential,
-        )
+        HttpCoreCaptureAdmission = import_module(
+            "cosmas_os.adapters.core_capture_admission"
+        ).HttpCoreCaptureAdmission
+        ConnectorUnavailable = import_module(
+            "cosmas_os.ports.bot_capabilities"
+        ).ConnectorUnavailable
+        core_capture = import_module("cosmas_os.ports.core_capture")
+        CoreCaptureBindingSnapshot = core_capture.CoreCaptureBindingSnapshot
+        CoreInteractionCredential = core_capture.CoreInteractionCredential
 
         def transport(request):
             assert request.url.host == "core.example.invalid"

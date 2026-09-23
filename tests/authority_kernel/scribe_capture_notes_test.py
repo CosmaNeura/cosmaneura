@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -12,7 +13,7 @@ from app.commands import scribe_transcript as ingest
 from app.services import authority
 from app.services import scribe_capture_notes as notes
 from app.services.scribe_capture_gateway import CaptureOperationUnavailable
-from app.services.scribe_workflow import ScribeWorkflowRejectedError
+from app.services.scribe_workflow import CaptureTranscript, ScribeWorkflowRejectedError
 
 from activemodel.session_manager import _session_context
 from app.models.ai_visit_note import AIVisitNote
@@ -47,7 +48,7 @@ class FakeModel:
         return self.output if json_output else "- Discuss sleep at follow-up."
 
 
-async def setup(f, monkeypatch):
+async def setup(f, monkeypatch) -> dict[str, Any]:
     scope = await ready(f)
     _, f.client.result = pair("transcript", scope)
     native = f.client.capture_operation
@@ -115,7 +116,9 @@ async def test_prepare_retry_read_and_lost_response_recover_one_source_and_note(
     reopened = await notes.capture_note(**{**kwargs, "prepare": False})
     assert first == second == reopened
     assert first.review_required and first.status == "draft"
+    assert first.fields is not None
     assert list(first.fields) == ["CC", "Plan"]
+    assert first.fields is not None
     assert "Greater than" not in first.fields["Plan"]
     assert len(f.model.calls) == 2
     assert "infer it from the clinical context" not in f.model.calls[1][0]
@@ -148,9 +151,11 @@ async def test_pending_generation_rechecks_scope_and_inputs(
         with Session(f.engine) as session:
             if mutation == "identity":
                 row = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert row is not None
                 row.revoked_at = datetime.now(UTC)
             elif mutation == "schema":
                 row = session.get(DoctorNoteSchema, f.schema_ref)
+                assert row is not None
                 row.fields = {"Different": "Changed during generation"}
             else:
                 row = session.exec(
@@ -243,6 +248,7 @@ async def test_scope_selection_cannot_import_or_invoke_model(
         with Session(f.engine) as session:
             schema = session.get(DoctorNoteSchema, f.schema_ref)
             if fault == "deleted_schema":
+                assert schema is not None
                 schema.deleted_at = datetime.now(UTC)
             else:
                 # A second real fixture provides a valid foreign-key owner.
@@ -251,6 +257,7 @@ async def test_scope_selection_cannot_import_or_invoke_model(
                 )
 
                 other = make_scope_case(session)
+                assert schema is not None
                 schema.doctor_id = other.doctor.id
             session.add(schema)
             session.commit()
@@ -328,6 +335,7 @@ def test_source_digest_matches_existing_delivery_contract():
         ),
     )
     _, transcript = pair("transcript", admitted)
+    assert isinstance(transcript, CaptureTranscript)
     source = notes._source(transcript, admitted)
     contract = Contract.model_validate(
         {
@@ -370,6 +378,7 @@ async def test_finalization_rechecks_authority_in_the_publication_transaction(
     def revoke_then_finalize(**values):
         with Session(f.engine) as session:
             identity = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+            assert identity is not None
             identity.revoked_at = datetime.now(UTC)
             session.add(identity)
             session.commit()
@@ -416,6 +425,7 @@ async def test_concurrent_restored_current_version_is_not_overwritten(
 
     f.model.after = restore
     result = await notes.capture_note(**kwargs)
+    assert result.fields is not None
     assert result.fields["Plan"] == "Preserved clinician choice"
     assert len(rows(f, AIVisitNote)) == 1
 
@@ -506,6 +516,7 @@ async def test_existing_core_content_is_linked_once_without_regeneration(
     ).status == "not_prepared"
     assert not rows(f, ScribeTranscriptDelivery)
     result = await notes.capture_note(**kwargs)
+    assert result.fields is not None
     assert result.note_ref == old_id and result.fields["Plan"] == "Keep existing text"
     assert not f.model.calls
     assert (
@@ -606,6 +617,7 @@ async def test_note_hash_changes_when_existing_core_editor_changes_same_record(
     first = await notes.capture_note(**kwargs)
     with Session(f.engine) as session:
         current = session.get(AIVisitNote, first.note_ref)
+        assert current is not None
         current.note = {"CC": "Sleep", "Plan": "A revised synthetic plan"}
         session.add(current)
         session.commit()
@@ -613,6 +625,7 @@ async def test_note_hash_changes_when_existing_core_editor_changes_same_record(
     assert second.note_ref == first.note_ref
     assert second.note_sha256 != first.note_sha256
     assert second.source_sha256 == first.source_sha256
+    assert second.fields is not None
     assert (
         second.note_sha256
         == hashlib.sha256(orjson.dumps(list(second.fields.items()))).hexdigest()

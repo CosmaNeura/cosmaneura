@@ -54,7 +54,14 @@ class RecoveryScribe(NativeScribe):
     practitioner = None
 
     async def capture_operation(
-        self, tenant_id, session_id, operation, *, idempotency_key, practitioner_id=None
+        self,
+        tenant_id,
+        session_id,
+        operation,
+        *,
+        idempotency_key,
+        practitioner_id=None,
+        creator_actor_id=None,
     ):
         self.practitioner = practitioner_id
         return await super().capture_operation(
@@ -181,6 +188,7 @@ async def test_current_identity_revocation_denies_recovery_data(
         if observed == phase:
             with Session(f.engine) as session:
                 row = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert row is not None
                 row.revoked_at = datetime.now(UTC)
                 session.add(row)
                 session.commit()

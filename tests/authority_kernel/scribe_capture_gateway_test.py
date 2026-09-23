@@ -225,7 +225,7 @@ class NativeScribe(FakeScribe):
         self.receipts = {}
         self.after_native = lambda _: None
         self.lose = False
-        self.result = None
+        self.result: Any = None
 
     async def get_capture_status(self, tenant_id, session_id):
         self.after_native("status")
@@ -238,7 +238,14 @@ class NativeScribe(FakeScribe):
         )
 
     async def capture_operation(
-        self, tenant_id, session_id, operation, *, idempotency_key
+        self,
+        tenant_id,
+        session_id,
+        operation,
+        *,
+        idempotency_key,
+        practitioner_id=None,
+        creator_actor_id=None,
     ):
         self.operation_calls.append((tenant_id, session_id, operation, idempotency_key))
         result = self.receipts.setdefault(idempotency_key, self.result)

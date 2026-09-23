@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
@@ -149,15 +150,19 @@ async def test_configured_admission_review_and_existing_soap_routes(
                         )
 
                     app = client().app
+                    assert isinstance(app, FastAPI)
                     app.dependency_overrides[get_admission_client_factory] = (
                         lambda: remote
                     )
+                    assert isinstance(app, FastAPI)
                     app.dependency_overrides[get_capture_settings] = (
                         lambda: f.caller.capture_settings
                     )
+                    assert isinstance(app, FastAPI)
                     app.dependency_overrides[get_capture_authority_settings] = (
                         lambda: f.caller.settings
                     )
+                    assert isinstance(app, FastAPI)
                     app.dependency_overrides[authenticate_scribe_capture_request] = (
                         lambda: EntraServicePrincipal(
                             client_id=f.caller.workload_client_id
