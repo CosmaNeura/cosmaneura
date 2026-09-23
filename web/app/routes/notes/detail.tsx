@@ -169,6 +169,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               key={note.id}
               note={note}
               defaultOpen={index === 0}
+              review={loaderData.session_prep_reviews?.[note.id]}
             />
           ))
         ) : (

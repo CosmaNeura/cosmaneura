@@ -155,6 +155,11 @@ from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
+from .session_prep_review import (
+    SessionPrepNoteReview,
+    note_review_statuses,
+    session_prep_review_api,
+)
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -192,6 +197,7 @@ internal_api_app = APIRouter(
 
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
+internal_api_app.include_router(session_prep_review_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -271,6 +277,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
     engagement_role: EngagementRole | None = None
+    session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
 
     @computed_field
     @property
@@ -294,10 +301,12 @@ def note_detail(
 
     visit_notes = cast(
         list[AIVisitNote],
-        AIVisitNote.where(
-            AIVisitNote.appointment_id == appointment_id,
-            cast(Any, AIVisitNote.superseded_at).is_(None),
-        ).all(),
+        list(
+            AIVisitNote.where(
+                AIVisitNote.appointment_id == appointment_id,
+                cast(Any, AIVisitNote.superseded_at).is_(None),
+            ).all()
+        ),
     )
 
     # There should only ever be one transcript per appointment. If this
@@ -312,6 +321,11 @@ def note_detail(
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
         engagement_role=engagement_role,
+        session_prep_reviews=(
+            note_review_statuses(doctor, visit_notes)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
     )
 
     return note_detail

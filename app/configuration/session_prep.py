@@ -4,6 +4,29 @@ from decouple import config
 
 
 @dataclass(frozen=True)
+class SessionPrepProviderSettings:
+    """Explicit, default-off cohort for reviewed-note Session Prep."""
+
+    enabled: bool = False
+    clerk_subjects: frozenset[str] = frozenset()
+
+    def allows(self, subject: str) -> bool:
+        return bool(self.enabled and subject and subject in self.clerk_subjects)
+
+
+SESSION_PREP_PROVIDER_SETTINGS = SessionPrepProviderSettings(
+    enabled=config("SESSION_PREP_PROVIDER_ENABLED", default=False, cast=bool),
+    clerk_subjects=frozenset(
+        value.strip()
+        for value in config("SESSION_PREP_PROVIDER_CLERK_SUBJECTS", default="").split(
+            ","
+        )
+        if value.strip()
+    ),
+)
+
+
+@dataclass(frozen=True)
 class SessionPrepSyntheticSettings:
     """Fail-closed controls for the non-PHI Session Prep demonstration."""
 

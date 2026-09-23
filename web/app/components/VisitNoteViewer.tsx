@@ -10,14 +10,18 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { CopyButton } from "~/components/shared/CopyButton"
-import type { AiVisitNote } from "~/configuration/client"
+import type { AiVisitNote, SessionPrepNoteReview } from "~/configuration/client"
+
+import { SessionPrepNoteReviewButton } from "./SessionPrepNoteReviewButton"
 
 export default function VisitNoteViewer({
   note,
   defaultOpen = false,
+  review,
 }: {
   note: AiVisitNote
   defaultOpen: boolean
+  review?: SessionPrepNoteReview
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -49,6 +53,13 @@ export default function VisitNoteViewer({
             </div>
           ))}
         </div>
+        {review && (
+          <SessionPrepNoteReviewButton
+            key={`${note.id}:${review.content_sha256}`}
+            noteId={note.id}
+            review={review}
+          />
+        )}
       </CollapsibleContent>
     </Collapsible>
   )
