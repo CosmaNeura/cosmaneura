@@ -664,3 +664,59 @@ class CandidateIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LocalCursorReviewTests(unittest.TestCase):
+    def test_local_review_binds_report_head_author_and_pull_request(self):
+        metadata = {
+            "reviewer": "Cursor",
+            "reviewed_head": REVIEWED,
+            "result": "accepted",
+            "after_final_substantive_push": True,
+            "report_sha256": m.sha(b"Independent report.\n"),
+        }
+
+        def comment(meta):
+            return {
+                "id": 101,
+                "user": {"login": "JohnClem", "type": "User"},
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                "body": "<!-- COSMANEURA_LOCAL_CURSOR_REVIEW "
+                + json.dumps(meta)
+                + " -->\nIndependent report.\n",
+            }
+
+        good = comment(metadata)
+        selected = replace(
+            request(),
+            review_kind="local_cursor",
+            controller_check_id=0,
+            controller_review_sha256=m.sha(good["body"].encode()),
+        )
+        m.validate_request(selected)
+        m.validate_local_cursor_review(good, selected)
+        for key, value in (
+            ("reviewed_head", "f" * 40),
+            ("result", "changes_requested"),
+            ("after_final_substantive_push", False),
+            ("report_sha256", "a" * 64),
+        ):
+            changed = comment({**metadata, key: value})
+            with self.subTest(key=key), self.assertRaises(m.BuildSourceRefused):
+                m.validate_local_cursor_review(
+                    changed,
+                    replace(
+                        selected,
+                        controller_review_sha256=m.sha(changed["body"].encode()),
+                    ),
+                )
+        for key, value in (
+            (
+                "issue_url",
+                "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/420",
+            ),
+            ("user", {"login": "someone-else", "type": "User"}),
+            ("body", good["body"] + "Edited report."),
+        ):
+            with self.subTest(key=key), self.assertRaises(m.BuildSourceRefused):
+                m.validate_local_cursor_review({**good, key: value}, selected)
