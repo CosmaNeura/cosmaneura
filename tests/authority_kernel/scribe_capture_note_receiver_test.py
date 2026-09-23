@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 
 from app.configuration.scribe_capture import ScribeCaptureSettings
-from app.routes.dependencies.entra_service import authenticate_agent_api_request
+from app.routes.dependencies.entra_service import authenticate_scribe_capture_request
 from app.routes.scribe_capture import get_admission_client_factory, get_capture_settings
 from app.services import authority
 from app.services import scribe_capture_note_edits as edits
@@ -89,12 +89,17 @@ def test_edit_receiver_rejects_ambiguous_or_unbounded_input(monkeypatch, fault):
         "expected_note_sha256": "b" * 64, "expected_source_sha256": "a" * 64,
         "fields": {"Plan": "Synthetic draft"},
     }}
-    if fault == "missing_edit": del payload["edit"]
-    elif fault == "edit_on_read": payload["action"] = "read"
-    elif fault == "authority": payload["edit"]["doctor_id"] = "private sentinel"
-    elif fault == "large": payload["edit"]["fields"]["Plan"] = "x" * 270337
+    if fault == "missing_edit":
+        del payload["edit"]
+    elif fault == "edit_on_read":
+        payload["action"] = "read"
+    elif fault == "authority":
+        payload["edit"]["doctor_id"] = "private sentinel"
+    elif fault == "large":
+        payload["edit"]["fields"]["Plan"] = "x" * 270337
     raw = json.dumps(payload)
-    if fault == "duplicate": raw = raw.replace('"Plan":', '"Plan":"private sentinel","Plan":')
+    if fault == "duplicate":
+        raw = raw.replace('"Plan":', '"Plan":"private sentinel","Plan":')
     monkeypatch.setattr(edits, "save_capture_note", lambda **_: pytest.fail("edit service reached"))
     response = connection().post(PATH, content=raw, headers=headers())
     assert response.status_code == 422 and "private sentinel" not in response.text
@@ -106,7 +111,7 @@ def test_workload_authentication_precedes_note_body(monkeypatch):
     def deny():
         raise HTTPException(401)
 
-    result.app.dependency_overrides[authenticate_agent_api_request] = deny
+    result.app.dependency_overrides[authenticate_scribe_capture_request] = deny
     monkeypatch.setattr(
         notes, "capture_note", lambda **_: pytest.fail("note service reached")
     )

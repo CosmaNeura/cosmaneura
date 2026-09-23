@@ -27,7 +27,7 @@ from app.configuration.scribe_capture import (
 from app.routes.authority_errors import agent_problem_response
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_scribe_capture_request,
 )
 from app.services import authority, encounter_prep
 from app.services import scribe_capture_admission as admission
@@ -211,7 +211,7 @@ async def _validated_request[RequestBody: BaseModel](
 async def resolve_binding(
     request: Request,
     principal: Annotated[
-        EntraServicePrincipal, Depends(authenticate_agent_api_request)
+        EntraServicePrincipal, Depends(authenticate_scribe_capture_request)
     ],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
     authority_settings: Annotated[
@@ -269,7 +269,7 @@ def _admission_problem(
 async def perform_capture_operation(
     request: Request,
     principal: Annotated[
-        EntraServicePrincipal, Depends(authenticate_agent_api_request)
+        EntraServicePrincipal, Depends(authenticate_scribe_capture_request)
     ],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
     authority_settings: Annotated[
@@ -361,7 +361,7 @@ def _note_problem(status_code: int, code: str) -> JSONResponse:
 @capture_api_app.post("/scribe/encounter-context", response_model=None)
 async def read_encounter_context(
     request: Request,
-    principal: Annotated[EntraServicePrincipal, Depends(authenticate_agent_api_request)],
+    principal: Annotated[EntraServicePrincipal, Depends(authenticate_scribe_capture_request)],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
     authority_settings: Annotated[AuthorityKernelSettings, Depends(get_capture_authority_settings)],
 ) -> JSONResponse:
@@ -390,7 +390,7 @@ async def read_encounter_context(
 async def prepare_or_read_note(
     request: Request,
     principal: Annotated[
-        EntraServicePrincipal, Depends(authenticate_agent_api_request)
+        EntraServicePrincipal, Depends(authenticate_scribe_capture_request)
     ],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
     authority_settings: Annotated[
@@ -494,7 +494,7 @@ async def prepare_or_read_note(
 async def admit_session(
     request: Request,
     principal: Annotated[
-        EntraServicePrincipal, Depends(authenticate_agent_api_request)
+        EntraServicePrincipal, Depends(authenticate_scribe_capture_request)
     ],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
     authority_settings: Annotated[

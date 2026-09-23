@@ -41,6 +41,7 @@ from .authority_errors import agent_problem_response, normalize_trace_id
 from .dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
+    authenticate_sovereign_tool_request,
 )
 from .scribe_capture import capture_api_app
 
@@ -557,7 +558,7 @@ async def invoke_tool(
     response: Response,
     principal: Annotated[
         EntraServicePrincipal,
-        Depends(authenticate_agent_api_request),
+        Depends(authenticate_sovereign_tool_request),
     ],
     mount_context_token: Annotated[
         str,

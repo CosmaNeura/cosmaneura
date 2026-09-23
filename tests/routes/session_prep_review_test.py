@@ -9,8 +9,10 @@ from app.configuration.session_prep import SessionPrepProviderSettings
 from app.server import api_app
 from app.services.session_prep_note_sources import note_content_sha256
 
-from app.models.doctor import Doctor
+from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.doctor import Doctor
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 
 from tests.factories import PatientFactory
@@ -82,6 +84,39 @@ def test_scribe_note_keeps_its_source_and_review_when_another_transcript_arrives
         note_content_sha256(note.note)
     )
     assert _review(authenticated_client, note).status_code == 200
+
+
+def test_two_current_notes_keep_distinct_sources_and_reviews(
+    authenticated_client, reviewable_note
+):
+    first = reviewable_note
+    original = AIVisitTranscript.one(id=first.ai_transcript_id)
+    second_source = AIVisitTranscript(
+        doctor_id=original.doctor_id, patient_id=original.patient_id,
+        appointment_id=original.appointment_id, duration=1, transcript_data=[],
+    ).save()
+    schema = DoctorNoteSchema(
+        doctor_id=first.doctor_id, note_type="Synthetic second template",
+        fields={"Plan": "Documented follow-up"},
+    ).save()
+    second = AIVisitNote(
+        doctor_id=first.doctor_id, appointment_id=first.appointment_id,
+        ai_transcript_id=second_source.id, doctor_note_schema_id=schema.id,
+        note={"Plan": "Distinct synthetic source."},
+    ).save()
+    assert _review(authenticated_client, first).status_code == 200
+    detail = authenticated_client.get(
+        api_app.url_path_for("note_detail", appointment_id=first.appointment_id)
+    ).json()
+    assert detail["transcript"] is None
+    assert {row["id"] for row in detail["note_transcripts"]} == {
+        str(original.id), str(second_source.id)
+    }
+    assert {row["id"]: row["ai_transcript_id"] for row in detail["notes"]} == {
+        str(first.id): str(original.id), str(second.id): str(second_source.id)
+    }
+    assert detail["session_prep_reviews"][str(first.id)]["reviewed_at"] is not None
+    assert detail["session_prep_reviews"][str(second.id)]["reviewed_at"] is None
 
 
 @pytest.mark.parametrize("disabled", ["switch", "cohort"])

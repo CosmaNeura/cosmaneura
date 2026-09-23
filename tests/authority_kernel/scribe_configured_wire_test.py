@@ -12,7 +12,7 @@ import pytest
 
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_scribe_capture_request,
 )
 from app.routes.scribe_capture import (
     get_admission_client_factory,
@@ -158,7 +158,7 @@ async def test_configured_admission_review_and_existing_soap_routes(
                     app.dependency_overrides[get_capture_authority_settings] = (
                         lambda: f.caller.settings
                     )
-                    app.dependency_overrides[authenticate_agent_api_request] = (
+                    app.dependency_overrides[authenticate_scribe_capture_request] = (
                         lambda: EntraServicePrincipal(
                             client_id=f.caller.workload_client_id
                         )

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from decouple import config
@@ -185,6 +185,8 @@ _AGENT_SCRIBE_RECEIVER = config("AGENT_API_SCRIBE_RECEIVER_CLIENT_ID", default="
 _AGENT_SOVEREIGN_IDS = _client_id_allowlist(
     config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
 )
+_AGENT_PROVIDER_IDS = _AGENT_SOVEREIGN_IDS
+_AGENT_CAPTURE_IDS: frozenset[str] = frozenset()
 _AGENT_REQUIRED_CLIENT_COUNT = 1
 if _AGENT_SCRIBE_RECEIVER:
     try:
@@ -194,6 +196,7 @@ if _AGENT_SCRIBE_RECEIVER:
     if not _receiver_id.int or len(_AGENT_SOVEREIGN_IDS) != 1 or str(_receiver_id) in _AGENT_SOVEREIGN_IDS:
         raise ValueError("agent_api_receiver_configuration_invalid")
     _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_receiver_id)}
+    _AGENT_CAPTURE_IDS = frozenset({str(_receiver_id)})
     _AGENT_REQUIRED_CLIENT_COUNT = 2
 
 AGENT_API_AUTH_SETTINGS = EntraAgentAuthSettings(
@@ -202,4 +205,17 @@ AGENT_API_AUTH_SETTINGS = EntraAgentAuthSettings(
     audience=config("AGENT_API_AUDIENCE", default="", cast=str),
     sovereign_client_ids=_AGENT_SOVEREIGN_IDS,
     required_client_count=_AGENT_REQUIRED_CLIENT_COUNT,
+)
+
+# Context resolution and conversation receipts are shared protocol operations.
+# Feature endpoints use separate callers even when both hold AgentApi.Access.
+SOVEREIGN_TOOL_AUTH_SETTINGS = replace(
+    AGENT_API_AUTH_SETTINGS,
+    sovereign_client_ids=_AGENT_PROVIDER_IDS,
+    required_client_count=1,
+)
+SCRIBE_CAPTURE_AUTH_SETTINGS = replace(
+    AGENT_API_AUTH_SETTINGS,
+    sovereign_client_ids=_AGENT_CAPTURE_IDS,
+    required_client_count=1,
 )

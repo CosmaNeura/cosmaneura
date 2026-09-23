@@ -11,7 +11,7 @@ import pytest
 
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_scribe_capture_request,
 )
 from app.routes.scribe_capture import (
     get_admission_client_factory,
@@ -105,7 +105,7 @@ async def test_core_to_scribe_review_and_lost_reply(admission_case, tmp_path, de
                     app.dependency_overrides[get_admission_client_factory] = lambda: remote
                     app.dependency_overrides[get_capture_settings] = lambda: f.caller.capture_settings
                     app.dependency_overrides[get_capture_authority_settings] = lambda: f.caller.settings
-                    app.dependency_overrides[authenticate_agent_api_request] = lambda: EntraServicePrincipal(client_id=f.caller.workload_client_id)
+                    app.dependency_overrides[authenticate_scribe_capture_request] = lambda: EntraServicePrincipal(client_id=f.caller.workload_client_id)
                     headers = {"X-Cosmaneura-Mount-Context": f.caller.mount_context_token,
                         "X-Cosmaneura-Interaction-Ref": f.caller.interaction_ref,
                         "X-Cosmaneura-Client-Turn-ID": str(f.caller.client_turn_id),

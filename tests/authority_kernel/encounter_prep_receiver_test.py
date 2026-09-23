@@ -9,7 +9,7 @@ from fastapi import FastAPI, HTTPException
 
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_scribe_capture_request,
 )
 from app.routes.scribe_capture import (
     get_capture_authority_settings,
@@ -38,7 +38,7 @@ def test_real_scoped_read_on_the_facade_and_os_client(admission_case):
     connection.app.dependency_overrides[get_capture_authority_settings] = (
         lambda: f.caller.settings
     )
-    connection.app.dependency_overrides[authenticate_agent_api_request] = (
+    connection.app.dependency_overrides[authenticate_scribe_capture_request] = (
         lambda: EntraServicePrincipal(client_id=f.caller.workload_client_id)
     )
     payload = {
@@ -142,7 +142,7 @@ def test_untrusted_read_rejected_before_source_access(monkeypatch, fault):
         def deny():
             raise HTTPException(401)
 
-        connection.app.dependency_overrides[authenticate_agent_api_request] = deny
+        connection.app.dependency_overrides[authenticate_scribe_capture_request] = deny
     monkeypatch.setattr(
         encounter_prep,
         "read_encounter_prep",

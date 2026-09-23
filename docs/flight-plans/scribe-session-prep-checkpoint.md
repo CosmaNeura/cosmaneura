@@ -19,7 +19,7 @@ and provider beta head `de9260834611`. Both upgrade paths were rehearsed against
 populated synthetic databases and preserved all seeded rows. No history was
 rewritten and no live migration has run.
 
-Local verification completed on this source: 1,542 Core application cases,
+Local verification before the review fixes completed 1,542 Core application cases,
 136 affected capture/source/edit/handoff cases, 329 browser cases, Python and
 browser type checks, and the browser build. Opt-in live-model and separate
 cross-repository tests remain outside this result. Both ordinary capture and
@@ -51,3 +51,34 @@ ActiveModel dependency is outside that registry scan.
 
 The current staging deployment and Scribe's active development checkout were
 not changed while producing this checkpoint.
+
+## Independent review dispositions
+
+Cursor's first integration review identified two release-blocking gaps. Feature
+endpoints now use separate Scribe-capture and Sovereign-tool workload policies;
+shared context/conversation protocol endpoints remain available to both with
+the existing record checks. Background summarization now refuses every
+capture-bound appointment, including raw and reviewed-English capture, and
+rechecks ownership under the final publication lock.
+
+The review also led to UTC-normalized encounter cutoffs, deterministic ordering
+of same-time notes, and origin validation before credential allocation. Focused
+HTTP tests cover both prohibited workload directions and distinct per-note
+transcripts/reviews. The handoff test uses separate workload identities.
+
+After those fixes, 93 focused authority/ownership cases passed, followed by
+42 handoff/receiver cases with both capture modes using separate service
+identities (one external Scribe-client case remained skipped). The affected
+application run passed 61 cases; six new URL cases initially hit a test fixture
+name collision. Renaming that parameter resolved it, and all 29 workflow-client
+cases then passed. Python type checking reported zero errors and warnings;
+Ruff and whitespace checks passed for the changed Python files.
+
+Known boundary retained for the next release review: historical multi-segment
+Recall notes persist only their latest segment's transcript ID. The note detail
+view exposes that linked segment; this checkpoint does not reconstruct a full
+historical source set for such notes. The new Scribe capture paths retain their
+explicit single-version source association. Live microphone/native-client,
+cross-repository service and identity-provider execution remain staging checks.
+GitHub Actions is disabled; local database tests are explicitly enabled through
+the owned test configuration and are not represented as a CI result.

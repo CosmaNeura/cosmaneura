@@ -13,7 +13,7 @@ from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.routes.agent import agent_api_app
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_scribe_capture_request,
 )
 from app.routes.scribe_capture import get_capture_settings
 from app.services import authority
@@ -44,7 +44,7 @@ def client(*, enabled=True):
     app = FastAPI()
     app.include_router(agent_api_app)
     app.dependency_overrides[aglobal_session] = lambda: None
-    app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+    app.dependency_overrides[authenticate_scribe_capture_request] = lambda: (
         EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
     )
     app.dependency_overrides[get_capture_settings] = lambda: ScribeCaptureSettings(
@@ -60,7 +60,7 @@ def test_authentication_runs_before_body_and_capture_service(monkeypatch):
     def deny():
         raise HTTPException(status_code=401)
 
-    connection.app.dependency_overrides[authenticate_agent_api_request] = deny
+    connection.app.dependency_overrides[authenticate_scribe_capture_request] = deny
     monkeypatch.setattr(
         scope, "resolve_capture_binding", lambda **_: pytest.fail("scope reached")
     )

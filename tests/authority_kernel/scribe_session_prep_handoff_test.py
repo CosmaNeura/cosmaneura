@@ -53,6 +53,7 @@ from tests.authority_kernel.scribe_configured_capture_test import note_setup
 from tests.services.session_prep_authority_test import AUTHORITY_SETTINGS, ISSUER
 
 capture_engine = _capture_engine
+SCRIBE_WORKLOAD = "22222222-2222-4222-8222-222222222222"
 
 
 @pytest.fixture
@@ -148,13 +149,13 @@ def real_record_capture(capture_engine, monkeypatch):
             session.commit()
             turn = uuid4()
             resolution = authority.resolve_mount_context(
-                workload_client_id=prep.WORKLOAD,
+                workload_client_id=SCRIBE_WORKLOAD,
                 mount_context_token=token,
                 client_turn_id=turn,
                 settings=AUTHORITY_SETTINGS,
             )
             caller = admission.CaptureCaller(
-                workload_client_id=prep.WORKLOAD,
+                workload_client_id=SCRIBE_WORKLOAD,
                 mount_context_token=token,
                 client_turn_id=turn,
                 interaction_ref=resolution.interaction_ref,

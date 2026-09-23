@@ -37,10 +37,19 @@ from app.models.note_type_customization import (
     PronounStyle,
     SubjectiveSource,
 )
-from app.models.scribe_capture_gap_manifest import ScribeCaptureGapManifest
-from app.models.scribe_capture_source_version import ScribeCaptureSourceVersion
+from app.models.scribe_capture_binding import ScribeCaptureBinding
 from sqlalchemy import and_, or_, update
 from sqlmodel import Session, select
+
+
+def _capture_owns_appointment(session: Session, appointment_id: TypeIDType) -> bool:
+    # A retained binding owns preparation even before transcript import and
+    # after revocation. A background job has no current capture authorization.
+    return session.exec(
+        select(cast(Any, ScribeCaptureBinding.id))
+        .where(ScribeCaptureBinding.appointment_id == appointment_id)
+        .limit(1)
+    ).first() is not None
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
@@ -63,26 +72,11 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         return
 
     with get_session() as session:
-        corrected_capture = session.exec(
-            select(ScribeCaptureSourceVersion)
-            .join(
-                AIVisitTranscript,
-                cast(Any, ScribeCaptureSourceVersion.transcript_id)
-                == AIVisitTranscript.id,
-            )
-            .where(AIVisitTranscript.appointment_id == trigger.appointment_id)
-            .limit(1)
-        ).first()
-        interrupted_capture = session.exec(
-            select(ScribeCaptureGapManifest)
-            .join(AIVisitTranscript, cast(Any, ScribeCaptureGapManifest.raw_core_transcript_id) == AIVisitTranscript.id)
-            .where(AIVisitTranscript.appointment_id == trigger.appointment_id)
-            .limit(1)
-        ).first()
-    if corrected_capture is not None or interrupted_capture is not None:
-        # A corrected recording is a complete replacement snapshot. This
-        # background path merges independent recordings and carries no current
-        # capture principal/consent; the explicit capture-note receiver owns it.
+        capture_owned = _capture_owns_appointment(cast(Session, session), trigger.appointment_id)
+    if capture_owned:
+        # Captures use explicit versioned sources. This background path merges
+        # independent recordings and carries no current capture authority;
+        # the explicit capture-note receiver owns the appointment's notes.
         log.info(
             "captured working source requires explicit note preparation",
             event_code="capture_working_explicit_preparation_required",
@@ -215,6 +209,12 @@ def _finalize_generated_note(
             .where(Appointment.id == trigger.appointment_id)
             .with_for_update()
         ).one()
+        if authorize_finalization is None and _capture_owns_appointment(
+            cast(Session, session), appointment.id
+        ):
+            # A capture may have been bound while this background model call
+            # was in flight. Recheck under the publication lock before writing.
+            return False
         current_latest = session.exec(
             select(AIVisitTranscript)
             .where(
