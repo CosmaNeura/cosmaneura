@@ -10,6 +10,7 @@ from app.server import api_app
 from app.services.session_prep_note_sources import note_content_sha256
 
 from app.models.doctor import Doctor
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 
 from tests.factories import PatientFactory
@@ -57,6 +58,30 @@ def test_review_binds_displayed_revision_and_survives_a_new_read(
     assert SessionPrepNoteFinalization.count() == 1
     reloaded = authenticated_client.get(path).json()
     assert reloaded["session_prep_reviews"][str(note.id)] == reviewed.json()
+
+
+def test_scribe_note_keeps_its_source_and_review_when_another_transcript_arrives(
+    authenticated_client, reviewable_note
+):
+    note = reviewable_note
+    source = AIVisitTranscript.one(id=note.ai_transcript_id)
+    AIVisitTranscript(
+        doctor_id=source.doctor_id,
+        patient_id=source.patient_id,
+        appointment_id=source.appointment_id,
+        duration=1,
+        transcript_data=[],
+    ).save()
+    path = api_app.url_path_for("note_detail", appointment_id=note.appointment_id)
+    response = authenticated_client.get(path)
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["transcript"]["id"] == str(source.id)
+    assert [row["id"] for row in detail["note_transcripts"]] == [str(source.id)]
+    assert detail["session_prep_reviews"][str(note.id)]["content_sha256"] == (
+        note_content_sha256(note.note)
+    )
+    assert _review(authenticated_client, note).status_code == 200
 
 
 @pytest.mark.parametrize("disabled", ["switch", "cohort"])

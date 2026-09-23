@@ -179,11 +179,27 @@ SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(
 )
 
 
+# Optional additional receiver, with the existing one-caller policy unchanged
+# when unset. This deployment-owned value is not accepted from request data.
+_AGENT_SCRIBE_RECEIVER = config("AGENT_API_SCRIBE_RECEIVER_CLIENT_ID", default="", cast=str).strip()
+_AGENT_SOVEREIGN_IDS = _client_id_allowlist(
+    config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
+)
+_AGENT_REQUIRED_CLIENT_COUNT = 1
+if _AGENT_SCRIBE_RECEIVER:
+    try:
+        _receiver_id = UUID(_AGENT_SCRIBE_RECEIVER)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("agent_api_receiver_configuration_invalid") from None
+    if not _receiver_id.int or len(_AGENT_SOVEREIGN_IDS) != 1 or str(_receiver_id) in _AGENT_SOVEREIGN_IDS:
+        raise ValueError("agent_api_receiver_configuration_invalid")
+    _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_receiver_id)}
+    _AGENT_REQUIRED_CLIENT_COUNT = 2
+
 AGENT_API_AUTH_SETTINGS = EntraAgentAuthSettings(
     enabled=config("AGENT_API_ENABLED", default=False, cast=bool),
     tenant_id=config("ENTRA_TENANT_ID", default="", cast=str),
     audience=config("AGENT_API_AUDIENCE", default="", cast=str),
-    sovereign_client_ids=_client_id_allowlist(
-        config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
-    ),
+    sovereign_client_ids=_AGENT_SOVEREIGN_IDS,
+    required_client_count=_AGENT_REQUIRED_CLIENT_COUNT,
 )

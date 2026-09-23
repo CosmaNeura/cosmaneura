@@ -276,6 +276,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     appointment: Appointment
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
+    note_transcripts: list[AIVisitTranscript] = Field(default_factory=list)
     engagement_role: EngagementRole | None = None
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
 
@@ -304,14 +305,43 @@ def note_detail(
         list(
             AIVisitNote.where(
                 AIVisitNote.appointment_id == appointment_id,
+                AIVisitNote.doctor_id == doctor.id,
                 cast(Any, AIVisitNote.superseded_at).is_(None),
             ).all()
         ),
     )
 
-    # There should only ever be one transcript per appointment. If this
-    # invariant is violated, this endpoint will start to cause issues.
-    transcript = AIVisitTranscript.get(appointment_id=appointment_id)
+    # Retained/reviewed versions can leave several transcripts on an encounter.
+    # Follow each current note's actual source, including an admin-restored note;
+    # neither creation time nor the restore frontier identifies that source.
+    transcript_query = AIVisitTranscript.where(
+        AIVisitTranscript.appointment_id == appointment.id,
+        AIVisitTranscript.doctor_id == doctor.id,
+        AIVisitTranscript.patient_id == appointment.patient_id,
+    )
+    note_transcripts: list[AIVisitTranscript] = []
+    transcript: AIVisitTranscript | None = None
+    if visit_notes:
+        source_ids = {note.ai_transcript_id for note in visit_notes}
+        note_transcripts = cast(
+            list[AIVisitTranscript],
+            list(
+                transcript_query.where(
+                    cast(Any, AIVisitTranscript.id).in_(source_ids)
+                ).all()
+            ),
+        )
+        # Keep the legacy shared field only when it describes every visible note.
+        if len(source_ids) == 1 and len(note_transcripts) == 1:
+            transcript = note_transcripts[0]
+    else:
+        # Preserve the single-transcript, pre-note view. Do not choose arbitrarily
+        # between multiple unassociated versions or expose their history.
+        candidates = cast(
+            list[AIVisitTranscript], list(transcript_query.limit(2).all())
+        )
+        if len(candidates) == 1:
+            transcript = candidates[0]
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
@@ -320,6 +350,7 @@ def note_detail(
         transcript=transcript,
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
+        note_transcripts=note_transcripts,
         engagement_role=engagement_role,
         session_prep_reviews=(
             note_review_statuses(doctor, visit_notes)

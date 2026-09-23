@@ -4473,6 +4473,13 @@
             ],
             "title": "Notes"
           },
+          "note_transcripts": {
+            "items": {
+              "$ref": "#/components/schemas/AIVisitTranscript"
+            },
+            "type": "array",
+            "title": "Note Transcripts"
+          },
           "engagement_role": {
             "anyOf": [
               {

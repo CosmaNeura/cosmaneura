@@ -42,12 +42,14 @@ from .dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
 )
+from .scribe_capture import capture_api_app
 
 agent_api_app = APIRouter(
     prefix="/service/v1/agent",
     tags=["agent"],
     dependencies=[Depends(aglobal_session)],
 )
+agent_api_app.include_router(capture_api_app)
 
 
 class MountContextResponse(BaseModel):

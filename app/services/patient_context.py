@@ -37,7 +37,9 @@ def days_since(past_dt: datetime) -> int:
 
 
 def recent_notes_for_patient(
-    doctor_id: TypeIDType, patient_id: TypeIDType, *, limit: int
+    doctor_id: TypeIDType, patient_id: TypeIDType, *, limit: int,
+    before: datetime | None = None,
+    exclude_appointment_id: TypeIDType | None = None,
 ) -> list[AIVisitNote]:
     "clinical notes for a patient, most recent appointment first, capped at NOTE_LOOKBACK"
 
@@ -58,6 +60,10 @@ def recent_notes_for_patient(
         .limit(limit)
     )
 
+    if before is not None:
+        query = query.where(Appointment.appointment_date < before)
+    if exclude_appointment_id is not None:
+        query = query.where(Appointment.id != exclude_appointment_id)
     return cast(list[AIVisitNote], list(query.all()))
 
 

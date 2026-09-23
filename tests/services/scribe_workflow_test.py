@@ -489,11 +489,20 @@ async def test_builder_applies_scale_to_zero_request_timeout(
     captured_options: dict[str, object] = {}
     real_async_client = httpx.AsyncClient
 
-    def client_factory(*, base_url: str, timeout: float) -> httpx.AsyncClient:
-        captured_options.update(base_url=base_url, timeout=timeout)
+    def client_factory(
+        *, base_url: str, timeout: float, follow_redirects: bool, trust_env: bool
+    ) -> httpx.AsyncClient:
+        captured_options.update(
+            base_url=base_url,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            trust_env=trust_env,
+        )
         return real_async_client(
             base_url=base_url,
             timeout=timeout,
+            follow_redirects=follow_redirects,
+            trust_env=trust_env,
             transport=httpx.MockTransport(lambda _: httpx.Response(500)),
         )
 
@@ -513,6 +522,8 @@ async def test_builder_applies_scale_to_zero_request_timeout(
     assert captured_options == {
         "base_url": "https://scribe.internal.example",
         "timeout": 60,
+        "follow_redirects": False,
+        "trust_env": False,
     }
     assert credential.closed
 
