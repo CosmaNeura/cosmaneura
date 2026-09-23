@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from typeid import TypeID
 
 from activemodel.session_manager import global_session
@@ -125,9 +125,9 @@ def routes():
 
     from app.server import api_app
 
-    for route in api_app.routes:
-        if isinstance(route, APIRoute):
-            methods = sorted(route.methods)
+    for route in iter_route_contexts(api_app.routes):
+        if isinstance(route.original_route, APIRoute):
+            methods = sorted(route.methods or ())
             method = ", ".join(methods)
             typer.echo(f"{method}   {route.path}    {route.name}")
         else:

@@ -29,3 +29,18 @@ symlink rejection, and SPA fallback. All data and external clients are synthetic
 Recovery is the previous application image and lockfile. No migration or data
 rewrite is included. Independent agent review of the final pushed commit remains
 required before this draft can enter a release candidate.
+
+Cursor's independent review identified two nested-router consumers still using
+the old flattened layout. Access logs and the routes CLI now traverse effective
+route contexts, preserving full route templates and leaf names without logging
+raw paths or queries. Static serving rejects NUL paths with 404 and preserves
+UTF-8 charset on precompressed text. The focused static/access/auth checks pass
+26 tests with one existing optional skip; focused Pyright and Ruff pass.
+
+The review's package-age concern did not establish a runtime defect. This exact
+FastAPI/Starlette/Clerk lock was also exercised in the combined beta candidate's
+1,513 application, 131 authority, and four concurrency checks; the artifact report
+records the exact candidate and test-report hashes. No advisory or compatibility
+exception is inferred from package age, and the local tests do not prove safety
+against undisclosed vulnerabilities. The final substantive push requires a new
+Cursor review before release.

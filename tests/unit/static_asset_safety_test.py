@@ -18,6 +18,7 @@ def site(tmp_path, monkeypatch):
     (public / "favicon.ico").write_bytes(b"synthetic icon")
     (assets / "app.js").write_bytes(b"synthetic script")
     (assets / "app.js.gz").write_bytes(gzip.compress(b"synthetic script"))
+    (assets / "app.css.gz").write_bytes(gzip.compress('body{content:"é"}'.encode()))
     secret = tmp_path / "outside.txt"
     secret.write_text("outside-synthetic-sentinel")
     (assets / "escape.js.gz").symlink_to(secret)
@@ -44,6 +45,17 @@ def test_explicitly_unacceptable_gzip_serves_plain_file(site, encoding):
     assert response.status_code == 200
     assert response.content == b"synthetic script"
     assert "Content-Encoding" not in response.headers
+
+
+def test_precompressed_text_preserves_utf8_charset(site):
+    response = site.get("/assets/app.css", headers={"Accept-Encoding": "gzip"})
+    assert response.headers["Content-Type"] == "text/css; charset=utf-8"
+    assert response.text == 'body{content:"é"}'
+
+
+@pytest.mark.parametrize("path", ["/%00", "/assets/%00"])
+def test_invalid_nul_path_is_not_an_application_error(site, path):
+    assert site.get(path).status_code == 404
 
 
 @pytest.mark.parametrize(

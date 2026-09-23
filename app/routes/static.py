@@ -42,6 +42,8 @@ class GZipStaticFiles(StaticFiles):
     """Serve precompressed assets through Starlette's protected file response."""
 
     async def get_response(self, path: str, scope: Scope):
+        if "\x00" in path:
+            raise HTTPException(status_code=404)
         encodings = Headers(scope=scope).get("Accept-Encoding", "")
         accepts_gzip = False
         for encoding in encodings.split(","):
@@ -68,9 +70,12 @@ class GZipStaticFiles(StaticFiles):
                     raise
             else:
                 response.headers["Content-Encoding"] = "gzip"
-                response.headers["Content-Type"] = (
+                content_type = (
                     mimetypes.guess_type(path)[0] or "application/octet-stream"
                 )
+                if content_type.startswith("text/"):
+                    content_type += f"; charset={response.charset}"
+                response.headers["Content-Type"] = content_type
                 response.headers.append("Vary", "Accept-Encoding")
                 return response
         response = await super().get_response(path, scope)
@@ -119,6 +124,8 @@ def mount_public_directory(app: FastAPI):
 
         https://gist.github.com/ultrafunkamsterdam/b1655b3f04893447c3802453e05ecb5e
         """
+        if "\x00" in path:
+            raise HTTPException(status_code=404)
         try:
             return await public_files.get_response(path, request.scope)
         except HTTPException as error:
