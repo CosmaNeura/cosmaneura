@@ -74,7 +74,7 @@ jobs:
       recovery_digest: ${{ steps.verify.outputs.recovery_digest }}
     steps:
       - name: Check out protected-master controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -157,7 +157,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -272,7 +272,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -315,7 +315,7 @@ jobs:
         run: just py_test-ci-${{ matrix.shard }}
       - name: Upload candidate backend shard test artifacts
         if: ${{ failure() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -356,7 +356,7 @@ jobs:
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
@@ -413,7 +413,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out protected-master configuration controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -473,7 +473,7 @@ jobs:
           echo "frontend_config_sha256=$frontend_config_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload allowlisted public staging frontend configuration
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-frontend-config-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/staging-frontend-build.json
@@ -500,7 +500,7 @@ jobs:
       contents: read
     steps:
       - name: Check out protected-master build controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -516,7 +516,7 @@ jobs:
         uses: ./.github/actions/install-nixpacks
 
       - name: Check out exact candidate for image build
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.verified_revision }}
           path: candidate
@@ -594,7 +594,7 @@ jobs:
           echo "image_id=$image_id" >> "$GITHUB_OUTPUT"
 
       - name: Upload content-addressed candidate image archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canonical-staging-image
@@ -630,7 +630,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out protected-master deployment controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -838,7 +838,7 @@ jobs:
 
       - name: Upload immutable publication evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-publication-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-publication-evidence
@@ -883,7 +883,7 @@ jobs:
       id-token: write
     steps:
       - name: Check out protected-master deployment controls
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
@@ -1002,7 +1002,7 @@ jobs:
           fi
 
       - name: Log in to staging Azure identity
-        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
@@ -1465,7 +1465,7 @@ jobs:
 
       - name: Upload non-secret staging release evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-release-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-release-evidence
@@ -1676,7 +1676,7 @@ jobs:
 
       - name: Upload complete staging workflow-attempt evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: canonical-staging-attempt-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-attempt-evidence
