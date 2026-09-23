@@ -138,6 +138,53 @@ class ControllerTests(unittest.TestCase):
         )
         self.put("native_archive", b"invented-native-archive")
 
+    def test_version_two_requires_exact_selection_and_rehearsed_schema(self):
+        self.plan.update(
+            version=2, candidate_sha="e" * 40, candidate_pr=479, controller_check_id=0
+        )
+        self.plan["release"] = {
+            "schema_before": "c" * 12,
+            "schema_after": "f" * 12,
+            "migration_revisions": ["d" * 12, "f" * 12],
+            "review_kind": "local_cursor",
+            "runtime_public": {},
+            "recovery": {},
+        }
+        self.put(
+            "selection",
+            {"founder_selected": True, "candidate_pr": 479, "candidate_sha": "e" * 40},
+        )
+        self.put(
+            "delegation",
+            {
+                "actor": "delegated_assistant",
+                "staging_build_approved": True,
+                "candidate_sha": "e" * 40,
+                "production_approved": False,
+            },
+        )
+        rehearsal = m.record(Path(self.plan["rehearsal"]["path"]).read_bytes())
+        rehearsal["rehearsal"].update(
+            source_revision="c" * 12,
+            target_revision="f" * 12,
+            forward_only=True,
+            restore_verified=True,
+            actual_online_migrations=[{"revision": x} for x in ("d" * 12, "f" * 12)],
+        )
+        self.put("rehearsal", rehearsal)
+        self.assertTrue(self.invoke(check_only=True)["local_bindings_passed"])
+        for field, value in (("candidate_sha", "a" * 40), ("candidate_pr", 480)):
+            with self.subTest(field=field):
+                original = self.plan[field]
+                self.plan[field] = value
+                with self.assertRaises(m.BuildControllerRefused):
+                    self.invoke(check_only=True)
+                self.plan[field] = original
+        rehearsal["rehearsal"]["restore_verified"] = False
+        self.put("rehearsal", rehearsal)
+        with self.assertRaises(m.BuildControllerRefused):
+            self.invoke(check_only=True)
+
     def tearDown(self):
         self.temp.cleanup()
         if self.parent.exists():

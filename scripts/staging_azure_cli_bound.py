@@ -293,7 +293,7 @@ def non_secret_argv(argv: list[str]) -> tuple[str, ...]:
     return tuple(visible)
 
 
-def validate_staging_scope(argv: list[str]) -> None:
+def validate_staging_scope(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
     if argv[0] == "containerapp":
         require(command_matches(argv, ALLOWED_CONTAINERAPP_COMMANDS))
         require(
@@ -348,8 +348,8 @@ def validate_staging_scope(argv: list[str]) -> None:
         require(
             len(names) == 1
             and re.fullmatch(
-                rf"{re.escape(STAGING_REPOSITORY)}"
-                rf"(?::{re.escape(CANDIDATE_SHA)}|@sha256:[0-9a-f]{{64}})",
+                rf"(?:{re.escape(STAGING_REPOSITORY)}:{re.escape(candidate)}|"
+                rf"(?:{re.escape(STAGING_REPOSITORY)}|scribe-beta/core)@sha256:[0-9a-f]{{64}})",
                 names[0],
             )
             is not None
@@ -359,7 +359,8 @@ def validate_staging_scope(argv: list[str]) -> None:
         require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
 
 
-def validate_argv(argv: list[str]) -> None:
+def validate_argv(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
+    require(re.fullmatch(r"[0-9a-f]{40}", candidate))
     if argv == ["--verify-only"]:
         return
     require(argv and argv[0] in {"acr", "containerapp"})
@@ -370,7 +371,73 @@ def validate_argv(argv: list[str]) -> None:
     require(
         not any("cosmaneuraprod" in value.lower() for value in non_secret_argv(argv))
     )
-    validate_staging_scope(argv)
+    validate_staging_scope(argv, candidate)
+
+
+def validate_runtime_operation(argv: list[str], operation: str) -> None:
+    """Exact commands for reviewed recovery and keeping the existing API warm."""
+    require(operation in {"recover-core", "warm-scribe"})
+    names = STAGING_CONTAINER_NAMES - {"cosmaneura-staging-migrate"}
+    if operation == "warm-scribe":
+        names = {"cosmaneura-staging-scribe-api"}
+    name = flag_values(argv, {"--name"})
+    require(len(name) == 1 and name[0] in names)
+    suffix = ["--name", name[0], "--resource-group", STAGING_RESOURCE_GROUP]
+    ending = ["--subscription", SUBSCRIPTION, "--only-show-errors", "--output", "json"]
+    if argv[:2] == ["containerapp", "show"]:
+        require(argv == ["containerapp", "show", *suffix, *ending])
+    elif argv[:3] == ["containerapp", "revision", "show"]:
+        revision = flag_values(argv, {"--revision"})
+        require(
+            len(revision) == 1
+            and re.fullmatch(re.escape(name[0]) + r"--[a-z0-9-]+", revision[0])
+        )
+        require(
+            argv
+            == [
+                "containerapp",
+                "revision",
+                "show",
+                *suffix,
+                "--revision",
+                revision[0],
+                *ending,
+            ]
+        )
+    elif operation == "recover-core":
+        revision = flag_values(argv, {"--from-revision"})
+        revision_suffix = flag_values(argv, {"--revision-suffix"})
+        require(len(revision) == len(revision_suffix) == 1)
+        require(re.fullmatch(re.escape(name[0]) + r"--[a-z0-9-]+", revision[0]))
+        require(re.fullmatch(r"recover-[a-f0-9]{12}", revision_suffix[0]))
+        require(
+            argv
+            == [
+                "containerapp",
+                "revision",
+                "copy",
+                *suffix,
+                "--from-revision",
+                revision[0],
+                "--revision-suffix",
+                revision_suffix[0],
+                *ending,
+            ]
+        )
+    else:
+        require(
+            argv
+            == [
+                "containerapp",
+                "update",
+                *suffix,
+                "--min-replicas",
+                "1",
+                "--max-replicas",
+                "1",
+                *ending,
+            ]
+        )
 
 
 def normalized_scopes(scopes: object) -> set[str]:
@@ -389,7 +456,17 @@ def main() -> int:
     require(os.getuid() == os.geteuid() != 0)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     argv = sys.argv[1:]
-    validate_argv(argv)
+    candidate = CANDIDATE_SHA
+    if argv[:1] == ["--runtime-operation"]:
+        require(len(argv) > 2)
+        operation, argv = argv[1], argv[2:]
+        validate_runtime_operation(argv, operation)
+    elif argv[:1] == ["--candidate-sha"]:
+        require(len(argv) > 2)
+        candidate, argv = argv[1], argv[2:]
+        validate_argv(argv, candidate)
+    else:
+        validate_argv(argv, candidate)
     token, expiry = token_record(3, MANAGEMENT_AUDIENCES)
     if argv == ["--verify-only"]:
         print(

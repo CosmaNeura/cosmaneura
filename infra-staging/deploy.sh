@@ -20,6 +20,9 @@ EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGE
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
+STAGING_PUBLICATION_RECEIPT="${STAGING_PUBLICATION_RECEIPT:-}"
+EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256="${EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256:-}"
+RELEASE_V2_JSON=""
 EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
@@ -105,7 +108,7 @@ az() {
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			--resource https://containerregistry.azure.net \
 			--only-show-errors --output json) || return
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json") \
 			4< <(printf '%s' "$registry_token_json"); then
@@ -115,7 +118,7 @@ az() {
 		fi
 		unset registry_token_json
 	else
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json"); then
 			status=0
@@ -152,10 +155,23 @@ verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
 	local controller_sha canonical_root canonical_origin dirty_checkout source_result
 	local expected_identity_sha256 expected_source_archive_sha256
+	# Authenticate the exact public release inputs before deriving any runtime
+	# selectors. Source/merge/review verification below is still mandatory.
+	if [[ -n "$STAGING_PUBLICATION_RECEIPT" ]]; then
+		RELEASE_V2_JSON=$("$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--deployment-inputs "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+			"$STAGING_PUBLICATION_RECEIPT" "$EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256") || return 1
+		FOUNDER_CANDIDATE_SHA=$(jq -er '.candidate_sha' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_APPROVAL_PR_NUMBER=$(jq -er '.candidate_pr' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_EXPECTED_SCHEMA_AFTER=$(jq -er '.schema_after' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_CANDIDATE_IMAGE_DIGEST=$(jq -er '.image_digest' <<<"$RELEASE_V2_JSON") || return 1
+		[[ "$EXPECTED_SCHEMA_BEFORE" == "$(jq -r '.schema_before' <<<"$RELEASE_V2_JSON")" && \
+			"$STAGING_IMAGE_DIGEST" == "$FOUNDER_CANDIDATE_IMAGE_DIGEST" ]] || return 1
+	fi
 	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
 		"$STAGING_APPROVAL_PR_NUMBER" != "$FOUNDER_APPROVAL_PR_NUMBER" || \
 		"$EXPECTED_SCHEMA_AFTER" != "$FOUNDER_EXPECTED_SCHEMA_AFTER" ]]; then
-		echo "Founder-user staging deployment is restricted to the reviewed PR #385 candidate and schema."
+		echo "Founder-user staging deployment is restricted to the exact reviewed candidate and schema."
 		return 1
 	fi
 	if ! canonical_root=$(git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel) || \
@@ -272,7 +288,7 @@ for schema_revision in "$EXPECTED_SCHEMA_BEFORE" "$EXPECTED_SCHEMA_AFTER"; do
 		exit 1
 	fi
 done
-if [[ ! "$EXPECTED_RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+if [[ -z "${RELEASE_V2_JSON:-}" && ! "$EXPECTED_RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 	echo "Expected recovery digest must be sha256 followed by 64 lowercase hex characters."
 	exit 1
 fi
@@ -327,6 +343,9 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 	echo "Failed to reconcile provider V7 staging configuration."
 	exit 1
 fi
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
+fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
 	type == "string" and length > 0
@@ -370,6 +389,10 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
 forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
+if sys.argv[2] == "v2":
+    forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
+    if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
+        fail()
 if any(v not in {"true", "false"} for v in flags.values()) or any(flags[k] != "false" for k in forced_false) or (flags["STRIPE_BILLING_ENABLED"] == "true" and flags["STRIPE_INTEGRATION_ENABLED"] != "true"):
     fail()
 try:
@@ -419,7 +442,7 @@ evidence = {
     "deployment_blockers": blockers,
 }
 print(json.dumps(evidence, separators=(",", ":"), sort_keys=True))
-' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" <<<"$ENV_JSON"
+' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" <<<"$ENV_JSON"
 }
 
 if ! CONFIGURATION_EVIDENCE_JSON=$(build_configuration_evidence); then
@@ -468,6 +491,11 @@ PUBLIC_VARS=(
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
 	SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED
+	SCRIBE_CAPTURE_ENABLED SCRIBE_CAPTURE_NOTES_ENABLED SCRIBE_CAPTURE_LONG_VISITS_ENABLED
+	SCRIBE_CAPTURE_WORKING_TRANSCRIPTS_ENABLED SCRIBE_CAPTURE_RECOVERY_ENABLED SCRIBE_CAPTURE_SOURCE_ENABLED
+	SCRIBE_ENCOUNTER_PREP_ENABLED SCRIBE_SERVICE_BASE_URL SCRIBE_SERVICE_SCOPE SCRIBE_MANAGED_IDENTITY_CLIENT_ID
+	SCRIBE_SERVICE_TIMEOUT_SECONDS SCRIBE_CAPTURE_UPLOAD_ORIGINS AGENT_API_SCRIBE_RECEIVER_CLIENT_ID
+	SESSION_PREP_PROVIDER_ENABLED SESSION_PREP_PROVIDER_CLERK_SUBJECTS
 	AUTO_MIGRATE_ON_STARTUP
 	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
@@ -591,6 +619,14 @@ if [[ "$PUBLISHED_DIGEST" != "$STAGING_IMAGE_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output image_digest "$STAGING_IMAGE_DIGEST" || exit 1
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	while IFS= read -r recovery_image; do
+		recovery_name=${recovery_image#cosmaneurastagingregistry.azurecr.io/}
+		recovery_digest=${recovery_image#*@}
+		observed=$(az acr manifest show-metadata --registry "$ACR_NAME" --name "$recovery_name" --query digest -o tsv) || exit 1
+		[[ "$observed" == "$recovery_digest" ]] || exit 1
+	done < <(jq -r '.recovery[].image' <<<"$RELEASE_V2_JSON" | sort -u)
+else
 if ! RECOVERY_MANIFEST_DIGEST=$(az acr manifest show-metadata \
 	--registry "$ACR_NAME" --name "$STAGING_REPOSITORY@$EXPECTED_RECOVERY_DIGEST" \
 	--query digest -o tsv); then
@@ -600,6 +636,7 @@ fi
 if [[ "$RECOVERY_MANIFEST_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
 	echo "The staging recovery manifest does not match the reviewed digest."
 	exit 1
+fi
 fi
 if ! ACR_USERNAME=$(az acr credential show \
 	-n "$ACR_NAME" --query "username" -o tsv); then
@@ -857,6 +894,12 @@ if ! verify_workload_state_ready "$WORKLOADS_BEFORE_JSON"; then
 	echo "Pre-deployment staging workload state is not safe to mutate."
 	exit 1
 fi
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	printf '%s' "$WORKLOADS_BEFORE_JSON" | "$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+		--verify-recovery "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" || exit 1
+	RECOVERY_DIGEST=$(jq -c '.recovery' <<<"$RELEASE_V2_JSON")
+	emit_github_output recovery_digest "$RECOVERY_DIGEST" || exit 1
+else
 RECOVERY_DIGEST=""
 while IFS= read -r current_image; do
 	if ! current_digest=$(resolve_staging_digest "$current_image"); then
@@ -875,6 +918,8 @@ if [[ "$RECOVERY_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output recovery_digest "$RECOVERY_DIGEST" || exit 1
+
+fi
 
 STRIPE_INTEGRATION_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_INTEGRATION_ENABLED // "false"')
 STRIPE_BILLING_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_BILLING_ENABLED // "false"')

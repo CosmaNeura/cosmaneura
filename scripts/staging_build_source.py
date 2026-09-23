@@ -19,7 +19,7 @@ import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import staging_human_build_inputs as inputs
 import staging_human_build_process as process
@@ -65,6 +65,7 @@ class SourceRequest:
     # completion of a provider check alone never establishes review acceptance.
     controller_review_sha256: str
     production_files: tuple[tuple[str, str], ...]
+    review_kind: str = "bugbot"
 
 
 @dataclass(frozen=True)
@@ -100,10 +101,16 @@ def validate_request(request: SourceRequest) -> None:
         type(context.expected_schema_after) is str
         and re.fullmatch(r"[0-9a-f]{12}", context.expected_schema_after)
     )
+    require(request.review_kind in {"bugbot", "local_cursor"})
+    require(type(request.controller_check_id) is int)
+    require(
+        request.controller_check_id == 0
+        if request.review_kind == "local_cursor"
+        else 0 < request.controller_check_id < 10**15
+    )
     for value in (
         request.controller_pr,
         request.controller_review_id,
-        request.controller_check_id,
     ):
         require(type(value) is int and 0 < value < 10**15)
     require(
@@ -126,6 +133,45 @@ def validate_request(request: SourceRequest) -> None:
     require(all(inputs.digest(value) for value in files.values()))
 
 
+def validate_local_cursor_review(
+    comment: dict[str, Any], request: SourceRequest
+) -> None:
+    """Bind the published local Cursor report; this is not GitHub approval."""
+    require(comment.get("id") == request.controller_review_id)
+    require(comment.get("user", {}).get("login") == candidate.FOUNDER_LOGIN)
+    require(comment.get("user", {}).get("type") == "User")
+    require(
+        comment.get("issue_url")
+        == "https://api.github.com/"
+        + source.API
+        + "/issues/"
+        + str(request.controller_pr)
+    )
+    body = comment.get("body")
+    require(type(body) is str and 0 < len(body) <= 65536)
+    body = cast(str, body)
+    require(sha(body.encode()) == request.controller_review_sha256)
+    prefix = "<!-- COSMANEURA_LOCAL_CURSOR_REVIEW "
+    require(body.startswith(prefix))
+    metadata, separator, report = body[len(prefix) :].partition(" -->\n")
+    require(separator and report.strip())
+    parsed = source.record(metadata.encode())
+    require(
+        set(parsed)
+        == {
+            "reviewer",
+            "reviewed_head",
+            "result",
+            "after_final_substantive_push",
+            "report_sha256",
+        }
+    )
+    require(parsed["reviewer"] == "Cursor" and parsed["result"] == "accepted")
+    require(parsed["reviewed_head"] == request.controller_reviewed_head)
+    require(parsed["after_final_substantive_push"] is True)
+    require(parsed["report_sha256"] == sha(report.encode()))
+
+
 class BuildSourceReader(source.ReadOnlySource):
     """A closed build-specific argv adapter; no mutation of snapshot allowlists.
 
@@ -144,6 +190,16 @@ class BuildSourceReader(source.ReadOnlySource):
 
     def allowed_git(self, args: list[str]) -> None:
         context = self.request.context
+        if self.request.review_kind == "local_cursor" and args == [
+            "diff",
+            "--name-only",
+            self.request.controller_reviewed_head,
+            context.controller_sha,
+            "--",
+            ".",
+            ":(exclude)docs/**",
+        ]:
+            return
         if args in (
             ["remote", "get-url", "origin"],
             ["rev-parse", "HEAD"],
@@ -203,6 +259,7 @@ class BuildSourceReader(source.ReadOnlySource):
             + "/reviews/"
             + str(self.request.controller_review_id),
             "check-runs/" + str(self.request.controller_check_id),
+            "issues/comments/" + str(self.request.controller_review_id),
         }:
             return
         require(
@@ -308,7 +365,9 @@ class BuildSourceReader(source.ReadOnlySource):
     def protections(self) -> str:
         policy = self.gh(source.API + "/branches/master/protection")
         rules = self.gh(source.API + "/rulesets/3778800")
-        source.protection(policy, rules)
+        source.protection(
+            policy, rules, current_staging=self.request.review_kind == "local_cursor"
+        )
         require(self.gh(source.API + "/actions/permissions").get("enabled") is False)
         return sha(source.canonical({"classic": policy, "ruleset": rules}))
 
@@ -394,50 +453,75 @@ class BuildSourceReader(source.ReadOnlySource):
             and head == request.controller_reviewed_head
         )
         self.is_ancestor(merged, context.controller_sha)
-        review = self.gh(
-            source.API
-            + "/pulls/"
-            + str(request.controller_pr)
-            + "/reviews/"
-            + str(request.controller_review_id)
-        )
-        check = self.gh(source.API + "/check-runs/" + str(request.controller_check_id))
-        require(
-            review.get("id") == request.controller_review_id
-            and review.get("commit_id") == request.controller_reviewed_head
-        )
-        require(
-            review.get("user", {}).get("login") == "cursor[bot]"
-            and review.get("user", {}).get("type") == "Bot"
-            and review.get("state") == "COMMENTED"
-        )
-        body = review.get("body")
-        require(
-            type(body) is str
-            and "<!-- BUGBOT_REVIEW -->" in body
-            and "<!-- BUGBOT_REVIEW_STALE -->" not in body
-            and "Bugbot reviewed your changes and found no new issues!" in body
-            and f"for commit {request.controller_reviewed_head}" in body
-        )
-        require(sha(source.canonical(review)) == request.controller_review_sha256)
-        require(
-            check.get("id") == request.controller_check_id
-            and check.get("head_sha") == request.controller_reviewed_head
-        )
-        require(
-            check.get("app", {}).get("slug") == "cursor"
-            and check.get("app", {}).get("id") == 1210556
-            and check.get("name") == "Cursor Bugbot"
-            and check.get("status") == "completed"
-            and check.get("conclusion") == "success"
-        )
-        source.statuses(
-            self.gh(source.API + "/commits/" + head + "/status?per_page=100"),
-            self.gh(
-                source.API + "/commits/" + head + "/check-runs?filter=all&per_page=100"
-            ),
-            head,
-        )
+        if request.review_kind == "local_cursor":
+            comment = self.gh(
+                source.API + "/issues/comments/" + str(request.controller_review_id)
+            )
+            validate_local_cursor_review(comment, request)
+            # Every executable/configuration byte must still match the reviewed
+            # head, including publisher/deployer helpers outside MODULES.
+            require(
+                self.git_bytes(
+                    "diff",
+                    "--name-only",
+                    request.controller_reviewed_head,
+                    context.controller_sha,
+                    "--",
+                    ".",
+                    ":(exclude)docs/**",
+                )
+                == b""
+            )
+        else:
+            review = self.gh(
+                source.API
+                + "/pulls/"
+                + str(request.controller_pr)
+                + "/reviews/"
+                + str(request.controller_review_id)
+            )
+            check = self.gh(
+                source.API + "/check-runs/" + str(request.controller_check_id)
+            )
+            require(
+                review.get("id") == request.controller_review_id
+                and review.get("commit_id") == request.controller_reviewed_head
+            )
+            require(
+                review.get("user", {}).get("login") == "cursor[bot]"
+                and review.get("user", {}).get("type") == "Bot"
+                and review.get("state") == "COMMENTED"
+            )
+            body = review.get("body")
+            require(
+                type(body) is str
+                and "<!-- BUGBOT_REVIEW -->" in body
+                and "<!-- BUGBOT_REVIEW_STALE -->" not in body
+                and "Bugbot reviewed your changes and found no new issues!" in body
+                and f"for commit {request.controller_reviewed_head}" in body
+            )
+            require(sha(source.canonical(review)) == request.controller_review_sha256)
+            require(
+                check.get("id") == request.controller_check_id
+                and check.get("head_sha") == request.controller_reviewed_head
+            )
+            require(
+                check.get("app", {}).get("slug") == "cursor"
+                and check.get("app", {}).get("id") == 1210556
+                and check.get("name") == "Cursor Bugbot"
+                and check.get("status") == "completed"
+                and check.get("conclusion") == "success"
+            )
+            source.statuses(
+                self.gh(source.API + "/commits/" + head + "/status?per_page=100"),
+                self.gh(
+                    source.API
+                    + "/commits/"
+                    + head
+                    + "/check-runs?filter=all&per_page=100"
+                ),
+                head,
+            )
         for name, expected in request.production_files:
             reviewed = self.git_bytes(
                 "show", request.controller_reviewed_head + ":scripts/" + name

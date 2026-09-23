@@ -564,3 +564,39 @@ def test_scope_normalization_never_splits_a_string_into_characters() -> None:
     scope = "https://management.azure.com/.default"
     assert m.normalized_scopes(scope) == {scope}
     assert m.normalized_scopes((scope,)) == {scope}
+
+
+def test_new_candidate_tag_is_exact_and_split_staging_recovery_is_read_only():
+    candidate = "c" * 40
+    command = [
+        "acr",
+        "manifest",
+        "show-metadata",
+        "--registry",
+        m.STAGING_REGISTRY,
+        "--name",
+        m.STAGING_REPOSITORY + ":" + candidate,
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+    m.validate_argv(command, candidate)
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command, "d" * 40)
+    command[command.index("--name") + 1] = "scribe-beta/core@sha256:" + "a" * 64
+    m.validate_argv(command, candidate)
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(
+            [
+                "containerapp",
+                "update",
+                "-n",
+                "cosmaneura-staging-app",
+                "-g",
+                m.STAGING_RESOURCE_GROUP,
+                "--image",
+                m.STAGING_REGISTRY_HOST + "/scribe-beta/core@sha256:" + "a" * 64,
+                "--subscription",
+                m.SUBSCRIPTION,
+            ],
+            candidate,
+        )
