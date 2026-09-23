@@ -597,7 +597,11 @@ def _finish(
         _validate_operation(operation, binding)
         if operation.consent_receipt and operation.consent_receipt.get("revoked_at"):
             raise AdmissionConsentUnavailable
-        if operation.session_id is None or operation.consent_id is None:
+        if (
+            operation.status != "ready"
+            or operation.session_id is None
+            or operation.consent_id is None
+        ):
             raise AdmissionUnconfirmed
         result = AdmissionSnapshot(
             operation_ref=operation_ref,

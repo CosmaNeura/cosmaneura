@@ -220,18 +220,23 @@ def _finalize_generated_note(
             # A capture may have been bound while this background model call
             # was in flight. Recheck under the publication lock before writing.
             return False
-        current_latest = session.exec(
-            select(AIVisitTranscript)
-            .where(
-                AIVisitTranscript.appointment_id == trigger.appointment_id,
-                cast(Any, AIVisitTranscript.deleted_at).is_(None),
+        source_query = select(AIVisitTranscript).where(
+            AIVisitTranscript.appointment_id == trigger.appointment_id,
+            cast(Any, AIVisitTranscript.deleted_at).is_(None),
+        )
+        if authorize_finalization is not None:
+            # The capture callback checks the current Scribe source under its
+            # authority locks. A separate Recall/upload row cannot replace or
+            # permanently block that exact source's note publication.
+            source_query = source_query.where(
+                AIVisitTranscript.id == generated_through_transcript_id
             )
-            .order_by(
+        else:
+            source_query = source_query.order_by(
                 cast(Any, AIVisitTranscript.created_at).desc(),
                 cast(Any, AIVisitTranscript.id).desc(),
-            )
-            .limit(1)
-        ).one_or_none()
+            ).limit(1)
+        current_latest = session.exec(source_query).one_or_none()
         existing_note = session.exec(
             select(AIVisitNote).where(
                 AIVisitNote.appointment_id == trigger.appointment_id,

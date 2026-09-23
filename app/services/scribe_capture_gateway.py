@@ -227,6 +227,14 @@ def _validate_source_start(
         else:
             checked = NativeStartReceipt.model_validate(result.model_dump(mode="json"))
             receipt = checked
+            if operation.action == "prepare" and (
+                receipt.state != "prepared"
+                or receipt.preparation_expires_at <= now
+                or receipt.preparation_expires_at > receipt.capture_authorized_until
+                or receipt.issued_at is not None
+                or receipt.expires_at is not None
+            ):
+                raise ValueError
             if operation.action == "cancel" and receipt.state != "cancelled":
                 raise ValueError
             if operation.action == "stop" and receipt.state not in {

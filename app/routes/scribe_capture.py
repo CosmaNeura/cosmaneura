@@ -391,6 +391,8 @@ async def read_encounter_context(
             binding_ref=data.binding_ref,
             workspace_id=data.workspace_id,
         )
+    except authority.AuthorityKernelDisabledError:
+        return _problem(503)
     except authority.AuthorityKernelError:
         return _problem(403)
     except (SQLAlchemyError, ValueError):

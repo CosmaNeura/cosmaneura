@@ -437,3 +437,45 @@ def test_fresh_and_incremental_migration_match(configured_engine):
             )
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_reviewed_source_after_binding_revocation(
+    admission_case,
+):
+    f = admission_case
+    kwargs = await note_setup(f)
+    await notes.capture_note(**kwargs)
+    with Session(f.engine) as session:
+        old = session.exec(
+            select(ScribeCaptureReviewedSource).where(
+                ScribeCaptureReviewedSource.binding_id == f.binding.binding_ref
+            )
+        ).one()
+        prior = session.get(AIVisitTranscript, old.transcript_id)
+        assert prior is not None
+        extra = AIVisitTranscript(
+            doctor_id=prior.doctor_id,
+            patient_id=prior.patient_id,
+            appointment_id=prior.appointment_id,
+            duration=prior.duration,
+            transcript_data=prior.transcript_data,
+        )
+        session.add(extra)
+        session.commit()
+        session.refresh(extra)
+        mapping = ScribeCaptureReviewedSource(
+            **{
+                **old.model_dump(exclude={"id", "created_at", "updated_at"}),
+                "working_version": old.working_version + 1,
+                "transcript_id": extra.id,
+            }
+        )
+        session.execute(
+            text("UPDATE scribe_capture_binding SET revoked_at=now() WHERE id=:id"),
+            {"id": TypeID.from_string(f.binding.binding_ref).uuid},
+        )
+        session.commit()
+        with pytest.raises(DBAPIError, match="reviewed source binding unavailable"):
+            session.add(mapping)
+            session.commit()

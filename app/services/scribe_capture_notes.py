@@ -452,9 +452,13 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
     has_gaps = source.qualified is not None and source.qualified.capture_incomplete
     corrected = working_corrected or has_gaps
     if not versions and manifest is None:
-        if len(transcripts) > 1:
-            raise CaptureNoteConflict
-        raw = transcripts[0] if transcripts else None
+        if delivery is None:
+            if len(transcripts) > 1:
+                raise CaptureNoteConflict
+            raw = transcripts[0] if transcripts else None
+        else:
+            raw = by_id.get(delivery.transcript_id)
+        allowed = {raw.id} if raw is not None else set()
     else:
         if delivery is None:
             raise CaptureNoteConflict
@@ -462,7 +466,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         allowed = {delivery.transcript_id, *(v.transcript_id for v in versions)}
         if manifest is not None and manifest.initial_transcript_id is not None:
             allowed.add(manifest.initial_transcript_id)
-        if set(by_id) != allowed:
+        if not allowed.issubset(by_id):
             raise CaptureNoteConflict
     if raw is not None and (
         raw.deleted_at is not None
@@ -535,7 +539,8 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         != ingest._entry_data(source.entries)
     ):
         raise CaptureNoteConflict
-    return selected, set(by_id), corrected
+    # Unrelated later uploads remain stored, but never become capture sources.
+    return selected, allowed, corrected
 
 
 def _new_effective_transcript(

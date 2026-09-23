@@ -455,3 +455,100 @@ async def test_database_rejects_invalid_manifest_before_any_unique_conflict(
         session.commit()
     assert "unique" not in str(error.value.orig).lower()
     assert not manifests(f)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_gap_blocks_a_foreign_working_origin(
+    admission_case, monkeypatch
+):
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import Queue
+    from time import monotonic, sleep
+
+    f = admission_case
+    args = await setup(f, monkeypatch)
+    history = f.history
+    f.history = CaptureRecoveryHistory(session_id=f.scope.session_id, recoveries=())
+    await notes.capture_note(**args)
+    assert not manifests(f)
+    with Session(f.engine) as check:
+        assert not check.exec(
+            select(ScribeCaptureSourceVersion).where(
+                ScribeCaptureSourceVersion.binding_id == f.binding.binding_ref
+            )
+        ).all()
+    raw = rows(f, AIVisitTranscript)[0]
+    effective = AIVisitTranscript(
+        doctor_id=raw.doctor_id,
+        patient_id=raw.patient_id,
+        appointment_id=raw.appointment_id,
+        duration=raw.duration,
+        transcript_data=raw.transcript_data,
+    ).save()
+    manifest = ScribeCaptureGapManifest(
+        binding_id=f.binding.binding_ref,
+        session_id=f.scope.session_id,
+        raw_source_id=f.raw.id,
+        raw_source_sha256=f.working.raw_transcript_sha256,
+        recovery_sha256=canonical_hash(history),
+        recovery_canonical=canonical_document(history),
+        raw_core_transcript_id=raw.id,
+    )
+    source: dict[str, Any] = dict(
+        binding_id=f.binding.binding_ref,
+        session_id=f.scope.session_id,
+        raw_source_id=uuid4(),
+        raw_source_sha256=f.working.raw_transcript_sha256,
+        working_transcript_id=uuid4(),
+        working_version=2,
+        working_sha256="b" * 64,
+        source_sha256="c" * 64,
+        raw_core_transcript_id=raw.id,
+        transcript_id=effective.id,
+    )
+    started = Queue()
+
+    def insert_working():
+        with Session(f.engine) as session:
+            started.put(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
+            try:
+                session.add(ScribeCaptureSourceVersion(**source))
+                session.commit()
+            except DBAPIError as error:
+                session.rollback()
+                return str(error.orig)
+        return None
+
+    owner = Session(f.engine)
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        owner.add(manifest)
+        owner.flush()
+        future = pool.submit(insert_working)
+        pid = started.get(timeout=5)
+        deadline = monotonic() + 5
+        blocked = False
+        while monotonic() < deadline:
+            with f.engine.connect() as connection:
+                blocked = bool(
+                    connection.execute(
+                        text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
+                        {"pid": pid},
+                    ).scalar_one()
+                )
+            if blocked:
+                break
+            sleep(0.01)
+        assert blocked, "working insert must wait on the gap publisher's binding lock"
+        owner.commit()
+        assert "working source gap origin mismatch" in (future.result(timeout=5) or "")
+        with Session(f.engine) as check:
+            assert not check.exec(
+                select(ScribeCaptureSourceVersion).where(
+                    ScribeCaptureSourceVersion.binding_id == f.binding.binding_ref
+                )
+            ).all()
+    finally:
+        owner.rollback()
+        owner.close()
+        pool.shutdown(wait=True)
