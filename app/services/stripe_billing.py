@@ -53,7 +53,23 @@ _HTTPX_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
 # One client for the process. Rebuilding it per call paid a fresh TCP and TLS
 # handshake on every billing operation.
+#
+# Reset after a Celery fork by `reset_http_client`, for the reason
+# `worker_process_init` already disposes the SQLAlchemy engine: a child that
+# inherits a parent's pooled sockets shares them with its siblings.
 _HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
+
+def reset_http_client() -> None:
+    """Drop any connection pooled before a fork and start a fresh one."""
+
+    global _HTTP_CLIENT
+    try:
+        _HTTP_CLIENT.close()
+    except Exception:  # noqa: BLE001 - a half-inherited pool must not stop startup
+        pass
+    _HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
 
 # Retry only what Stripe says is safe to retry, and only for requests this
 # integration can prove are idempotent. Stripe caches an idempotent result for
@@ -251,8 +267,15 @@ def _isolated_state_session() -> Session:
 def _stripe_error_detail(response: httpx.Response) -> str:
     """Stripe's structured error, flattened for a log line and an exception.
 
-    Without this the only record of a decline or a bad parameter is the status
-    code, and the actual reason has to be looked up in the Stripe dashboard.
+    Only Stripe's enumerated fields. `message` and `param` are free text that
+    echoes what was submitted — an invalid-email failure quotes the address
+    back — and this string does not stay in the process: it becomes the
+    exception message, and `process_stripe_event_inbox` writes that into
+    `stripe_event_inbox.last_error`, where it persists. `customer_email` is a
+    real doctor's address.
+
+    `request_id` is the handle for the rest. Anyone debugging can retrieve the
+    full error from Stripe with it, which is where that text belongs.
     """
 
     request_id = response.headers.get("request-id", "")
@@ -264,8 +287,6 @@ def _stripe_error_detail(response: httpx.Response) -> str:
         "type": error.get("type"),
         "code": error.get("code"),
         "decline_code": error.get("decline_code"),
-        "param": error.get("param"),
-        "message": error.get("message"),
         "request_id": request_id or None,
     }
     rendered = " ".join(f"{k}={v}" for k, v in fields.items() if v)
@@ -323,9 +344,9 @@ def _request(
         headers["Idempotency-Key"] = idempotency_key
 
     replayable = _request_is_replayable(method, idempotency_key)
-    last_transport_error: httpx.RequestError | None = None
 
-    for attempt in range(_MAX_REQUEST_ATTEMPTS):
+    attempt = 0
+    while True:
         final_attempt = attempt == _MAX_REQUEST_ATTEMPTS - 1
         try:
             response = _HTTP_CLIENT.request(
@@ -341,7 +362,6 @@ def _request(
             # the same key is the only way to find out what happened.
             if not replayable or final_attempt:
                 raise
-            last_transport_error = exc
             log.warning(
                 "stripe request transport error, retrying",
                 stripe_path=path,
@@ -349,6 +369,7 @@ def _request(
                 error=type(exc).__name__,
             )
             time.sleep(_retry_delay(None, attempt))
+            attempt += 1
             continue
 
         if response.is_success:
@@ -363,6 +384,7 @@ def _request(
                 detail=_stripe_error_detail(response),
             )
             time.sleep(_retry_delay(response, attempt))
+            attempt += 1
             continue
 
         detail = _stripe_error_detail(response)
@@ -380,8 +402,6 @@ def _request(
             request=response.request,
             response=response,
         )
-
-    raise last_transport_error or RuntimeError("stripe request loop exited early")
 
 
 def _validate_runtime_account() -> None:

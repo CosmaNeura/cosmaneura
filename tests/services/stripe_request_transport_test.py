@@ -256,6 +256,14 @@ def test_the_failure_names_the_cause_instead_of_only_the_status(monkeypatch, sle
     ):
         assert expected in message
 
+    # Free text is deliberately absent. This string becomes the exception
+    # message, and `process_stripe_event_inbox` persists that into
+    # `stripe_event_inbox.last_error`; Stripe echoes submitted values in
+    # `message`, and one of the values this integration submits is a doctor's
+    # email address. `request_id` is how a human retrieves the rest.
+    assert "insufficient funds" not in message.lower().replace("insufficient_funds", "")
+    assert "Your card" not in message
+
 
 def test_backoff_grows_and_stays_within_the_ceiling(monkeypatch, slept):
     _drive(monkeypatch, [httpx.Response(500) for _ in range(5)])
@@ -287,3 +295,65 @@ def test_every_request_pins_the_api_version(monkeypatch, slept):
     assert (
         calls[0].headers["stripe-version"] == stripe_config.SUPPORTED_STRIPE_API_VERSION
     )
+
+
+def test_free_text_from_stripe_is_never_carried_into_the_failure(monkeypatch, slept):
+    """`message` and `param` echo submitted values and this string is persisted."""
+
+    _drive(
+        monkeypatch,
+        [
+            httpx.Response(
+                400,
+                headers={"request-id": "req_email"},
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "email_invalid",
+                        "param": "customer_email",
+                        "message": "Invalid email address: dr.smith@practice.example",
+                    }
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        stripe_billing._request("GET", "/account")
+
+    message = str(raised.value)
+    assert "invalid_request_error" in message
+    assert "email_invalid" in message
+    assert "req_email" in message
+    # The address, and the parameter naming it, stay out of anything persisted.
+    assert "dr.smith@practice.example" not in message
+    assert "customer_email" not in message
+
+
+def test_the_client_is_replaced_after_a_fork_not_merely_closed():
+    """A child inheriting the parent's pool would share sockets with its siblings.
+
+    `worker_process_init` disposes the SQLAlchemy engine for the same reason;
+    this is the HTTP half of it.
+    """
+
+    before = stripe_billing._HTTP_CLIENT
+
+    stripe_billing.reset_http_client()
+
+    after = stripe_billing._HTTP_CLIENT
+    assert after is not before
+    assert before.is_closed
+    assert not after.is_closed
+
+    stripe_billing.reset_http_client()
+
+
+def test_resetting_an_already_closed_client_does_not_raise():
+    """A half-inherited pool must not stop a worker from starting."""
+
+    stripe_billing._HTTP_CLIENT.close()
+
+    stripe_billing.reset_http_client()
+
+    assert not stripe_billing._HTTP_CLIENT.is_closed
