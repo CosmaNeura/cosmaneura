@@ -54,7 +54,8 @@ not changed while producing this checkpoint.
 
 ## Independent review dispositions
 
-Cursor's first integration review identified two release-blocking gaps. Feature
+Cursor's first integration review identified a High and a Medium gap that we
+treated as blockers before saving the checkpoint. Feature
 endpoints now use separate Scribe-capture and Sovereign-tool workload policies;
 shared context/conversation protocol endpoints remain available to both with
 the existing record checks. Background summarization now refuses every
@@ -82,3 +83,20 @@ explicit single-version source association. Live microphone/native-client,
 cross-repository service and identity-provider execution remain staging checks.
 GitHub Actions is disabled; local database tests are explicitly enabled through
 the owned test configuration and are not represented as a CI result.
+
+Cursor's final static review accepted substantive commit
+`028a224ffa5cdd89bb4465382a39251e9cdeadbc` as a stable source checkpoint, with
+no remaining correctness blocker in these fixes. The complete assessment and
+its limits are in [the independent review](scribe-session-prep-checkpoint-cursor-review.md).
+
+One additional operational limit must be handled before enabling mixed capture
+and Recall workflows: creating a capture binding reserves note preparation even
+if no recording is completed. If the provider then switches to Recall or an
+uploaded recording, the background note is skipped, and the capture path can
+reject that unrelated transcript. The recording remains stored, but a note may
+not be produced. An explicit, authorized recovery/reassignment path and visible
+provider feedback are not implemented at this checkpoint; they remain release
+work. Deleting bindings or records is not a supported recovery procedure.
+
+Work stops at this committed source checkpoint at the user's request. No
+staging deployment or further feature implementation is included in this stop.
