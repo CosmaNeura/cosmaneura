@@ -57,7 +57,32 @@ connection concurrency tests, and 131 isolated authority-kernel tests passed.
 One pre-existing optional PostgreSQL migration test was skipped because its
 separate historical-revision database was not configured.
 
-## Evidence recorded so far
+## Increment 3: durable preparation and tool reads
+
+Generated expand revision `de9260834611` adds immutable prepared artifacts,
+recoverable build leases, and durable idempotent read receipts. Source text goes
+to Core's existing Azure model client from the worker only; Redis carries an
+argument-free periodic task. Calls are bounded to 45 seconds and 3,500 output
+tokens, with at most three attempts before a five-minute cooldown. An expired
+worker cannot publish, and current authority and reviewed sources are checked
+again after generation and before every read/replay. Changed sources suppress
+the old brief immediately. Read receipts and metadata-only authoritative audit
+events commit before HTTP success. Receipts have a 24-hour replay window.
+
+Apply the additive schema before starting the receiver/worker version. Turning
+off `SESSION_PREP_PROVIDER_ENABLED` stops new work and closes the real-record
+read path; application rollback leaves the three structures dormant. No live
+migration or activation has occurred. Expired-receipt cleanup and queue-health
+instrumentation are the next operations increment.
+
+Local validation includes 17 worker/generator/real-endpoint tests, two actual
+independent-connection worker/idempotency races, and 131 authority-kernel tests
+with one existing optional migration test skipped. Model tests use local fakes.
+The final combined source/authority/worker/generator/endpoint/migration run passed
+63 tests. Ruff and focused Python type checks pass. Independent source-bound
+review and deployed acceptance remain release gates.
+
+## Earlier evidence
 
 - PostgreSQL review/source/API/authority and migration graph tests: 47 passed.
 - Focused frontend component tests: six passed; TypeScript passes.

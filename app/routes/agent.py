@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import Annotated, Literal
+from datetime import UTC, datetime
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Request, Response, status
@@ -17,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
@@ -32,8 +33,9 @@ from app.configuration.session_prep import (
     SessionPrepSyntheticSettings,
 )
 
-from activemodel.session_manager import aglobal_session
+from activemodel.session_manager import aglobal_session, get_session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlmodel import Session
 
 from .authority_errors import agent_problem_response, normalize_trace_id
 from .dependencies.entra_service import (
@@ -598,7 +600,7 @@ async def invoke_tool(
         Header(alias="X-Trace-ID"),
     ] = None,
 ) -> app.services.session_prep.SessionPrepToolResponse | JSONResponse:
-    """Run the default-off, exact-ref synthetic Session Prep compatibility path."""
+    """Read a current provider brief or the isolated synthetic compatibility path."""
 
     resolved_trace_id = normalize_trace_id(trace_id)
     singleton_headers = (
@@ -643,7 +645,10 @@ async def invoke_tool(
             trace_id=resolved_trace_id,
         )
 
-    if not session_prep_settings.is_complete():
+    if (
+        not session_prep_settings.is_complete()
+        and not session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+    ):
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code="PLATFORM_UNAVAILABLE",
@@ -656,25 +661,51 @@ async def invoke_tool(
         data.model_dump(mode="json", exclude_unset=True)
     )
     try:
-        authorized = app.services.session_prep.authorize_session_prep_read(
-            workload_client_id=principal.client_id,
-            mount_context_token=mount_context_token,
-            interaction_ref=interaction_ref,
-            client_turn_id=client_turn_id,
-            source_turn_ref=invocation.arguments.source_turn_ref,
-            settings=authority_settings,
-        )
-        result = app.services.session_prep.SYNTHETIC_SESSION_PREP_SERVICE.invoke(
-            workload_client_id=principal.client_id,
-            interaction_ref=interaction_ref,
-            client_turn_id=client_turn_id,
-            idempotency_key=idempotency_key,
-            source_turn_ref=invocation.arguments.source_turn_ref,
-            context_snapshot_ref=invocation.arguments.context_snapshot_ref,
-            detail=invocation.arguments.detail,
-            allowed_context_snapshot_ref=session_prep_settings.context_snapshot_ref,
-            turn_closed=authorized.turn_closed,
-        )
+        with get_session() as managed:
+            session = cast(Session, managed)
+            authorized = app.services.session_prep.authorize_session_prep_read(
+                workload_client_id=principal.client_id,
+                mount_context_token=mount_context_token,
+                interaction_ref=interaction_ref,
+                client_turn_id=client_turn_id,
+                source_turn_ref=invocation.arguments.source_turn_ref,
+                settings=authority_settings,
+                session=session,
+            )
+            if (
+                session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
+                and authorized.authorized.context.session_prep_context_ref is not None
+            ):
+                from app.services.session_prep_runtime import (
+                    invoke_provider_session_prep,
+                )
+
+                result = invoke_provider_session_prep(
+                    session=session,
+                    authorization=authorized,
+                    workload_client_id=principal.client_id,
+                    idempotency_key=idempotency_key,
+                    source_turn_ref=invocation.arguments.source_turn_ref,
+                    context_snapshot_ref=invocation.arguments.context_snapshot_ref,
+                    detail=invocation.arguments.detail,
+                    observed_at=datetime.now(UTC),
+                    settings=authority_settings,
+                )
+                session.commit()
+            elif session_prep_settings.is_complete():
+                result = app.services.session_prep.SYNTHETIC_SESSION_PREP_SERVICE.invoke(
+                    workload_client_id=principal.client_id,
+                    interaction_ref=interaction_ref,
+                    client_turn_id=client_turn_id,
+                    idempotency_key=idempotency_key,
+                    source_turn_ref=invocation.arguments.source_turn_ref,
+                    context_snapshot_ref=invocation.arguments.context_snapshot_ref,
+                    detail=invocation.arguments.detail,
+                    allowed_context_snapshot_ref=session_prep_settings.context_snapshot_ref,
+                    turn_closed=authorized.turn_closed,
+                )
+            else:
+                raise app.services.session_prep.SessionPrepScopeDenied
     except app.services.authority.AuthorityKernelDisabledError:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
