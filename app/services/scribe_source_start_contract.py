@@ -3,7 +3,15 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, SerializerFunctionWrapHandler, model_serializer
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 
 class NativeStartContract(BaseModel):

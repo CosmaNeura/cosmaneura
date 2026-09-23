@@ -37,7 +37,11 @@ from app.services.scribe_creator_review_contract import (
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
-from app.services.scribe_source_start_contract import NativeStartDecision, NativeStartReceipt, NativeUnstartedRetirement
+from app.services.scribe_source_start_contract import (
+    NativeStartDecision,
+    NativeStartReceipt,
+    NativeUnstartedRetirement,
+)
 from app.services.scribe_workflow import (
     CaptureSession,
     CaptureSource,
@@ -118,8 +122,12 @@ def _profile_receipt(
     scope: AdmittedCaptureScope,
     now: datetime,
 ) -> protocol.CaptureProfileReceipt:
-    receipt = protocol.CaptureProfileReceipt.model_validate(value.model_dump(mode="json"))
-    if receipt.session_id != scope.session_id or receipt.created_at > now + timedelta(seconds=5):
+    receipt = protocol.CaptureProfileReceipt.model_validate(
+        value.model_dump(mode="json")
+    )
+    if receipt.session_id != scope.session_id or receipt.created_at > now + timedelta(
+        seconds=5
+    ):
         raise ValueError
     return receipt
 
@@ -176,17 +184,28 @@ def _upload_target(
 
 
 def _validate_source_start(
-    operation: protocol.NativeSourceStart, result: BaseModel,
-    scope: AdmittedCaptureScope, now: datetime,
+    operation: protocol.NativeSourceStart,
+    result: BaseModel,
+    scope: AdmittedCaptureScope,
+    now: datetime,
 ) -> BaseModel:
     try:
         if not isinstance(scope.session_request, ConfiguredSessionCreate):
             raise ValueError
-        if operation.action == "stop" and result.model_dump(mode="json").get("state") == "unstarted":
-            checked = NativeUnstartedRetirement.model_validate(result.model_dump(mode="json"))
+        if (
+            operation.action == "stop"
+            and result.model_dump(mode="json").get("state") == "unstarted"
+        ):
+            checked = NativeUnstartedRetirement.model_validate(
+                result.model_dump(mode="json")
+            )
             receipt = checked
-            if receipt.retired_at > now or not hmac.compare_digest(receipt.owner_proof_sha256,
-                hashlib.sha256(operation.payload.owner_proof.encode("ascii")).hexdigest()):
+            if receipt.retired_at > now or not hmac.compare_digest(
+                receipt.owner_proof_sha256,
+                hashlib.sha256(
+                    operation.payload.owner_proof.encode("ascii")
+                ).hexdigest(),
+            ):
                 raise ValueError
         elif operation.action == "authorize":
             checked = NativeStartDecision.model_validate(result.model_dump(mode="json"))
@@ -194,9 +213,12 @@ def _validate_source_start(
             if not hmac.compare_digest(checked.secret, operation.payload.owner_proof):
                 raise ValueError
             if (
-                receipt.state != "issued" or receipt.issued_at is None
-                or receipt.expires_at is None or receipt.issued_at > now
-                or receipt.expires_at <= now or receipt.expires_at <= receipt.issued_at
+                receipt.state != "issued"
+                or receipt.issued_at is None
+                or receipt.expires_at is None
+                or receipt.issued_at > now
+                or receipt.expires_at <= now
+                or receipt.expires_at <= receipt.issued_at
                 or receipt.expires_at > receipt.issued_at + timedelta(seconds=15)
                 or receipt.issued_at >= receipt.preparation_expires_at
                 or receipt.expires_at > receipt.capture_authorized_until
@@ -207,14 +229,19 @@ def _validate_source_start(
             receipt = checked
             if operation.action == "cancel" and receipt.state != "cancelled":
                 raise ValueError
-            if operation.action == "stop" and receipt.state not in {"stopped", "cancelled", "expired"}:
+            if operation.action == "stop" and receipt.state not in {
+                "stopped",
+                "cancelled",
+                "expired",
+            }:
                 raise ValueError
         expected = operation.payload
         if (
             receipt.session_id != scope.session_id
             or receipt.creator_actor_id != scope.creator_actor_id
             or receipt.consent_record_id != scope.session_request.consent_record_id
-            or receipt.attempt_id != expected.attempt_id or receipt.source != expected.source
+            or receipt.attempt_id != expected.attempt_id
+            or receipt.source != expected.source
             or receipt.lease_id != expected.lease_id
             or receipt.lease_receipt_id != expected.lease_receipt_id
             or receipt.lease_generation != expected.lease_generation
@@ -225,13 +252,16 @@ def _validate_source_start(
             raise ValueError
         if isinstance(receipt, NativeUnstartedRetirement):
             return checked
-        if (receipt.preparation_expires_at > receipt.capture_authorized_until
-            or (receipt.state not in {"issued", "stopped"}
-                and (receipt.issued_at is not None or receipt.expires_at is not None))):
+        if receipt.preparation_expires_at > receipt.capture_authorized_until or (
+            receipt.state not in {"issued", "stopped"}
+            and (receipt.issued_at is not None or receipt.expires_at is not None)
+        ):
             raise ValueError
         if receipt.state == "stopped" and (
-            receipt.issued_at is None or receipt.expires_at is None
-            or receipt.issued_at > now or receipt.expires_at <= receipt.issued_at
+            receipt.issued_at is None
+            or receipt.expires_at is None
+            or receipt.issued_at > now
+            or receipt.expires_at <= receipt.issued_at
             or receipt.expires_at > receipt.issued_at + timedelta(seconds=15)
             or receipt.issued_at >= receipt.preparation_expires_at
             or receipt.expires_at > receipt.capture_authorized_until
@@ -253,11 +283,14 @@ def validate_receipt(
 ) -> BaseModel:
     """Validate even injected clients; retained or malformed receipts grant nothing."""
     if isinstance(operation, protocol.NativeSourceStart):
-        return _validate_source_start(operation, receipt, scope, now or datetime.now(UTC))
+        return _validate_source_start(
+            operation, receipt, scope, now or datetime.now(UTC)
+        )
     types: dict[str, type[BaseModel]] = {
         "encryption_key": protocol.EncryptionKey,
         "capabilities": protocol.LongVisitCapabilities
-        if getattr(operation, "profile_receipt_id", None) is not None else protocol.Capabilities,
+        if getattr(operation, "profile_receipt_id", None) is not None
+        else protocol.Capabilities,
         "capture_profile": protocol.CaptureProfileReceipt,
         "select_capture_profile": protocol.CaptureProfileReceipt,
         "bind_key": protocol.KeyReceipt,
@@ -292,25 +325,34 @@ def validate_receipt(
             raise ValueError
         if isinstance(result, protocol.CaptureProfileReceipt):
             _profile_receipt(result, scope, at)
-            if isinstance(operation, protocol.SelectCaptureProfile) and result.request != operation.payload:
+            if (
+                isinstance(operation, protocol.SelectCaptureProfile)
+                and result.request != operation.payload
+            ):
                 raise ValueError
         if isinstance(result, CaptureRecoveryReceipt) and (
-                not isinstance(operation, protocol.RecoverCapture)
-                or result.acknowledged_by_practitioner_id != scope.session_request.practitioner_id
-                or result.request_sha256 != canonical_hash(operation.payload)
-                or result.lease.issued_at > at + timedelta(seconds=5)
+            not isinstance(operation, protocol.RecoverCapture)
+            or result.acknowledged_by_practitioner_id
+            != scope.session_request.practitioner_id
+            or result.request_sha256 != canonical_hash(operation.payload)
+            or result.lease.issued_at > at + timedelta(seconds=5)
         ):
             raise ValueError
         # A replay may contain an expired lease. This immutable receipt is
         # evidence only; current reservations still gate every recording run.
         if isinstance(result, CaptureRecoveryState) and (
-                result.history.session_id != scope.session_id
-                or len(result.model_dump_json().encode("utf-8")) > MAX_RECOVERY_STATE_BYTES
-                or any(row.acknowledged_by_practitioner_id != scope.session_request.practitioner_id
-                       or row.lease.issued_at > at + timedelta(seconds=5)
-                       for row in result.history.recoveries)
-                or (result.current_lease is not None
-                    and result.current_lease.issued_at > at + timedelta(seconds=5))
+            result.history.session_id != scope.session_id
+            or len(result.model_dump_json().encode("utf-8")) > MAX_RECOVERY_STATE_BYTES
+            or any(
+                row.acknowledged_by_practitioner_id
+                != scope.session_request.practitioner_id
+                or row.lease.issued_at > at + timedelta(seconds=5)
+                for row in result.history.recoveries
+            )
+            or (
+                result.current_lease is not None
+                and result.current_lease.issued_at > at + timedelta(seconds=5)
+            )
         ):
             raise ValueError
         if (
@@ -320,28 +362,52 @@ def validate_receipt(
             raise ValueError
         if isinstance(result, CaptureSource):
             result.validate_practitioner(scope.session_request.practitioner_id)
-            if (len(result.model_dump_json().encode("utf-8")) > MAX_CAPTURE_SOURCE_BYTES
+            if (
+                len(result.model_dump_json().encode("utf-8")) > MAX_CAPTURE_SOURCE_BYTES
                 or result.raw_transcript.created_at > at + timedelta(seconds=5)
                 or result.working_transcript.created_at > at + timedelta(seconds=5)
-                or any(row.lease.issued_at > at + timedelta(seconds=5)
-                       for row in result.recovery_history.recoveries)):
-                raise ValueError
-        if isinstance(result, (CaptureWorkingTranscript, CaptureSource)):
-            working_receipt = result.working_transcript if isinstance(result, CaptureSource) else result
-            if len(working_receipt.model_dump_json().encode("utf-8")) > MAX_WORKING_BYTES:
-                raise ValueError
-            if isinstance(operation, (protocol.CorrectTranscript, protocol.CorrectCaptureSource)) and (
-                working_receipt.raw_transcript_id != operation.payload.raw_transcript_id
-                or working_receipt.raw_transcript_sha256 != operation.payload.raw_transcript_sha256
-                or working_receipt.previous_working_sha256 != operation.payload.expected_working_sha256
-                or working_receipt.working_source.source_transcript_version != operation.payload.expected_working_version + 1
+                or any(
+                    row.lease.issued_at > at + timedelta(seconds=5)
+                    for row in result.recovery_history.recoveries
+                )
             ):
                 raise ValueError
-            if isinstance(operation, (protocol.CorrectTranscript, protocol.CorrectCaptureSource)):
-                segments = {s.source_segment_id: s for s in working_receipt.working_source.segments}
+        if isinstance(result, (CaptureWorkingTranscript, CaptureSource)):
+            working_receipt = (
+                result.working_transcript
+                if isinstance(result, CaptureSource)
+                else result
+            )
+            if (
+                len(working_receipt.model_dump_json().encode("utf-8"))
+                > MAX_WORKING_BYTES
+            ):
+                raise ValueError
+            if isinstance(
+                operation, (protocol.CorrectTranscript, protocol.CorrectCaptureSource)
+            ) and (
+                working_receipt.raw_transcript_id != operation.payload.raw_transcript_id
+                or working_receipt.raw_transcript_sha256
+                != operation.payload.raw_transcript_sha256
+                or working_receipt.previous_working_sha256
+                != operation.payload.expected_working_sha256
+                or working_receipt.working_source.source_transcript_version
+                != operation.payload.expected_working_version + 1
+            ):
+                raise ValueError
+            if isinstance(
+                operation, (protocol.CorrectTranscript, protocol.CorrectCaptureSource)
+            ):
+                segments = {
+                    s.source_segment_id: s
+                    for s in working_receipt.working_source.segments
+                }
                 for edit in operation.payload.corrections:
                     saved = segments[edit.source_segment_id]
-                    if saved.content != edit.content or saved.speaker_role != edit.speaker_role:
+                    if (
+                        saved.content != edit.content
+                        or saved.speaker_role != edit.speaker_role
+                    ):
                         raise ValueError
         if isinstance(operation, protocol.BindKey):
             assert isinstance(result, protocol.KeyReceipt)
@@ -439,15 +505,29 @@ async def execute_capture_operation(
     scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
     if operation.kind in {"creator_review", "decide_translation", "source_start"}:
         return await _execute_creator_review(
-            caller, binding_ref, workspace_id, scope, operation, client_request_key, client,
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            operation,
+            client_request_key,
+            client,
         )
     working = operation.kind in {"working_transcript", "correct_transcript"}
     recovery = operation.kind in {"recover_capture", "capture_recovery_state"}
     source = operation.kind in {"capture_source", "correct_capture_source"}
     configured = isinstance(scope.session_request, ConfiguredSessionCreate)
-    if configured and (working or recovery or source or operation.kind in {"transcript", "transcription_status"}):
+    if configured and (
+        working
+        or recovery
+        or source
+        or operation.kind in {"transcript", "transcription_status"}
+    ):
         raise CaptureOperationUnavailable
-    if isinstance(operation, protocol.SelectCaptureProfile) and not caller.capture_settings.long_visits_enabled:
+    if (
+        isinstance(operation, protocol.SelectCaptureProfile)
+        and not caller.capture_settings.long_visits_enabled
+    ):
         raise CaptureOperationUnavailable
     if source and not caller.capture_settings.source_envelopes_enabled:
         raise CaptureOperationUnavailable
@@ -459,14 +539,25 @@ async def execute_capture_operation(
     # global encryption-key reads. The operation receiver checks it atomically.
     try:
         if configured:
-            await _execute_creator_review(caller, binding_ref, workspace_id, scope,
-                protocol.ReadOperation(kind="creator_review"), "configured-capture-current", client)
+            await _execute_creator_review(
+                caller,
+                binding_ref,
+                workspace_id,
+                scope,
+                protocol.ReadOperation(kind="creator_review"),
+                "configured-capture-current",
+                client,
+            )
         else:
             async with asyncio.timeout(30):
-                status = await client.get_capture_status(scope.tenant_id, scope.session_id)
+                status = await client.get_capture_status(
+                    scope.tenant_id, scope.session_id
+                )
             if status.session_id != scope.session_id:
                 raise CaptureReceiptInvalid
-            if (operation.kind == "transcript" or working) and not status.transcript_available:
+            if (
+                operation.kind == "transcript" or working
+            ) and not status.transcript_available:
                 raise CaptureOperationUnavailable
     except (ScribeWorkflowConflictError, ScribeWorkflowRejectedError):
         raise CaptureOperationUnavailable from None
@@ -480,7 +571,9 @@ async def execute_capture_operation(
         try:
             async with asyncio.timeout(30):
                 remote_profile = await client.capture_operation(
-                    scope.tenant_id, scope.session_id, profile_read,
+                    scope.tenant_id,
+                    scope.session_id,
+                    profile_read,
                     idempotency_key="core-capture-profile-read",
                 )
         except (ScribeWorkflowConflictError, ScribeWorkflowRejectedError):
@@ -490,13 +583,19 @@ async def execute_capture_operation(
         if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
             raise CaptureReceiptInvalid
         checked_profile = validate_receipt(
-            profile_read, remote_profile, scope, upload_origins=upload_origins,
+            profile_read,
+            remote_profile,
+            scope,
+            upload_origins=upload_origins,
         )
         if not isinstance(checked_profile, protocol.CaptureProfileReceipt):
             raise CaptureReceiptInvalid
         try:
             capture_profile = _acknowledged_profile(
-                operation, checked_profile, scope, datetime.now(UTC),
+                operation,
+                checked_profile,
+                scope,
+                datetime.now(UTC),
             )
         except (ValueError, TypeError, AttributeError):
             raise CaptureReceiptInvalid from None
@@ -504,7 +603,9 @@ async def execute_capture_operation(
     if working:
         try:
             async with asyncio.timeout(30):
-                raw = await client.get_capture_transcript(scope.tenant_id, scope.session_id)
+                raw = await client.get_capture_transcript(
+                    scope.tenant_id, scope.session_id
+                )
             raw = CaptureTranscript.model_validate(raw.model_dump(mode="json"))
             if raw.session_id != scope.session_id:
                 raise CaptureReceiptInvalid
@@ -534,7 +635,8 @@ async def execute_capture_operation(
         async with asyncio.timeout(30):
             extra = (
                 {"practitioner_id": scope.session_request.practitioner_id}
-                if working or recovery or source else {}
+                if working or recovery or source
+                else {}
             )
             result = await client.capture_operation(
                 scope.tenant_id,
@@ -551,7 +653,11 @@ async def execute_capture_operation(
     if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
         raise CaptureReceiptInvalid
     checked = validate_receipt(
-        operation, result, scope, upload_origins=upload_origins, capture_profile=capture_profile,
+        operation,
+        result,
+        scope,
+        upload_origins=upload_origins,
+        capture_profile=capture_profile,
     )
     if working:
         try:
@@ -581,8 +687,11 @@ async def _execute_creator_review(
         # immutable receipt recovery even when its first reply was lost.
         async with asyncio.timeout(30):
             result = await client.capture_operation(
-                scope.tenant_id, scope.session_id, operation,
-                idempotency_key=key, creator_actor_id=scope.creator_actor_id,
+                scope.tenant_id,
+                scope.session_id,
+                operation,
+                idempotency_key=key,
+                creator_actor_id=scope.creator_actor_id,
             )
     except (ScribeWorkflowConflictError, ScribeWorkflowRejectedError):
         raise CaptureOperationUnavailable from None

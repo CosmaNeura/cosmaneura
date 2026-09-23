@@ -19,8 +19,10 @@ class ScribeCaptureAdmission(
     """Receipts survive retries and revocation; they never authorize more work."""
 
     __table_args__ = (
-        sa.CheckConstraint("configured_capture IS NULL OR jsonb_typeof(configured_capture) = 'object'",
-                           name="ck_scribe_configured_capture_object"),
+        sa.CheckConstraint(
+            "configured_capture IS NULL OR jsonb_typeof(configured_capture) = 'object'",
+            name="ck_scribe_configured_capture_object",
+        ),
         sa.UniqueConstraint("binding_id", name="uq_scribe_admission_binding"),
         sa.UniqueConstraint(
             "scribe_tenant_id", "session_id", name="uq_scribe_admission_session"

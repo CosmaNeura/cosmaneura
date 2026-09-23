@@ -22,8 +22,11 @@ class CaptureContinuity(ProtectedContract):
     @model_validator(mode="after")
     def ordered_starts(self):
         positions = [item.first_sequence_number for item in self.starts]
-        if (positions[0] != 0 or positions != sorted(positions)
-                or len({item.source_start_id for item in self.starts}) != len(self.starts)):
+        if (
+            positions[0] != 0
+            or positions != sorted(positions)
+            or len({item.source_start_id for item in self.starts}) != len(self.starts)
+        ):
             raise ValueError("capture_continuity_invalid")
         return self
 

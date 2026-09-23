@@ -60,8 +60,11 @@ def canonical_document(value: object) -> str:
         return item
 
     return json.dumps(
-        normalize(value), sort_keys=True, separators=(",", ":"),
-        ensure_ascii=False, allow_nan=False,
+        normalize(value),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
     )
 
 

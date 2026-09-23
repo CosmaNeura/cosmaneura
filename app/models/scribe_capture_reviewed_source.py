@@ -15,9 +15,14 @@ class ScribeCaptureReviewedSource(
     BaseModel, TimestampsMixin, TypeIDMixin("scribe_review_source"), table=True
 ):
     __table_args__ = (
-        sa.UniqueConstraint("binding_id", "working_version", name="uq_scribe_review_working_version"),
+        sa.UniqueConstraint(
+            "binding_id", "working_version", name="uq_scribe_review_working_version"
+        ),
         sa.UniqueConstraint("transcript_id", name="uq_scribe_review_core_transcript"),
-        sa.CheckConstraint("source_version >= 1 AND working_version >= 1", name="ck_scribe_review_versions"),
+        sa.CheckConstraint(
+            "source_version >= 1 AND working_version >= 1",
+            name="ck_scribe_review_versions",
+        ),
         sa.CheckConstraint(
             "source_sha256 ~ '^[a-f0-9]{64}$' AND payload_sha256 ~ '^[a-f0-9]{64}$'",
             name="ck_scribe_review_source_digests",

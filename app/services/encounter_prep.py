@@ -19,7 +19,9 @@ from sqlmodel import Session, select
 
 class PrepSource(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
-    source_ref: str = Field(pattern=r"^(?:visit_note|intake)_[0-7][0-9a-hjkmnp-tv-z]{25}$")
+    source_ref: str = Field(
+        pattern=r"^(?:visit_note|intake)_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    )
     appointment_ref: str = Field(pattern=r"^appointment_[0-7][0-9a-hjkmnp-tv-z]{25}$")
     kind: Literal["generated_visit_note", "patient_intake_summary"]
     label: str = Field(min_length=1, max_length=200)

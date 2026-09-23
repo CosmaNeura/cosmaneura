@@ -201,8 +201,12 @@ class AsyncTokenCredential(Protocol):
 
 class ScribeWorkflowClient(Protocol):
     async def create_configured_session(
-        self, tenant_id: UUID, payload: ConfiguredSessionCreate, *,
-        creator_actor_id: str, idempotency_key: str,
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
     ) -> ConfiguredSessionReceipt: ...
 
     async def capture_operation(
@@ -253,8 +257,12 @@ class ScribeWorkflowClient(Protocol):
 
 class DisabledScribeWorkflowClient:
     async def create_configured_session(
-        self, tenant_id: UUID, payload: ConfiguredSessionCreate, *,
-        creator_actor_id: str, idempotency_key: str,
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
     ) -> ConfiguredSessionReceipt:
         raise ScribeWorkflowDisabledError("scribe_workflow_disabled")
 
@@ -357,16 +365,24 @@ class HttpScribeWorkflowClient:
         )
 
     async def create_configured_session(
-        self, tenant_id: UUID, payload: ConfiguredSessionCreate, *,
-        creator_actor_id: str, idempotency_key: str,
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
     ) -> ConfiguredSessionReceipt:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id):
             raise ScribeWorkflowRejectedError("scribe_invalid_creator")
         if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
             raise ScribeWorkflowRejectedError("scribe_invalid_admission_key")
         receipt = await self._post(
-            "/v1/captured-sessions", tenant_id, payload, idempotency_key,
-            ConfiguredSessionReceipt, creator_actor_id=creator_actor_id,
+            "/v1/captured-sessions",
+            tenant_id,
+            payload,
+            idempotency_key,
+            ConfiguredSessionReceipt,
+            creator_actor_id=creator_actor_id,
         )
         if receipt.creator_actor_id != creator_actor_id or any(
             getattr(receipt, field) != getattr(payload, field)
@@ -444,9 +460,21 @@ class HttpScribeWorkflowClient:
                     "Authorization": f"Bearer {access_token.token}",
                     "X-Tenant-ID": str(tenant_id),
                     "Idempotency-Key": idempotency_key,
-                    **({"X-Scribe-Creator-Actor-ID": creator_actor_id} if creator_actor_id else {}),
-                    **({"X-Capture-Practitioner": practitioner_id} if practitioner_id else {}),
-                    **({"X-Capture-Profile-Receipt": str(profile_receipt_id)} if profile_receipt_id else {}),
+                    **(
+                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                        if creator_actor_id
+                        else {}
+                    ),
+                    **(
+                        {"X-Capture-Practitioner": practitioner_id}
+                        if practitioner_id
+                        else {}
+                    ),
+                    **(
+                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                        if profile_receipt_id
+                        else {}
+                    ),
                     "Accept": "application/json",
                     "Cache-Control": "no-store",
                 },
@@ -564,9 +592,21 @@ class HttpScribeWorkflowClient:
                     "X-Tenant-ID": str(tenant_id),
                     "Accept": "application/json",
                     "Cache-Control": "no-store",
-                    **({"X-Scribe-Creator-Actor-ID": creator_actor_id} if creator_actor_id else {}),
-                    **({"X-Capture-Practitioner": practitioner_id} if practitioner_id else {}),
-                    **({"X-Capture-Profile-Receipt": str(profile_receipt_id)} if profile_receipt_id else {}),
+                    **(
+                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                        if creator_actor_id
+                        else {}
+                    ),
+                    **(
+                        {"X-Capture-Practitioner": practitioner_id}
+                        if practitioner_id
+                        else {}
+                    ),
+                    **(
+                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                        if profile_receipt_id
+                        else {}
+                    ),
                 },
                 follow_redirects=False,
             ) as response:
@@ -629,6 +669,7 @@ class HttpScribeWorkflowClient:
                 NativeStartReceipt,
                 NativeStopResult,
             )
+
             if creator_actor_id is None or not re.fullmatch(
                 r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
             ):
@@ -637,13 +678,21 @@ class HttpScribeWorkflowClient:
                 raise ScribeWorkflowRejectedError("scribe_invalid_start_key")
             return await self._post(
                 f"/v1/captured-sessions/{session_id}/source-start/{operation.action}",
-                tenant_id, operation.payload, idempotency_key,
-                NativeStartDecision if operation.action == "authorize" else
-                NativeStopResult if operation.action == "stop" else NativeStartReceipt,
-                max_bytes=8192, creator_actor_id=creator_actor_id,
+                tenant_id,
+                operation.payload,
+                idempotency_key,
+                NativeStartDecision
+                if operation.action == "authorize"
+                else NativeStopResult
+                if operation.action == "stop"
+                else NativeStartReceipt,
+                max_bytes=8192,
+                creator_actor_id=creator_actor_id,
             )
         if operation.kind in {"creator_review", "decide_translation"}:
-            if creator_actor_id is None or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id):
+            if creator_actor_id is None or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
+            ):
                 raise ScribeWorkflowRejectedError("scribe_invalid_creator")
             if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
                 raise ScribeWorkflowRejectedError("scribe_invalid_review_key")
@@ -652,54 +701,88 @@ class HttpScribeWorkflowClient:
             # creator and current consent. Legacy transcript status cannot do so.
             if isinstance(operation, capture_protocol.DecideTranslation):
                 result = await self._post(
-                    path, tenant_id, operation.payload, idempotency_key,
-                    CreatorDecisionReceipt, creator_actor_id=creator_actor_id,
+                    path,
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    CreatorDecisionReceipt,
+                    creator_actor_id=creator_actor_id,
                 )
             else:
                 result = await self._get_resource(
-                    tenant_id, path, CreatorReviewView,
-                    max_bytes=MAX_CREATOR_REVIEW_BYTES, creator_actor_id=creator_actor_id,
+                    tenant_id,
+                    path,
+                    CreatorReviewView,
+                    max_bytes=MAX_CREATOR_REVIEW_BYTES,
+                    creator_actor_id=creator_actor_id,
                 )
             if result.session_id != session_id:
                 raise ScribeWorkflowRejectedError("scribe_response_scope_mismatch")
             return result
         if operation.kind in {
-            "working_transcript", "correct_transcript", "recover_capture", "capture_recovery_state",
-            "capture_source", "correct_capture_source",
+            "working_transcript",
+            "correct_transcript",
+            "recover_capture",
+            "capture_recovery_state",
+            "capture_source",
+            "correct_capture_source",
         }:
-            if practitioner_id is None or not re.fullmatch(r"doctor_[0-7][0-9a-hjkmnp-tv-z]{25}", practitioner_id):
+            if practitioner_id is None or not re.fullmatch(
+                r"doctor_[0-7][0-9a-hjkmnp-tv-z]{25}", practitioner_id
+            ):
                 raise ScribeWorkflowRejectedError("scribe_invalid_practitioner")
             if isinstance(operation, capture_protocol.CorrectCaptureSource):
                 return await self._post(
-                    prefix + "/capture-source/corrections", tenant_id, operation.payload,
-                    idempotency_key, CaptureSource, max_bytes=MAX_CAPTURE_SOURCE_BYTES,
+                    prefix + "/capture-source/corrections",
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    CaptureSource,
+                    max_bytes=MAX_CAPTURE_SOURCE_BYTES,
                     practitioner_id=practitioner_id,
                 )
             if operation.kind == "capture_source":
                 return await self._get_resource(
-                    tenant_id, prefix + "/capture-source", CaptureSource,
-                    max_bytes=MAX_CAPTURE_SOURCE_BYTES, practitioner_id=practitioner_id,
+                    tenant_id,
+                    prefix + "/capture-source",
+                    CaptureSource,
+                    max_bytes=MAX_CAPTURE_SOURCE_BYTES,
+                    practitioner_id=practitioner_id,
                 )
             if isinstance(operation, capture_protocol.RecoverCapture):
                 return await self._post(
-                    prefix + "/capture-recoveries", tenant_id, operation.payload,
-                    idempotency_key, CaptureRecoveryReceipt, max_bytes=16_384,
+                    prefix + "/capture-recoveries",
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    CaptureRecoveryReceipt,
+                    max_bytes=16_384,
                     practitioner_id=practitioner_id,
                 )
             if operation.kind == "capture_recovery_state":
                 return await self._get_resource(
-                    tenant_id, prefix + "/capture-recovery-state", CaptureRecoveryState,
-                    max_bytes=MAX_RECOVERY_STATE_BYTES, practitioner_id=practitioner_id,
+                    tenant_id,
+                    prefix + "/capture-recovery-state",
+                    CaptureRecoveryState,
+                    max_bytes=MAX_RECOVERY_STATE_BYTES,
+                    practitioner_id=practitioner_id,
                 )
             if isinstance(operation, capture_protocol.CorrectTranscript):
                 return await self._post(
-                    prefix + "/working-transcript", tenant_id, operation.payload,
-                    idempotency_key, CaptureWorkingTranscript, max_bytes=MAX_WORKING_BYTES,
+                    prefix + "/working-transcript",
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    CaptureWorkingTranscript,
+                    max_bytes=MAX_WORKING_BYTES,
                     practitioner_id=practitioner_id,
                 )
             return await self._get_resource(
-                tenant_id, prefix + "/working-transcript", CaptureWorkingTranscript,
-                max_bytes=MAX_WORKING_BYTES, practitioner_id=practitioner_id,
+                tenant_id,
+                prefix + "/working-transcript",
+                CaptureWorkingTranscript,
+                max_bytes=MAX_WORKING_BYTES,
+                practitioner_id=practitioner_id,
             )
         if isinstance(operation, capture_protocol.ReadOperation):
             if operation.kind == "transcription_status":
@@ -712,15 +795,22 @@ class HttpScribeWorkflowClient:
                     capture_protocol.EncryptionKey,
                 )
             elif operation.kind == "capture_profile":
-                path, response_type = prefix + "/capture-profile", capture_protocol.CaptureProfileReceipt
+                path, response_type = (
+                    prefix + "/capture-profile",
+                    capture_protocol.CaptureProfileReceipt,
+                )
             else:
                 path, response_type = (
                     prefix + "/capture-capabilities",
                     capture_protocol.LongVisitCapabilities
-                    if operation.profile_receipt_id is not None else capture_protocol.Capabilities,
+                    if operation.profile_receipt_id is not None
+                    else capture_protocol.Capabilities,
                 )
             return await self._get_resource(
-                tenant_id, path, response_type, max_bytes=16_384,
+                tenant_id,
+                path,
+                response_type,
+                max_bytes=16_384,
                 profile_receipt_id=operation.profile_receipt_id,
             )
         if isinstance(operation, capture_protocol.ReadChunk):
@@ -731,7 +821,10 @@ class HttpScribeWorkflowClient:
                 max_bytes=16_384,
             )
         if isinstance(operation, capture_protocol.SelectCaptureProfile):
-            path, response_type = prefix + "/capture-profile", capture_protocol.CaptureProfileReceipt
+            path, response_type = (
+                prefix + "/capture-profile",
+                capture_protocol.CaptureProfileReceipt,
+            )
         elif isinstance(operation, capture_protocol.BindKey):
             path, response_type = prefix + "/audio-key", capture_protocol.KeyReceipt
         elif isinstance(operation, capture_protocol.IssueLease):
@@ -765,7 +858,8 @@ class HttpScribeWorkflowClient:
             else 16_384,
             profile_receipt_id=(
                 operation.profile_receipt_id
-                if isinstance(operation, capture_protocol.ReserveChunks) else None
+                if isinstance(operation, capture_protocol.ReserveChunks)
+                else None
             ),
         )
 

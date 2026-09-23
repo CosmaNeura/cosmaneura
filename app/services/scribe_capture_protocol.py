@@ -110,7 +110,9 @@ class CaptureProfileRequest(ProtectedContract):
 
 
 def profile_request_sha256(request: CaptureProfileRequest) -> str:
-    payload = json.dumps(request.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -140,7 +142,11 @@ class SelectCaptureProfile(ProtectedContract):
 
 class ReadOperation(ProtectedContract):
     kind: Literal[
-        "encryption_key", "capabilities", "transcription_status", "transcript", "working_transcript",
+        "encryption_key",
+        "capabilities",
+        "transcription_status",
+        "transcript",
+        "working_transcript",
         "capture_recovery_state",
         "capture_source",
         "capture_profile",

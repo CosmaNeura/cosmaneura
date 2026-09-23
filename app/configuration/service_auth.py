@@ -181,7 +181,9 @@ SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(
 
 # Optional additional receiver, with the existing one-caller policy unchanged
 # when unset. This deployment-owned value is not accepted from request data.
-_AGENT_SCRIBE_RECEIVER = config("AGENT_API_SCRIBE_RECEIVER_CLIENT_ID", default="", cast=str).strip()
+_AGENT_SCRIBE_RECEIVER = config(
+    "AGENT_API_SCRIBE_RECEIVER_CLIENT_ID", default="", cast=str
+).strip()
 _AGENT_SOVEREIGN_IDS = _client_id_allowlist(
     config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
 )
@@ -193,7 +195,11 @@ if _AGENT_SCRIBE_RECEIVER:
         _receiver_id = UUID(_AGENT_SCRIBE_RECEIVER)
     except (ValueError, TypeError, AttributeError):
         raise ValueError("agent_api_receiver_configuration_invalid") from None
-    if not _receiver_id.int or len(_AGENT_SOVEREIGN_IDS) != 1 or str(_receiver_id) in _AGENT_SOVEREIGN_IDS:
+    if (
+        not _receiver_id.int
+        or len(_AGENT_SOVEREIGN_IDS) != 1
+        or str(_receiver_id) in _AGENT_SOVEREIGN_IDS
+    ):
         raise ValueError("agent_api_receiver_configuration_invalid")
     _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_receiver_id)}
     _AGENT_CAPTURE_IDS = frozenset({str(_receiver_id)})

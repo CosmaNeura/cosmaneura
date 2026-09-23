@@ -350,10 +350,13 @@ def note_detail(
     # A retained capture owns note preparation even if admission was interrupted.
     # Tell the provider why a later Recall/upload transcript has no queued note;
     # background summarization must not replace an authorized capture source.
-    capture_workflow_required = ScribeCaptureBinding.where(
-        ScribeCaptureBinding.appointment_id == appointment.id,
-        ScribeCaptureBinding.doctor_id == doctor.id,
-    ).first() is not None
+    capture_workflow_required = (
+        ScribeCaptureBinding.where(
+            ScribeCaptureBinding.appointment_id == appointment.id,
+            ScribeCaptureBinding.doctor_id == doctor.id,
+        ).first()
+        is not None
+    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
