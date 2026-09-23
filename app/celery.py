@@ -525,6 +525,10 @@ def capture_worker_stop(sender, **kwargs):
 # }
 
 celery_app.conf.beat_schedule = {
+    "session_prep": {
+        "task": "app.jobs.session_prep.perform",
+        "schedule": 5.0,
+    },
     "sync_clerk": {
         "task": "app.jobs.sync_clerk.perform",
         "schedule": crontab(minute="0", hour="0"),

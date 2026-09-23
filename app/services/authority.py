@@ -428,6 +428,7 @@ def exchange_context_token(
     db = session
     if clerk_issuer != settings.clerk_issuer:
         raise AuthorityRequestDeniedError
+    provider_scope = None
     if (
         requested_surface == "provider_assistant"
         and record_ref is not None
@@ -436,7 +437,7 @@ def exchange_context_token(
         )
     ):
         try:
-            ensure_provider_record_scope(
+            provider_scope = ensure_provider_record_scope(
                 session=db,
                 clerk_issuer=clerk_issuer,
                 clerk_subject=clerk_subject,
@@ -461,7 +462,7 @@ def exchange_context_token(
         if binding is None:
             raise AuthorityRequestDeniedError
         try:
-            validate_provider_record_scope(
+            provider_scope = validate_provider_record_scope(
                 session=db,
                 binding=binding,
                 actor_id=actor.id,
@@ -469,6 +470,12 @@ def exchange_context_token(
             )
         except ProviderRecordScopeDenied:
             raise AuthorityRequestDeniedError from None
+    if provider_scope is not None:
+        from app.services.session_prep_runtime import schedule_scope_build
+
+        schedule_scope_build(
+            db, provider_scope, observed_at=datetime.now(UTC), settings=settings
+        )
     surface_ceiling, auth_tier_ceiling = _exchange_authority_ceiling(
         db,
         actor=actor,
