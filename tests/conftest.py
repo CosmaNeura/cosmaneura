@@ -43,9 +43,12 @@ from .log import log
 
 
 _APPEND_ONLY_TEST_TRIGGERS = {
+    "provider_practice_authority": "provider_practice_authority_reject_mutation",
+    "provider_record_authority": "provider_record_authority_reject_mutation",
     "ai_visit_note": "ai_visit_note_reject_delete",
     "ai_visit_note_version_audit": "ai_visit_note_version_audit_reject_mutation",
     "authority_audit_event": "authority_audit_event_append_only",
+    "authority_person_origin": "authority_person_origin_append_only",
     "baa_acceptance": "baa_acceptance_reject_mutation",
     "practice_access_audit": "practice_access_audit_reject_mutation",
     "public_legal_acceptance": "public_legal_acceptance_reject_mutation",

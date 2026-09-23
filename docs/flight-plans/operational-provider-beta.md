@@ -37,6 +37,26 @@ This increment does not yet deliver a real-record prepared brief.
 4. Prove failure recovery and rollback; release Session Prep and bounded clinician
    assistance only. Labs and referral-directory results remain out of beta.
 
+## Increment 2: record and practice authority
+
+Verified Clerk token exchange can bind an allowlisted doctor to the actual
+practice membership, owned appointment, and owned patient. The record binding
+retains those exact identities. Every later resolution checks current access,
+membership, identity, tenant, and record ownership; changing the patient or
+practice does not retarget an existing token. An opaque Session Prep handle is
+returned only through the authenticated Core-to-Sovereign response header. The
+public five-field mount schema is unchanged.
+
+Generated expand revision `c80db51e6a75` adds two immutable mapping tables and
+three indexes, with UPDATE/DELETE rejection triggers. Apply before the receiver
+code; rollback leaves these structures dormant. This increment alone does not
+activate the prepared-brief worker or real-record tool response.
+
+Local validation: 28 PostgreSQL authority/migration tests, two actual independent-
+connection concurrency tests, and 131 isolated authority-kernel tests passed.
+One pre-existing optional PostgreSQL migration test was skipped because its
+separate historical-revision database was not configured.
+
 ## Evidence recorded so far
 
 - PostgreSQL review/source/API/authority and migration graph tests: 47 passed.
@@ -45,3 +65,7 @@ This increment does not yet deliver a real-record prepared brief.
   CSS-minification, and chunk-import warnings remain visible in build output.
 - No cloud mutation, live migration, or deployment performed for this increment.
 - Independent review and final source-bound release evidence remain required.
+- Runtime dependency audit found 14 affected Core registry packages; remediation
+  and a repeat scan remain engineering release work. The pinned activemodel Git
+  dependency is outside registry advisory coverage. Sovereign's separate runtime
+  dependency scan had zero findings.

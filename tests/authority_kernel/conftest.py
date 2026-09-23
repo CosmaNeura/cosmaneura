@@ -160,3 +160,10 @@ def _platform_view_as_guard_is_outside_isolated_kernel(monkeypatch) -> None:
         "app.services.view_as.mount_context_session_blocked_by_view_as",
         lambda _session, **_kwargs: False,
     )
+    # The provider record/practice adapter is tested against PostgreSQL in
+    # services/provider_record_authority_test.py, including revocation and
+    # record reassignment. This SQLite kernel fixture has no clinical tables.
+    monkeypatch.setattr(
+        "app.services.authority.validate_provider_record_scope",
+        lambda **_kwargs: None,
+    )

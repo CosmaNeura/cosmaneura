@@ -3,15 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
+import app.configuration.session_prep as session_prep_configuration
 import app.services.session_prep_scope as session_prep_scope
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
+)
+from app.services.provider_record_authority import (
+    ProviderRecordScopeDenied,
+    ensure_provider_record_scope,
+    validate_provider_record_scope,
 )
 
 from activemodel.session_manager import get_session
@@ -106,6 +112,7 @@ class ResolvedMountContext:
     actor_id: str | None
     session_id: TypeIDType
     person_id: TypeIDType | None
+    session_prep_context_ref: str | None = field(default=None, repr=False)
 
     def public_body(self) -> dict[str, object]:
         return {
@@ -421,6 +428,22 @@ def exchange_context_token(
     db = session
     if clerk_issuer != settings.clerk_issuer:
         raise AuthorityRequestDeniedError
+    if (
+        requested_surface == "provider_assistant"
+        and record_ref is not None
+        and session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
+            clerk_subject
+        )
+    ):
+        try:
+            ensure_provider_record_scope(
+                session=db,
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
+                record_ref=record_ref,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
     actor, source_identity = _actor_for_clerk_identity(
         db,
         clerk_issuer,
@@ -433,6 +456,19 @@ def exchange_context_token(
         requested_surface=requested_surface,
         record_ref=record_ref,
     )
+    if person_binding_id is not None:
+        binding = db.get(AuthorityPersonBinding, person_binding_id)
+        if binding is None:
+            raise AuthorityRequestDeniedError
+        try:
+            validate_provider_record_scope(
+                session=db,
+                binding=binding,
+                actor_id=actor.id,
+                clerk_subject=source_identity.subject,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
     surface_ceiling, auth_tier_ceiling = _exchange_authority_ceiling(
         db,
         actor=actor,
@@ -656,6 +692,7 @@ def _context_for_session(
         if person is None or person.status != "active":
             raise AuthorityRequestDeniedError
 
+    session_prep_context_ref = None
     if binding is not None and binding.binding_kind == "provider_record":
         if actor is None or tenant is None:
             raise AuthorityRequestDeniedError
@@ -666,6 +703,19 @@ def _context_for_session(
         )
         if membership is None:
             raise AuthorityRequestDeniedError
+        if source_identity is None:
+            raise AuthorityRequestDeniedError
+        try:
+            record_scope = validate_provider_record_scope(
+                session=session,
+                binding=binding,
+                actor_id=actor.id,
+                clerk_subject=source_identity.subject,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
+        if record_scope is not None:
+            session_prep_context_ref = record_scope.context_snapshot_ref
         surface = "provider_assistant"
         derived_auth_tier = "provider"
     else:
@@ -688,7 +738,7 @@ def _context_for_session(
             raise AuthorityRequestDeniedError
         auth_tier = derived_auth_tier
         capabilities = PROVIDER_CAPABILITIES
-        if (
+        if session_prep_context_ref is not None or (
             binding is not None
             and source_identity is not None
             and session_prep_scope.synthetic_session_prep_context_ref(
@@ -731,6 +781,7 @@ def _context_for_session(
         actor_id=str(actor.id) if actor is not None else None,
         session_id=mount_session.id,
         person_id=person.id if person is not None else None,
+        session_prep_context_ref=session_prep_context_ref,
     )
 
 
