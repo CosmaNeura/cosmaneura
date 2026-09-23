@@ -43,6 +43,12 @@ from .log import log
 
 
 _APPEND_ONLY_TEST_TRIGGERS = {
+    "scribe_capture_source_version": "scribe_working_source_immutable",
+    "scribe_capture_gap_manifest": "scribe_gap_manifest_immutable",
+    "scribe_capture_note_edit": "scribe_note_edit_immutable",
+    "scribe_capture_note_context": "scribe_note_context_immutable",
+    "scribe_capture_note_save_fence": "scribe_note_close_immutable",
+    "scribe_capture_reviewed_source": "scribe_reviewed_source_scope",
     "session_prep_artifact": "prep_artifact_reject_mutation",
     "session_prep_read_receipt": "prep_read_receipt_guard_mutation",
     "provider_practice_authority": "provider_practice_authority_reject_mutation",
