@@ -1,0 +1,102 @@
+{
+  "request": {
+    "protocol_version": "1.0",
+    "capture_lease_id": "00000000-0000-0000-0000-00000000000a",
+    "capture_lease_generation": 1,
+    "channel": "microphone",
+    "segment_id": "00000000-0000-0000-0000-00000000000b",
+    "segment_ordinal": 0,
+    "first_sequence_number": 0,
+    "next_sequence_number": 1,
+    "segment_started_at": "2026-09-17T00:00:00Z",
+    "gap_id": "00000000-0000-0000-0000-00000000000c",
+    "reason_code": "capture_backgrounded",
+    "observed_at": "2026-09-17T00:00:00Z",
+    "acknowledged_at": "2026-09-17T00:00:00Z",
+    "decision": "resume_capture"
+  },
+  "receipt": {
+    "receipt_id": "00000000-0000-0000-0000-00000000000f",
+    "session_id": "00000000-0000-0000-0000-00000000000e",
+    "request": {
+      "protocol_version": "1.0",
+      "capture_lease_id": "00000000-0000-0000-0000-00000000000a",
+      "capture_lease_generation": 1,
+      "channel": "microphone",
+      "segment_id": "00000000-0000-0000-0000-00000000000b",
+      "segment_ordinal": 0,
+      "first_sequence_number": 0,
+      "next_sequence_number": 1,
+      "segment_started_at": "2026-09-17T00:00:00Z",
+      "gap_id": "00000000-0000-0000-0000-00000000000c",
+      "reason_code": "capture_backgrounded",
+      "observed_at": "2026-09-17T00:00:00Z",
+      "acknowledged_at": "2026-09-17T00:00:00Z",
+      "decision": "resume_capture"
+    },
+    "request_sha256": "861d0958396d064e6f5a8634d6aeda6437eeee63230118287d2912184d7691d0",
+    "acknowledged_by_practitioner_id": "doctor_00000000000000000000000001",
+    "following_segment_id": "00000000-0000-0000-0000-000000000010",
+    "lease": {
+      "protocol_version": "1.0",
+      "receipt_id": "00000000-0000-0000-0000-00000000000d",
+      "lease_id": "00000000-0000-0000-0000-00000000000a",
+      "session_id": "00000000-0000-0000-0000-00000000000e",
+      "generation": 2,
+      "issued_at": "2026-09-17T00:00:00Z",
+      "expires_at": "2026-09-17T00:15:00Z"
+    },
+    "review_state": "required"
+  },
+  "state": {
+    "history": {
+      "session_id": "00000000-0000-0000-0000-00000000000e",
+      "recoveries": [
+        {
+          "receipt_id": "00000000-0000-0000-0000-00000000000f",
+          "session_id": "00000000-0000-0000-0000-00000000000e",
+          "request": {
+            "protocol_version": "1.0",
+            "capture_lease_id": "00000000-0000-0000-0000-00000000000a",
+            "capture_lease_generation": 1,
+            "channel": "microphone",
+            "segment_id": "00000000-0000-0000-0000-00000000000b",
+            "segment_ordinal": 0,
+            "first_sequence_number": 0,
+            "next_sequence_number": 1,
+            "segment_started_at": "2026-09-17T00:00:00Z",
+            "gap_id": "00000000-0000-0000-0000-00000000000c",
+            "reason_code": "capture_backgrounded",
+            "observed_at": "2026-09-17T00:00:00Z",
+            "acknowledged_at": "2026-09-17T00:00:00Z",
+            "decision": "resume_capture"
+          },
+          "request_sha256": "861d0958396d064e6f5a8634d6aeda6437eeee63230118287d2912184d7691d0",
+          "acknowledged_by_practitioner_id": "doctor_00000000000000000000000001",
+          "following_segment_id": "00000000-0000-0000-0000-000000000010",
+          "lease": {
+            "protocol_version": "1.0",
+            "receipt_id": "00000000-0000-0000-0000-00000000000d",
+            "lease_id": "00000000-0000-0000-0000-00000000000a",
+            "session_id": "00000000-0000-0000-0000-00000000000e",
+            "generation": 2,
+            "issued_at": "2026-09-17T00:00:00Z",
+            "expires_at": "2026-09-17T00:15:00Z"
+          },
+          "review_state": "required"
+        }
+      ]
+    },
+    "current_lease": {
+      "protocol_version": "1.0",
+      "receipt_id": "00000000-0000-0000-0000-00000000000d",
+      "lease_id": "00000000-0000-0000-0000-00000000000a",
+      "session_id": "00000000-0000-0000-0000-00000000000e",
+      "generation": 2,
+      "issued_at": "2026-09-17T00:00:00Z",
+      "expires_at": "2026-09-17T00:15:00Z"
+    },
+    "lease_closed": false,
+    "session_status": "capturing"
+  }
+}
