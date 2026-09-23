@@ -207,6 +207,63 @@
         ]
       }
     },
+    "/internal/v1/notes/revisions/{note_id}/session-prep-review": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Review Note For Session Prep",
+        "operationId": "review_note_for_session_prep",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewNoteForSessionPrepRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPrepNoteReview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -4426,6 +4483,20 @@
               }
             ]
           },
+          "session_prep_reviews": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SessionPrepNoteReview"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Prep Reviews"
+          },
           "patient": {
             "$ref": "#/components/schemas/Patient",
             "readOnly": true
@@ -5029,6 +5100,21 @@
         ],
         "title": "ResourceLink"
       },
+      "ReviewNoteForSessionPrepRequest": {
+        "properties": {
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_content_sha256"
+        ],
+        "title": "ReviewNoteForSessionPrepRequest"
+      },
       "ScheduleResponse": {
         "properties": {
           "zoom_connected": {
@@ -5055,6 +5141,33 @@
           "meetings"
         ],
         "title": "ScheduleResponse"
+      },
+      "SessionPrepNoteReview": {
+        "properties": {
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content_sha256"
+        ],
+        "title": "SessionPrepNoteReview"
       },
       "SettingsData": {
         "properties": {
