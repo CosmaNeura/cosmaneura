@@ -44,3 +44,12 @@ records the exact candidate and test-report hashes. No advisory or compatibility
 exception is inferred from package age, and the local tests do not prove safety
 against undisclosed vulnerabilities. The final substantive push requires a new
 Cursor review before release.
+
+Cursor's follow-up found that Sentry 2.26.1 repeatedly wraps synchronous
+included-router endpoints under FastAPI 0.141.1. A local reproduction showed
+wrapper depth growing from 1 to 25 over 25 requests. Disable only the FastAPI
+integration, retaining Starlette request/error monitoring and the existing
+scrubbers. A process-isolated regression runs 1,100 requests with stable endpoint
+identity, captures the intentional error, and verifies its private values are
+removed. All 15 Sentry regressions pass. This substantive fix requires a fresh
+independent Cursor review before merge.
