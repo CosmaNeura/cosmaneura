@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
 import httpx
@@ -28,6 +28,8 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.scheduling_acuity as scheduling_acuity
+import app.services.scheduling_oauth_state as scheduling_oauth_state
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -54,6 +56,7 @@ from app.services.biomarkers import (
 )
 from app.services.clerk_identity import verified_primary_email
 from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.managed_organization_access import (
     ManagedOrganizationAccessState,
     resolve_managed_organization_access,
@@ -82,6 +85,7 @@ from app.services.reference_links import (
     resource_links_for,
 )
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
+from app.services.scheduling_provider import confirm_queued_match
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -104,6 +108,10 @@ from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ambiguous_patient_match import (
+    AmbiguousPatientMatch,
+    AmbiguousPatientMatchStatus,
+)
 from app.models.appointment import Appointment
 from app.models.baa import (
     BAA_DOC_ID,
@@ -113,6 +121,7 @@ from app.models.baa import (
 from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_scheduling_integration import DoctorSchedulingIntegration
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
@@ -129,6 +138,7 @@ from app.models.note_type_customization import (
 )
 from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
+from app.models.patient_external_identity import SchedulingProviderSource
 from app.models.patient_medication import (
     MedicationKind,
     MedicationSource,
@@ -783,6 +793,8 @@ class SettingsData(BaseModel, extra="forbid"):
     # The frontend uses this to fire a one-time toast; the persistent
     # banner uses zoom_connected alone.
     zoom_revoked: bool
+    acuity_connected: bool
+    google_calendar_connected: bool
     email: str | None
     onboarding_completed: bool
     practice_ready: bool
@@ -836,6 +848,12 @@ def settings_data(request: Request) -> SettingsData:
         doctor_id=doctor.id, provider=VideoProvider.zoom
     )
     zoom_revoked = bool(get_redis().get(zoom_revoked_redis_key(str(doctor.id))))
+    acuity_integration = DoctorSchedulingIntegration.get(
+        doctor_id=doctor.id, source=SchedulingProviderSource.acuity
+    )
+    google_calendar_integration = DoctorSchedulingIntegration.get(
+        doctor_id=doctor.id, source=SchedulingProviderSource.google_calendar
+    )
 
     notes_schema = cast(
         list[DoctorNoteSchema],
@@ -869,6 +887,8 @@ def settings_data(request: Request) -> SettingsData:
         biography=doctor.biography,
         zoom_connected=zoom_integration is not None,
         zoom_revoked=zoom_revoked,
+        acuity_connected=acuity_integration is not None,
+        google_calendar_connected=google_calendar_integration is not None,
         email=doctor.email,
         onboarding_completed=(
             doctor.onboarding_completed_at is not None
@@ -987,6 +1007,200 @@ def zoom_disconnect(request: Request) -> None:
     # An intentional disconnect should not surface as an unexpected revoke
     # toast next time the doctor opens the app.
     get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
+
+
+class SchedulingAuthUrlResponse(BaseModel, extra="forbid"):
+    url: str
+
+
+@internal_api_app.get("/acuity-auth-url", name="acuity_auth_url")
+def acuity_auth_url(request: Request, response: Response) -> SchedulingAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    issued = scheduling_oauth_state.issue_scheduling_oauth_state(
+        SchedulingProviderSource.acuity, str(doctor.id)
+    )
+    response.set_cookie(
+        key=scheduling_oauth_state.scheduling_oauth_binding_cookie(
+            SchedulingProviderSource.acuity
+        ),
+        value=issued.browser_binding,
+        max_age=scheduling_oauth_state.SCHEDULING_OAUTH_STATE_TTL_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("acuity_oauth_start").include_query_params(state=issued.state)
+    )
+    return SchedulingAuthUrlResponse(url=url)
+
+
+@internal_api_app.delete(
+    "/acuity-connect", name="acuity_disconnect", status_code=status.HTTP_204_NO_CONTENT
+)
+def acuity_disconnect(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    scheduling_acuity.revoke_token(doctor)
+
+
+@internal_api_app.get("/google-calendar-auth-url", name="google_calendar_auth_url")
+def google_calendar_auth_url(
+    request: Request, response: Response
+) -> SchedulingAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    issued = scheduling_oauth_state.issue_scheduling_oauth_state(
+        SchedulingProviderSource.google_calendar, str(doctor.id)
+    )
+    response.set_cookie(
+        key=scheduling_oauth_state.scheduling_oauth_binding_cookie(
+            SchedulingProviderSource.google_calendar
+        ),
+        value=issued.browser_binding,
+        max_age=scheduling_oauth_state.SCHEDULING_OAUTH_STATE_TTL_SECONDS,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("google_calendar_oauth_start").include_query_params(
+            state=issued.state
+        )
+    )
+    return SchedulingAuthUrlResponse(url=url)
+
+
+@internal_api_app.delete(
+    "/google-calendar-connect",
+    name="google_calendar_disconnect",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def google_calendar_disconnect(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    integration = DoctorSchedulingIntegration.get(
+        doctor_id=doctor.id, source=SchedulingProviderSource.google_calendar
+    )
+    if integration is not None:
+        integration.delete()
+
+
+class AmbiguousPatientMatchResponse(BaseModel, extra="forbid"):
+    id: TypeIDType
+    source: SchedulingProviderSource
+    candidate_patient_name: str | None
+    candidate_patient_email: str | None
+    candidate_patient_phone: str | None
+    candidate_appointment_start_at: datetime
+    created_at: datetime
+
+
+@internal_api_app.get("/scheduling-review", name="scheduling_review_list")
+def scheduling_review_list(request: Request) -> list[AmbiguousPatientMatchResponse]:
+    """Pending roster-sync rows this doctor has not yet resolved."""
+    doctor: Doctor = request.state.doctor
+    rows = cast(
+        list[AmbiguousPatientMatch],
+        list(
+            AmbiguousPatientMatch.where(
+                AmbiguousPatientMatch.doctor_id == doctor.id,
+                AmbiguousPatientMatch.status == AmbiguousPatientMatchStatus.pending,
+            )
+            .order_by(cast(Any, AmbiguousPatientMatch.created_at).asc())
+            .all()
+        ),
+    )
+    return [
+        AmbiguousPatientMatchResponse(
+            id=row.id,
+            source=row.source,
+            candidate_patient_name=row.candidate_patient_name,
+            candidate_patient_email=row.candidate_patient_email,
+            candidate_patient_phone=row.candidate_patient_phone,
+            candidate_appointment_start_at=row.candidate_appointment_start_at,
+            created_at=cast(datetime, row.created_at),
+        )
+        for row in rows
+    ]
+
+
+def _pending_match_or_404(doctor: Doctor, match_id: str) -> AmbiguousPatientMatch:
+    match = AmbiguousPatientMatch.get(id=match_id, doctor_id=doctor.id)
+    if match is None or match.status != AmbiguousPatientMatchStatus.pending:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return match
+
+
+class ConfirmSchedulingReviewRequest(BaseModel, extra="forbid"):
+    patient_id: str | None = None
+    "an existing patient to link this appointment to"
+
+    new_patient_name: str | None = None
+    new_patient_date_of_birth: date | None = None
+    "provide both new_patient_* fields instead of patient_id to create a new patient"
+
+    @model_validator(mode="after")
+    def check_exactly_one_target(self):
+        has_existing = self.patient_id is not None
+        has_new = self.new_patient_name is not None or (
+            self.new_patient_date_of_birth is not None
+        )
+        if has_existing == has_new:
+            raise ValueError(
+                "provide exactly one of patient_id or both new_patient_* fields"
+            )
+        if has_new and (
+            self.new_patient_name is None or self.new_patient_date_of_birth is None
+        ):
+            raise ValueError(
+                "new_patient_name and new_patient_date_of_birth are both required together"
+            )
+        return self
+
+
+@internal_api_app.post(
+    "/scheduling-review/{match_id}/confirm",
+    name="scheduling_review_confirm",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def scheduling_review_confirm(
+    request: Request, match_id: str, data: ConfirmSchedulingReviewRequest
+) -> None:
+    doctor: Doctor = request.state.doctor
+    match = _pending_match_or_404(doctor, match_id)
+
+    if data.patient_id is not None:
+        patient = Patient.get(id=data.patient_id, doctor_id=doctor.id)
+        if patient is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    else:
+        assert data.new_patient_name is not None
+        assert data.new_patient_date_of_birth is not None
+        patient = Patient(
+            doctor_id=doctor.id,
+            name=data.new_patient_name,
+            date_of_birth=datetime.combine(
+                data.new_patient_date_of_birth, datetime.min.time()
+            ),
+        ).save()
+
+    confirm_queued_match(
+        match, patient=patient, resolved_by=provider_log_ref(f"doctor:{doctor.id}")
+    )
+
+
+@internal_api_app.post(
+    "/scheduling-review/{match_id}/dismiss",
+    name="scheduling_review_dismiss",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def scheduling_review_dismiss(request: Request, match_id: str) -> None:
+    doctor: Doctor = request.state.doctor
+    match = _pending_match_or_404(doctor, match_id)
+    match.status = AmbiguousPatientMatchStatus.dismissed
+    match.resolved_at = datetime.now(timezone.utc)
+    match.resolved_by = provider_log_ref(f"doctor:{doctor.id}")
+    match.save()
 
 
 @internal_api_app.post(

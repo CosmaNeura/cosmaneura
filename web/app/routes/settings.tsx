@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
+import { SchedulingProviderConnect } from "~/components/SchedulingProviderConnect"
 import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
@@ -30,6 +31,10 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
+  acuityAuthUrl,
+  acuityDisconnect,
+  googleCalendarAuthUrl,
+  googleCalendarDisconnect,
   settingsData,
   updateSettingsData,
   zoomAuthUrl,
@@ -703,6 +708,20 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
                 customizations={loaderData.note_customizations}
               />
               <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+              <SchedulingProviderConnect
+                title="Acuity"
+                description="Connect Acuity Scheduling so appointments and patients sync automatically."
+                connected={loaderData.acuity_connected}
+                onConnect={acuityAuthUrl}
+                onDisconnect={acuityDisconnect}
+              />
+              <SchedulingProviderConnect
+                title="Google Calendar"
+                description="Connect Google Calendar so appointments and patients sync automatically."
+                connected={loaderData.google_calendar_connected}
+                onConnect={googleCalendarAuthUrl}
+                onDisconnect={googleCalendarDisconnect}
+              />
               {referenceToolkitEnabled && (
                 <NatMedConnection
                   hasSubscription={loaderData.has_natmed_subscription}

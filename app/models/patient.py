@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
-from sqlmodel import Relationship
+from sqlmodel import Field, Relationship
 
 from .doctor import Doctor
 
@@ -38,3 +38,13 @@ class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
 
     name: str
     date_of_birth: datetime
+
+    email: str | None = Field(default=None, nullable=True)
+    "as given by the originating system; never used to auto-match across records"
+
+    phone: str | None = Field(default=None, nullable=True)
+    "as given by the originating system; never used to auto-match across records"
+
+    # TODO should make this an enum, mirrors Appointment.created_by_system
+    created_by_system: str | None = Field(default="gui", nullable=True)
+    "the system that created this patient record. gui, api, acuity, google_calendar, etc"

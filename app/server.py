@@ -18,8 +18,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.routes.acuity_auth import acuity_auth_app
 from app.routes.api import external_api_app
 from app.routes.errors import EarlyResponseException
+from app.routes.google_calendar_auth import google_calendar_auth_app
 from app.routes.recall_callbacks import recall_callbacks_app
 from app.routes.utils.openapi import simplify_operation_ids
 from app.routes.webhooks import webhook_api_app
@@ -88,6 +90,8 @@ api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
 api_app.include_router(zoom_auth_app)
+api_app.include_router(acuity_auth_app)
+api_app.include_router(google_calendar_auth_app)
 api_app.include_router(recall_callbacks_app)
 
 

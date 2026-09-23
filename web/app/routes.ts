@@ -29,6 +29,7 @@ export default [
       ]),
     ]),
     route("/settings", "routes/settings.tsx"),
+    route("/scheduling-review", "routes/scheduling-review.tsx"),
   ]),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),

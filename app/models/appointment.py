@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import computed_field
 
+import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
@@ -28,6 +29,21 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     """
     Represents an appointment with a patient from accuity
     """
+
+    __table_args__ = (
+        # Closes the race in app/commands/intake/create.py's non-atomic
+        # get()-then-create(): a second concurrent delivery for the same
+        # external appointment now fails at the DB rather than creating a
+        # duplicate. Partial so appointments with no external_id (created
+        # by staff in the GUI) are unaffected.
+        sa.Index(
+            "uq_appointment_doctor_external_id",
+            "doctor_id",
+            "external_id",
+            unique=True,
+            postgresql_where=sa.text("external_id IS NOT NULL"),
+        ),
+    )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
