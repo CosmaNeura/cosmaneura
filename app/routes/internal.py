@@ -173,6 +173,8 @@ CHECKOUT_RETIREMENT_PENDING_DETAIL = (
 
 internal_api_app = APIRouter(
     prefix="/internal/v1",
+    # Keep generated client method names stable for nested routers as well.
+    generate_unique_id_function=lambda route: route.name,
     # TODO unclear what the tags are used for...
     tags=["private"],
     # think of dependencies as middleware

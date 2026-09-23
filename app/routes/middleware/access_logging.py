@@ -7,14 +7,12 @@ from typing import NamedTuple
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.routing import iter_route_contexts
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 from starlette.routing import Match
 from starlette.types import Scope
-from structlog_config.fastapi_access_logger import (
-    get_route_name,
-    is_static_assets_request,
-)
+from structlog_config.fastapi_access_logger import is_static_assets_request
 
 log = structlog.get_logger("access_log")
 
@@ -33,7 +31,7 @@ def safe_access_target(app: FastAPI, scope: Scope) -> SafeAccessTarget:
     route = next(
         (
             candidate
-            for candidate in app.router.routes
+            for candidate in iter_route_contexts(app.router.routes)
             if candidate.matches(scope)[0] == Match.FULL
         ),
         None,
@@ -43,8 +41,8 @@ def safe_access_target(app: FastAPI, scope: Scope) -> SafeAccessTarget:
 
     template = getattr(route, "path", None)
     path_template = template if isinstance(template, str) else UNMATCHED_ROUTE
-    route_name = get_route_name(app, scope)
-    if route_name == scope.get("path"):
+    route_name = route.name
+    if not isinstance(route_name, str) or route_name == scope.get("path"):
         route_name = UNMATCHED_ROUTE
     return SafeAccessTarget(path_template, route_name, path_template)
 

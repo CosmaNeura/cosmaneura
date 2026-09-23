@@ -19,12 +19,13 @@ There are some nuances we need to consider:
 """
 
 import mimetypes
-import os
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException
+from starlette.requests import Request
 from starlette.types import Scope
 
 from app import log, root
@@ -35,41 +36,51 @@ from app.environments import (
     is_staging,
     python_environment,
 )
-from app.utils.patching import hash_function_code
-
-# make sure the underlying implementation here does not change significantly, since we are using undocumented APIs
-# https://github.com/encode/starlette/commit/bc3b4002e241353d96e1ad18d8c6b5fc4f8463df
-assert (
-    hash_function_code(StaticFiles.lookup_path)
-    == "a3ebf7850a8389fc2d8328d7322745f233879bc300ab5cc1bd2a52a5e1710815"
-)
 
 
 class GZipStaticFiles(StaticFiles):
-    "Check for a precompressed gz file and serve that instead. Loosely based on GZipMiddleware"
+    """Serve precompressed assets through Starlette's protected file response."""
 
     async def get_response(self, path: str, scope: Scope):
-        # GZipMiddleware checks the scope for HTTP
-        if scope["type"] == "http":
-            headers = Headers(scope=scope)
-            if "gzip" in headers.get("Accept-Encoding", ""):
-                # returns tuple where first element is a string full path on the local filesystem
-                # and second is stat information
-                full_path = self.lookup_path(path)[0]
-                gz_path = full_path + ".gz"
-
-                if os.path.exists(gz_path):
-                    content_type, _ = mimetypes.guess_type(full_path)
-                    headers = {"Content-Encoding": "gzip"}
-
-                    return FileResponse(
-                        gz_path,
-                        # FileResponse uses `guess_type` but falls back to `text/plain`
-                        media_type=(content_type or "text/plain"),
-                        headers=headers,
-                    )
-
-        return await super().get_response(path, scope)
+        if "\x00" in path:
+            raise HTTPException(status_code=404)
+        encodings = Headers(scope=scope).get("Accept-Encoding", "")
+        accepts_gzip = False
+        for encoding in encodings.split(","):
+            token, *parameters = encoding.strip().lower().split(";")
+            if token != "gzip":
+                continue
+            try:
+                quality = next(
+                    (
+                        float(part.strip()[2:])
+                        for part in parameters
+                        if part.strip().startswith("q=")
+                    ),
+                    1.0,
+                )
+                accepts_gzip = 0 < quality <= 1
+            except ValueError:
+                accepts_gzip = False
+        if accepts_gzip:
+            try:
+                response = await super().get_response(path + ".gz", scope)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+            else:
+                response.headers["Content-Encoding"] = "gzip"
+                content_type = (
+                    mimetypes.guess_type(path)[0] or "application/octet-stream"
+                )
+                if content_type.startswith("text/"):
+                    content_type += f"; charset={response.charset}"
+                response.headers["Content-Type"] = content_type
+                response.headers.append("Vary", "Accept-Encoding")
+                return response
+        response = await super().get_response(path, scope)
+        response.headers.append("Vary", "Accept-Encoding")
+        return response
 
 
 def mount_public_directory(app: FastAPI):
@@ -101,8 +112,10 @@ def mount_public_directory(app: FastAPI):
     async def javascript_index():
         return FileResponse(public_path / "index.html")
 
+    public_files = StaticFiles(directory=public_path, html=False)
+
     @app.get("/{path:path}", include_in_schema=False)
-    async def frontend_handler(path: str):
+    async def frontend_handler(path: str, request: Request):
         """
         This is a very dangerous piece of code: if this is not last it will override other routes in the application
 
@@ -111,11 +124,13 @@ def mount_public_directory(app: FastAPI):
 
         https://gist.github.com/ultrafunkamsterdam/b1655b3f04893447c3802453e05ecb5e
         """
-        fp = public_path / path
-
-        if not fp.exists():
-            fp = public_path / "index.html"
-
-        return FileResponse(fp)
+        if "\x00" in path:
+            raise HTTPException(status_code=404)
+        try:
+            return await public_files.get_response(path, request.scope)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+        return FileResponse(public_path / "index.html")
 
     return app

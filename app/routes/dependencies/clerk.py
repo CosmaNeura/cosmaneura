@@ -3,16 +3,16 @@ Attempting to upstream at: https://github.com/clerk/clerk-sdk-python/pull/65/fil
 """
 
 import httpx
-from clerk_backend_api import Clerk
-from clerk_backend_api.jwks_helpers.authenticaterequest import (
-    AuthenticateRequestOptions,
-    AuthStatus,
-    RequestState,
-)
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import log
+from app.configuration.clerk import (
+    AuthenticateRequestOptions,
+    AuthStatus,
+    Clerk,
+    RequestState,
+)
 from app.environments import is_testing
 
 # Bearer tokens with this prefix are accepted by AuthenticateClerkRequest
