@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.configuration import stripe as stripe_config
 from app.jobs import stripe_billing as stripe_billing_job
 from app.jobs import stripe_events as stripe_events_job
 from app.services import stripe_billing
@@ -298,3 +299,62 @@ def test_the_event_task_passes_its_inbox_id_straight_through(monkeypatch):
 
     assert stripe_events_job.process("stripe_event_inbox_123") is True
     assert seen == ["stripe_event_inbox_123"]
+
+
+def test_an_event_on_an_unaccepted_api_version_is_refused(monkeypatch):
+    """The pin is the contract; an unrecognised shape must not reach the inbox."""
+
+    monkeypatch.setattr(
+        stripe_config,
+        "ACCEPTED_EVENT_API_VERSIONS",
+        frozenset({"2025-09-30.clover"}),
+    )
+
+    with pytest.raises(stripe_billing.StripeStateInvalid):
+        stripe_billing.validate_stripe_event_envelope(
+            {
+                "id": "evt_version",
+                "type": "customer.subscription.updated",
+                "api_version": "2026-08-26.dahlia",
+                "livemode": False,
+                "created": 1700000000,
+                "data": {"object": {}},
+            }
+        )
+
+
+def test_a_migration_window_accepts_both_versions(monkeypatch):
+    """Widening the set is what lets the dashboard and the deploy flip separately.
+
+    Without it the two are one atomic change, and every billing event arriving
+    in the gap is refused before it is ever persisted.
+    """
+
+    monkeypatch.setattr(
+        stripe_config,
+        "ACCEPTED_EVENT_API_VERSIONS",
+        frozenset({"2025-09-30.clover", "2026-08-26.dahlia"}),
+    )
+
+    for version in ("2025-09-30.clover", "2026-08-26.dahlia"):
+        event = {
+            "id": f"evt_{version}",
+            "type": "customer.subscription.updated",
+            "api_version": version,
+            "livemode": False,
+            "created": 1700000000,
+            "data": {"object": {}},
+        }
+        # Past the version gate; anything after it is a different concern.
+        with pytest.raises(stripe_billing.StripeStateInvalid) as raised:
+            stripe_billing.validate_stripe_event_envelope(event)
+        assert "API version" not in str(raised.value)
+
+
+def test_the_accepted_set_contains_the_outbound_pin(monkeypatch):
+    """A set that omitted it would refuse the events this deployment causes."""
+
+    assert (
+        stripe_config.SUPPORTED_STRIPE_API_VERSION
+        in stripe_config.ACCEPTED_EVENT_API_VERSIONS
+    )

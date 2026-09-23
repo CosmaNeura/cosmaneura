@@ -3185,7 +3185,7 @@ def validate_stripe_event_envelope(
     event_id = event.get("id")
     if not isinstance(event_id, str) or not event_id.startswith("evt_"):
         raise StripeStateInvalid("Stripe event id is invalid")
-    if event.get("api_version") != stripe_config.SUPPORTED_STRIPE_API_VERSION:
+    if event.get("api_version") not in stripe_config.ACCEPTED_EVENT_API_VERSIONS:
         raise StripeStateInvalid(
             "Stripe event API version does not match the pinned contract"
         )
