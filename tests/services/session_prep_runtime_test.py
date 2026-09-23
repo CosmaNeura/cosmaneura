@@ -13,7 +13,7 @@ from app.configuration.session_prep import SessionPrepProviderSettings
 from app.routes.agent import agent_api_app, get_agent_authority_settings
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_sovereign_tool_request,
 )
 from app.services.authority_conversation import write_conversation_turn
 from app.services.session_prep import (
@@ -315,7 +315,7 @@ def test_ready_artifacts_and_receipts_cannot_be_rewritten(scope):
 def _client():
     app = FastAPI()
     app.include_router(agent_api_app)
-    app.dependency_overrides[authenticate_agent_api_request] = (
+    app.dependency_overrides[authenticate_sovereign_tool_request] = (
         lambda: EntraServicePrincipal(client_id=WORKLOAD)
     )
     app.dependency_overrides[get_agent_authority_settings] = lambda: AUTHORITY_SETTINGS

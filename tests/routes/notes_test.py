@@ -23,7 +23,7 @@ from tests.factories import (
     DoctorNoteSchemaFactory,
     SimpleCompleteIntakeFactory,
 )
-from tests.routes.utils import get_clerk_dev_user, get_clerk_seed_user
+from tests.routes.utils import get_clerk_dev_user
 
 
 def test_notes_list(authenticated_client: TestClient):
@@ -240,13 +240,33 @@ def test_visit_note_version_metadata_is_not_in_public_openapi_schema() -> None:
 
 
 def test_note_detail_deleted_transcript(authenticated_client: TestClient):
-    # Use data from seeds.
-    _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
-
-    transcript = AIVisitTranscript.sample()
-    assert not transcript.deleted_at
-    appointment = Appointment.one(transcript.appointment_id)
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    patient = Patient(
+        doctor_id=doctor.id,
+        name="Synthetic transcript deletion patient",
+        date_of_birth=datetime(2001, 1, 1),
+    ).save()
+    appointment = Appointment(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime.now(UTC),
+        external_id=None,
+    ).save()
+    transcript = AIVisitTranscript(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=appointment.id,
+        duration=1,
+        transcript_data=[
+            {
+                "speaker": "A",
+                "content": "Synthetic visit",
+                "startTime": 0,
+                "endTime": 1000,
+            }
+        ],
+    ).save()
 
     response = authenticated_client.get(
         api_app.url_path_for("note_detail", appointment_id=appointment.id)
