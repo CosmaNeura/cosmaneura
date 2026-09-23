@@ -88,13 +88,27 @@ CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
 # explicit policy generation in the key so a successful old request whose local
 # cache write was interrupted cannot block the card-required rollout.
 PAID_PILOT_CHECKOUT_POLICY_VERSION = "paid-pilot-v3"
+# Retire when: no Checkout Session created under `card-required-v1` is still
+# recoverable. Stripe expires an idempotency key after 24 hours, so this is
+# removable once no frozen checkout request on any Practice row names this
+# generation. Only read at one site, when deciding whether a stored request may
+# be replayed.
 LEGACY_CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "card-required-v1"
 # The active writer and its idempotency key share one immutable generation.
 # This prevents a retry from reusing a legacy key with a different request.
 CHECKOUT_IDEMPOTENCY_POLICY_VERSION = PAID_PILOT_CHECKOUT_POLICY_VERSION
 CHECKOUT_TRIAL_CLOCK_POLICY = "checkout-fixed-14-day-v2"
+# Retire when: no live subscription carries a trial that began under the
+# BAA-carryover rule ADR 0024 replaced. Those trials are finite, so this expires
+# on its own once the last one ends; until then a subscription bound under it
+# must keep resolving to its original trial end rather than the fixed 14 days.
 LEGACY_TRIAL_CLOCK_POLICY = "legacy-baa-carryover-v1"
 CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION = PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+# Retire when: no subscription in Stripe still carries entitlement metadata
+# written before the contract was versioned. Unlike the two above this does not
+# expire by itself — it needs a backfill that stamps the current contract
+# version onto those subscriptions, after which this and its entry in
+# SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS both go.
 LEGACY_UNVERSIONED_STRIPE_CONTRACT = "stripe-legacy-unversioned.v0"
 SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS = frozenset(
     {CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION}
