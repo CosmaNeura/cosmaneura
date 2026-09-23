@@ -624,7 +624,10 @@ class HttpScribeWorkflowClient:
                         f"scribe_http_{response.status_code}"
                     )
                 if (
-                    response.headers.get("content-type", "").split(";", 1)[0].strip()
+                    response.headers.get("content-type", "")
+                    .split(";", 1)[0]
+                    .strip()
+                    .lower()
                     != "application/json"
                 ):
                     raise ScribeWorkflowRetryableError("scribe_invalid_response")
@@ -633,7 +636,11 @@ class HttpScribeWorkflowClient:
                     if len(body) + len(chunk) > max_bytes:
                         raise ScribeWorkflowRetryableError("scribe_response_too_large")
                     body.extend(chunk)
-        except (AzureError, httpx.HTTPError):
+        except httpx.TimeoutException:
+            raise ScribeWorkflowRetryableError("scribe_request_timeout") from None
+        except AzureError:
+            raise ScribeWorkflowRetryableError("scribe_identity_unavailable") from None
+        except httpx.HTTPError:
             # Remote payloads and credentials must not appear in error text.
             raise ScribeWorkflowRetryableError("scribe_transport_unavailable") from None
         try:

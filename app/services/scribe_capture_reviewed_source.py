@@ -170,9 +170,10 @@ def select_transcript(session, scope, source: ReviewedSource, transcripts, deliv
             raise ReviewedSourceConflict
         return None, set(), False
     by_id = {row.id: row for row in transcripts}
+    known = {row.transcript_id for row in rows}
     if (
         delivery is None
-        or set(by_id) != {r.transcript_id for r in rows}
+        or not known.issubset(by_id)
         or (
             delivery.transcript_id != rows[0].transcript_id
             or delivery.payload_sha256 != rows[0].payload_sha256
@@ -206,7 +207,7 @@ def select_transcript(session, scope, source: ReviewedSource, transcripts, deliv
             selected = transcript
     return (
         selected,
-        set(by_id),
+        known,
         source.reference.working_version != rows[0].working_version,
     )
 

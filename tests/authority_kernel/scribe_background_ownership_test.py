@@ -92,3 +92,45 @@ async def test_background_job_and_late_publication_preserve_capture_owner(
                 ).count()
                 == 0
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["raw", "reviewed_english"])
+async def test_later_separate_upload_cannot_block_capture_publication(
+    admission_case, monkeypatch, source
+):
+    f = admission_case
+    kwargs = (
+        await note_setup(f)
+        if source == "reviewed_english"
+        else await raw_note_setup(f, monkeypatch)
+    )
+    inserted = []
+
+    def upload_during_model(count):
+        if count != 1:
+            return
+        extra = AIVisitTranscript(
+            doctor_id=f.case.doctor.id,
+            patient_id=f.case.patient.id,
+            appointment_id=f.case.appointment.id,
+            duration=1,
+            transcript_data=[
+                TranscriptEntry(
+                    speaker="Doctor",
+                    content="Separate upload sentinel; never part of capture.",
+                    startTime=0,
+                    endTime=1000,
+                )
+            ],
+        ).save()
+        inserted.append(extra.id)
+
+    f.model.after = upload_during_model
+    result = await notes.capture_note(**kwargs)
+    assert result.status == "draft" and result.note_ref is not None
+    saved = AIVisitNote.one(id=result.note_ref)
+    assert inserted and saved.ai_transcript_id not in inserted
+    assert str(saved.ai_transcript_id) == result.transcript_ref
+    assert all("Separate upload sentinel" not in prompt for prompt, _ in f.model.calls)
+    assert await notes.capture_note(**{**kwargs, "prepare": False}) == result

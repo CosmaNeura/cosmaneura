@@ -579,3 +579,47 @@ async def test_cancelled_request_retains_lease_and_stable_recovery(admission_cas
     fixture.client.pause = False
     await admission.admit_capture(**call_arguments(fixture, resume=True))
     assert len(fixture.client.consents) == len(fixture.client.sessions) == 1
+
+
+@pytest.mark.asyncio
+async def test_late_session_receipt_cannot_report_ready_under_another_lease(
+    admission_case,
+):
+    f = admission_case
+    admitted = await admission.admit_capture(**call_arguments(f))
+    first = admission._claim(
+        f.caller, f.binding.binding_ref, f.binding.workspace_id, admitted.operation_ref
+    )
+    receipt = await f.client.create_session(
+        first.scribe_tenant_id, first.payload, idempotency_key=first.key
+    )
+    with Session(f.engine) as session:
+        row = session.get(ScribeCaptureAdmission, admitted.operation_ref)
+        assert row is not None
+        row.lease_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        session.add(row)
+        session.commit()
+    second = admission._claim(
+        f.caller, f.binding.binding_ref, f.binding.workspace_id, admitted.operation_ref
+    )
+    admission._accept_receipt(first, receipt)
+    assert journal(f).session_id == receipt.id
+    assert journal(f).status == "session_unconfirmed"
+    assert journal(f).lease_token == second.lease_token
+    with pytest.raises(admission.AdmissionUnconfirmed):
+        admission._finish(
+            f.caller,
+            f.binding.binding_ref,
+            f.binding.workspace_id,
+            admitted.operation_ref,
+        )
+    admission._accept_receipt(second, receipt)
+    assert (
+        admission._finish(
+            f.caller,
+            f.binding.binding_ref,
+            f.binding.workspace_id,
+            admitted.operation_ref,
+        ).session_id
+        == receipt.id
+    )
