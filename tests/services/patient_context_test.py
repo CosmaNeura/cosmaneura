@@ -7,10 +7,12 @@ from app.services.patient_context import (
     recent_notes_for_patient,
 )
 
+from activemodel.session_manager import _session_context, get_session
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.intake.intake import Intake
+from sqlalchemy import text
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
@@ -192,3 +194,37 @@ def test_superseded_note_is_excluded_from_patient_prompt_context():
 
     assert [note.id for note in notes] == [current.id]
     assert historical.note not in [note.note for note in notes]
+
+
+def test_encounter_cutoff_uses_utc_in_a_non_utc_database_session():
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    cutoff = datetime.now(UTC) - timedelta(days=2)
+    prior = _create_note(
+        doctor, patient, appointment_date=(cutoff - timedelta(minutes=5)).replace(tzinfo=None),
+        note={"Plan": "Prior synthetic visit"},
+    )
+    _create_note(
+        doctor, patient, appointment_date=(cutoff + timedelta(minutes=5)).replace(tzinfo=None),
+        note={"Plan": "Later synthetic visit"},
+    )
+    with get_session() as session:
+        context = _session_context.set(session)
+        try:
+            session.execute(text("SET LOCAL TIME ZONE 'America/New_York'"))
+            result = recent_notes_for_patient(doctor.id, patient.id, limit=6, before=cutoff)
+            assert [note.id for note in result] == [prior.id]
+        finally:
+            session.rollback()
+            _session_context.reset(context)
+
+
+def test_same_time_notes_have_a_stable_order_before_limiting():
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    when = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=2)
+    notes = [_create_note(
+        doctor, patient, appointment_date=when, note={"Plan": f"Synthetic {index}"}
+    ) for index in range(3)]
+    expected = sorted((str(note.id) for note in notes), reverse=True)[:2]
+    assert [str(note.id) for note in recent_notes_for_patient(doctor.id, patient.id, limit=2)] == expected

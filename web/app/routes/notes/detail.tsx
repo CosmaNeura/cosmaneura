@@ -30,12 +30,18 @@ import { invariant } from "@epic-web/invariant"
 
 type Status = Parameters<typeof StatusBadge>[0]["status"]
 
-export function EmptyNotes() {
+export function EmptyNotes({
+  captureRequired = false,
+}: {
+  captureRequired?: boolean
+}) {
   return (
     <div className="mb-4">
       <div className="mb-2 text-xl font-semibold">Notes</div>
       <div className="text-muted-foreground text-sm italic">
-        No Notes Available. Upload some!
+        {captureRequired
+          ? "This visit was started in Scribe. Reopen it in Scribe to resume the recording and prepare its note. A recording uploaded separately cannot generate a note for this visit. Use a new visit for a separate upload."
+          : "No Notes Available. Upload some!"}
       </div>
     </div>
   )
@@ -132,8 +138,17 @@ function NoteHeader({
 }
 
 export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
-  const { transcript, notes } = loaderData
+  const { transcript, notes, note_transcripts } = loaderData
   const hasNotes = notes && notes.length > 0
+  const distinctNoteSources =
+    new Set((notes ?? []).map((note) => note.ai_transcript_id)).size > 1
+  // The fallback supports a prior backend without attaching its transcript to
+  // a note with a different source ID.
+  const sourceTranscripts = note_transcripts ?? (transcript ? [transcript] : [])
+  const sharedTranscript =
+    !hasNotes || notes.every((note) => note.ai_transcript_id === transcript?.id)
+      ? transcript
+      : null
 
   // The engagement "personality" badge is gated to the same beta cohort as
   // Zoom, so in production only allowlisted doctors see it.
@@ -170,10 +185,17 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               note={note}
               defaultOpen={index === 0}
               review={loaderData.session_prep_reviews?.[note.id]}
+              transcript={
+                distinctNoteSources
+                  ? (sourceTranscripts.find(
+                      (source) => source.id === note.ai_transcript_id,
+                    ) ?? null)
+                  : undefined
+              }
             />
           ))
         ) : (
-          <EmptyNotes />
+          <EmptyNotes captureRequired={loaderData.capture_workflow_required} />
         )}
 
         {referenceToolkitEnabled && (
@@ -183,7 +205,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           <LabResultsPanel patientId={loaderData.patient.id} />
         )}
 
-        <VisitTranscriptViewer transcript={transcript} />
+        {!distinctNoteSources && (
+          <VisitTranscriptViewer transcript={sharedTranscript} />
+        )}
       </InnerScrollableContent>
       <SovereignPanelHost appointmentId={loaderData.appointment.id} />
     </SidebarInset>

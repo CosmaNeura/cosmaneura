@@ -4473,6 +4473,18 @@
             ],
             "title": "Notes"
           },
+          "note_transcripts": {
+            "items": {
+              "$ref": "#/components/schemas/AIVisitTranscript"
+            },
+            "type": "array",
+            "title": "Note Transcripts"
+          },
+          "capture_workflow_required": {
+            "type": "boolean",
+            "title": "Capture Workflow Required",
+            "default": false
+          },
           "engagement_role": {
             "anyOf": [
               {

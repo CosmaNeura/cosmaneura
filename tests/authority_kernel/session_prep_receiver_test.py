@@ -17,7 +17,7 @@ from app.configuration.session_prep import SessionPrepSyntheticSettings
 from app.routes.agent import agent_api_app, get_session_prep_synthetic_settings
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
-    authenticate_agent_api_request,
+    authenticate_sovereign_tool_request,
 )
 
 from activemodel.session_manager import aglobal_session
@@ -49,7 +49,7 @@ def _request_body(fixture_name: str = "request-brief.json") -> dict[str, object]
 
 def _authorized_client() -> TestClient:
     app = _isolated_app()
-    app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+    app.dependency_overrides[authenticate_sovereign_tool_request] = lambda: (
         EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
     )
     return TestClient(app)
@@ -61,7 +61,7 @@ def _enabled_client(
     context_snapshot_ref: str = "context_synthetic_001",
 ) -> TestClient:
     fastapi_app = _isolated_app()
-    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+    fastapi_app.dependency_overrides[authenticate_sovereign_tool_request] = lambda: (
         EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
     )
     fastapi_app.dependency_overrides[get_session_prep_synthetic_settings] = lambda: (
@@ -87,7 +87,7 @@ def test_receiver_authenticates_before_reading_the_body() -> None:
     def reject_workload() -> None:
         raise HTTPException(status_code=401)
 
-    app.dependency_overrides[authenticate_agent_api_request] = reject_workload
+    app.dependency_overrides[authenticate_sovereign_tool_request] = reject_workload
     response = TestClient(app).post(
         "/service/v1/agent/tools/invoke",
         headers={**_headers(), "Content-Type": "application/json"},
