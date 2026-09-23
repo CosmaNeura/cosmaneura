@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import json
+import traceback
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from azure.core.credentials import AccessToken
+from pydantic import ValidationError
 
 from app.configuration.scribe_workflow import ScribeWorkflowSettings
 from app.services import scribe_workflow
 from app.services.scribe_workflow import (
     ConsentCreate,
+    ExternalTranscriptSessionCreate,
     HttpScribeWorkflowClient,
     ScribeWorkflowDisabledError,
+    ScribeWorkflowRejectedError,
     ScribeWorkflowRetryableError,
     SessionCreate,
     build_scribe_workflow_client,
@@ -56,6 +60,16 @@ def consent_payload() -> ConsentCreate:
         method="pre_visit_form",
         all_parties_consented=True,
         granted_at=datetime.now(UTC),
+    )
+
+
+def external_session_payload() -> ExternalTranscriptSessionCreate:
+    return ExternalTranscriptSessionCreate(
+        appointment_id="appointment_01kzy09rxaepjt63rb0pv1256p",
+        practitioner_id="doctor_01kzy09rx9emh9n9q0p0e6neam",
+        patient_id="patient_01kzy09rxben2txt3pfy34bn6h",
+        consent_record_id=uuid4(),
+        modality="virtual",
     )
 
 
@@ -110,7 +124,10 @@ async def test_client_uses_workload_scope_and_verified_tenant_header() -> None:
 
 
 @pytest.mark.asyncio
-async def test_client_creates_session_without_scheduling_source() -> None:
+@pytest.mark.parametrize("response_mode", [None, "chunk_upload"])
+async def test_client_creates_session_without_scheduling_source(
+    response_mode: str | None,
+) -> None:
     tenant_id = uuid4()
     credential = StaticCredential()
     consent_id = uuid4()
@@ -124,6 +141,7 @@ async def test_client_creates_session_without_scheduling_source() -> None:
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/sessions"
         body = json.loads(request.content)
         assert set(body) == {
             "appointment_id",
@@ -132,15 +150,15 @@ async def test_client_creates_session_without_scheduling_source() -> None:
             "consent_record_id",
             "modality",
         }
-        return httpx.Response(
-            201,
-            json={
-                **body,
-                "id": str(session_id),
-                "status": "created",
-                "created_at": datetime.now(UTC).isoformat(),
-            },
-        )
+        response_body = {
+            **body,
+            "id": str(session_id),
+            "status": "created",
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        if response_mode is not None:
+            response_body["ingest_mode"] = response_mode
+        return httpx.Response(201, json=response_body)
 
     async with httpx.AsyncClient(
         base_url="https://scribe.internal.example",
@@ -160,6 +178,218 @@ async def test_client_creates_session_without_scheduling_source() -> None:
         )
 
     assert result.id == session_id
+    assert result.ingest_mode == "chunk_upload"
+
+
+@pytest.mark.asyncio
+async def test_ordinary_session_response_rejects_external_mode() -> None:
+    payload = SessionCreate(
+        appointment_id="appointment_01kzy09rxaepjt63rb0pv1256p",
+        practitioner_id="doctor_01kzy09rx9emh9n9q0p0e6neam",
+        patient_id="patient_01kzy09rxben2txt3pfy34bn6h",
+        consent_record_id=uuid4(),
+        modality="virtual",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            201,
+            json={
+                **json.loads(request.content),
+                "id": str(uuid4()),
+                "ingest_mode": "external_async_transcript",
+                "status": "created",
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=5,
+            credential=StaticCredential(),
+            client=http_client,
+        )
+        with pytest.raises(ScribeWorkflowRetryableError) as exc_info:
+            await client.create_session(
+                uuid4(),
+                payload,
+                idempotency_key="session-stable-key-2000",
+            )
+
+    assert exc_info.value.code == "scribe_invalid_response"
+
+
+@pytest.mark.asyncio
+async def test_external_session_uses_existing_workload_boundary() -> None:
+    tenant_id = uuid4()
+    credential = StaticCredential()
+    session_id = uuid4()
+    payload = external_session_payload()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        body = json.loads(request.content)
+        assert set(body) == {
+            "appointment_id",
+            "practitioner_id",
+            "patient_id",
+            "consent_record_id",
+            "modality",
+        }
+        assert {
+            "tenant_id",
+            "ingest_mode",
+            "patient_name",
+            "date_of_birth",
+            "scheduling_provider",
+            "transcript",
+        }.isdisjoint(body)
+        return httpx.Response(
+            201,
+            json={
+                **body,
+                "id": str(session_id),
+                "ingest_mode": "external_async_transcript",
+                "status": "created",
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=5,
+            credential=credential,
+            client=http_client,
+        )
+        result = await client.create_external_transcript_session(
+            tenant_id,
+            payload,
+            idempotency_key="external-session-stable-key-1000",
+        )
+
+    assert result.id == session_id
+    assert result.ingest_mode == "external_async_transcript"
+    assert credential.scopes == ["api://scribe-api/.default"]
+    assert len(seen) == 1
+    assert seen[0].url.path == "/v1/external-transcript-sessions"
+    assert seen[0].headers["authorization"] == "Bearer test-access-token"
+    assert seen[0].headers["x-tenant-id"] == str(tenant_id)
+    assert seen[0].headers["idempotency-key"] == "external-session-stable-key-1000"
+
+
+@pytest.mark.parametrize(
+    "response_patch",
+    [
+        {},
+        {"ingest_mode": "chunk_upload"},
+        {
+            "ingest_mode": "external_async_transcript",
+            "patient_name": "Synthetic Patient",
+        },
+    ],
+    ids=["missing-mode", "wrong-mode", "unknown-field"],
+)
+@pytest.mark.asyncio
+async def test_external_session_response_requires_server_pinned_mode(
+    response_patch: dict[str, str],
+) -> None:
+    payload = external_session_payload()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response_body = {
+            **json.loads(request.content),
+            "id": str(uuid4()),
+            "status": "created",
+            "created_at": datetime.now(UTC).isoformat(),
+            **response_patch,
+        }
+        return httpx.Response(201, json=response_body)
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=5,
+            credential=StaticCredential(),
+            client=http_client,
+        )
+        with pytest.raises(ScribeWorkflowRetryableError) as exc_info:
+            await client.create_external_transcript_session(
+                uuid4(),
+                payload,
+                idempotency_key="external-session-stable-key-2000",
+            )
+
+    assert exc_info.value.code == "scribe_invalid_response"
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__
+    rendered_traceback = "".join(traceback.format_exception(exc_info.value))
+    assert "Synthetic Patient" not in rendered_traceback
+
+
+@pytest.mark.asyncio
+async def test_external_session_opaque_admission_denial_is_rejected() -> None:
+    sensitive_body = "admission details must remain opaque"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text=sensitive_body)
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=5,
+            credential=StaticCredential(),
+            client=http_client,
+        )
+        with pytest.raises(ScribeWorkflowRejectedError) as exc_info:
+            await client.create_external_transcript_session(
+                uuid4(),
+                external_session_payload(),
+                idempotency_key="external-session-stable-key-3000",
+            )
+
+    assert exc_info.value.code == "scribe_http_404"
+    assert sensitive_body not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tenant_id", "00000000-0000-0000-0000-000000000001"),
+        ("ingest_mode", "external_async_transcript"),
+        ("patient_name", "Synthetic Patient"),
+        ("date_of_birth", "2000-01-01"),
+        ("scheduling_provider", "synthetic_scheduler"),
+        ("transcript", "Synthetic transcript text"),
+    ],
+)
+def test_external_session_request_rejects_authority_and_phi_fields(
+    field: str,
+    value: str,
+) -> None:
+    payload = external_session_payload().model_dump(mode="json")
+    payload[field] = value
+
+    with pytest.raises(ValidationError):
+        ExternalTranscriptSessionCreate.model_validate(payload)
 
 
 @pytest.mark.asyncio
@@ -201,6 +431,13 @@ async def test_disabled_client_fails_closed() -> None:
             uuid4(),
             consent_payload(),
             idempotency_key="consent-stable-key-3000",
+        )
+
+    with pytest.raises(ScribeWorkflowDisabledError):
+        await client.create_external_transcript_session(
+            uuid4(),
+            external_session_payload(),
+            idempotency_key="external-session-stable-key-4000",
         )
 
 
