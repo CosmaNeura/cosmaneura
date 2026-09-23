@@ -3498,3 +3498,130 @@ def test_signature_rejects_malformed_headers():
     assert not stripe_billing.verify_webhook_signature(payload, None)
     assert not stripe_billing.verify_webhook_signature(payload, "v1=abc")
     assert not stripe_billing.verify_webhook_signature(payload, "t=notanumber,v1=abc")
+
+
+def test_a_broken_seat_ledger_invalidates_the_subscription_rather_than_leaving_it_active(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Billing fails closed when seat accounting cannot be trusted.
+
+    Membership mutation owns prevention, but if drift or an older path violates
+    the seat invariant the mirror must not keep reporting an active entitlement
+    off a count it could not compute.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLedgerInvalid("ledger is invalid")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_ledger",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert (
+        practice.stripe_quantity_sync_error
+        == stripe_billing.LOCAL_SEAT_LEDGER_INVALID_ERROR
+    )
+
+
+def test_a_seat_count_outside_the_pilot_limit_also_invalidates(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Distinguished from a broken ledger, because the operator response differs."""
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded("outside the 1-20 pilot limit")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_limit",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert (
+        practice.stripe_quantity_sync_error
+        == stripe_billing.LOCAL_SEAT_COUNT_OUT_OF_RANGE_ERROR
+    )
+
+
+def test_an_existing_sync_error_is_not_overwritten_by_the_seat_failure(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """The first failure is the one worth keeping; later ones add no information."""
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.stripe_quantity_sync_error = "an earlier, more specific failure"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded("outside the limit")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_keep_error",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_error == "an earlier, more specific failure"
