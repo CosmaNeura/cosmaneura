@@ -3625,3 +3625,188 @@ def test_an_existing_sync_error_is_not_overwritten_by_the_seat_failure(
 
     practice.refresh()
     assert practice.stripe_quantity_sync_error == "an earlier, more specific failure"
+
+
+def test_an_event_older_than_the_last_applied_one_is_receipted_but_not_applied(
+    remote: FakeStripe,
+):
+    """Stripe does not guarantee webhook ordering.
+
+    Called directly rather than through `apply_stripe_event`, because that has
+    its own ordering guard and would filter the stale event before this one is
+    reached. This is the inner check, inside the row lock: defence in depth
+    against the row advancing between the outer comparison and the transaction.
+
+    A late delivery must not overwrite newer state, and must still be receipted
+    so a redelivery is recognised rather than reprocessed.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, status="active")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+
+    newer = int(NOW.timestamp()) + 600
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_ordering_new",
+            created=newer,
+        )
+    )
+    practice.refresh()
+    applied_status = practice.subscription_status
+    applied_version = practice.stripe_state_version
+
+    stale = _subscription(practice, status="past_due")
+    remote.subscriptions[stale["id"]] = stale
+    result, changed = stripe_billing._apply_authoritative_subscription(
+        practice,
+        stale["id"],
+        event_created_at=datetime.fromtimestamp(newer - 300, tz=timezone.utc),
+        event_id="evt_ordering_stale",
+        event_type="customer.subscription.updated",
+    )
+
+    assert result is None
+    assert changed is False
+    practice.refresh()
+    assert practice.subscription_status == applied_status
+    assert practice.stripe_state_version == applied_version
+    # Receipted, so a redelivery of the stale event is a no-op rather than a reapply.
+    assert StripeEventReceipt.get(event_id="evt_ordering_stale") is not None
+
+
+def test_a_bound_subscription_that_lost_its_practice_metadata_is_invalidated(
+    remote: FakeStripe,
+):
+    """Flagged rather than refused: the binding already exists, the data drifted."""
+
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"].pop("practice_id")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+
+
+def test_an_unbound_subscription_is_refused_before_metadata_is_even_considered(
+    remote: FakeStripe,
+):
+    """Binding is gated on Checkout completion, not on metadata.
+
+    The missing-metadata branch is defence in depth behind this: subscription
+    metadata is mutable and therefore only a routing hint, so an initial binding
+    needs the immutable Checkout Session id Core persisted before Stripe created
+    the subscription, or a paid invoice whose customer was already bound.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, subscription_id="sub_unclaimed")
+    subscription["metadata"].pop("practice_id")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = "sub_test_123"
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeStateConflict) as raised:
+        stripe_billing._apply_authoritative_subscription(
+            practice,
+            subscription["id"],
+            require_practice_metadata=True,
+        )
+
+    assert "Checkout completion" in str(raised.value)
+
+
+def test_an_event_for_a_subscription_this_practice_no_longer_holds_is_receipted_only(
+    remote: FakeStripe,
+):
+    """A superseded subscription must not touch the binding that replaced it.
+
+    Stripe keeps delivering events for an old subscription after a practice has
+    moved to a new one. Those arrive with valid signatures and a real payload,
+    so the guard is the binding, not the envelope: the event is receipted so a
+    redelivery is recognised, and nothing is applied.
+    """
+
+    practice = _practice()
+    current = _subscription(practice, subscription_id="sub_current")
+    superseded = _subscription(practice, subscription_id="sub_superseded")
+    remote.subscriptions[current["id"]] = current
+    remote.subscriptions[superseded["id"]] = superseded
+
+    practice.stripe_customer_id = current["customer"]
+    practice.stripe_subscription_id = current["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+    version_before = practice.stripe_state_version
+
+    result, changed = stripe_billing._apply_authoritative_subscription(
+        practice,
+        superseded["id"],
+        event_created_at=datetime.fromtimestamp(
+            int(NOW.timestamp()) + 900, tz=timezone.utc
+        ),
+        event_id="evt_superseded",
+        event_type="customer.subscription.updated",
+    )
+
+    assert result is None
+    assert changed is False
+    practice.refresh()
+    assert practice.stripe_subscription_id == current["id"]
+    assert practice.stripe_state_version == version_before
+    assert StripeEventReceipt.get(event_id="evt_superseded") is not None
+
+
+def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
+    remote: FakeStripe,
+):
+    """The receipt is the whole point of that branch; it cannot be skipped."""
+
+    practice = _practice()
+    current = _subscription(practice, subscription_id="sub_current_2")
+    superseded = _subscription(practice, subscription_id="sub_superseded_2")
+    remote.subscriptions[current["id"]] = current
+    remote.subscriptions[superseded["id"]] = superseded
+
+    practice.stripe_customer_id = current["customer"]
+    practice.stripe_subscription_id = current["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeStateInvalid) as raised:
+        stripe_billing._apply_authoritative_subscription(
+            practice,
+            superseded["id"],
+            event_id="evt_superseded_no_meta",
+            event_type=None,
+        )
+
+    assert "receipt metadata is incomplete" in str(raised.value)
