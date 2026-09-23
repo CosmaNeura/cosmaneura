@@ -94,3 +94,28 @@ review and deployed acceptance remain release gates.
   and a repeat scan remain engineering release work. The pinned activemodel Git
   dependency is outside registry advisory coverage. Sovereign's separate runtime
   dependency scan had zero findings.
+
+## Increment 4: runtime maintenance
+
+The scheduler expires at most 100 read receipts per minute after their 24-hour
+replay window, using PostgreSQL's clock and leaving authoritative audit metadata
+intact. Cleanup continues when generation is disabled. A metadata-only health
+event reports pending/running/ready/failed counts and oldest queued age; failed
+work or queue age over 120 seconds produces a warning while the feature is on.
+No provider, record, source content, or exception detail appears in these events.
+Sixteen local operations/worker tests pass; focused Ruff/Pyright checks pass.
+Recovery: restore the prior worker/scheduler application. This increment changes
+no schema, cohort, or environment configuration.
+
+## Current paired deployment drift (read-only observation, 2026-09-23)
+
+Core staging web revision `cosmaneura-staging-app--0000015` uses
+`scribe-beta/core@sha256:2fd9ebb808b2f420fdfd7ef88bc4874e607f733ed456bea3915e8c67f78241a5`
+(tag `20260923-h91ly9kp-caller`, created 11:41 UTC). Its worker and scheduler use
+`cosmaneura/cosmaneura@sha256:a2c2a736651b7d24965da0866836c0de027e3589dcecdf825d4dc2e5a51d42cc`
+at source `ace819712c2b4c757893a9bf134dad5198d1708f`. Core production web, worker,
+and scheduler remain at `8fa02a71f4b880cd43f4fccc8c81c92a0d635623` (August 31).
+Both known source commits are ancestors of the integration base. The staging
+web digest's complete source provenance still needs reconciliation. Retain the
+current deployment until an approved paired candidate is ready; align web,
+worker, and scheduler as part of that rollout. No cloud mutation performed.
