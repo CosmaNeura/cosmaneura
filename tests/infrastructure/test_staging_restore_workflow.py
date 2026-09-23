@@ -9,12 +9,12 @@ WORKFLOW = (
     / ".github/workflows/staging_restore_rehearsal.yml"
 )
 
-CHECKOUT = "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
-AZURE_LOGIN = "azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca"
+CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+AZURE_LOGIN = "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906"
 ATTEST_PROVENANCE = (
     "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be"
 )
-UPLOAD_ARTIFACT = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+UPLOAD_ARTIFACT = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 PROVISION_REFUSAL = (
     'echo "::error::Provision is disabled. Activation requires one trusted process '
     "to authenticate server, provider, and GitHub proofs, compose their opaque "
