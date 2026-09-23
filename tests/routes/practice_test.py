@@ -786,6 +786,9 @@ def test_wrong_domain_lookup_and_join_disclose_no_practice_identity(
 
     # Bound to the record, not to repeated literals: renaming the fixture must
     # not leave these assertions passing against a name nobody serves.
+    assert responses, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for response in responses:
         assert practice.legal_name not in response.text, response.text
         assert practice.email_domain not in response.text, response.text

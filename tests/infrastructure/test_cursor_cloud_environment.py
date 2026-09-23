@@ -319,6 +319,9 @@ fi
     commands.update(
         {item["name"]: item["command"] for item in environment["terminals"]}
     )
+    assert commands, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for mode, command in commands.items():
         command_parts = shlex.split(command)
         prefix = "/usr/bin/env -i /bin/bash --noprofile --norc --"

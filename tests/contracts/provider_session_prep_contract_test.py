@@ -146,5 +146,8 @@ def test_result_fixtures_pin_stable_states_and_content_relationships() -> None:
 
 
 def test_schema_and_fixtures_are_byte_pinned() -> None:
+    assert EXPECTED_HASHES, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for path, expected in EXPECTED_HASHES.items():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected

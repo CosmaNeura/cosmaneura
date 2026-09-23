@@ -300,6 +300,9 @@ def test_copy_sequence_accepts_only_semantically_stable_template_projection() ->
         evidence.append(_validate(fixture))
 
     baseline = evidence[0]
+    assert len(evidence) > 1, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for progress, (before, after, fixture) in enumerate(
         zip(evidence[:-1], evidence[1:], fixtures[1:], strict=True), start=3
     ):

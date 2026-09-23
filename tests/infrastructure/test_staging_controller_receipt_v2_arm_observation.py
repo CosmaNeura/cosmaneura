@@ -531,5 +531,8 @@ def test_one_shot_and_seal_revalidate_exact_raw_responses(
 def test_no_live_or_mutating_import_path() -> None:
     source = inspect.getsource(arm)
     forbidden = 'method="POST"|method="PUT"|method="DELETE"|subprocess|open("|requests.'
+    assert forbidden, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for token in forbidden.split("|"):
         assert token not in source

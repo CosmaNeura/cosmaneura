@@ -41,12 +41,20 @@ def test_resource_inventory_excludes_publishers_identities_and_existing_registry
 
 @pytest.mark.parametrize("keyword", ["provider", "data", "module", "provisioner"])
 def test_module_has_no_ambient_or_executable_integration(keyword: str) -> None:
-    for path in MODULE.glob("*.tf"):
+    sources = sorted(MODULE.glob("*.tf"))
+    assert sources, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
+    for path in sources:
         assert not re.search(rf'^\s*{keyword}\s+"', path.read_text(), re.MULTILINE)
 
 
 def test_existing_root_does_not_instantiate_publisher_module() -> None:
-    for path in (ROOT / "infra-staging-rehearsal").glob("*.tf"):
+    sources = sorted((ROOT / "infra-staging-rehearsal").glob("*.tf"))
+    assert sources, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
+    for path in sources:
         assert "private-probe-publisher-network" not in path.read_text()
 
 

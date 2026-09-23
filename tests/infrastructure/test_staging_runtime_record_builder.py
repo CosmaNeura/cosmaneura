@@ -178,6 +178,9 @@ def test_record_id_derivation_covers_every_other_authoritative_field() -> None:
     projected = {name: value for name, value in record.items() if name != "record_id"}
     original = binding._derive_runtime_record_id(projected)
 
+    assert projected, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for field in projected:
         changed = deepcopy(projected)
         value = changed[field]
