@@ -1,15 +1,16 @@
 """Bounded receipt expiry and metadata-only preparation queue health."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from activemodel.session_manager import get_session
 from app.models.session_prep_runtime import SessionPrepBuild, SessionPrepReadReceipt
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
 RECEIPT_CLEANUP_BATCH = 100
 QUEUE_LAG_THRESHOLD_SECONDS = 120
+FAILED_BUILD_ALERT_WINDOW = timedelta(minutes=15)
 
 
 def expire_read_receipts() -> int:
@@ -52,10 +53,30 @@ def runtime_health() -> dict[str, int | str]:
             )
         ).one()
         lag = max(0, int((datetime.now(UTC) - oldest).total_seconds())) if oldest else 0
+        # scope_unavailable includes worker configuration/issuer mismatch and
+        # publish revalidation errors, so it must alert too. Terminal jobs
+        # use a five-minute cooldown; the alert persists fifteen minutes past
+        # retry_at (at most twenty minutes after the terminal failure).
+        actionable_failed = session.exec(
+            select(func.count())
+            .select_from(SessionPrepBuild)
+            .where(
+                SessionPrepBuild.state == "failed",
+                SessionPrepBuild.retry_at
+                >= datetime.now(UTC) - FAILED_BUILD_ALERT_WINDOW,
+                or_(
+                    cast(Any, SessionPrepBuild.failure_code).is_(None),
+                    cast(Any, SessionPrepBuild.failure_code).not_in(
+                        ["no_eligible_sources"]
+                    ),
+                ),
+            )
+        ).one()
         return {
             **counts,
+            "actionable_failed": actionable_failed,
             "oldest_pending_seconds": lag,
             "status": "degraded"
-            if counts["failed"] or lag > QUEUE_LAG_THRESHOLD_SECONDS
+            if actionable_failed or lag > QUEUE_LAG_THRESHOLD_SECONDS
             else "ok",
         }

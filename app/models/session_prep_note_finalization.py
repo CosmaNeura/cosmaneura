@@ -50,5 +50,9 @@ class SessionPrepNoteFinalization(
     patient_id: TypeIDType = Patient.foreign_key(index=True)
     source_version: int = Field(ge=1)
     content_sha256: str = Field(min_length=64, max_length=64)
-    reviewed_content: dict[str, str] = Field(sa_type=JSONB, exclude=True, repr=False)
+    # JSONB object keys are unordered; section/text pairs preserve the reviewed
+    # note's section order inside the immutable snapshot without a schema change.
+    reviewed_content: dict[str, list[list[str]]] = Field(
+        sa_type=JSONB, exclude=True, repr=False
+    )
     finalized_at: datetime = Field(sa_type=sa.DateTime(timezone=True))  # type: ignore

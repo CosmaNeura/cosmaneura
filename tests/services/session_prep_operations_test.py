@@ -1,6 +1,7 @@
 """Expire only replay payloads; expose queue signals without record content."""
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -75,10 +76,37 @@ def test_queue_health_reports_only_counts_and_detects_stuck_work(scope):
         "running",
         "ready",
         "failed",
+        "actionable_failed",
         "oldest_pending_seconds",
         "status",
     }
     assert "context_prep" not in json.dumps(health)
+
+
+@pytest.mark.parametrize(
+    "failure_code,age,expected_status",
+    [
+        ("scope_unavailable", timedelta(0), "degraded"),
+        ("scope_unavailable", timedelta(hours=1), "ok"),
+        ("no_eligible_sources", timedelta(0), "ok"),
+        ("generation_failed", timedelta(hours=1), "ok"),
+        ("generation_failed", timedelta(0), "degraded"),
+        ("invalid_brief", timedelta(0), "degraded"),
+        (None, timedelta(0), "degraded"),
+    ],
+)
+def test_health_distinguishes_recent_outages_from_terminal_scope_changes(
+    scope, failure_code, age, expected_status
+):
+    build = SessionPrepBuild.first()
+    build.state = "failed"
+    build.failure_code = failure_code
+    build.retry_at = datetime.now(UTC) - age
+    build.save()
+    health = operations.runtime_health()
+    assert health["failed"] == 1
+    assert health["actionable_failed"] == int(expected_status == "degraded")
+    assert health["status"] == expected_status
 
 
 def test_maintenance_expires_receipts_even_when_generation_is_disabled(monkeypatch):
@@ -109,3 +137,22 @@ def test_maintenance_failure_emits_no_exception_or_record_detail(monkeypatch):
     job.maintain()
     assert "synthetic-private" not in json.dumps(messages)
     assert messages[0][1] == {"event_code": "session_prep_maintenance_failed"}
+
+
+@pytest.mark.parametrize("drift", ["disabled", "wrong_issuer"])
+def test_worker_configuration_failure_remains_visible_in_health(scope, drift):
+    from app.services.session_prep_worker import run_one_build
+
+    settings = replace(
+        runtime_tests.AUTHORITY_SETTINGS,
+        **({"enabled": False} if drift == "disabled" else {"clerk_issuer": "https://wrong.invalid"}),
+    )
+    assert run_one_build(
+        generate=runtime_tests._brief,
+        clock=lambda: runtime_tests.NOW,
+        settings=settings,
+    ) == "failed"
+    build = SessionPrepBuild.first()
+    assert build.state == "failed"
+    assert build.failure_code == "scope_unavailable"
+    assert operations.runtime_health()["status"] == "degraded"

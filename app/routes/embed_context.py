@@ -9,12 +9,17 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
+import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
 from app.configuration.clerk import CLERK_PRIVATE_KEY
+from app.services.provider_record_authority import (
+    ProviderRecordScopeDenied,
+    lock_provider_record_owner,
+)
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     configured_superadmin_capability_environment,
@@ -200,6 +205,19 @@ def exchange_context_token(
         if settings.enabled:
             environment = configured_superadmin_capability_environment()
             with get_session() as session:
+                # View-as reconciliation locks Doctor until this request's
+                # transaction ends. Acquire Practice first for real-record
+                # exchanges so offboarding never sees the reverse order.
+                if (
+                    data.requested_surface == "provider_assistant"
+                    and data.record_ref is not None
+                    and session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
+                        clerk_identity.subject
+                    )
+                ):
+                    lock_provider_record_owner(
+                        session=session, clerk_subject=clerk_identity.subject
+                    )
                 if context_token_exchange_blocked_by_view_as(
                     session,
                     issuer=clerk_identity.issuer,
@@ -236,7 +254,7 @@ def exchange_context_token(
             title="Context service unavailable",
             detail="Context-token exchange is not available.",
         )
-    except app.services.authority.AuthorityRequestDeniedError:
+    except (app.services.authority.AuthorityRequestDeniedError, ProviderRecordScopeDenied):
         return token_problem_response(
             status_code=status.HTTP_403_FORBIDDEN,
             code="REQUEST_DENIED",

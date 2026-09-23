@@ -34,7 +34,7 @@ export function SessionPrepNoteReviewButton({
         setReviewed(true)
       } else {
         setError(
-          result.response?.status === 409
+          result.response?.status === 409 || result.response?.status === 404
             ? "This note or your account access changed. Reload the page before reviewing it again."
             : "The review could not be saved. Try again.",
         )

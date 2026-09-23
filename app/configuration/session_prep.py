@@ -70,3 +70,17 @@ SESSION_PREP_SYNTHETIC_SETTINGS = SessionPrepSyntheticSettings(
         cast=str,
     ),
 )
+
+
+def validate_session_prep_cohorts() -> None:
+    """A real-record provider never falls back to an unscoped demo binding."""
+    if (
+        SESSION_PREP_SYNTHETIC_SETTINGS.enabled
+        and SESSION_PREP_PROVIDER_SETTINGS.allows(
+            SESSION_PREP_SYNTHETIC_SETTINGS.clerk_subject
+        )
+    ):
+        raise ValueError("Session Prep provider and synthetic cohorts must be distinct")
+
+
+validate_session_prep_cohorts()

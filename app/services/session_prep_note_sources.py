@@ -40,15 +40,17 @@ def canonical_note_content(value: object) -> str:
         or not value
         or len(value) > 64
         or any(
-            not isinstance(key, str) or not key.strip() or not isinstance(text, str)
+            not isinstance(key, str)
+            or not key.strip()
+            or not isinstance(text, str)
+            or "\x00" in key
+            or "\x00" in text
             for key, text in value.items()
         )
         or not any(text.strip() for text in value.values())
     ):
         raise NoteSourceDenied("Note cannot be used for Session Prep")
-    content = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    content = json.dumps(list(value.items()), separators=(",", ":"), ensure_ascii=False)
     if len(content) > MAX_SOURCE_CHARACTERS:
         raise NoteSourceDenied("Note exceeds the Session Prep source bound")
     try:
@@ -60,6 +62,29 @@ def canonical_note_content(value: object) -> str:
 
 def note_content_sha256(value: object) -> str:
     return hashlib.sha256(canonical_note_content(value).encode("utf-8")).hexdigest()
+
+
+def _snapshot_content(value: object) -> dict[str, str]:
+    """Decode ordered snapshots; older unordered reviews require fresh review."""
+    if not isinstance(value, dict) or set(value) != {"sections"}:
+        raise NoteSourceDenied("Note review content is unavailable")
+    sections = value["sections"]
+    if (
+        not isinstance(sections, list)
+        or not 1 <= len(sections) <= 64
+        or any(
+            not isinstance(section, list)
+            or len(section) != 2
+            or not all(isinstance(part, str) for part in section)
+            for section in sections
+        )
+    ):
+        raise NoteSourceDenied("Note review content is unavailable")
+    content = dict(sections)
+    if len(content) != len(sections):
+        raise NoteSourceDenied("Note review content is unavailable")
+    canonical_note_content(content)
+    return content
 
 
 def _utc(value: datetime) -> datetime:
@@ -129,7 +154,8 @@ def finalize_note_for_session_prep(
             existing.doctor_id != doctor_id
             or existing.appointment_id != appointment.id
             or existing.patient_id != appointment.patient_id
-            or note_content_sha256(existing.reviewed_content) != digest
+            or note_content_sha256(_snapshot_content(existing.reviewed_content))
+            != digest
         ):
             raise NoteSourceDenied("Note review scope is unavailable")
         return existing
@@ -145,7 +171,7 @@ def finalize_note_for_session_prep(
         patient_id=appointment.patient_id,
         source_version=(last_version or 0) + 1,
         content_sha256=digest,
-        reviewed_content=json.loads(canonical_note_content(note.note)),
+        reviewed_content={"sections": json.loads(canonical_note_content(note.note))},
         finalized_at=observed_at,
     )
     session.add(finalized)
@@ -188,10 +214,16 @@ def load_reviewed_note_sources(
         session, doctor_id=doctor_id, appointment_id=target_appointment_id
     )
     cutoff = min(_utc(target.appointment_date), observed_at.astimezone(UTC))
+    # appointment_date is timestamp WITHOUT time zone containing UTC. Bind
+    # naive UTC bounds so PostgreSQL cannot reinterpret it in the session zone.
+    appointment_cutoff = cutoff.replace(tzinfo=None)
     rows = session.exec(
         select(SessionPrepNoteFinalization, AIVisitNote, Appointment)
-        .join(AIVisitNote, AIVisitNote.id == SessionPrepNoteFinalization.note_id)
-        .join(Appointment, Appointment.id == AIVisitNote.appointment_id)
+        .join(
+            AIVisitNote,
+            cast(Any, AIVisitNote.id) == SessionPrepNoteFinalization.note_id,
+        )
+        .join(Appointment, cast(Any, Appointment.id) == AIVisitNote.appointment_id)
         .where(
             SessionPrepNoteFinalization.doctor_id == doctor_id,
             SessionPrepNoteFinalization.patient_id == target.patient_id,
@@ -201,13 +233,13 @@ def load_reviewed_note_sources(
             Appointment.doctor_id == doctor_id,
             Appointment.patient_id == target.patient_id,
             Appointment.id != target.id,
-            Appointment.appointment_date >= cutoff - SOURCE_WINDOW,
-            Appointment.appointment_date < cutoff,
+            Appointment.appointment_date >= appointment_cutoff - SOURCE_WINDOW,
+            Appointment.appointment_date < appointment_cutoff,
             SessionPrepNoteFinalization.finalized_at <= observed_at,
         )
         .order_by(
             cast(Any, Appointment.appointment_date).desc(),
-            AIVisitNote.id,
+            cast(Any, AIVisitNote.id),
             cast(Any, SessionPrepNoteFinalization.source_version).desc(),
         )
         .limit(MAX_REVIEW_CANDIDATES + 1)
@@ -222,7 +254,8 @@ def load_reviewed_note_sources(
             continue
         try:
             current_digest = note_content_sha256(note.note)
-            evidence_digest = note_content_sha256(evidence.reviewed_content)
+            reviewed_content = _snapshot_content(evidence.reviewed_content)
+            evidence_digest = note_content_sha256(reviewed_content)
         except NoteSourceDenied:
             continue
         if not hmac.compare_digest(
@@ -239,7 +272,7 @@ def load_reviewed_note_sources(
                 source_at=_utc(appointment.appointment_date),
                 clinician_action_ref=str(evidence.id),
                 content_sha256=evidence.content_sha256,
-                content=json.loads(canonical_note_content(evidence.reviewed_content)),
+                content=reviewed_content,
             )
         )
     return ReviewedNoteSelection(tuple(selected), truncated=False)
