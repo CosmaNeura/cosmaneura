@@ -11,7 +11,9 @@ from jwt import PyJWKClient, PyJWTError
 from app import log
 from app.configuration.service_auth import (
     AGENT_API_AUTH_SETTINGS,
+    SCRIBE_CAPTURE_AUTH_SETTINGS,
     SERVICE_AUTH_SETTINGS,
+    SOVEREIGN_TOOL_AUTH_SETTINGS,
 )
 
 
@@ -172,3 +174,5 @@ class EntraServiceAuthenticator:
 
 authenticate_scribe_service_request = EntraServiceAuthenticator(SERVICE_AUTH_SETTINGS)
 authenticate_agent_api_request = EntraServiceAuthenticator(AGENT_API_AUTH_SETTINGS)
+authenticate_sovereign_tool_request = EntraServiceAuthenticator(SOVEREIGN_TOOL_AUTH_SETTINGS)
+authenticate_scribe_capture_request = EntraServiceAuthenticator(SCRIBE_CAPTURE_AUTH_SETTINGS)
