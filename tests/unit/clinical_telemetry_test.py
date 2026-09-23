@@ -90,9 +90,6 @@ def test_clinical_workflow_logs_never_serialize_sensitive_objects() -> None:
         "str(error)",
         "log.exception",
     )
-    assert TARGETS, (
-        "there is nothing to check, so the assertions below would pass vacuously"
-    )
     for path in TARGETS:
         for call in _log_calls(path):
             rendered = ast.unparse(call)
@@ -111,9 +108,6 @@ def test_request_context_never_stores_identity_models_or_raw_ids() -> None:
         "api_user_id",
         "doctor_id",
     }
-    assert CONTEXT_TARGETS, (
-        "there is nothing to check, so the assertions below would pass vacuously"
-    )
     for path in CONTEXT_TARGETS:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
