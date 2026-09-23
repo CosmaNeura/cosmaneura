@@ -47,8 +47,9 @@ def intake(f, *, text="Invented patient reports poor sleep.", deleted=False):
         external_intake_data={},
         intake_questions=[],
         summary=text,
-        deleted_at=datetime.now(UTC) if deleted else None,
     )
+    if deleted:
+        item.deleted_at = datetime.now(UTC)
     f.session.add(item)
     f.session.commit()
     return item

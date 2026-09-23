@@ -12,8 +12,12 @@ from pydantic import ValidationError
 from app.services import authority
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_protocol as protocol
-from app.services.scribe_capture_recovery_contract import CaptureRecoveryHistory
+from app.services.scribe_capture_recovery_contract import (
+    CaptureRecoveryHistory,
+    CaptureRecoveryReceipt,
+)
 from app.services.scribe_capture_working_contract import (
+    SegmentCorrection,
     TranscriptCorrection,
     canonical_hash,
 )
@@ -68,6 +72,7 @@ async def setup(f, kind="capture_source"):
     ).model_copy(update={"session_id": scope.session_id})
     first = working_receipt(raw, scope.session_request.practitioner_id)
     _, receipt = recovery_pair(scope)
+    assert isinstance(receipt, CaptureRecoveryReceipt)
     history = CaptureRecoveryHistory(session_id=scope.session_id, recoveries=(receipt,))
     if kind == "capture_source":
         f.client.result = envelope(raw, first, history)
@@ -88,11 +93,11 @@ async def setup(f, kind="capture_source"):
                 expected_working_version=1,
                 expected_working_sha256=first.working_sha256,
                 corrections=tuple(
-                    {
-                        "source_segment_id": part.source_segment_id,
-                        "content": part.content,
-                        "speaker_role": part.speaker_role,
-                    }
+                    SegmentCorrection(
+                        source_segment_id=part.source_segment_id,
+                        content=part.content,
+                        speaker_role=part.speaker_role,
+                    )
                     for part in second.working_source.segments
                 ),
             ),
@@ -145,14 +150,12 @@ async def test_source_flag_is_independent_and_dark(admission_case):
 async def test_source_correction_recovers_one_namespaced_key(admission_case):
     f = admission_case
     _, operation = await setup(f, "correct_capture_source")
+    assert isinstance(operation, protocol.CorrectCaptureSource)
     f.client.lose = True
     args = arguments(f, operation)
     with pytest.raises(gateway.CaptureOperationUnconfirmed):
         await gateway.execute_capture_operation(**args)
-    assert (
-        await gateway.execute_capture_operation(**args)
-        == f.client.result
-    )
+    assert await gateway.execute_capture_operation(**args) == f.client.result
     assert f.client.operation_calls[0] == f.client.operation_calls[1]
 
 
@@ -169,6 +172,7 @@ async def test_revocation_during_source_call_blocks_disclosure(
         if observed == phase:
             with Session(f.engine) as session:
                 row = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert row is not None
                 row.revoked_at = datetime.now(UTC)
                 session.add(row)
                 session.commit()
@@ -206,6 +210,7 @@ async def test_self_consistent_foreign_practitioner_manifest_is_not_admitted(
 async def test_correction_response_must_contain_the_requested_change(admission_case):
     f = admission_case
     _, operation = await setup(f, "correct_capture_source")
+    assert isinstance(operation, protocol.CorrectCaptureSource)
     payload = operation.payload.model_dump(mode="json")
     payload["corrections"][0]["content"] = "A different requested correction."
     changed = protocol.CorrectCaptureSource(

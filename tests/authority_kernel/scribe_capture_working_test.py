@@ -260,6 +260,8 @@ async def test_correction_replaces_note_input_preserves_history_and_invalidates_
     first = await notes.capture_note(**kwargs)
     assert first.source_sha256 == notes._source(f.raw, f.scope).digest
     raw_before = f.raw.model_dump_json()
+    assert first.note_ref is not None
+    assert first.note_sha256 is not None
     old_edit = edits.NoteEdit(
         client_key=uuid4(),
         expected_note_ref=first.note_ref,
@@ -386,6 +388,7 @@ async def test_working_gateway_rechecks_current_human_authority(
                 identity = session.get(
                     AuthorityActorExternalIdentity, f.case.identity.id
                 )
+                assert identity is not None
                 identity.revoked_at = datetime.now(UTC)
                 session.add(identity)
                 session.commit()

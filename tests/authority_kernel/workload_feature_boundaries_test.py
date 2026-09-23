@@ -97,11 +97,13 @@ def test_both_workloads_retain_context_protocol_access(client, caller):
 
 
 def test_missing_capture_receiver_cannot_fall_back_to_sovereign(client, monkeypatch):
+    settings = authenticate_scribe_capture_request.settings
+    assert isinstance(settings, EntraAgentAuthSettings)
     monkeypatch.setattr(
         authenticate_scribe_capture_request,
         "settings",
         replace(
-            authenticate_scribe_capture_request.settings,
+            settings,
             sovereign_client_ids=frozenset(),
         ),
     )

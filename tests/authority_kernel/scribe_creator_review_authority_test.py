@@ -3,6 +3,7 @@
 import hashlib
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -44,13 +45,19 @@ def review_engine():
     if not raw:
         pytest.skip("Explicit fresh Core creator-review test database required")
     url = make_url(raw)
-    private_scope = (url.database == "scribe_core_creator_review_test"
-            and url.username == "scribe_core_review_owner" and url.host is None
-            and url.query.get("host", "").startswith("/private/tmp/scribe-core-review.")
-            and url.query.get("port") == "55457")
-    operational_beta_scope = url.database in {"scribe_core_creator_review_test", "staging_release_review_test"} and (url.host, url.port, url.username) == (
-        "127.0.0.1", 32768, "beta_local"
+    socket_host = url.query.get("host", "")
+    private_scope = (
+        url.database == "scribe_core_creator_review_test"
+        and url.username == "scribe_core_review_owner"
+        and url.host is None
+        and isinstance(socket_host, str)
+        and socket_host.startswith("/private/tmp/scribe-core-review.")
+        and url.query.get("port") == "55457"
     )
+    operational_beta_scope = url.database in {
+        "scribe_core_creator_review_test",
+        "staging_release_review_test",
+    } and (url.host, url.port, url.username) == ("127.0.0.1", 32768, "beta_local")
     if not (private_scope or operational_beta_scope):
         pytest.fail("Refusing database outside the private synthetic review scope")
     from activemodel.session_manager import _serialize_pydantic_model
@@ -64,18 +71,28 @@ def review_engine():
 
 @pytest.fixture
 def capture_engine(review_engine, monkeypatch):
-    monkeypatch.setattr(view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD)
+    monkeypatch.setattr(
+        view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD
+    )
     return review_engine
 
 
 async def admitted(f):
     await admission.admit_capture(**call_arguments(f))
-    return admission.authorize_admitted_capture(f.caller, f.binding.binding_ref, f.binding.workspace_id)
+    return admission.authorize_admitted_capture(
+        f.caller, f.binding.binding_ref, f.binding.workspace_id
+    )
 
 
-def arguments(f, remote):
-    return dict(caller=f.caller, binding_ref=f.binding.binding_ref, workspace_id=f.binding.workspace_id,
-        operation=protocol.ReadOperation(kind="creator_review"), client_request_key=uuid4().hex, client=remote)
+def arguments(f, remote) -> dict[str, Any]:
+    return dict(
+        caller=f.caller,
+        binding_ref=f.binding.binding_ref,
+        workspace_id=f.binding.workspace_id,
+        operation=protocol.ReadOperation(kind="creator_review"),
+        client_request_key=uuid4().hex,
+        client=remote,
+    )
 
 
 def install_view_as(f):
@@ -88,27 +105,46 @@ def install_view_as(f):
     grant = SuperadminCapabilityGrant(
         environment=SuperadminCapabilityEnvironment.staging,
         capability_kind=SuperadminCapabilityKind.view_as,
-        clerk_issuer=f.case.identity.issuer, clerk_subject=f.case.identity.subject,
-        doctor_id=f.case.doctor.id, issuer_sha256=issuer, subject_sha256=subject,
-        verified_primary_email_sha256="a" * 64, source_ref="synthetic:reviewed-capability",
-        source_sha256="b" * 64, grant_plan_sha256="c" * 64,
-        granted_by_ref="synthetic:reviewer", grant_reason_code="synthetic_fixture", granted_at=now,
+        clerk_issuer=f.case.identity.issuer,
+        clerk_subject=f.case.identity.subject,
+        doctor_id=f.case.doctor.id,
+        issuer_sha256=issuer,
+        subject_sha256=subject,
+        verified_primary_email_sha256="a" * 64,
+        source_ref="synthetic:reviewed-capability",
+        source_sha256="b" * 64,
+        grant_plan_sha256="c" * 64,
+        granted_by_ref="synthetic:reviewer",
+        grant_reason_code="synthetic_fixture",
+        granted_at=now,
     )
     f.session.add(grant)
     f.session.flush()
-    f.session.add(ViewAsSession(
-        environment="staging", capability_grant_id=grant.id,
-        actor_doctor_id=f.case.doctor.id, target_doctor_id=target.id,
-        actor_issuer_sha256=issuer, actor_subject_sha256=subject,
-        clerk_session_sha256="d" * 64, browser_nonce_sha256="e" * 64,
-        started_at=now, absolute_expires_at=now + timedelta(minutes=10),
-    ))
+    f.session.add(
+        ViewAsSession(
+            environment="staging",
+            capability_grant_id=grant.id,
+            actor_doctor_id=f.case.doctor.id,
+            target_doctor_id=target.id,
+            actor_issuer_sha256=issuer,
+            actor_subject_sha256=subject,
+            clerk_session_sha256="d" * 64,
+            browser_nonce_sha256="e" * 64,
+            started_at=now,
+            absolute_expires_at=now + timedelta(minutes=10),
+        )
+    )
     f.session.commit()
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("rejection", ["other_creator", "tenant_changed", "revoked", "view_as", "revoked_during"])
-async def test_real_authority_rejects_foreign_or_revoked_review(admission_case, rejection):
+@pytest.mark.parametrize(
+    "rejection",
+    ["other_creator", "tenant_changed", "revoked", "view_as", "revoked_during"],
+)
+async def test_real_authority_rejects_foreign_or_revoked_review(
+    admission_case, rejection
+):
     f = admission_case
     scope = await admitted(f)
     assert scope.creator_actor_id == str(f.case.actor.id)
@@ -118,6 +154,7 @@ async def test_real_authority_rejects_foreign_or_revoked_review(admission_case, 
     def revoke():
         with Session(f.engine) as session:
             row = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+            assert row is not None
             row.revoked_at = datetime.now(UTC)
             session.add(row)
             session.commit()
@@ -132,9 +169,16 @@ async def test_real_authority_rejects_foreign_or_revoked_review(admission_case, 
 
     args = arguments(f, Remote())
     if rejection == "other_creator":
-        other = make_scope_case(f.session, existing_tenant=f.case.tenant, existing_practice=f.case.practice)
-        args["caller"] = admission.CaptureCaller(**{
-            k: v for k, v in other.arguments.items() if k in admission.CaptureCaller.__dataclass_fields__})
+        other = make_scope_case(
+            f.session, existing_tenant=f.case.tenant, existing_practice=f.case.practice
+        )
+        args["caller"] = admission.CaptureCaller(
+            **{
+                k: v
+                for k, v in other.arguments.items()
+                if k in admission.CaptureCaller.__dataclass_fields__
+            }
+        )
     elif rejection == "tenant_changed":
         row = f.session.get(ScribeCaptureBinding, f.binding.binding_ref)
         row.scribe_tenant_id = uuid4()

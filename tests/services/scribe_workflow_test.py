@@ -528,11 +528,17 @@ async def test_builder_applies_scale_to_zero_request_timeout(
     assert credential.closed
 
 
-@pytest.mark.parametrize("invalid_origin", [
-    "https://scribe.internal.example/path", "https://scribe.internal.example:8443",
-    "https://user:password@scribe.internal.example", "https://scribe.internal.example?token=x",
-    "https://scribe.internal.example/#fragment", "https://[invalid",
-])
+@pytest.mark.parametrize(
+    "invalid_origin",
+    [
+        "https://scribe.internal.example/path",
+        "https://scribe.internal.example:8443",
+        "https://user:password@scribe.internal.example",
+        "https://scribe.internal.example?token=x",
+        "https://scribe.internal.example/#fragment",
+        "https://[invalid",
+    ],
+)
 def test_invalid_origin_is_rejected_before_creating_a_credential(invalid_origin):
     from dataclasses import replace
 

@@ -162,7 +162,10 @@ def journal(fixture) -> ScribeCaptureAdmission:
     ("error", "expected"),
     [
         (TimeoutError("private sentinel"), "scribe_phase_timeout"),
-        (ScribeWorkflowRetryableError("scribe_invalid_response"), "scribe_invalid_response"),
+        (
+            ScribeWorkflowRetryableError("scribe_invalid_response"),
+            "scribe_invalid_response",
+        ),
         (ScribeWorkflowRejectedError("scribe_http_403"), "scribe_http_403"),
         (ScribeWorkflowRetryableError("private sentinel"), "scribe_remote_unconfirmed"),
         (ValueError("private sentinel"), "scribe_phase_unconfirmed"),

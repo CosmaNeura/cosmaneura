@@ -91,9 +91,13 @@ def real_record_capture(capture_engine, monkeypatch):
                 doctor_id=doctor.id,
                 patient_id=patient.id,
                 appointment_date=now - timedelta(days=7),
+                external_id=None,
             )
             target = Appointment(
-                doctor_id=doctor.id, patient_id=patient.id, appointment_date=now
+                doctor_id=doctor.id,
+                patient_id=patient.id,
+                appointment_date=now,
+                external_id=None,
             )
             session.add_all(
                 [
@@ -134,6 +138,7 @@ def real_record_capture(capture_engine, monkeypatch):
                     AuthorityActorExternalIdentity.subject == doctor.clerk_id,
                 )
             ).one()
+            assert mapping is not None
             session.add(
                 ScribeCaptureProviderLink(
                     actor_id=identity.actor_id,
@@ -280,6 +285,7 @@ async def test_capture_note_review_and_correction_feed_later_session_prep(
     ready = prep._read(token, record, action, key=ready_key)
     result = ready.response.result
     assert result.state == "ready"
+    assert result.prepared_brief is not None
     assert result.prepared_brief.recap.source_refs == [str(note.id)]
     assert any(
         item.included and item.source_ref == str(note.id) for item in result.provenance
@@ -291,6 +297,8 @@ async def test_capture_note_review_and_correction_feed_later_session_prep(
     request = {
         key: value for key, value in kwargs.items() if key not in ("prepare", "model")
     }
+    assert captured.note_ref is not None
+    assert captured.note_sha256 is not None
     corrected = await edits.save_capture_note(
         **request,
         edit=edits.NoteEdit(
@@ -322,5 +330,6 @@ async def test_capture_note_review_and_correction_feed_later_session_prep(
         token, record, next_action, key="capture-refreshed-" + uuid4().hex
     ).response.result
     assert refreshed.state == "ready" and refreshed.brief_version == 2
+    assert refreshed.prepared_brief is not None
     assert refreshed.prepared_brief.recap.source_refs == [str(revised.id)]
     assert refreshed.brief_supersedes_ref == result.brief_ref

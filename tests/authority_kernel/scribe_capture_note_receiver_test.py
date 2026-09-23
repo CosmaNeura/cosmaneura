@@ -44,37 +44,73 @@ def connection():
 
 
 def test_explicit_resolution_reaches_receiver_without_preparing_or_saving(monkeypatch):
-    payload={**body(),"action":"resolve","edit":{
-        "client_key":str(uuid4()),"expected_note_ref":"visit_note_01j00000000000000000000000",
-        "expected_note_sha256":"b"*64,"expected_source_sha256":"a"*64,"fields":{"Plan":"Invented retained edit"}}}
-    called=[]
+    payload = {
+        **body(),
+        "action": "resolve",
+        "edit": {
+            "client_key": str(uuid4()),
+            "expected_note_ref": "visit_note_01j00000000000000000000000",
+            "expected_note_sha256": "b" * 64,
+            "expected_source_sha256": "a" * 64,
+            "fields": {"Plan": "Invented retained edit"},
+        },
+    }
+    called = []
+
     async def resolve(**kwargs):
         called.append(kwargs)
-        return edits.SaveResolution(session_id=payload['expected_session_id'],schema_ref=payload['schema_ref'],
-            client_key=payload['edit']['client_key'],request_sha256='c'*64,status='closed')
-    monkeypatch.setattr(edits,'resolve_capture_note_save',resolve)
-    monkeypatch.setattr(edits,'save_capture_note',lambda **_:pytest.fail('save reached'))
-    monkeypatch.setattr(notes,'capture_note',lambda **_:pytest.fail('prepare reached'))
-    response=connection().post(PATH,json=payload,headers=headers())
-    assert response.status_code==200 and response.json()['action']=='resolve'
-    assert response.json()['receipt']['status']=='closed' and len(called)==1
-    assert called[0]['edit'].model_dump(mode='json')==payload['edit']
+        return edits.SaveResolution(
+            session_id=payload["expected_session_id"],
+            schema_ref=payload["schema_ref"],
+            client_key=payload["edit"]["client_key"],
+            request_sha256="c" * 64,
+            status="closed",
+        )
+
+    monkeypatch.setattr(edits, "resolve_capture_note_save", resolve)
+    monkeypatch.setattr(
+        edits, "save_capture_note", lambda **_: pytest.fail("save reached")
+    )
+    monkeypatch.setattr(
+        notes, "capture_note", lambda **_: pytest.fail("prepare reached")
+    )
+    response = connection().post(PATH, json=payload, headers=headers())
+    assert response.status_code == 200 and response.json()["action"] == "resolve"
+    assert response.json()["receipt"]["status"] == "closed" and len(called) == 1
+    assert called[0]["edit"].model_dump(mode="json") == payload["edit"]
 
 
 def test_explicit_edit_reaches_the_current_scope_with_closed_payload(monkeypatch):
-    payload = {**body(), "action": "save", "edit": {
-        "client_key": str(uuid4()),
-        "expected_note_ref": "visit_note_01j00000000000000000000000",
-        "expected_note_sha256": "b" * 64, "expected_source_sha256": "a" * 64,
-        "fields": {"CC": "Synthetic visit", "Plan": "x" * 2200},
-    }}
+    payload = {
+        **body(),
+        "action": "save",
+        "edit": {
+            "client_key": str(uuid4()),
+            "expected_note_ref": "visit_note_01j00000000000000000000000",
+            "expected_note_sha256": "b" * 64,
+            "expected_source_sha256": "a" * 64,
+            "fields": {"CC": "Synthetic visit", "Plan": "x" * 2200},
+        },
+    }
     called = []
+
     async def save(**kwargs):
         called.append(kwargs)
-        return notes.DraftReceipt(session_id=payload["expected_session_id"], scribe_source_id=uuid4(),
-            source_sha256="a" * 64, schema_ref=payload["schema_ref"], transcript_ref="synthetic-transcript",
-            note_ref="synthetic-note", status="draft", note_type="Visit", fields=payload["edit"]["fields"],
-            field_order=("CC", "Plan"), note_sha256="b" * 64, created_at=datetime.now(UTC))
+        return notes.DraftReceipt(
+            session_id=payload["expected_session_id"],
+            scribe_source_id=uuid4(),
+            source_sha256="a" * 64,
+            schema_ref=payload["schema_ref"],
+            transcript_ref="synthetic-transcript",
+            note_ref="synthetic-note",
+            status="draft",
+            note_type="Visit",
+            fields=payload["edit"]["fields"],
+            field_order=("CC", "Plan"),
+            note_sha256="b" * 64,
+            created_at=datetime.now(UTC),
+        )
+
     monkeypatch.setattr(edits, "save_capture_note", save)
     response = connection().post(PATH, json=payload, headers=headers())
     assert response.status_code == 200 and response.json()["action"] == "save"
@@ -82,13 +118,21 @@ def test_explicit_edit_reaches_the_current_scope_with_closed_payload(monkeypatch
     assert called[0]["caller"].capture_settings.notes_enabled
 
 
-@pytest.mark.parametrize("fault", ["missing_edit", "edit_on_read", "authority", "large", "duplicate"])
+@pytest.mark.parametrize(
+    "fault", ["missing_edit", "edit_on_read", "authority", "large", "duplicate"]
+)
 def test_edit_receiver_rejects_ambiguous_or_unbounded_input(monkeypatch, fault):
-    payload = {**body(), "action": "save", "edit": {
-        "client_key": str(uuid4()), "expected_note_ref": "visit_note_01j00000000000000000000000",
-        "expected_note_sha256": "b" * 64, "expected_source_sha256": "a" * 64,
-        "fields": {"Plan": "Synthetic draft"},
-    }}
+    payload = {
+        **body(),
+        "action": "save",
+        "edit": {
+            "client_key": str(uuid4()),
+            "expected_note_ref": "visit_note_01j00000000000000000000000",
+            "expected_note_sha256": "b" * 64,
+            "expected_source_sha256": "a" * 64,
+            "fields": {"Plan": "Synthetic draft"},
+        },
+    }
     if fault == "missing_edit":
         del payload["edit"]
     elif fault == "edit_on_read":
@@ -100,7 +144,9 @@ def test_edit_receiver_rejects_ambiguous_or_unbounded_input(monkeypatch, fault):
     raw = json.dumps(payload)
     if fault == "duplicate":
         raw = raw.replace('"Plan":', '"Plan":"private sentinel","Plan":')
-    monkeypatch.setattr(edits, "save_capture_note", lambda **_: pytest.fail("edit service reached"))
+    monkeypatch.setattr(
+        edits, "save_capture_note", lambda **_: pytest.fail("edit service reached")
+    )
     response = connection().post(PATH, content=raw, headers=headers())
     assert response.status_code == 422 and "private sentinel" not in response.text
 
@@ -111,6 +157,7 @@ def test_workload_authentication_precedes_note_body(monkeypatch):
     def deny():
         raise HTTPException(401)
 
+    assert isinstance(result.app, FastAPI)
     result.app.dependency_overrides[authenticate_scribe_capture_request] = deny
     monkeypatch.setattr(
         notes, "capture_note", lambda **_: pytest.fail("note service reached")
@@ -122,6 +169,7 @@ def test_workload_authentication_precedes_note_body(monkeypatch):
 
 def test_capture_enabled_does_not_implicitly_enable_notes():
     result = client()
+    assert isinstance(result.app, FastAPI)
     result.app.dependency_overrides[get_admission_client_factory] = lambda: (
         lambda: pytest.fail("client constructed")
     )
@@ -205,6 +253,7 @@ def test_note_response_correlates_request_and_releases_client(monkeypatch, actio
 
     monkeypatch.setattr(notes, "capture_note", execute)
     result = connection()
+    assert isinstance(result.app, FastAPI)
     result.app.dependency_overrides[get_admission_client_factory] = lambda: LocalClient
     response = result.post(PATH, json=payload, headers=headers())
     assert response.status_code == 200
@@ -237,6 +286,7 @@ def test_note_failure_hides_provider_exception_and_closes_client(
 
     monkeypatch.setattr(notes, "capture_note", fail)
     result = connection()
+    assert isinstance(result.app, FastAPI)
     result.app.dependency_overrides[get_admission_client_factory] = lambda: LocalClient
     response = result.post(PATH, json=body(), headers=headers())
     assert response.status_code == code
@@ -261,10 +311,13 @@ def test_templates_action_requires_no_selected_schema(monkeypatch):
     assert response.json()["receipt"]["templates"] == []
 
 
-def test_request_deadline_returns_recoverable_error_and_cancels_pending_work(monkeypatch):
+def test_request_deadline_returns_recoverable_error_and_cancels_pending_work(
+    monkeypatch,
+):
     import asyncio
 
     from app.routes import scribe_capture as route
+
     cancelled = []
 
     async def pending(**_):

@@ -97,5 +97,6 @@ def test_transcript_representation_does_not_include_speech():
     from tests.authority_kernel.scribe_gateway_receiver_test import scope
 
     _, transcript = pair("transcript", scope())
+    assert isinstance(transcript, CaptureTranscript)
     assert "Invented visit" not in repr(transcript)
     assert "Invented visit" not in repr(transcript.segments[0])
