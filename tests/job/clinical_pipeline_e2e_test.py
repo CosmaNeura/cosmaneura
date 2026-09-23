@@ -11,6 +11,7 @@ against the real database, so the assertions below are about this repository's
 behaviour, not about the stubs.
 """
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pytest
@@ -68,6 +69,15 @@ def _phi_entries() -> list[TranscriptEntry]:
     ]
 
 
+@dataclass
+class Pipeline:
+    appointment: object
+    schema: object
+    audio: object
+    deidentified: list[str]
+    """Every string handed to `deidentify`, in call order."""
+
+
 @pytest.fixture
 def pipeline(monkeypatch):
     """A doctor with one note schema, one uploaded recording, and stubbed externals.
@@ -76,6 +86,14 @@ def pipeline(monkeypatch):
     practice: the gate has its own suite in `doctor_access_gates_test.py`, and
     leaving it live here would make this test fail for reasons that have nothing
     to do with the pipeline.
+
+    Tests using this fixture also take `global_session`, because `summarize`
+    commits through its own `get_session()` and the note is otherwise invisible
+    to the test's transaction. In production that write lands in a separate
+    worker process and is visible without it. The consequence worth knowing is
+    that sharing one session means this test cannot detect a genuine
+    cross-session visibility failure; it covers the pipeline's behaviour, not
+    the session topology.
     """
 
     doctor = DoctorFactory.build().save()
@@ -110,17 +128,29 @@ def pipeline(monkeypatch):
     monkeypatch.setattr(
         summarize, "generate_clinical_note", lambda *_a, **_k: dict(GENERATED_NOTE)
     )
-    # Keyed lookup, not a constant: a stub that returned the same string for any
-    # input would make the "PHI is absent" assertions below pass without the
-    # pipeline having carried anything through.
-    monkeypatch.setattr(anonymize, "deidentify", lambda text: REDACTED[text])
+    # Recorded rather than keyed-and-strict: a `REDACTED[text]` lookup would
+    # raise KeyError on any content the pipeline normalised before the call,
+    # failing with a stack trace instead of an assertion. The call log below is
+    # asserted directly, so the constraint is explicit rather than implied.
+    deidentified: list[str] = []
+
+    def _record_deidentify(text: str) -> str:
+        deidentified.append(text)
+        return REDACTED.get(text, text)
+
+    monkeypatch.setattr(anonymize, "deidentify", _record_deidentify)
 
     # Queued off the same transcript but not part of this pipeline; both reach
     # external services of their own.
     monkeypatch.setattr(score_engagement, "queue", lambda **_k: None)
     monkeypatch.setattr(extract_medications, "queue", lambda **_k: None)
 
-    return doctor, patient, appointment, schema, audio
+    return Pipeline(
+        appointment=appointment,
+        schema=schema,
+        audio=audio,
+        deidentified=deidentified,
+    )
 
 
 def _retained_count() -> int:
@@ -136,7 +166,7 @@ def _note_for(appointment) -> AIVisitNote | None:
     return AIVisitNote.where(AIVisitNote.appointment_id == appointment.id).first()
 
 
-def _run_to_note(audio) -> AIVisitTranscript:
+def _transcribe(audio) -> AIVisitTranscript:
     transcribe.perform(audio.id)
     transcript = AIVisitTranscript.get(appointment_id=audio.appointment_id)
     assert transcript, "transcription produced no transcript"
@@ -148,9 +178,7 @@ def test_pipeline_produces_a_note_then_tombstones_the_transcript(
 ):
     """The whole chain, and the state each stage is supposed to leave behind."""
 
-    _doctor, _patient, appointment, schema, audio = pipeline
-
-    transcript = _run_to_note(audio)
+    transcript = _transcribe(pipeline.audio)
     assert [entry.content for entry in transcript.transcript_data] == list(
         TRANSCRIPT_PHI
     )
@@ -159,12 +187,12 @@ def test_pipeline_produces_a_note_then_tombstones_the_transcript(
     # `sync_celery` makes transcribe's queued summarisation run inline, so the
     # note below is produced by the real chain rather than by calling summarize
     # directly.
-    note = _note_for(appointment)
+    note = _note_for(pipeline.appointment)
     assert note, "transcription did not chain into summarisation"
     assert note.ai_transcript_id == transcript.id
     assert note.note == GENERATED_NOTE
-    assert note.doctor_note_schema_id == schema.id
-    assert note.appointment_id == appointment.id
+    assert note.doctor_note_schema_id == pipeline.schema.id
+    assert note.appointment_id == pipeline.appointment.id
 
     anonymize.perform(transcript.id)
 
@@ -179,8 +207,7 @@ def test_deidentified_copy_carries_none_of_the_transcript_phi(
 ):
     """The point of the whole exercise."""
 
-    *_, audio = pipeline
-    transcript = _run_to_note(audio)
+    transcript = _transcribe(pipeline.audio)
     before = _retained_count()
 
     anonymize.perform(transcript.id)
@@ -188,6 +215,10 @@ def test_deidentified_copy_carries_none_of_the_transcript_phi(
     copies = list(AIVisitTranscriptNonPHI.all())
     assert len(copies) - before == 1, "de-identification produced no retained copy"
     retained = " ".join(entry.content for entry in copies[-1].data)
+
+    # The pipeline routed each transcript entry through de-identification, in
+    # order, with its content unaltered.
+    assert pipeline.deidentified == list(TRANSCRIPT_PHI)
 
     assert retained, "the retained copy is empty, so the assertions below prove nothing"
     for identifier in (PATIENT_NAME, CLINIC_NAME, VISIT_DATE):
@@ -205,17 +236,13 @@ def test_deidentified_copy_has_no_column_that_could_reattach_it_to_the_visit(pip
     this table must not permit.
     """
 
-    columns = set(AIVisitTranscriptNonPHI.__table__.columns.keys())
-
-    assert columns == {"id", "data"}
-    for forbidden in (
-        "doctor_id",
-        "patient_id",
-        "appointment_id",
-        "created_at",
-        "updated_at",
-    ):
-        assert forbidden not in columns
+    # An exact set rather than a list of forbidden names, deliberately. This
+    # table exists to be published as a de-identified dataset, so any new column
+    # is a re-identification question and not only the obvious foreign keys and
+    # timestamps: a locale or a duration can single out a visit in a small
+    # cohort. Adding one should fail here and be argued for, not slip past a
+    # blocklist that nobody remembered to extend.
+    assert set(AIVisitTranscriptNonPHI.__table__.columns.keys()) == {"id", "data"}
 
 
 def test_note_outlives_the_phi_it_was_generated_from(
@@ -223,9 +250,8 @@ def test_note_outlives_the_phi_it_was_generated_from(
 ):
     """De-identification removes the source, not the clinical record."""
 
-    _doctor, _patient, appointment, _schema, audio = pipeline
-    transcript = _run_to_note(audio)
-    note = _note_for(appointment)
+    transcript = _transcribe(pipeline.audio)
+    note = _note_for(pipeline.appointment)
     assert note
     note_id = note.id
 
@@ -241,13 +267,12 @@ def test_rerunning_transcription_after_deidentification_does_not_resurrect_phi(
 ):
     """A retried Celery task must not undo the tombstone."""
 
-    *_, audio = pipeline
-    transcript = _run_to_note(audio)
+    transcript = _transcribe(pipeline.audio)
     before = _retained_count()
     anonymize.perform(transcript.id)
     after_first = _retained_count()
 
-    transcribe.perform(audio.id)
+    transcribe.perform(pipeline.audio.id)
 
     assert AIVisitTranscript.get(id=transcript.id).transcript_data == []
     assert after_first - before == 1
@@ -259,8 +284,7 @@ def test_rerunning_deidentification_is_idempotent(
 ):
     """The daily sweeper and a Celery retry can both arrive for one transcript."""
 
-    *_, audio = pipeline
-    transcript = _run_to_note(audio)
+    transcript = _transcribe(pipeline.audio)
     before = _retained_count()
 
     anonymize.perform(transcript.id)
