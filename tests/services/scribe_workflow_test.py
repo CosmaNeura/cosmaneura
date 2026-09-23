@@ -9,6 +9,7 @@ import pytest
 from azure.core.credentials import AccessToken
 
 from app.configuration.scribe_workflow import ScribeWorkflowSettings
+from app.services import scribe_workflow
 from app.services.scribe_workflow import (
     ConsentCreate,
     HttpScribeWorkflowClient,
@@ -216,6 +217,18 @@ def test_enabled_client_requires_complete_passwordless_configuration() -> None:
         build_scribe_workflow_client(incomplete)
 
 
+@pytest.mark.parametrize("timeout_seconds", [0, 60.1])
+def test_settings_enforce_request_timeout_contract(timeout_seconds: float) -> None:
+    with pytest.raises(ValueError, match="between 1 and 60 seconds"):
+        ScribeWorkflowSettings(
+            enabled=True,
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            managed_identity_client_id=str(uuid4()),
+            timeout_seconds=timeout_seconds,
+        )
+
+
 def test_credential_factory_receives_only_the_nonsecret_client_id() -> None:
     received: list[str] = []
     credential = StaticCredential()
@@ -230,3 +243,72 @@ def test_credential_factory_receives_only_the_nonsecret_client_id() -> None:
     assert received == [configured.managed_identity_client_id]
     assert client is not None
     assert isinstance(UUID(configured.managed_identity_client_id), UUID)
+
+
+@pytest.mark.asyncio
+async def test_builder_applies_scale_to_zero_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_options: dict[str, object] = {}
+    real_async_client = httpx.AsyncClient
+
+    def client_factory(*, base_url: str, timeout: float) -> httpx.AsyncClient:
+        captured_options.update(base_url=base_url, timeout=timeout)
+        return real_async_client(
+            base_url=base_url,
+            timeout=timeout,
+            transport=httpx.MockTransport(lambda _: httpx.Response(500)),
+        )
+
+    monkeypatch.setattr(scribe_workflow.httpx, "AsyncClient", client_factory)
+    configured = ScribeWorkflowSettings(
+        enabled=True,
+        base_url="https://scribe.internal.example",
+        scope="api://scribe-api/.default",
+        managed_identity_client_id=str(uuid4()),
+        timeout_seconds=60,
+    )
+    credential = StaticCredential()
+
+    client = build_scribe_workflow_client(configured, lambda _: credential)
+    await client.close()
+
+    assert captured_options == {
+        "base_url": "https://scribe.internal.example",
+        "timeout": 60,
+    }
+    assert credential.closed
+
+
+@pytest.mark.asyncio
+async def test_timeout_is_retryable_without_automatic_mutation_retry() -> None:
+    credential = StaticCredential()
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise httpx.ReadTimeout("synthetic timeout", request=request)
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=60,
+            credential=credential,
+            client=http_client,
+        )
+        with pytest.raises(ScribeWorkflowRetryableError) as exc_info:
+            await client.create_consent(
+                uuid4(),
+                consent_payload(),
+                idempotency_key="consent-stable-key-timeout-1000",
+            )
+        await client.close()
+
+    assert exc_info.value.code == "scribe_transport_unavailable"
+    assert credential.closed
+    assert len(requests) == 1
+    assert requests[0].headers["idempotency-key"] == ("consent-stable-key-timeout-1000")

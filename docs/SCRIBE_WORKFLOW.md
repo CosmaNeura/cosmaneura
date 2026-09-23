@@ -33,12 +33,18 @@ SCRIBE_WORKFLOW_ENABLED=false
 SCRIBE_SERVICE_BASE_URL=https://<private-scribe-fqdn>
 SCRIBE_SERVICE_SCOPE=api://<scribe-api-application-id>/.default
 SCRIBE_MANAGED_IDENTITY_CLIENT_ID=<platform-scribe-workflow-identity-client-id>
-SCRIBE_SERVICE_TIMEOUT_SECONDS=15
+SCRIBE_SERVICE_TIMEOUT_SECONDS=60
 ```
 
 The platform requests the `.default` scope. Scribe validates the resulting token against the API
 application client ID UUID, plus the exact platform client ID and role. The Scribe API app
 registration must issue v2 access tokens and add `idtyp` as an access-token optional claim.
+
+The Terraform default owns the deployed Container App environment value. The matching application
+default covers local and other non-Terraform entry points; both deliberately default to 60 seconds,
+and Terraform rejects values above 60. This allows one Scribe scale-from-zero start without adding
+an automatic mutation retry. If a timeout leaves success unknown, the caller must replay the
+byte-identical request with its original idempotency key.
 
 This outbound scope is intentionally distinct from the inbound handoff setting
 `SCRIBE_API_AUDIENCE`, which must contain the master platform API application ID. Migrating the
