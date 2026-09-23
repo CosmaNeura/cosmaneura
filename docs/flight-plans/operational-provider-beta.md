@@ -119,3 +119,35 @@ Both known source commits are ancestors of the integration base. The staging
 web digest's complete source provenance still needs reconciliation. Retain the
 current deployment until an approved paired candidate is ready; align web,
 worker, and scheduler as part of that rollout. No cloud mutation performed.
+
+## Independent review remediation
+
+The initial Cursor review found note-section ordering loss, database-time-zone
+sensitivity, stale review guidance, a provider membership lifecycle conflict,
+Practice/Doctor lock inversion, overlapping demo/real cohorts, and persistent
+queue warnings after ordinary scope changes. This follow-up preserves ordered
+section/text pairs inside the existing JSONB snapshot, hashes that order, rejects
+NUL text consistently, uses naive UTC appointment bounds, and directs stale pages
+to reload. Earlier unordered snapshots remain immutable and require a fresh
+explicit review; no schema or stored data is rewritten.
+
+A verified current-practice exchange retires the actor's other active provider
+memberships with an audit event, preserving the platform's single-active-tenant
+contract. Revoked target memberships are not revived, and staff memberships are
+not moved implicitly. Practice is locked before Doctor and membership is then
+rechecked, matching roster/offboarding. Startup rejects overlapping enabled
+synthetic and real-provider cohorts instead of falling back to fixture authority.
+
+Queue health retains total failure counts but warns only for recent actionable
+failures or excessive pending/running lag. Revocation and absence of eligible
+sources do not create a permanent outage warning. Immutable artifacts retain their
+existing historical-record behavior; automatic artifact purging is a separate
+schema/data operation and is not introduced in this technical-beta increment.
+Restoring byte-identical current note content preserves its prior explicit review;
+editing or reordering content always requires a new review.
+
+Risk remains Tier 2. Recovery: set SESSION_PREP_PROVIDER_ENABLED=false and return
+to the previous receiver image, with the additive tables left dormant. Keep the
+real-record feature disabled when reverting to the earlier unordered snapshot
+reader. No environment configuration, live migration, or cohort was changed.
+Local validation and final Cursor review evidence are recorded on the follow-up PR.

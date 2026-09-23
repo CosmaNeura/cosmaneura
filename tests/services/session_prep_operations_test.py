@@ -75,10 +75,36 @@ def test_queue_health_reports_only_counts_and_detects_stuck_work(scope):
         "running",
         "ready",
         "failed",
+        "actionable_failed",
         "oldest_pending_seconds",
         "status",
     }
     assert "context_prep" not in json.dumps(health)
+
+
+@pytest.mark.parametrize(
+    "failure_code,age,expected_status",
+    [
+        ("scope_unavailable", timedelta(0), "ok"),
+        ("no_eligible_sources", timedelta(0), "ok"),
+        ("generation_failed", timedelta(hours=1), "ok"),
+        ("generation_failed", timedelta(0), "degraded"),
+        ("invalid_brief", timedelta(0), "degraded"),
+        (None, timedelta(0), "degraded"),
+    ],
+)
+def test_health_distinguishes_recent_outages_from_terminal_scope_changes(
+    scope, failure_code, age, expected_status
+):
+    build = SessionPrepBuild.first()
+    build.state = "failed"
+    build.failure_code = failure_code
+    build.retry_at = datetime.now(UTC) - age
+    build.save()
+    health = operations.runtime_health()
+    assert health["failed"] == 1
+    assert health["actionable_failed"] == int(expected_status == "degraded")
+    assert health["status"] == expected_status
 
 
 def test_maintenance_expires_receipts_even_when_generation_is_disabled(monkeypatch):

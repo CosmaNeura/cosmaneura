@@ -1,7 +1,9 @@
 """Real database regressions for reviewed-note source isolation."""
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -26,7 +28,7 @@ from sqlmodel import Session, select
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
-NOW = datetime(2026, 9, 23, 12, tzinfo=UTC)
+NOW = datetime.now(UTC)
 
 
 def _scope():
@@ -95,6 +97,8 @@ def _sources(session, doctor, target):
         {"Plan": " "},
         {"Plan": "x" * 18_001},
         {"Plan": "\ud800"},
+        {"Plan": "unrepresentable\x00text"},
+        {"Section\x00": "text"},
     ],
 )
 def test_invalid_or_oversized_content_is_not_reviewable(content):
@@ -131,6 +135,82 @@ def test_stale_review_is_rejected_and_repeat_review_is_idempotent():
         again = _finalize(session, doctor, note)
         assert again.id == first.id
         assert again.source_version == 1
+
+
+def test_review_preserves_section_order_after_database_round_trip():
+    doctor, patient, target = _scope()
+    sections = {
+        "Subjective": "Synthetic reported history.",
+        "Objective": "Synthetic observations.",
+        "Assessment": "Synthetic clinician assessment.",
+        "Plan": "Synthetic documented follow-up.",
+    }
+    note = _note(doctor, patient, content=sections)
+    with get_session() as managed:
+        session = cast(Session, managed)
+        finalized = _finalize(session, doctor, note)
+        session.expire(finalized, ["reviewed_content"])
+        selected = _sources(session, doctor, target).sources
+        assert list(selected[0].content.items()) == list(sections.items())
+        assert finalized.reviewed_content == {
+            "sections": [[key, value] for key, value in sections.items()]
+        }
+        assert _finalize(session, doctor, note).id == finalized.id
+
+        # A reorder alone changes the revision that the clinician approved.
+        current = session.get(AIVisitNote, note.id)
+        assert current is not None
+        current.note = dict(reversed(list(sections.items())))
+        session.flush()
+        assert _sources(session, doctor, target).sources == ()
+        refreshed = _finalize(session, doctor, current)
+        assert refreshed.id != finalized.id
+        assert refreshed.source_version == finalized.source_version + 1
+        assert list(_sources(session, doctor, target).sources[0].content) == list(
+            current.note
+        )
+
+
+def test_source_selection_uses_utc_independent_of_database_session_timezone():
+    doctor, patient, target = _scope()
+    note = _note(doctor, patient, days_ago=1 / 24)
+    with get_session() as managed:
+        session = cast(Session, managed)
+        _finalize(session, doctor, note)
+        session.exec(text("SET LOCAL TIME ZONE 'America/New_York'"))
+        try:
+            assert [
+                s.source_ref for s in _sources(session, doctor, target).sources
+            ] == [str(note.id)]
+        finally:
+            session.exec(text("SET LOCAL TIME ZONE 'UTC'"))
+
+
+def test_earlier_unordered_snapshot_requires_new_explicit_review():
+    doctor, patient, target = _scope()
+    note = _note(doctor, patient)
+    old_digest = hashlib.sha256(
+        json.dumps(note.note, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    with get_session() as managed:
+        session = cast(Session, managed)
+        earlier = SessionPrepNoteFinalization(
+            note_id=note.id,
+            doctor_id=doctor.id,
+            appointment_id=note.appointment_id,
+            patient_id=patient.id,
+            source_version=1,
+            content_sha256=old_digest,
+            reviewed_content=cast(Any, note.note.copy()),
+            finalized_at=NOW,
+        )
+        session.add(earlier)
+        session.flush()
+        assert _sources(session, doctor, target).sources == ()
+        current = _finalize(session, doctor, note)
+        assert current.source_version == 2
+        assert current.id != earlier.id
+        assert len(_sources(session, doctor, target).sources) == 1
 
 
 def test_another_doctor_cannot_review_or_select_the_record():

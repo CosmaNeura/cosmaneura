@@ -47,7 +47,13 @@ from tests.services.session_prep_authority_test import AUTHORITY_SETTINGS, ISSUE
 from tests.services.session_prep_note_sources_test import _note
 
 WORKLOAD = "11111111-1111-4111-8111-111111111111"
-NOW = datetime(2026, 9, 23, 16, tzinfo=UTC)
+NOW = datetime.now(UTC)
+
+
+class _AuthorityClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return NOW.astimezone(tz) if tz is not None else NOW.replace(tzinfo=None)
 
 
 def _brief(selection):
@@ -74,6 +80,9 @@ def _brief(selection):
 
 @pytest.fixture
 def scope(monkeypatch):
+    # The exchange schedules using the authority clock. Keep it aligned with
+    # the injected worker clock instead of depending on the wall time of day.
+    monkeypatch.setattr(authority, "datetime", _AuthorityClock)
     doctor = DoctorFactory.build().save()
     provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()

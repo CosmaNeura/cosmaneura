@@ -9,7 +9,10 @@ from fastapi.testclient import TestClient
 
 import app.configuration.session_prep as configuration
 import app.services.authority as authority
-from app.configuration.session_prep import SessionPrepProviderSettings
+from app.configuration.session_prep import (
+    SessionPrepProviderSettings,
+    SessionPrepSyntheticSettings,
+)
 from app.routes.agent import agent_api_app, get_agent_authority_settings
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
@@ -23,6 +26,7 @@ from app.models.authority import (
     AuthorityAuditEvent,
     AuthorityPersonBinding,
     AuthorityTenant,
+    AuthorityTenantMembership,
     MountContextToken,
 )
 from app.models.practice import PracticeMember
@@ -67,6 +71,29 @@ def _record(appointment):
     return ProviderRecordAuthority.get(appointment_id=appointment.id)
 
 
+def test_synthetic_and_real_cohort_overlap_is_a_configuration_error(scope, monkeypatch):
+    doctor, _practice, _patient, appointment = scope
+    monkeypatch.setattr(
+        configuration,
+        "SESSION_PREP_SYNTHETIC_SETTINGS",
+        SessionPrepSyntheticSettings(
+            True,
+            "context_synthetic_test",
+            doctor.clerk_id,
+            str(appointment.id),
+            "synthetic_preview_fixture_test",
+        ),
+    )
+    with pytest.raises(ValueError, match="cohorts must be distinct"):
+        configuration.validate_session_prep_cohorts()
+    monkeypatch.setattr(
+        configuration,
+        "SESSION_PREP_PROVIDER_SETTINGS",
+        SessionPrepProviderSettings(True, frozenset({"user_other_synthetic"})),
+    )
+    configuration.validate_session_prep_cohorts()
+
+
 def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(scope):
     doctor, _practice, patient, appointment = scope
     token = _token(doctor, str(appointment.id))
@@ -96,6 +123,66 @@ def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(sc
             AuthorityAuditEvent.event_type == "authority.provider_record.bound"
         ).count()
         == 2
+    )
+
+
+def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
+    doctor, _practice, patient, appointment = scope
+    old_token = _token(doctor, str(appointment.id))
+    old_context = _context(old_token)
+    other_doctor = DoctorFactory.build().save()
+    next_practice = provision_practice_in_force(other_doctor)
+    member = PracticeMember.get(doctor_id=doctor.id)
+    member.practice_id = next_practice.id
+    member.save()
+    next_appointment = AppointmentFactory.build(
+        doctor_id=doctor.id, patient_id=patient.id
+    ).save()
+    new_context = _context(_token(doctor, str(next_appointment.id)))
+    assert new_context.actor_id == old_context.actor_id
+    assert new_context.tenant_id != old_context.tenant_id
+    memberships = AuthorityTenantMembership.where(
+        AuthorityTenantMembership.actor_id == new_context.actor_id
+    ).all()
+    assert [
+        (str(row.tenant_id), row.status)
+        for row in memberships
+        if row.status == "active"
+    ] == [(new_context.tenant_id, "active")]
+    assert (
+        AuthorityTenantMembership.get(
+            actor_id=old_context.actor_id, tenant_id=old_context.tenant_id
+        ).status
+        == "revoked"
+    )
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _context(old_token)
+    assert (
+        AuthorityAuditEvent.where(
+            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+        ).count()
+        == 1
+    )
+
+
+def test_existing_staff_membership_is_not_silently_reassigned(scope):
+    doctor, _practice, _patient, appointment = scope
+    context = _context(_token(doctor, str(appointment.id)))
+    other_tenant = AuthorityTenant(status="active").save()
+    staff = AuthorityTenantMembership(
+        tenant_id=other_tenant.id,
+        actor_id=context.actor_id,
+        membership_kind="staff",
+        status="active",
+    ).save()
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _token(doctor, str(appointment.id))
+    assert AuthorityTenantMembership.get(id=staff.id).status == "active"
+    assert (
+        AuthorityAuditEvent.where(
+            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+        ).count()
+        == 0
     )
 
 

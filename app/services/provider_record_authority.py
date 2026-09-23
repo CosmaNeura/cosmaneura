@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 from typeid import TypeID
@@ -131,12 +131,12 @@ def ensure_provider_record_scope(
         raise ProviderRecordScopeDenied from None
     if appointment_id.prefix != "appointment":
         raise ProviderRecordScopeDenied
-    # Serialize provisioning for one authenticated doctor, then one practice
-    # and patient. This also preserves the Doctor-first view-as lock order.
+    # Organization roster/offboarding takes Practice before Doctor. Discover
+    # the practice without a lock, acquire that same order, then recheck the
+    # membership so a concurrent practice move cannot bind the old practice.
     doctor = session.exec(
         select(Doctor)
         .where(Doctor.clerk_id == clerk_subject)
-        .with_for_update(of=Doctor)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if doctor is None:
@@ -145,6 +145,14 @@ def ensure_provider_record_scope(
     session.exec(
         select(Practice).where(Practice.id == practice.id).with_for_update()
     ).one()
+    doctor = session.exec(
+        select(Doctor)
+        .where(Doctor.clerk_id == clerk_subject)
+        .with_for_update(of=Doctor)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if doctor is None or _current_practice(session, doctor).id != practice.id:
+        raise ProviderRecordScopeDenied
     appointment = session.get(
         Appointment, cast(TypeIDType, appointment_id), populate_existing=True
     )
@@ -211,6 +219,41 @@ def ensure_provider_record_scope(
             AuthorityTenantMembership.tenant_id == tenant.id,
         )
     ).one_or_none()
+    if membership is not None and (
+        membership.status != "active" or membership.membership_kind != "provider"
+    ):
+        raise ProviderRecordScopeDenied
+    active_memberships = session.exec(
+        select(AuthorityTenantMembership)
+        .where(
+            AuthorityTenantMembership.actor_id == actor.id,
+            AuthorityTenantMembership.status == "active",
+        )
+        .with_for_update()
+    ).all()
+    # The platform's closure and identity-recovery contracts require one active
+    # provider tenant. A verified current practice replaces stale provider
+    # memberships; it never revives a revoked target or moves a staff identity.
+    if any(row.membership_kind != "provider" for row in active_memberships):
+        raise ProviderRecordScopeDenied
+    for stale in active_memberships:
+        if stale.tenant_id != tenant.id:
+            stale.status = "revoked"
+            session.add(stale)
+            session.add(
+                AuthorityAuditEvent(
+                    event_type="authority.provider_membership.replaced",
+                    outcome="accepted",
+                    occurred_at=now,
+                    tenant_id=stale.tenant_id,
+                    actor_id=actor.id,
+                    resource_type="tenant_membership",
+                    resource_ref=str(stale.id),
+                    request_digest=hashlib.sha256(
+                        f"{doctor.id}:{practice.id}:{tenant.id}".encode()
+                    ).hexdigest(),
+                )
+            )
     if membership is None:
         session.add(
             AuthorityTenantMembership(
@@ -220,8 +263,6 @@ def ensure_provider_record_scope(
                 status="active",
             )
         )
-    elif membership.status != "active" or membership.membership_kind != "provider":
-        raise ProviderRecordScopeDenied
 
     binding = session.exec(
         select(AuthorityPersonBinding).where(
@@ -244,7 +285,7 @@ def ensure_provider_record_scope(
         select(AuthorityPersonBinding)
         .join(
             ProviderRecordAuthority,
-            ProviderRecordAuthority.binding_id == AuthorityPersonBinding.id,
+            cast(Any, ProviderRecordAuthority.binding_id) == AuthorityPersonBinding.id,
         )
         .where(
             ProviderRecordAuthority.patient_id == patient.id,
