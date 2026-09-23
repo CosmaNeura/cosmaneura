@@ -37,7 +37,10 @@ def days_since(past_dt: datetime) -> int:
 
 
 def recent_notes_for_patient(
-    doctor_id: TypeIDType, patient_id: TypeIDType, *, limit: int,
+    doctor_id: TypeIDType,
+    patient_id: TypeIDType,
+    *,
+    limit: int,
     before: datetime | None = None,
     exclude_appointment_id: TypeIDType | None = None,
 ) -> list[AIVisitNote]:

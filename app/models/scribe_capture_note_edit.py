@@ -40,8 +40,12 @@ class ScribeCaptureNoteSaveFence(
     """Immutable closure of an exact, unpublished edit request."""
 
     __table_args__ = (
-        sa.UniqueConstraint("binding_id", "client_key", name="uq_scribe_note_close_key"),
-        sa.CheckConstraint("request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_scribe_note_close_digest"),
+        sa.UniqueConstraint(
+            "binding_id", "client_key", name="uq_scribe_note_close_key"
+        ),
+        sa.CheckConstraint(
+            "request_sha256 ~ '^[0-9a-f]{64}$'", name="ck_scribe_note_close_digest"
+        ),
     )
 
     binding_id: TypeIDType = ScribeCaptureBinding.foreign_key()

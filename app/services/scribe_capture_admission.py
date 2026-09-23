@@ -188,8 +188,11 @@ def authorize_admitted_capture_locked(
     try:
         consent = ConsentRecord.model_validate(operation.consent_receipt)
         request = _session_request(operation, consent)
-        receipt = (ConfiguredSessionReceipt if isinstance(request, ConfiguredSessionCreate)
-                   else CaptureSession).model_validate(operation.session_receipt)
+        receipt = (
+            ConfiguredSessionReceipt
+            if isinstance(request, ConfiguredSessionCreate)
+            else CaptureSession
+        ).model_validate(operation.session_receipt)
         if (
             consent.id != operation.consent_id
             or not _matches(consent, consent_payload)
@@ -243,13 +246,19 @@ def _document(payload: ConsentCreate) -> dict[str, Any]:
 
 
 def _digest(
-    binding: ScribeCaptureBinding, document: dict[str, Any],
+    binding: ScribeCaptureBinding,
+    document: dict[str, Any],
     configured: dict[str, Any] | None = None,
 ) -> str:
     return hashlib.sha256(
         json.dumps(
-            {"scope_sha256": binding.scope_sha256, "consent": document,
-             **({"configured_capture": configured} if configured is not None else {})},
+            {
+                "scope_sha256": binding.scope_sha256,
+                "consent": document,
+                **(
+                    {"configured_capture": configured} if configured is not None else {}
+                ),
+            },
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -287,13 +296,16 @@ def _validate_operation(
     try:
         consent = ConsentCreate.model_validate(operation.consent_payload)
         if operation.configured_capture is not None:
-            reservation = ConfiguredCaptureReservation.model_validate(operation.configured_capture)
+            reservation = ConfiguredCaptureReservation.model_validate(
+                operation.configured_capture
+            )
             if reservation.creator_actor_id != str(binding.actor_id):
                 raise ValueError
         if (
             operation.binding_id != binding.id
             or operation.scribe_tenant_id != binding.scribe_tenant_id
-            or operation.request_sha256 != _digest(binding, _document(consent), operation.configured_capture)
+            or operation.request_sha256
+            != _digest(binding, _document(consent), operation.configured_capture)
             or consent.appointment_id != str(binding.appointment_id)
             or consent.practitioner_id != str(binding.doctor_id)
             or consent.patient_id != str(binding.patient_id)
@@ -305,13 +317,24 @@ def _validate_operation(
 
 
 def _session_request(operation: ScribeCaptureAdmission, consent: ConsentRecord):
-    fields = dict(appointment_id=consent.appointment_id, practitioner_id=consent.practitioner_id,
-                  patient_id=consent.patient_id, consent_record_id=consent.id, modality=consent.modality)
+    fields = dict(
+        appointment_id=consent.appointment_id,
+        practitioner_id=consent.practitioner_id,
+        patient_id=consent.patient_id,
+        consent_record_id=consent.id,
+        modality=consent.modality,
+    )
     if operation.configured_capture is None:
         return SessionCreate.model_validate(fields)
     reserved = ConfiguredCaptureReservation.model_validate(operation.configured_capture)
-    return ConfiguredSessionCreate.model_validate({**fields, "schema_version": reserved.schema_version,
-                                   "id": reserved.id, "language_mode": reserved.language_mode})
+    return ConfiguredSessionCreate.model_validate(
+        {
+            **fields,
+            "schema_version": reserved.schema_version,
+            "id": reserved.id,
+            "language_mode": reserved.language_mode,
+        }
+    )
 
 
 def _prepare(
@@ -326,7 +349,9 @@ def _prepare(
         raise AdmissionConflict
     if configured_capture is not None:
         try:
-            configured_capture = ConfiguredCaptureSelection.model_validate(configured_capture.model_dump())
+            configured_capture = ConfiguredCaptureSelection.model_validate(
+                configured_capture.model_dump()
+            )
         except (TypeError, ValueError, AttributeError):
             raise AdmissionConflict from None
     if attestation is not None:
@@ -355,9 +380,15 @@ def _prepare(
             ):
                 raise AdmissionConsentRequired
             document = _document(_consent_payload(binding, attestation))
-            configured = None if configured_capture is None else ConfiguredCaptureReservation(
-                **configured_capture.model_dump(), id=uuid4(), creator_actor_id=str(binding.actor_id)
-            ).model_dump(mode="json")
+            configured = (
+                None
+                if configured_capture is None
+                else ConfiguredCaptureReservation(
+                    **configured_capture.model_dump(),
+                    id=uuid4(),
+                    creator_actor_id=str(binding.actor_id),
+                ).model_dump(mode="json")
+            )
             operation = ScribeCaptureAdmission(
                 binding_id=binding.id,
                 scribe_tenant_id=binding.scribe_tenant_id,
@@ -377,8 +408,10 @@ def _prepare(
                 raise AdmissionConflict
             if configured_capture is not None:
                 assert operation.configured_capture is not None
-                if any(operation.configured_capture.get(k) != v
-                       for k, v in configured_capture.model_dump(mode="json").items()):
+                if any(
+                    operation.configured_capture.get(k) != v
+                    for k, v in configured_capture.model_dump(mode="json").items()
+                ):
                     raise AdmissionConflict
             if attestation is not None and operation.request_sha256 != _digest(
                 binding,
@@ -432,7 +465,9 @@ def _claim(
             phase=phase,
             key=key,
             payload=payload,
-            creator_actor_id=str(binding.actor_id) if operation.configured_capture else None,
+            creator_actor_id=str(binding.actor_id)
+            if operation.configured_capture
+            else None,
         )
         session.commit()
         return claim
@@ -452,10 +487,13 @@ def _clear_lease(operation: ScribeCaptureAdmission) -> None:
 
 
 def _accept_receipt(
-    claim: _PhaseClaim, receipt: ConsentRecord | CaptureSession | ConfiguredSessionReceipt
+    claim: _PhaseClaim,
+    receipt: ConsentRecord | CaptureSession | ConfiguredSessionReceipt,
 ) -> None:
     if isinstance(claim.payload, ConfiguredSessionCreate):
-        receipt = ConfiguredSessionReceipt.model_validate(receipt.model_dump(mode="json"))
+        receipt = ConfiguredSessionReceipt.model_validate(
+            receipt.model_dump(mode="json")
+        )
     if not _matches(receipt, claim.payload):
         raise AdmissionUnconfirmed
     if claim.phase == "consent":
@@ -523,9 +561,12 @@ def _failure_code(error: Exception) -> str:
         return "scribe_phase_timeout"
     if isinstance(error, ScribeWorkflowError):
         if error.code in {
-            "scribe_transport_unavailable", "scribe_invalid_response",
-            "scribe_request_timeout", "scribe_identity_unavailable",
-            "scribe_response_too_large", "scribe_response_scope_mismatch",
+            "scribe_transport_unavailable",
+            "scribe_invalid_response",
+            "scribe_request_timeout",
+            "scribe_identity_unavailable",
+            "scribe_response_too_large",
+            "scribe_response_scope_mismatch",
             "scribe_conflict",
         } or re.fullmatch(r"scribe_http_[1-5][0-9]{2}", error.code):
             return error.code
@@ -586,7 +627,12 @@ async def admit_capture(
     forcing Scribe to check current consent before this receipt is returned.
     """
     operation_ref = _prepare(
-        caller, binding_ref, workspace_id, client_request_key, attestation, configured_capture
+        caller,
+        binding_ref,
+        workspace_id,
+        client_request_key,
+        attestation,
+        configured_capture,
     )
     for _ in range(2):
         claim = _claim(caller, binding_ref, workspace_id, operation_ref)
@@ -601,8 +647,10 @@ async def admit_capture(
                 elif isinstance(claim.payload, ConfiguredSessionCreate):
                     assert claim.creator_actor_id is not None
                     receipt = await client.create_configured_session(
-                        claim.scribe_tenant_id, claim.payload,
-                        creator_actor_id=claim.creator_actor_id, idempotency_key=claim.key,
+                        claim.scribe_tenant_id,
+                        claim.payload,
+                        creator_actor_id=claim.creator_actor_id,
+                        idempotency_key=claim.key,
                     )
                 else:
                     receipt = await client.create_session(

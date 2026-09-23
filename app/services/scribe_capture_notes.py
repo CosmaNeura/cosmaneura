@@ -30,13 +30,13 @@ from app.services.scribe_capture_admission import (
     authorize_admitted_capture,
     authorize_admitted_capture_locked,
 )
+from app.services.scribe_capture_continuity import continuity_grounding
 from app.services.scribe_capture_gateway import (
     CaptureOperationUnavailable,
     CaptureReceiptInvalid,
     execute_capture_operation,
 )
 from app.services.scribe_capture_notebook import NotebookSource, ScratchNotes
-from app.services.scribe_capture_continuity import continuity_grounding
 from app.services.scribe_capture_protocol import ReadOperation
 from app.services.scribe_capture_working_contract import CaptureWorkingTranscript
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
@@ -211,7 +211,11 @@ class Inputs:
 def _notebook_context(session, scope, note) -> ScratchNotes | None:
     if note is None:
         return None
-    row = session.exec(select(ScribeCaptureNoteContext).where(ScribeCaptureNoteContext.note_id == note.id)).one_or_none()
+    row = session.exec(
+        select(ScribeCaptureNoteContext).where(
+            ScribeCaptureNoteContext.note_id == note.id
+        )
+    ).one_or_none()
     if row is None:
         return None
     admission = session.get(ScribeCaptureAdmission, scope.operation_ref)
@@ -232,13 +236,19 @@ def _save_notebook_context(session, scope, note, scratch_notes):
     binding = session.get(ScribeCaptureBinding, admission.binding_id)
     if scratch_notes.workspace_id != binding.workspace_id:
         raise CaptureNoteConflict
-    session.add(ScribeCaptureNoteContext(binding_id=binding.id, note_id=note.id,
-                                        scratch_notes=scratch_notes.model_dump(mode="json")))
+    session.add(
+        ScribeCaptureNoteContext(
+            binding_id=binding.id,
+            note_id=note.id,
+            scratch_notes=scratch_notes.model_dump(mode="json"),
+        )
+    )
     session.flush()
 
 
 def _source(
-    receipt: CaptureTranscript, scope: AdmittedCaptureScope,
+    receipt: CaptureTranscript,
+    scope: AdmittedCaptureScope,
     working: CaptureWorkingTranscript | None = None,
     qualified: CaptureSource | None = None,
 ) -> Source:
@@ -289,29 +299,52 @@ def _source(
         raise CaptureReceiptInvalid from None
     if not working.working_transcript.note_ready:
         raise CaptureOperationUnavailable
-    entries = [TranscriptEntry(
-        speaker=roles[part.speaker_role], content=part.content,
-        startTime=part.start_ms, endTime=part.end_ms,
-    ) for part in working.working_source.segments]
+    entries = [
+        TranscriptEntry(
+            speaker=roles[part.speaker_role],
+            content=part.content,
+            startTime=part.start_ms,
+            endTime=part.end_ms,
+        )
+        for part in working.working_source.segments
+    ]
     # Version 1 keeps existing raw-backed review references stable. A correction
     # binds the full working revision, even if someone later changes text back.
-    digest = original.digest if working.working_source.source_transcript_version == 1 else hashlib.sha256(
-        orjson.dumps({"raw": original.digest, "working": working.working_sha256}, option=orjson.OPT_SORT_KEYS)
-    ).hexdigest()
+    digest = (
+        original.digest
+        if working.working_source.source_transcript_version == 1
+        else hashlib.sha256(
+            orjson.dumps(
+                {"raw": original.digest, "working": working.working_sha256},
+                option=orjson.OPT_SORT_KEYS,
+            )
+        ).hexdigest()
+    )
     if qualified is not None and qualified.capture_incomplete:
-        digest = hashlib.sha256(orjson.dumps({
-            "raw": original.digest, "working": working.working_sha256,
-            "recovery": qualified.recovery_sha256,
-        }, option=orjson.OPT_SORT_KEYS)).hexdigest()
-    return Source(receipt, original.duration, entries, digest, working, original, qualified)
+        digest = hashlib.sha256(
+            orjson.dumps(
+                {
+                    "raw": original.digest,
+                    "working": working.working_sha256,
+                    "recovery": qualified.recovery_sha256,
+                },
+                option=orjson.OPT_SORT_KEYS,
+            )
+        ).hexdigest()
+    return Source(
+        receipt, original.duration, entries, digest, working, original, qualified
+    )
 
 
 async def _read_source(caller, binding_ref, workspace_id, scope, client) -> Source:
     if isinstance(scope.session_request, ConfiguredSessionCreate):
         view = await execute_capture_operation(
-            caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
             operation=ReadOperation(kind="creator_review"),
-            client_request_key="capture-note-reviewed-source", client=client,
+            client_request_key="capture-note-reviewed-source",
+            client=client,
         )
         if not isinstance(view, CreatorReviewView):
             raise CaptureReceiptInvalid
@@ -319,29 +352,52 @@ async def _read_source(caller, binding_ref, workspace_id, scope, client) -> Sour
             reviewed = reviewed_sources.project(view, scope)
         except (ValueError, reviewed_sources.ReviewedSourceConflict):
             raise CaptureOperationUnavailable from None
-        return Source(None, reviewed.duration, reviewed.entries, reviewed.digest, reviewed=reviewed)
+        return Source(
+            None,
+            reviewed.duration,
+            reviewed.entries,
+            reviewed.digest,
+            reviewed=reviewed,
+        )
     if caller.capture_settings.source_envelopes_enabled:
         qualified = await execute_capture_operation(
-            caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
             operation=ReadOperation(kind="capture_source"),
-            client_request_key="capture-note-qualified-source", client=client,
+            client_request_key="capture-note-qualified-source",
+            client=client,
         )
-        if not isinstance(qualified, CaptureSource) or qualified.session_id != scope.session_id:
+        if (
+            not isinstance(qualified, CaptureSource)
+            or qualified.session_id != scope.session_id
+        ):
             raise CaptureReceiptInvalid
-        return _source(qualified.raw_transcript, scope, qualified.working_transcript, qualified)
+        return _source(
+            qualified.raw_transcript, scope, qualified.working_transcript, qualified
+        )
     receipt = await execute_capture_operation(
-        caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
-        operation=ReadOperation(kind="transcript"), client_request_key="capture-note-source",
+        caller=caller,
+        binding_ref=binding_ref,
+        workspace_id=workspace_id,
+        operation=ReadOperation(kind="transcript"),
+        client_request_key="capture-note-source",
         client=client,
     )
-    if not isinstance(receipt, CaptureTranscript) or receipt.session_id != scope.session_id:
+    if (
+        not isinstance(receipt, CaptureTranscript)
+        or receipt.session_id != scope.session_id
+    ):
         raise CaptureReceiptInvalid
     working = None
     if caller.capture_settings.working_transcripts_enabled:
         working = await execute_capture_operation(
-            caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
             operation=ReadOperation(kind="working_transcript"),
-            client_request_key="capture-note-working-source", client=client,
+            client_request_key="capture-note-working-source",
+            client=client,
         )
         if not isinstance(working, CaptureWorkingTranscript):
             raise CaptureReceiptInvalid
@@ -349,20 +405,28 @@ async def _read_source(caller, binding_ref, workspace_id, scope, client) -> Sour
 
 
 def _source_versions(session: Session, scope: AdmittedCaptureScope):
-    admission_row = session.exec(select(ScribeCaptureAdmission).where(
-        ScribeCaptureAdmission.id == scope.operation_ref
-    )).one()
+    admission_row = session.exec(
+        select(ScribeCaptureAdmission).where(
+            ScribeCaptureAdmission.id == scope.operation_ref
+        )
+    ).one()
     binding_id = admission_row.binding_id
-    versions = list(session.exec(select(ScribeCaptureSourceVersion).where(
-        ScribeCaptureSourceVersion.binding_id == binding_id
-    ).order_by(cast(Any, ScribeCaptureSourceVersion.working_version))).all())
+    versions = list(
+        session.exec(
+            select(ScribeCaptureSourceVersion)
+            .where(ScribeCaptureSourceVersion.binding_id == binding_id)
+            .order_by(cast(Any, ScribeCaptureSourceVersion.working_version))
+        ).all()
+    )
     return binding_id, versions
 
 
 def _select_source_transcript(session, scope, source, transcripts, delivery):
     if source.reviewed is not None:
         try:
-            return reviewed_sources.select_transcript(session, scope, source.reviewed, transcripts, delivery)
+            return reviewed_sources.select_transcript(
+                session, scope, source.reviewed, transcripts, delivery
+            )
         except reviewed_sources.ReviewedSourceConflict:
             raise CaptureNoteConflict from None
     binding_id, versions = _source_versions(session, scope)
@@ -371,7 +435,9 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         raise CaptureNoteDisabled
     if manifest is not None:
         try:
-            gaps.validate_manifest(manifest, source.qualified, delivery.transcript_id if delivery else None)
+            gaps.validate_manifest(
+                manifest, source.qualified, delivery.transcript_id if delivery else None
+            )
         except gaps.GapProvenanceConflict:
             raise CaptureNoteConflict from None
     if source.working is None and versions:
@@ -379,7 +445,10 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         raise CaptureNoteDisabled
     original = source.original or source
     by_id = {row.id: row for row in transcripts}
-    working_corrected = source.working is not None and source.working.working_source.source_transcript_version > 1
+    working_corrected = (
+        source.working is not None
+        and source.working.working_source.source_transcript_version > 1
+    )
     has_gaps = source.qualified is not None and source.qualified.capture_incomplete
     corrected = working_corrected or has_gaps
     if not versions and manifest is None:
@@ -400,11 +469,13 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(raw.doctor_id) != scope.session_request.practitioner_id
         or str(raw.patient_id) != scope.session_request.patient_id
         or raw.duration != original.duration
-        or ingest._entry_data(raw.transcript_data) != ingest._entry_data(original.entries)
+        or ingest._entry_data(raw.transcript_data)
+        != ingest._entry_data(original.entries)
     ):
         raise CaptureNoteConflict
     if delivery is not None and (
-        raw is None or delivery.transcript_id != raw.id
+        raw is None
+        or delivery.transcript_id != raw.id
         or str(delivery.appointment_id) != scope.session_request.appointment_id
         or delivery.payload_sha256 != original.digest
     ):
@@ -416,28 +487,43 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         for version in versions:
             row = by_id.get(version.transcript_id)
             if (
-                version.session_id != scope.session_id or raw is None
+                version.session_id != scope.session_id
+                or raw is None
                 or version.raw_core_transcript_id != raw.id
                 or version.raw_source_id != source.receipt.id
                 or version.raw_source_sha256 != working.raw_transcript_sha256
-                or version.working_transcript_id != working.working_transcript.working_transcript_id
-                or row is None or row.deleted_at is not None
+                or version.working_transcript_id
+                != working.working_transcript.working_transcript_id
+                or row is None
+                or row.deleted_at is not None
                 or str(row.doctor_id) != scope.session_request.practitioner_id
                 or str(row.patient_id) != scope.session_request.patient_id
             ):
                 raise CaptureNoteConflict
-        if versions[-1].working_version > working.working_source.source_transcript_version:
+        if (
+            versions[-1].working_version
+            > working.working_source.source_transcript_version
+        ):
             raise CaptureNoteConflict
     selected = raw if not corrected else None
     if has_gaps and not working_corrected and manifest is not None:
-        if manifest.initial_source_sha256 != source.digest or manifest.initial_transcript_id is None:
+        if (
+            manifest.initial_source_sha256 != source.digest
+            or manifest.initial_transcript_id is None
+        ):
             raise CaptureNoteConflict
         selected = by_id[manifest.initial_transcript_id]
     if working_corrected:
         assert source.working is not None
         for version in versions:
-            if version.working_version == source.working.working_source.source_transcript_version:
-                if version.working_sha256 != source.working.working_sha256 or version.source_sha256 != source.digest:
+            if (
+                version.working_version
+                == source.working.working_source.source_transcript_version
+            ):
+                if (
+                    version.working_sha256 != source.working.working_sha256
+                    or version.source_sha256 != source.digest
+                ):
                     raise CaptureNoteConflict
                 selected = by_id[version.transcript_id]
     if selected is not None and (
@@ -445,46 +531,72 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(selected.doctor_id) != scope.session_request.practitioner_id
         or str(selected.patient_id) != scope.session_request.patient_id
         or selected.duration != source.duration
-        or ingest._entry_data(selected.transcript_data) != ingest._entry_data(source.entries)
+        or ingest._entry_data(selected.transcript_data)
+        != ingest._entry_data(source.entries)
     ):
         raise CaptureNoteConflict
     return selected, set(by_id), corrected
 
 
-def _new_effective_transcript(session: Session, scope: AdmittedCaptureScope, source: Source):
-    latest_time = session.exec(select(AIVisitTranscript.created_at).where(
-        AIVisitTranscript.appointment_id == scope.session_request.appointment_id
-    ).order_by(cast(Any, AIVisitTranscript.created_at).desc()).limit(1)).one()
+def _new_effective_transcript(
+    session: Session, scope: AdmittedCaptureScope, source: Source
+):
+    latest_time = session.exec(
+        select(AIVisitTranscript.created_at)
+        .where(AIVisitTranscript.appointment_id == scope.session_request.appointment_id)
+        .order_by(cast(Any, AIVisitTranscript.created_at).desc())
+        .limit(1)
+    ).one()
     assert latest_time is not None
     transcript = AIVisitTranscript(
-        doctor_id=cast(TypeIDType, TypeID.from_string(scope.session_request.practitioner_id)),
-        appointment_id=cast(TypeIDType, TypeID.from_string(scope.session_request.appointment_id)),
-        patient_id=cast(TypeIDType, TypeID.from_string(scope.session_request.patient_id)),
-        duration=source.duration, transcript_data=source.entries,
+        doctor_id=cast(
+            TypeIDType, TypeID.from_string(scope.session_request.practitioner_id)
+        ),
+        appointment_id=cast(
+            TypeIDType, TypeID.from_string(scope.session_request.appointment_id)
+        ),
+        patient_id=cast(
+            TypeIDType, TypeID.from_string(scope.session_request.patient_id)
+        ),
+        duration=source.duration,
+        transcript_data=source.entries,
     )
-    transcript.created_at = max(datetime.now(UTC), latest_time + timedelta(microseconds=1))
+    transcript.created_at = max(
+        datetime.now(UTC), latest_time + timedelta(microseconds=1)
+    )
     session.add(transcript)
     session.flush()
     return transcript
 
 
-def _import_working_source(session: Session, scope: AdmittedCaptureScope, source: Source) -> None:
+def _import_working_source(
+    session: Session, scope: AdmittedCaptureScope, source: Source
+) -> None:
     if source.working is None:
         return
     assert source.receipt is not None
     binding_id, versions = _source_versions(session, scope)
     working = source.working
     number = working.working_source.source_transcript_version
-    raw_delivery = session.exec(select(ScribeTranscriptDelivery).where(
-        ScribeTranscriptDelivery.logical_producer == LOGICAL_SCRIBE_PRODUCER,
-        ScribeTranscriptDelivery.scribe_session_id == scope.session_id,
-    )).one()
+    raw_delivery = session.exec(
+        select(ScribeTranscriptDelivery).where(
+            ScribeTranscriptDelivery.logical_producer == LOGICAL_SCRIBE_PRODUCER,
+            ScribeTranscriptDelivery.scribe_session_id == scope.session_id,
+        )
+    ).one()
     if source.qualified is not None and source.qualified.capture_incomplete:
         manifest = gaps.current_manifest(session, binding_id)
-        initial = _new_effective_transcript(session, scope, source) if number == 1 and manifest is None else None
+        initial = (
+            _new_effective_transcript(session, scope, source)
+            if number == 1 and manifest is None
+            else None
+        )
         try:
             gaps.import_manifest(
-                session, binding_id, source.qualified, raw_delivery.transcript_id,
+                session,
+                binding_id,
+                source.qualified,
+                raw_delivery.transcript_id,
                 initial.id if initial is not None else None,
                 source.digest if initial is not None else None,
             )
@@ -493,14 +605,20 @@ def _import_working_source(session: Session, scope: AdmittedCaptureScope, source
     if number == 1 or any(version.working_version == number for version in versions):
         return
     transcript = _new_effective_transcript(session, scope, source)
-    session.add(ScribeCaptureSourceVersion(
-        binding_id=binding_id, session_id=scope.session_id,
-        raw_source_id=source.receipt.id, raw_source_sha256=working.raw_transcript_sha256,
-        working_transcript_id=working.working_transcript.working_transcript_id,
-        working_version=number, working_sha256=working.working_sha256,
-        source_sha256=source.digest, raw_core_transcript_id=raw_delivery.transcript_id,
-        transcript_id=transcript.id,
-    ))
+    session.add(
+        ScribeCaptureSourceVersion(
+            binding_id=binding_id,
+            session_id=scope.session_id,
+            raw_source_id=source.receipt.id,
+            raw_source_sha256=working.raw_transcript_sha256,
+            working_transcript_id=working.working_transcript.working_transcript_id,
+            working_version=number,
+            working_sha256=working.working_sha256,
+            source_sha256=source.digest,
+            raw_core_transcript_id=raw_delivery.transcript_id,
+            transcript_id=transcript.id,
+        )
+    )
     session.flush()
 
 
@@ -602,8 +720,13 @@ def _inputs(
         or current.restore_frontier_transcript_id not in {None, *known_transcripts}
     ):
         raise CaptureNoteConflict
-    if current is not None and (transcript is None or current.ai_transcript_id != transcript.id):
-        if not corrected or (transcript is not None and current.restore_frontier_transcript_id == transcript.id):
+    if current is not None and (
+        transcript is None or current.ai_transcript_id != transcript.id
+    ):
+        if not corrected or (
+            transcript is not None
+            and current.restore_frontier_transcript_id == transcript.id
+        ):
             raise CaptureNoteConflict
         # The old note remains current history until publication supersedes it,
         # but it is never returned as a draft of the corrected source.
@@ -619,7 +742,11 @@ def _inputs(
         current = None
     notebook = _notebook_context(session, scope, current)
     base_note_ref = current.id if current else None
-    base_note_sha256 = hashlib.sha256(orjson.dumps(list(current.note.items()))).hexdigest() if current else None
+    base_note_sha256 = (
+        hashlib.sha256(orjson.dumps(list(current.note.items()))).hexdigest()
+        if current
+        else None
+    )
     if scratch_notes is not None and notebook != scratch_notes:
         # A selected newer notebook revision gets a new unreviewed note version.
         # Read-only legacy callers still receive the provenance of a saved note.
@@ -658,7 +785,11 @@ def _inputs(
                 "configuration": configuration,
                 "biography": doctor.biography,
                 "terminology": doctor.terminology,
-                **({"scratch_notes": scratch_notes.model_dump(mode="json")} if scratch_notes else {}),
+                **(
+                    {"scratch_notes": scratch_notes.model_dump(mode="json")}
+                    if scratch_notes
+                    else {}
+                ),
             },
             option=orjson.OPT_SORT_KEYS,
         )
@@ -688,8 +819,14 @@ def _inputs(
     if frozen_transcript is not None and transcript is not None:
         frozen_transcript.id = transcript.id
     return Inputs(
-        frozen_transcript, frozen_schema, frozen_doctor, effective, fingerprint, note,
-        base_note_ref, base_note_sha256,
+        frozen_transcript,
+        frozen_schema,
+        frozen_doctor,
+        effective,
+        fingerprint,
+        note,
+        base_note_ref,
+        base_note_sha256,
     )
 
 
@@ -733,7 +870,9 @@ async def _current_consent(
         raise CaptureOperationUnavailable
 
 
-async def _current_source(caller, binding_ref, workspace_id, scope, client, source: Source) -> None:
+async def _current_source(
+    caller, binding_ref, workspace_id, scope, client, source: Source
+) -> None:
     if source.reviewed is not None:
         current = await _read_source(caller, binding_ref, workspace_id, scope, client)
         if current.digest != source.digest:
@@ -741,9 +880,12 @@ async def _current_source(caller, binding_ref, workspace_id, scope, client, sour
         return
     if source.qualified is not None:
         current_source = await execute_capture_operation(
-            caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
             operation=ReadOperation(kind="capture_source"),
-            client_request_key="capture-note-current-source", client=client,
+            client_request_key="capture-note-current-source",
+            client=client,
         )
         if (
             not isinstance(current_source, CaptureSource)
@@ -756,9 +898,12 @@ async def _current_source(caller, binding_ref, workspace_id, scope, client, sour
         await _current_consent(caller, binding_ref, workspace_id, scope, client)
         return
     current = await execute_capture_operation(
-        caller=caller, binding_ref=binding_ref, workspace_id=workspace_id,
+        caller=caller,
+        binding_ref=binding_ref,
+        workspace_id=workspace_id,
         operation=ReadOperation(kind="working_transcript"),
-        client_request_key="capture-note-current-working", client=client,
+        client_request_key="capture-note-current-working",
+        client=client,
     )
     if (
         not isinstance(current, CaptureWorkingTranscript)
@@ -877,7 +1022,9 @@ async def capture_note(
     if scope.session_id != expected_session_id:
         raise CaptureNoteConflict
     source = await _read_source(caller, binding_ref, workspace_id, scope, client)
-    inputs = _snapshot(caller, binding_ref, workspace_id, scope, schema_ref, source, scratch_notes)
+    inputs = _snapshot(
+        caller, binding_ref, workspace_id, scope, schema_ref, source, scratch_notes
+    )
     if not prepare or inputs.note.status == "draft":
         return inputs.note
     with _database() as session:
@@ -886,12 +1033,15 @@ async def capture_note(
         try:
             original = source.original or source
             if source.reviewed is not None:
-                reviewed_sources.import_source(session, scope, source.reviewed, caller.workload_client_id)
+                reviewed_sources.import_source(
+                    session, scope, source.reviewed, caller.workload_client_id
+                )
             else:
                 ingest._perform(
                     session=session,
                     encounter_id=cast(
-                        TypeIDType, TypeID.from_string(scope.session_request.appointment_id)
+                        TypeIDType,
+                        TypeID.from_string(scope.session_request.appointment_id),
                     ),
                     caller_client_id=caller.workload_client_id,
                     idempotency_key="core-source-" + scope.operation_ref,
@@ -915,7 +1065,9 @@ async def capture_note(
         _import_working_source(session, scope, source)
         session.commit()
     await _current_source(caller, binding_ref, workspace_id, scope, client, source)
-    inputs = _snapshot(caller, binding_ref, workspace_id, scope, schema_ref, source, scratch_notes)
+    inputs = _snapshot(
+        caller, binding_ref, workspace_id, scope, schema_ref, source, scratch_notes
+    )
     if inputs.note.status == "draft":
         return inputs.note
     assert inputs.transcript is not None
@@ -925,8 +1077,13 @@ async def capture_note(
         current = _inputs(session, scope, schema_ref, source, scratch_notes)
         if current.fingerprint != inputs.fingerprint:
             raise CaptureNoteConflict
-        if scratch_notes is not None and current.note.status != "draft" and (
-            current.base_note_ref != inputs.base_note_ref or current.base_note_sha256 != inputs.base_note_sha256
+        if (
+            scratch_notes is not None
+            and current.note.status != "draft"
+            and (
+                current.base_note_ref != inputs.base_note_ref
+                or current.base_note_sha256 != inputs.base_note_sha256
+            )
         ):
             raise CaptureNoteConflict
 
@@ -940,8 +1097,11 @@ async def capture_note(
     generator = model or ConfiguredNoteModel()
     actions = await _model_call(
         generator,
-        (scratch_notes.grounding() if scratch_notes else "") + gaps.gap_grounding(source.qualified)
-        + continuity_grounding(source.reviewed.capture_continuity if source.reviewed else None)
+        (scratch_notes.grounding() if scratch_notes else "")
+        + gaps.gap_grounding(source.qualified)
+        + continuity_grounding(
+            source.reviewed.capture_continuity if source.reviewed else None
+        )
         + summarize.build_action_item_prompt(
             inputs.transcript, terminology_terms(inputs.doctor)
         ),
@@ -956,10 +1116,16 @@ async def capture_note(
         action_items=actions,
         doctor=inputs.doctor,
     )
-    raw = await _model_call(generator, (scratch_notes.grounding() if scratch_notes else "")
+    raw = await _model_call(
+        generator,
+        (scratch_notes.grounding() if scratch_notes else "")
         + gaps.gap_grounding(source.qualified)
-        + continuity_grounding(source.reviewed.capture_continuity if source.reviewed else None)
-        + prompt, json_output=True)
+        + continuity_grounding(
+            source.reviewed.capture_continuity if source.reviewed else None
+        )
+        + prompt,
+        json_output=True,
+    )
     note = _validated_note(raw, inputs.schema.fields)
     await checkpoint()
     summarize._finalize_generated_note(
@@ -969,9 +1135,16 @@ async def capture_note(
         note=note,
         appointment_name=note.get("CC", "General Appointment")[:255],
         authorize_finalization=verify,
-        **({"replace_note_ref": inputs.base_note_ref,
-            "persist_provenance": lambda session, saved: _save_notebook_context(session, scope, saved, scratch_notes)}
-           if scratch_notes else {}),
+        **(
+            {
+                "replace_note_ref": inputs.base_note_ref,
+                "persist_provenance": lambda session, saved: _save_notebook_context(
+                    session, scope, saved, scratch_notes
+                ),
+            }
+            if scratch_notes
+            else {}
+        ),
     )
     await _current_source(caller, binding_ref, workspace_id, scope, client, source)
     result = _snapshot(

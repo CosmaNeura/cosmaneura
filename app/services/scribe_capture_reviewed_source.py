@@ -129,8 +129,16 @@ def project(view: CreatorReviewView, scope: AdmittedCaptureScope) -> ReviewedSou
         duration,
         entries,
         canonical_hash(
-            {"session_id": scope.session_id, "source": source, "working": working,
-             **({"capture_continuity": view.capture_continuity} if view.capture_continuity is not None else {})}
+            {
+                "session_id": scope.session_id,
+                "source": source,
+                "working": working,
+                **(
+                    {"capture_continuity": view.capture_continuity}
+                    if view.capture_continuity is not None
+                    else {}
+                ),
+            }
         ),
         payload_digest(scope, duration, entries),
         view.capture_continuity,

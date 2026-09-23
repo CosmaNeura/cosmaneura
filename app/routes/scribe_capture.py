@@ -105,7 +105,9 @@ class NoteScopeRequest(BaseModel):
 
 class PrepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-    binding_ref: str = Field(pattern=r"^scribe_capture_binding_[0-7][0-9a-hjkmnp-tv-z]{25}$")
+    binding_ref: str = Field(
+        pattern=r"^scribe_capture_binding_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    )
     workspace_id: UUID
     request_nonce: UUID
 
@@ -125,7 +127,8 @@ class NoteRequest(NoteScopeRequest):
         if (self.action in {"save", "resolve"}) != (self.edit is not None):
             raise ValueError("invalid_note_edit_selection")
         if self.scratch_notes is not None and (
-            self.action not in {"read", "prepare"} or self.scratch_notes.workspace_id != self.workspace_id
+            self.action not in {"read", "prepare"}
+            or self.scratch_notes.workspace_id != self.workspace_id
         ):
             raise ValueError("invalid_notebook_source")
         return self
@@ -287,7 +290,9 @@ async def perform_capture_operation(
         key = request.headers["idempotency-key"]
         if not re.fullmatch(r"[!-~]{8,255}", key):
             raise ValueError
-        data, interaction = await _validated_request(request, OperationRequest, 4_194_304)
+        data, interaction = await _validated_request(
+            request, OperationRequest, 4_194_304
+        )
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _problem(422)
     try:
@@ -361,9 +366,13 @@ def _note_problem(status_code: int, code: str) -> JSONResponse:
 @capture_api_app.post("/scribe/encounter-context", response_model=None)
 async def read_encounter_context(
     request: Request,
-    principal: Annotated[EntraServicePrincipal, Depends(authenticate_scribe_capture_request)],
+    principal: Annotated[
+        EntraServicePrincipal, Depends(authenticate_scribe_capture_request)
+    ],
     capture_settings: Annotated[ScribeCaptureSettings, Depends(get_capture_settings)],
-    authority_settings: Annotated[AuthorityKernelSettings, Depends(get_capture_authority_settings)],
+    authority_settings: Annotated[
+        AuthorityKernelSettings, Depends(get_capture_authority_settings)
+    ],
 ) -> JSONResponse:
     if not capture_settings.enabled or not capture_settings.prep_enabled:
         return _problem(503)
@@ -373,17 +382,30 @@ async def read_encounter_context(
         return _problem(422)
     try:
         receipt = encounter_prep.read_encounter_prep(
-            caller=admission.CaptureCaller(workload_client_id=principal.client_id,
-                **interaction.model_dump(), settings=authority_settings, capture_settings=capture_settings),
-            binding_ref=data.binding_ref, workspace_id=data.workspace_id)
+            caller=admission.CaptureCaller(
+                workload_client_id=principal.client_id,
+                **interaction.model_dump(),
+                settings=authority_settings,
+                capture_settings=capture_settings,
+            ),
+            binding_ref=data.binding_ref,
+            workspace_id=data.workspace_id,
+        )
     except authority.AuthorityKernelError:
         return _problem(403)
     except (SQLAlchemyError, ValueError):
         return _problem(503)
-    return JSONResponse({"contract_version": "1", "binding_ref": data.binding_ref,
-        "workspace_id": str(data.workspace_id), "request_nonce": str(data.request_nonce),
-        "checked_at": datetime.now(UTC).isoformat(), "receipt": receipt.model_dump(mode="json")},
-        headers={"Cache-Control": "no-store", "X-Cosmaneura-Capture-Version": "1"})
+    return JSONResponse(
+        {
+            "contract_version": "1",
+            "binding_ref": data.binding_ref,
+            "workspace_id": str(data.workspace_id),
+            "request_nonce": str(data.request_nonce),
+            "checked_at": datetime.now(UTC).isoformat(),
+            "receipt": receipt.model_dump(mode="json"),
+        },
+        headers={"Cache-Control": "no-store", "X-Cosmaneura-Capture-Version": "1"},
+    )
 
 
 @capture_api_app.post("/scribe/capture-notes", response_model=None)
@@ -403,7 +425,9 @@ async def prepare_or_read_note(
     if not capture_settings.enabled or not capture_settings.notes_enabled:
         return _note_problem(503, "CAPTURE_NOTES_UNAVAILABLE")
     try:
-        data, interaction = await _validated_request(request, NoteRequest, notes.MAX_MODEL_BYTES + 8192)
+        data, interaction = await _validated_request(
+            request, NoteRequest, notes.MAX_MODEL_BYTES + 8192
+        )
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _note_problem(422, "VALIDATION_FAILED")
     try:
@@ -428,12 +452,19 @@ async def prepare_or_read_note(
                 )
             elif data.action in {"save", "resolve"}:
                 assert data.schema_ref is not None and data.edit is not None
-                operation = note_edits.save_capture_note if data.action == "save" else note_edits.resolve_capture_note_save
+                operation = (
+                    note_edits.save_capture_note
+                    if data.action == "save"
+                    else note_edits.resolve_capture_note_save
+                )
                 receipt = await operation(
-                    caller=caller, binding_ref=data.binding_ref,
+                    caller=caller,
+                    binding_ref=data.binding_ref,
                     workspace_id=data.workspace_id,
                     expected_session_id=data.expected_session_id,
-                    schema_ref=data.schema_ref, edit=data.edit, client=client,
+                    schema_ref=data.schema_ref,
+                    edit=data.edit,
+                    client=client,
                 )
             else:
                 assert data.schema_ref is not None

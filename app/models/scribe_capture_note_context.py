@@ -12,7 +12,9 @@ from sqlmodel import Field
 class ScribeCaptureNoteContext(
     BaseModel, TimestampsMixin, TypeIDMixin("scribe_note_context"), table=True
 ):
-    __table_args__ = (sa.UniqueConstraint("note_id", name="uq_scribe_note_context_note"),)
+    __table_args__ = (
+        sa.UniqueConstraint("note_id", name="uq_scribe_note_context_note"),
+    )
     binding_id: TypeIDType = ScribeCaptureBinding.foreign_key()
     note_id: TypeIDType = AIVisitNote.foreign_key()
     scratch_notes: dict = Field(sa_type=sa.JSON, nullable=False)

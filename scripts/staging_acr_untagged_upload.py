@@ -513,7 +513,9 @@ def main() -> int:
     token_record = json.loads(token_raw, object_pairs_hook=unique)
     del token_raw
     require(type(token_record) is dict)
-    result = build_and_upload(Path(sys.argv[1]), sys.argv[2], sys.argv[3], token_record, candidate_sha)
+    result = build_and_upload(
+        Path(sys.argv[1]), sys.argv[2], sys.argv[3], token_record, candidate_sha
+    )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
     return 0
 

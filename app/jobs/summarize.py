@@ -45,11 +45,14 @@ from sqlmodel import Session, select
 def _capture_owns_appointment(session: Session, appointment_id: TypeIDType) -> bool:
     # A retained binding owns preparation even before transcript import and
     # after revocation. A background job has no current capture authorization.
-    return session.exec(
-        select(cast(Any, ScribeCaptureBinding.id))
-        .where(ScribeCaptureBinding.appointment_id == appointment_id)
-        .limit(1)
-    ).first() is not None
+    return (
+        session.exec(
+            select(cast(Any, ScribeCaptureBinding.id))
+            .where(ScribeCaptureBinding.appointment_id == appointment_id)
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
@@ -72,7 +75,9 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         return
 
     with get_session() as session:
-        capture_owned = _capture_owns_appointment(cast(Session, session), trigger.appointment_id)
+        capture_owned = _capture_owns_appointment(
+            cast(Session, session), trigger.appointment_id
+        )
     if capture_owned:
         # Captures use explicit versioned sources. This background path merges
         # independent recordings and carries no current capture authority;

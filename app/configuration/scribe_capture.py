@@ -44,12 +44,18 @@ SCRIBE_CAPTURE_SETTINGS = ScribeCaptureSettings(
     enabled=config("SCRIBE_CAPTURE_ENABLED", default=False, cast=bool),
     notes_enabled=config("SCRIBE_CAPTURE_NOTES_ENABLED", default=False, cast=bool),
     prep_enabled=config("SCRIBE_ENCOUNTER_PREP_ENABLED", default=False, cast=bool),
-    long_visits_enabled=config("SCRIBE_CAPTURE_LONG_VISITS_ENABLED", default=False, cast=bool),
+    long_visits_enabled=config(
+        "SCRIBE_CAPTURE_LONG_VISITS_ENABLED", default=False, cast=bool
+    ),
     working_transcripts_enabled=config(
         "SCRIBE_CAPTURE_WORKING_TRANSCRIPTS_ENABLED", default=False, cast=bool
     ),
-    recovery_enabled=config("SCRIBE_CAPTURE_RECOVERY_ENABLED", default=False, cast=bool),
-    source_envelopes_enabled=config("SCRIBE_CAPTURE_SOURCE_ENABLED", default=False, cast=bool),
+    recovery_enabled=config(
+        "SCRIBE_CAPTURE_RECOVERY_ENABLED", default=False, cast=bool
+    ),
+    source_envelopes_enabled=config(
+        "SCRIBE_CAPTURE_SOURCE_ENABLED", default=False, cast=bool
+    ),
     upload_origins=tuple(
         filter(
             None,
