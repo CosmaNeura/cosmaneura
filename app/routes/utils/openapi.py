@@ -8,7 +8,7 @@ https://github.com/fastapiutils/fastapi-utils/blob/e9e7e2c834d703503a3bf5d5605db
 """
 
 from fastapi import APIRouter, FastAPI
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from app import log
 
@@ -20,7 +20,10 @@ def simplify_operation_ids(app: FastAPI | APIRouter) -> None:
 
     found_route = False
 
-    for route in app.routes:
+    # FastAPI keeps included routers nested. Traverse effective contexts while
+    # updating their original routes so subsequent schema builds retain names.
+    for context in iter_route_contexts(app.routes):
+        route = context.original_route
         if isinstance(route, APIRoute):
             route.operation_id = route.name
             found_route = True

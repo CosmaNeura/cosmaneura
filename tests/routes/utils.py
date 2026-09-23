@@ -11,13 +11,11 @@ import pytest
 from cachetools import LRUCache, cached
 from clerk_backend_api import CreateSessionRequestBody
 from clerk_backend_api import User as ClerkUser
-from clerk_backend_api.jwks_helpers import AuthStatus
-from clerk_backend_api.jwks_helpers.authenticaterequest import RequestState
 from decouple import config as decouple_config
 from fastapi import Request, status
 from httpx import Response
 
-from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
+from app.configuration.clerk import CLERK_PRIVATE_KEY, AuthStatus, RequestState, clerk
 from app.utils.email_domain import extract_email_domain
 
 from app.models.baa import (

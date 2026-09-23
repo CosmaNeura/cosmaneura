@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 from uuid import uuid4
 
+import httpx
 import pytest
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 from typer.testing import CliRunner
@@ -113,6 +114,7 @@ def _patch_staging_and_clerk(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def clerk_resource_not_found() -> ClerkErrors:
         return ClerkErrors(
+            raw_response=httpx.Response(404, json={"errors": []}),
             data=ClerkErrorsData(
                 errors=[
                     ClerkError(
@@ -828,6 +830,7 @@ def test_rebind_rejects_clerk_error_with_more_than_one_error(
                     ],
                 )
             raise ClerkErrors(
+                raw_response=httpx.Response(404, json={"errors": []}),
                 data=ClerkErrorsData(
                     errors=[
                         ClerkError(

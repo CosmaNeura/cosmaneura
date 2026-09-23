@@ -11,9 +11,10 @@ from app.server import api_app
 
 
 def test_authority_routes_are_registered_on_the_platform_server() -> None:
-    paths = {getattr(route, "path", "") for route in api_app.routes}
-
-    assert {
+    # Included routers are no longer flattened, and service routes are hidden
+    # from public OpenAPI. Exercise routing through the supported HTTP surface.
+    client = TestClient(api_app, base_url=f"https://{allowed_hosts()[0]}")
+    for path in {
         "/embed/v1/context-tokens/anonymous",
         "/embed/v1/context-tokens/exchange",
         "/embed/v1/context-tokens/rotate",
@@ -23,7 +24,12 @@ def test_authority_routes_are_registered_on_the_platform_server() -> None:
         "/service/v1/agent/conversation-turns/write",
         "/service/v1/agent/model-usage-events/report",
         "/service/v1/agent/tools/invoke",
-    } <= paths
+    }:
+        response = client.post(path, json={})
+        assert response.status_code in {401, 403, 422, 426, 503}, (
+            path,
+            response.status_code,
+        )
 
 
 def test_authority_validation_errors_use_safe_contract_shapes() -> None:

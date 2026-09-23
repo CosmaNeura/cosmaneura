@@ -278,7 +278,7 @@
                     "$ref": "#/components/schemas/Patient"
                   },
                   "type": "array",
-                  "title": "Response Patient List Internal V1 Patients Get"
+                  "title": "Response Patient List"
                 }
               }
             }
@@ -553,7 +553,7 @@
               "application/json": {
                 "schema": {
                   "type": "string",
-                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
+                  "title": "Response Generate Signed Example Note Upload Url"
                 }
               }
             }
@@ -903,7 +903,7 @@
                       "type": "null"
                     }
                   ],
-                  "title": "Response Practice Status Internal V1 Practice Get"
+                  "title": "Response Practice Status"
                 }
               }
             }
@@ -982,7 +982,7 @@
                       "type": "null"
                     }
                   ],
-                  "title": "Response Organization Access Opportunity Internal V1 Practice Organization Access Get"
+                  "title": "Response Organization Access Opportunity"
                 }
               }
             }
@@ -1133,7 +1133,7 @@
                     "$ref": "#/components/schemas/BaaAcceptanceRecord"
                   },
                   "type": "array",
-                  "title": "Response Practice Baa Acceptances Internal V1 Practice Baa Acceptances Get"
+                  "title": "Response Practice Baa Acceptances"
                 }
               }
             }
@@ -1522,7 +1522,7 @@
                   "items": {
                     "$ref": "#/components/schemas/MedicationData"
                   },
-                  "title": "Response Medication List Internal V1 Patients  Patient Id  Medications Get"
+                  "title": "Response Medication List"
                 }
               }
             }
@@ -1923,7 +1923,7 @@
                   "items": {
                     "$ref": "#/components/schemas/LabPanelData"
                   },
-                  "title": "Response Lab Panel List Internal V1 Patients  Patient Id  Lab Panels Get"
+                  "title": "Response Lab Panel List"
                 }
               }
             }
@@ -2205,7 +2205,7 @@
                     "$ref": "#/components/schemas/LabRangeData"
                   },
                   "type": "array",
-                  "title": "Response Lab Range List Internal V1 Lab Ranges Get"
+                  "title": "Response Lab Range List"
                 }
               }
             }
@@ -5558,6 +5558,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",
