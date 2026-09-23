@@ -53,6 +53,10 @@ def runtime_health() -> dict[str, int | str]:
             )
         ).one()
         lag = max(0, int((datetime.now(UTC) - oldest).total_seconds())) if oldest else 0
+        # scope_unavailable includes worker configuration/issuer mismatch and
+        # publish revalidation errors, so it must alert too. Terminal jobs
+        # use a five-minute cooldown; the alert persists fifteen minutes past
+        # retry_at (at most twenty minutes after the terminal failure).
         actionable_failed = session.exec(
             select(func.count())
             .select_from(SessionPrepBuild)
@@ -63,7 +67,7 @@ def runtime_health() -> dict[str, int | str]:
                 or_(
                     cast(Any, SessionPrepBuild.failure_code).is_(None),
                     cast(Any, SessionPrepBuild.failure_code).not_in(
-                        ["scope_unavailable", "no_eligible_sources"]
+                        ["no_eligible_sources"]
                     ),
                 ),
             )

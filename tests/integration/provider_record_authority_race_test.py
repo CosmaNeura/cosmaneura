@@ -6,7 +6,12 @@ from queue import Queue
 from threading import Barrier
 from time import monotonic, sleep
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import app.configuration.session_prep as configuration
+import app.routes.embed_context as embed_context
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.services.authority import AuthorityRequestDeniedError, exchange_context_token
 from app.services.session_prep_note_sources import (
@@ -22,6 +27,7 @@ from app.models.provider_record_authority import (
     ProviderRecordAuthority,
 )
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
+from app.models.superadmin_capability import SuperadminCapabilityEnvironment
 from sqlalchemy import text
 from sqlmodel import select
 
@@ -97,7 +103,8 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
     assert SessionPrepNoteFinalization.count() == 1
 
 
-def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypatch):
+@pytest.mark.parametrize("via_http", [False, True])
+def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypatch, via_http):
     doctor = DoctorFactory.build().save()
     practice = provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
@@ -109,9 +116,40 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
         "SESSION_PREP_PROVIDER_SETTINGS",
         SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
     )
+    monkeypatch.setattr(
+        embed_context,
+        "configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
     pids: Queue[int] = Queue()
+    api = FastAPI()
+    api.include_router(embed_context.embed_context_api_app)
+
+    def verified_identity():
+        # The real router's aglobal_session remains installed: its Doctor
+        # lock must not precede the Practice lock during view-as checking.
+        with get_session() as session:
+            session.exec(text("SET LOCAL statement_timeout = '5s'"))
+            pids.put(session.exec(text("SELECT pg_backend_pid()")).scalar_one())
+        return embed_context.VerifiedClerkIdentity(
+            ISSUER, doctor.clerk_id, "sess_synthetic_race"
+        )
+
+    api.dependency_overrides[embed_context.authenticate_embed_platform_session] = verified_identity
+    api.dependency_overrides[embed_context.get_authority_kernel_settings] = lambda: AUTHORITY_SETTINGS
 
     def exchange():
+        if via_http:
+            with TestClient(api) as client:
+                response = client.post(
+                    "/embed/v1/context-tokens/exchange",
+                    headers={"X-Cosmaneura-Embed-Version": "1.0"},
+                    json={"requested_surface": "provider_assistant", "record_ref": str(appointment.id)},
+                )
+            assert response.status_code == 403, response.text
+            assert response.json()["code"] == "REQUEST_DENIED"
+            return "denied"
+
         with get_session() as session:
             session.exec(text("SET LOCAL statement_timeout = '5s'"))
             pids.put(session.exec(text("SELECT pg_backend_pid()")).scalar_one())

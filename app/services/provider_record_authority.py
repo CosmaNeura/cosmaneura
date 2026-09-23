@@ -121,16 +121,10 @@ def validate_provider_record_scope(
     return scope
 
 
-def ensure_provider_record_scope(
-    *, session: Session, clerk_issuer: str, clerk_subject: str, record_ref: str
-) -> ProviderRecordAuthority:
-    """Provision within the verified token exchange transaction; never repair tombstones."""
-    try:
-        appointment_id = TypeID.from_string(record_ref)
-    except (TypeIDException, TypeError, ValueError):
-        raise ProviderRecordScopeDenied from None
-    if appointment_id.prefix != "appointment":
-        raise ProviderRecordScopeDenied
+def lock_provider_record_owner(
+    *, session: Session, clerk_subject: str
+) -> tuple[Doctor, Practice]:
+    """Take the shared practice/doctor order before any request view-as lock."""
     # Organization roster/offboarding takes Practice before Doctor. Discover
     # the practice without a lock, acquire that same order, then recheck the
     # membership so a concurrent practice move cannot bind the old practice.
@@ -153,6 +147,22 @@ def ensure_provider_record_scope(
     ).one_or_none()
     if doctor is None or _current_practice(session, doctor).id != practice.id:
         raise ProviderRecordScopeDenied
+    return doctor, practice
+
+
+def ensure_provider_record_scope(
+    *, session: Session, clerk_issuer: str, clerk_subject: str, record_ref: str
+) -> ProviderRecordAuthority:
+    """Provision within the verified token exchange transaction; never repair tombstones."""
+    try:
+        appointment_id = TypeID.from_string(record_ref)
+    except (TypeIDException, TypeError, ValueError):
+        raise ProviderRecordScopeDenied from None
+    if appointment_id.prefix != "appointment":
+        raise ProviderRecordScopeDenied
+    doctor, practice = lock_provider_record_owner(
+        session=session, clerk_subject=clerk_subject
+    )
     appointment = session.get(
         Appointment, cast(TypeIDType, appointment_id), populate_existing=True
     )
@@ -236,6 +246,15 @@ def ensure_provider_record_scope(
     # memberships; it never revives a revoked target or moves a staff identity.
     if any(row.membership_kind != "provider" for row in active_memberships):
         raise ProviderRecordScopeDenied
+    # A fixture/import tenant is outside this practice-move mechanism. Deny
+    # the exchange rather than revoking it or mixing it into a real cohort.
+    for row in active_memberships:
+        if row.tenant_id != tenant.id and session.exec(
+            select(ProviderPracticeAuthority).where(
+                ProviderPracticeAuthority.tenant_id == row.tenant_id
+            )
+        ).one_or_none() is None:
+            raise ProviderRecordScopeDenied
     for stale in active_memberships:
         if stale.tenant_id != tenant.id:
             stale.status = "revoked"

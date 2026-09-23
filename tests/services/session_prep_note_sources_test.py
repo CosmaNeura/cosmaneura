@@ -24,6 +24,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+from sqlalchemy.orm.attributes import flag_modified
 from sqlmodel import Session, select
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
@@ -161,7 +162,10 @@ def test_review_preserves_section_order_after_database_round_trip():
         current = session.get(AIVisitNote, note.id)
         assert current is not None
         current.note = dict(reversed(list(sections.items())))
+        flag_modified(current, "note")
         session.flush()
+        session.expire(current, ["note"])
+        assert list(current.note) == list(reversed(sections))
         assert _sources(session, doctor, target).sources == ()
         refreshed = _finalize(session, doctor, current)
         assert refreshed.id != finalized.id

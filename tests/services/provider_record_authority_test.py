@@ -186,6 +186,29 @@ def test_existing_staff_membership_is_not_silently_reassigned(scope):
     )
 
 
+def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scope):
+    doctor, _practice, _patient, appointment = scope
+    _token(doctor, str(appointment.id))
+    binding = AuthorityPersonBinding.one(id=_record(appointment).binding_id)
+    fixture_tenant = AuthorityTenant(status="active").save()
+    fixture_membership = AuthorityTenantMembership(
+        actor_id=binding.actor_id,
+        tenant_id=fixture_tenant.id,
+        membership_kind="provider",
+        status="active",
+    ).save()
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _token(doctor, str(appointment.id))
+    assert AuthorityTenantMembership.get(id=fixture_membership.id).status == "active"
+    assert AuthorityTenantMembership.where(
+        AuthorityTenantMembership.actor_id == binding.actor_id,
+        AuthorityTenantMembership.status == "active",
+    ).count() == 2
+    assert AuthorityAuditEvent.where(
+        AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+    ).count() == 0
+
+
 @pytest.mark.parametrize("same_practice", [False, True])
 def test_other_selected_provider_cannot_exchange_or_reuse_record(
     scope, monkeypatch, same_practice

@@ -132,15 +132,20 @@ to reload. Earlier unordered snapshots remain immutable and require a fresh
 explicit review; no schema or stored data is rewritten.
 
 A verified current-practice exchange retires the actor's other active provider
-memberships with an audit event, preserving the platform's single-active-tenant
+memberships only when their tenants map to practices with an audit event, preserving the platform's single-active-tenant
 contract. Revoked target memberships are not revived, and staff memberships are
-not moved implicitly. Practice is locked before Doctor and membership is then
-rechecked, matching roster/offboarding. Startup rejects overlapping enabled
+not moved implicitly. Unmapped fixture/import tenants cause a denied exchange
+with all memberships preserved. Practice is locked before Doctor at the HTTP
+route, ahead of view-as reconciliation, and again at the service boundary;
+membership is rechecked, matching roster/offboarding. Startup rejects overlapping enabled
 synthetic and real-provider cohorts instead of falling back to fixture authority.
 
 Queue health retains total failure counts but warns only for recent actionable
-failures or excessive pending/running lag. Revocation and absence of eligible
-sources do not create a permanent outage warning. Immutable artifacts retain their
+failures or excessive pending/running lag. Scope failures still alert because
+worker configuration or issuer drift can cause them. The warning ends fifteen
+minutes after the terminal retry time (up to twenty minutes after failure);
+absence of eligible sources does not alert, and historical failures do not
+create permanent warnings. Immutable artifacts retain their
 existing historical-record behavior; automatic artifact purging is a separate
 schema/data operation and is not introduced in this technical-beta increment.
 Restoring byte-identical current note content preserves its prior explicit review;
@@ -151,3 +156,8 @@ to the previous receiver image, with the additive tables left dormant. Keep the
 real-record feature disabled when reverting to the earlier unordered snapshot
 reader. No environment configuration, live migration, or cohort was changed.
 Local validation and final Cursor review evidence are recorded on the follow-up PR.
+
+The follow-up Cursor findings are covered by an actual HTTP exchange/offboarding
+race with the request-global transaction and view-as precheck left intact,
+worker-disabled/wrong-issuer health regressions, preservation of unmapped fixture
+memberships, and an explicitly persisted/reloaded note-reorder test.
