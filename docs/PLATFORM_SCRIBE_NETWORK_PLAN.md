@@ -142,6 +142,10 @@ inputs only, prove:
 - the exact managed identity and role can complete one idempotent consent/session flow; and
 - logs contain no tokens, identity claims, patient data, transcript text, or signed URLs.
 
+The image-owned request timeout is 60 seconds so the first health check can cover one Scribe
+scale-from-zero start. The probe still sends each check once inside the job's separate 300-second
+timeout, and the Container Apps retry limit remains zero.
+
 Build, job deployment, and job start are three separate future approvals. See
 [`EAST_US_DATA_PATH_PLAN.md`](EAST_US_DATA_PATH_PLAN.md).
 

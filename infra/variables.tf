@@ -188,9 +188,9 @@ variable "scribe_service_scope" {
 }
 
 variable "scribe_service_timeout_seconds" {
-  description = "Timeout for one platform-to-Scribe API request."
+  description = "Timeout for one platform-to-Scribe API request; keep aligned with the application fallback for non-Terraform entry points."
   type        = number
-  default     = 15
+  default     = 60
 
   validation {
     condition     = var.scribe_service_timeout_seconds >= 1 && var.scribe_service_timeout_seconds <= 60
