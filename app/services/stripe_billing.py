@@ -174,17 +174,6 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
         super().__init__(str(reason))
 
 
-class StripeTrialCarryoverDeferred(Exception):
-    """Legacy API compatibility for callers that handled the former dead zone."""
-
-    def __init__(self, available_at: datetime):
-        self.available_at = available_at
-        super().__init__(
-            "Checkout is deferred until the platform trial ends so no remaining "
-            "trial time is shortened."
-        )
-
-
 class StripeTrialClockReconciliationRequired(Exception):
     """A prior paid-pilot trial cannot be replaced by a fresh trial."""
 
