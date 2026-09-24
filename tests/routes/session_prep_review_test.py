@@ -81,6 +81,13 @@ def test_current_visit_exposes_only_prior_note_metadata_and_refreshes_after_revi
     assert preview["included_count"] == 0
     assert preview["notes"][0]["note_id"] == str(note.id)
     assert preview["notes"][0]["status"] == "needs_review"
+    source_detail = authenticated_client.get(
+        api_app.url_path_for("note_detail", appointment_id=note.appointment_id)
+    ).json()
+    assert (
+        preview["notes"][0]["appointment_date"]
+        == source_detail["appointment"]["appointment_date"]
+    )
     assert set(preview["notes"][0]) == {
         "note_id",
         "appointment_id",

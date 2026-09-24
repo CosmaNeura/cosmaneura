@@ -320,12 +320,16 @@ def prior_note_overview(
             PriorNotePreview(
                 note_id=str(note.id),
                 appointment_id=str(visit.id),
-                appointment_date=_utc(visit.appointment_date),
+                # Match Appointment's naive-UTC wire representation so the
+                # preview and linked visit header display the same date.
+                appointment_date=_utc(visit.appointment_date).replace(tzinfo=None),
                 note_type=note.note_type,
                 status=status,
             )
         )
-    previews.sort(key=lambda item: (-item.appointment_date.timestamp(), item.note_id))
+    previews.sort(
+        key=lambda item: (-_utc(item.appointment_date).timestamp(), item.note_id)
+    )
     return PriorNoteOverview(
         notes=tuple(previews),
         included_count=len(included),

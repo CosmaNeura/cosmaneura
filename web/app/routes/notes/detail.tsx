@@ -63,11 +63,16 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
     }
 
     invariant(result.data, "data should exist")
+    const requestedNoteId = new URL(loaderArgs.request.url).searchParams.get(
+      "reviewNote",
+    )
     return {
       ...result.data,
-      focusedNoteId: new URL(loaderArgs.request.url).searchParams.get(
-        "reviewNote",
-      ),
+      focusedNoteId: result.data.notes?.some(
+        (note) => note.id === requestedNoteId,
+      )
+        ? requestedNoteId
+        : null,
     }
   } catch (error) {
     if (isRouteErrorResponse(error)) throw error
@@ -184,7 +189,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           }}
         />
 
-        {loaderData.session_prep_prior_notes && (
+        {loaderData.session_prep_prior_notes && !loaderData.focusedNoteId && (
           <SessionPrepPriorNotes
             overview={loaderData.session_prep_prior_notes}
           />
@@ -195,7 +200,12 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
             <VisitNoteViewer
               key={note.id}
               note={note}
-              defaultOpen={index === 0 || loaderData.focusedNoteId === note.id}
+              defaultOpen={
+                loaderData.focusedNoteId
+                  ? loaderData.focusedNoteId === note.id
+                  : index === 0
+              }
+              focusOnMount={loaderData.focusedNoteId === note.id}
               review={loaderData.session_prep_reviews?.[note.id]}
               transcript={
                 distinctNoteSources

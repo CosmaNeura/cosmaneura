@@ -53,6 +53,15 @@ browser type checks, changed-file Ruff/ESLint/format checks, and the production-
 bundled test build passed. All records and build configuration were synthetic.
 These results do not represent a deployed UI or native-device acceptance test.
 
+Cursor found no blocking issue at `05499580`. Its three low-severity UX findings
+were addressed: preview dates now follow the existing visit-header wire format;
+an explicitly opened review tab hides its own prior-visit panel; and only the
+requested note opens, with explicit scrolling after the client-rendered mount.
+The URL focus is accepted only for a current note returned by the authorized
+loader. Fifteen backend and fifteen browser follow-up cases and browser types
+passed. This preserves the existing date-display convention rather than changing
+the application's global timezone behavior. Renew review on the final push.
+
 This is an additive Core-only update: no new migration, dependency, Scribe API
 contract or Sovereign release is required. Merge the reviewed PR with the next
 stable Scribe Core changes, run the existing combined-release checks, then deploy
