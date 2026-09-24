@@ -330,15 +330,31 @@ def reconcile(
             is not None
         )
         return {"status": "already_applied", "plan_sha256": audit.evidence_sha256}
-    _require(mapping is None and record is None)
+    _require((mapping is None) == (record is None))
+    if mapping is not None and record is not None:
+        _require(mapping.practice_id == practice.id and mapping.tenant_id == tenant.id)
+        _require(
+            record.binding_id == person_binding.id
+            and record.practice_authority_id == mapping.id
+            and record.doctor_id == doctor.id
+            and record.patient_id == patient.id
+            and record.appointment_id == appointment.id
+        )
     if members[str(additional.id)] is None:
         require_active_clinician_seat_capacity(session, practice)
     plan = {
-        "version": 1,
+        "version": 2,
         "operator_ref": operator_ref,
         "scope": scope,
         "additional_doctor": str(additional.id),
         "additional_member_exists": members[str(additional.id)] is not None,
+        "existing_authority": {
+            "practice_mapping": str(mapping.id) if mapping is not None else None,
+            "record_mapping": str(record.id) if record is not None else None,
+            "context_snapshot_sha256": (
+                _digest(record.context_snapshot_ref) if record is not None else None
+            ),
+        },
         "preserve_solo_enrollment": preserve_solo_enrollment,
         "practice_solo_enrollment": practice.is_solo,
         "account_fingerprints": sorted(
@@ -390,9 +406,12 @@ def reconcile(
                 attested_at=None,
             )
         )
-    mapping = ProviderPracticeAuthority(practice_id=practice.id, tenant_id=tenant.id)
-    session.add(mapping)
-    session.flush()
+    if mapping is None:
+        mapping = ProviderPracticeAuthority(
+            practice_id=practice.id, tenant_id=tenant.id
+        )
+        session.add(mapping)
+        session.flush()
     if not any(
         o.origin == "provider_entry" and o.source_ref == str(patient.id)
         for o in origins
@@ -404,16 +423,17 @@ def reconcile(
                 source_ref=str(patient.id),
             )
         )
-    session.add(
-        ProviderRecordAuthority(
-            binding_id=person_binding.id,
-            practice_authority_id=mapping.id,
-            doctor_id=doctor.id,
-            appointment_id=appointment.id,
-            patient_id=patient.id,
-            context_snapshot_ref=f"context_prep_{uuid4().hex}",
+    if record is None:
+        session.add(
+            ProviderRecordAuthority(
+                binding_id=person_binding.id,
+                practice_authority_id=mapping.id,
+                doctor_id=doctor.id,
+                appointment_id=appointment.id,
+                patient_id=patient.id,
+                context_snapshot_ref=f"context_prep_{uuid4().hex}",
+            )
         )
-    )
     session.add(
         PracticeAccessAudit(
             practice_id=practice.id,

@@ -52,7 +52,12 @@ identity, actor, tenant, link, membership, person and binding tombstones deny.
 The original Scribe staging provenance marker may be supplemented with the
 current patient reference, but is never replaced. Another patient reference or
 unknown import provenance is refused. Existing conflicting practice or record
-mappings are refused. The final state must pass the ordinary runtime
+mappings and partial mapping pairs are refused. An already-existing complete pair
+may be retained only when its practice, tenant, binding, doctor, patient and
+appointment match the verified capture exactly. Plan version 2 binds the
+existing mapping IDs and context-snapshot fingerprint; any intervening mapping
+change invalidates the plan. Applying preserves those rows byte-for-byte and
+adds only missing membership/provenance and the operator audit. The final state must pass the ordinary runtime
 `validate_provider_record_scope` in the same transaction.
 
 ## Plan, review and apply
@@ -123,3 +128,21 @@ Scribe too. The existing image recovery procedure remains separate and must
 not remove these records. This change does not deploy a new application image
 or authorize production, additional memberships, record reassignment, other
 clinical data, or a public synthetic-fixture fallback.
+
+## Existing authority follow-up
+
+A fresh staging read found the exact complete practice/record authority pair
+already present, with the capture digest unchanged and the additional membership
+still absent. The original no-mapping plan was refused and must not be reused.
+The bounded follow-up preserves the matching pair and requires a fresh version-2
+plan; it does not infer that an unrelated actor completed this operator. The new
+operator audit records only this operation. Partial or conflicting pairs remain
+a refusal, without reassignment or deletion.
+
+Local tests cover preserving an existing pair while adding the membership,
+current-scope validation, exact audit retry, newly appearing mappings, tampered planned
+context-snapshot fingerprints, and partial/conflicting pairs. The managed-domain case now
+registers the unchanged account domain, so it reaches the managed-domain guard.
+A separate case adds a second capture under another person after a successful
+bare-binding plan, exercising the one-capture guard. This corrects the two
+earlier review coverage limits; other CLI/concurrency limits above remain.
