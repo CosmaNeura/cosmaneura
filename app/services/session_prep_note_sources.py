@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -16,13 +16,14 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
-from sqlalchemy import func
+from sqlalchemy import func, tuple_
 from sqlmodel import Session, select
 
 MAX_SOURCE_CHARACTERS = 18_000
 MAX_FINALIZED_NOTES = 5
 MAX_REVIEW_CANDIDATES = 128
 SOURCE_WINDOW = timedelta(days=548)
+PRIOR_NOTE_PREVIEW_LIMIT = 20
 
 
 class NoteSourceDenied(ValueError):
@@ -193,6 +194,148 @@ class ReviewedNoteSource:
 class ReviewedNoteSelection:
     sources: tuple[ReviewedNoteSource, ...]
     truncated: bool
+
+
+@dataclass(frozen=True)
+class PriorNotePreview:
+    note_id: str
+    appointment_id: str
+    appointment_date: datetime
+    note_type: str
+    status: Literal["included", "reviewed", "needs_review", "unavailable"]
+
+
+@dataclass(frozen=True)
+class PriorNoteOverview:
+    notes: tuple[PriorNotePreview, ...]
+    included_count: int
+    more_notes: bool
+    selection_limited: bool
+
+
+def prior_note_overview(
+    *,
+    session: Session,
+    doctor_id: TypeIDType,
+    target_appointment_id: TypeIDType,
+    observed_at: datetime,
+) -> PriorNoteOverview:
+    """Show owned prior-note metadata and the actual current Prep selection.
+
+    This read never reviews a note, starts generation, or returns note content.
+    Include all selected sources even if they precede the recent-note preview.
+    Callers must enforce the current provider cohort and prohibit view-as.
+    """
+    selection = load_reviewed_note_sources(
+        session=session,
+        doctor_id=doctor_id,
+        target_appointment_id=target_appointment_id,
+        observed_at=observed_at,
+    )
+    target = _owned_appointment(
+        session, doctor_id=doctor_id, appointment_id=target_appointment_id
+    )
+    cutoff = min(_utc(target.appointment_date), observed_at.astimezone(UTC)).replace(
+        tzinfo=None
+    )
+    query = (
+        select(AIVisitNote, Appointment)
+        .join(Appointment, cast(Any, Appointment.id) == AIVisitNote.appointment_id)
+        .where(
+            AIVisitNote.doctor_id == doctor_id,
+            cast(Any, AIVisitNote.superseded_at).is_(None),
+            Appointment.doctor_id == doctor_id,
+            Appointment.patient_id == target.patient_id,
+            Appointment.id != target.id,
+            Appointment.appointment_date >= cutoff - SOURCE_WINDOW,
+            Appointment.appointment_date < cutoff,
+        )
+        .order_by(
+            cast(Any, Appointment.appointment_date).desc(), cast(Any, AIVisitNote.id)
+        )
+    )
+    recent = session.exec(query.limit(PRIOR_NOTE_PREVIEW_LIMIT + 1)).all()
+    rows = {
+        str(note.id): (note, visit) for note, visit in recent[:PRIOR_NOTE_PREVIEW_LIMIT]
+    }
+    included = {source.source_ref for source in selection.sources}
+    missing = included - rows.keys()
+    if missing:
+        rows.update(
+            (str(note.id), (note, visit))
+            for note, visit in session.exec(
+                query.where(cast(Any, AIVisitNote.id).in_(missing))
+            ).all()
+        )
+    digests: dict[str, str] = {}
+    for note, _visit in rows.values():
+        try:
+            digests[str(note.id)] = note_content_sha256(note.note)
+        except NoteSourceDenied:
+            continue
+    reviews: set[str] = set()
+    if digests:
+        evidence_rows = session.exec(
+            select(SessionPrepNoteFinalization).where(
+                SessionPrepNoteFinalization.doctor_id == doctor_id,
+                SessionPrepNoteFinalization.patient_id == target.patient_id,
+                # The unique (note_id, content_sha256) pair bounds this query
+                # to one review per preview, independent of revision history.
+                tuple_(
+                    cast(Any, SessionPrepNoteFinalization.note_id),
+                    cast(Any, SessionPrepNoteFinalization.content_sha256),
+                ).in_([(rows[ref][0].id, digest) for ref, digest in digests.items()]),
+                SessionPrepNoteFinalization.finalized_at <= observed_at,
+            )
+        ).all()
+        for evidence in evidence_rows:
+            note, visit = rows[str(evidence.note_id)]
+            try:
+                matches = (
+                    evidence.appointment_id == visit.id
+                    and digests[str(note.id)] == evidence.content_sha256
+                    and note_content_sha256(
+                        _snapshot_content(evidence.reviewed_content)
+                    )
+                    == evidence.content_sha256
+                )
+            except NoteSourceDenied:
+                continue
+            if matches:
+                reviews.add(str(note.id))
+    previews: list[PriorNotePreview] = []
+    for note, visit in rows.values():
+        status: Literal["included", "reviewed", "needs_review", "unavailable"]
+        if str(note.id) in digests:
+            status = (
+                "included"
+                if str(note.id) in included
+                else "reviewed"
+                if str(note.id) in reviews
+                else "needs_review"
+            )
+        else:
+            status = "unavailable"
+        previews.append(
+            PriorNotePreview(
+                note_id=str(note.id),
+                appointment_id=str(visit.id),
+                # Match Appointment's naive-UTC wire representation so the
+                # preview and linked visit header display the same date.
+                appointment_date=_utc(visit.appointment_date).replace(tzinfo=None),
+                note_type=note.note_type,
+                status=status,
+            )
+        )
+    previews.sort(
+        key=lambda item: (-_utc(item.appointment_date).timestamp(), item.note_id)
+    )
+    return PriorNoteOverview(
+        notes=tuple(previews),
+        included_count=len(included),
+        more_notes=len(recent) > PRIOR_NOTE_PREVIEW_LIMIT,
+        selection_limited=selection.truncated,
+    )
 
 
 def load_reviewed_note_sources(
