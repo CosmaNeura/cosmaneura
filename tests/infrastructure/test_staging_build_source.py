@@ -667,6 +667,69 @@ if __name__ == "__main__":
 
 
 class LocalCursorReviewTests(unittest.TestCase):
+    def test_agent_review_preserves_identity_source_and_report_binding(self):
+        report = "Independent final-source review.\n"
+        metadata = {
+            "reviewer": "Codex",
+            "reviewed_head": REVIEWED,
+            "result": "accepted",
+            "after_final_substantive_push": True,
+            "report_sha256": m.sha(report.encode()),
+        }
+
+        def verify(meta, *, prefix="AGENT", **changes):
+            comment = {
+                "id": 101,
+                "user": {"login": "JohnClem", "type": "User"},
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                "body": "<!-- COSMANEURA_LOCAL_"
+                + prefix
+                + "_REVIEW "
+                + json.dumps(meta)
+                + " -->\n"
+                + report,
+            }
+            comment.update(changes)
+            selected = replace(
+                request(),
+                review_kind="local_cursor",
+                controller_check_id=0,
+                controller_review_sha256=m.sha(comment["body"].encode()),
+            )
+            m.validate_request(selected)
+            m.validate_local_cursor_review(comment, selected)
+
+        for reviewer in ("Codex", "Claude Code"):
+            with self.subTest(reviewer=reviewer):
+                verify({**metadata, "reviewer": reviewer})
+        for key, value in (
+            ("reviewer", "Cursor"),
+            ("reviewer", "unknown"),
+            ("reviewer", []),
+            ("reviewed_head", "f" * 40),
+            ("result", "changes_requested"),
+            ("after_final_substantive_push", False),
+            ("report_sha256", "a" * 64),
+            ("extra_field", True),
+        ):
+            with (
+                self.subTest(key=key, value=value),
+                self.assertRaises(m.BuildSourceRefused),
+            ):
+                verify({**metadata, key: value})
+        for changes in (
+            {"id": 102},
+            {"user": {"login": "someone-else", "type": "User"}},
+            {"user": {"login": "JohnClem", "type": "Bot"}},
+            {
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/420"
+            },
+        ):
+            with self.subTest(changes=changes), self.assertRaises(m.BuildSourceRefused):
+                verify(metadata, **changes)
+        with self.assertRaises(m.BuildSourceRefused):
+            verify(metadata, prefix="CURSOR")
+
     def test_local_review_binds_report_head_author_and_pull_request(self):
         metadata = {
             "reviewer": "Cursor",
