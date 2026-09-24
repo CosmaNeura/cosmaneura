@@ -34,7 +34,12 @@ export default function VisitNoteViewer({
   const contentRef = useRef<HTMLDivElement>(null)
 
   return (
-    <Collapsible className="mb-5" open={isOpen} onOpenChange={setOpen}>
+    <Collapsible
+      id={`note-${note.id}`}
+      className="mb-5 scroll-mt-24"
+      open={isOpen}
+      onOpenChange={setOpen}
+    >
       <div className="flex items-start">
         <CollapsibleTrigger asChild>
           <Button variant="ghost" size="sm" className="h-auto p-2">

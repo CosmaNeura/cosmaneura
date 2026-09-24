@@ -11,8 +11,10 @@ from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services.session_prep_note_sources import (
     NoteSourceChanged,
     NoteSourceDenied,
+    PriorNoteOverview,
     finalize_note_for_session_prep,
     note_content_sha256,
+    prior_note_overview,
 )
 
 from activemodel.session_manager import get_session
@@ -34,6 +36,26 @@ class SessionPrepNoteReview(BaseModel, extra="forbid"):
 
 class ReviewNoteForSessionPrepRequest(BaseModel, extra="forbid"):
     expected_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+def prior_notes_for_session_prep(
+    doctor: Doctor, appointment_id: TypeIDType
+) -> PriorNoteOverview | None:
+    if (
+        doctor.deleted_at is not None
+        or not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id)
+    ):
+        return None
+    try:
+        with get_session() as managed:
+            return prior_note_overview(
+                session=cast(Session, managed),
+                doctor_id=doctor.id,
+                target_appointment_id=appointment_id,
+                observed_at=datetime.now(UTC),
+            )
+    except NoteSourceDenied:
+        return None
 
 
 def note_review_statuses(

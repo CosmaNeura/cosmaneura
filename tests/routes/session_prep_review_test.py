@@ -3,9 +3,11 @@
 from datetime import datetime
 
 import pytest
+from fastapi import Request
 
 import app.configuration.session_prep as configuration
 from app.configuration.session_prep import SessionPrepProviderSettings
+from app.routes.dependencies.view_as import apply_view_as
 from app.server import api_app
 from app.services.session_prep_note_sources import note_content_sha256
 
@@ -15,7 +17,7 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 
-from tests.factories import PatientFactory
+from tests.factories import AppointmentFactory, PatientFactory
 from tests.routes.utils import get_clerk_dev_user
 from tests.services.session_prep_note_sources_test import _note, _scope
 
@@ -60,6 +62,35 @@ def test_review_binds_displayed_revision_and_survives_a_new_read(
     assert SessionPrepNoteFinalization.count() == 1
     reloaded = authenticated_client.get(path).json()
     assert reloaded["session_prep_reviews"][str(note.id)] == reviewed.json()
+
+
+def test_current_visit_exposes_only_prior_note_metadata_and_refreshes_after_review(
+    authenticated_client, reviewable_note
+):
+    note = reviewable_note
+    source = AIVisitTranscript.one(id=note.ai_transcript_id)
+    target = AppointmentFactory.build(
+        doctor_id=note.doctor_id,
+        patient_id=source.patient_id,
+        appointment_date=datetime.now(),
+    ).save()
+    path = api_app.url_path_for("note_detail", appointment_id=target.id)
+    before = authenticated_client.get(path)
+    assert before.status_code == 200 and "no-store" in before.headers["cache-control"]
+    preview = before.json()["session_prep_prior_notes"]
+    assert preview["included_count"] == 0
+    assert preview["notes"][0]["note_id"] == str(note.id)
+    assert preview["notes"][0]["status"] == "needs_review"
+    assert set(preview["notes"][0]) == {
+        "note_id",
+        "appointment_id",
+        "appointment_date",
+        "note_type",
+        "status",
+    }
+    assert _review(authenticated_client, note).status_code == 200
+    after = authenticated_client.get(path).json()["session_prep_prior_notes"]
+    assert after["included_count"] == 1 and after["notes"][0]["status"] == "included"
 
 
 def test_scribe_note_keeps_its_source_and_review_when_another_transcript_arrives(
@@ -148,6 +179,7 @@ def test_review_is_default_off_and_scoped_to_selected_providers(
         "note_detail", appointment_id=reviewable_note.appointment_id
     )
     assert authenticated_client.get(path).json()["session_prep_reviews"] is None
+    assert authenticated_client.get(path).json()["session_prep_prior_notes"] is None
     assert SessionPrepNoteFinalization.count() == 0
 
 
@@ -156,6 +188,27 @@ def test_other_provider_note_cannot_be_reviewed(authenticated_client, reviewable
     foreign_note = _note(outsider, patient)
     assert _review(authenticated_client, foreign_note).status_code == 404
     assert SessionPrepNoteFinalization.count() == 0
+
+
+def test_view_as_read_does_not_expose_prior_note_review_workflow(
+    authenticated_client, reviewable_note
+):
+    def force_view_as(request: Request) -> None:
+        request.state.view_as_actor = request.state.doctor
+        request.state.view_as = object()
+
+    api_app.dependency_overrides[apply_view_as] = force_view_as
+    try:
+        response = authenticated_client.get(
+            api_app.url_path_for(
+                "note_detail", appointment_id=reviewable_note.appointment_id
+            )
+        )
+    finally:
+        del api_app.dependency_overrides[apply_view_as]
+    assert response.status_code == 200
+    assert response.json()["session_prep_prior_notes"] is None
+    assert response.json()["session_prep_reviews"] is None
 
 
 def test_stale_and_superseded_revisions_are_not_reviewed(

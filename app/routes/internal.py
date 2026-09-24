@@ -157,8 +157,10 @@ from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
 from .session_prep_review import (
+    PriorNoteOverview,
     SessionPrepNoteReview,
     note_review_statuses,
+    prior_notes_for_session_prep,
     session_prep_review_api,
 )
 from .view_as import view_as_api_app
@@ -281,6 +283,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     capture_workflow_required: bool = False
     engagement_role: EngagementRole | None = None
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
+    session_prep_prior_notes: PriorNoteOverview | None = None
 
     @computed_field
     @property
@@ -291,8 +294,10 @@ class NoteDetail(BaseModel, extra="forbid"):
 @internal_api_app.get("/notes/{appointment_id}")
 def note_detail(
     request: Request,
+    response: Response,
     appointment_id: Annotated[TypeIDType, Path()],
 ) -> NoteDetail:
+    response.headers["Cache-Control"] = "no-store"
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
     appointment = cast(
@@ -367,6 +372,11 @@ def note_detail(
         engagement_role=engagement_role,
         session_prep_reviews=(
             note_review_statuses(doctor, visit_notes)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
+        session_prep_prior_notes=(
+            prior_notes_for_session_prep(doctor, appointment.id)
             if getattr(request.state, "view_as", None) is None
             else None
         ),

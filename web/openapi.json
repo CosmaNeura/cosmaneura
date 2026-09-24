@@ -4509,6 +4509,16 @@
             ],
             "title": "Session Prep Reviews"
           },
+          "session_prep_prior_notes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PriorNoteOverview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "patient": {
             "$ref": "#/components/schemas/Patient",
             "readOnly": true
@@ -5029,6 +5039,77 @@
           "subscription_status"
         ],
         "title": "PracticeStatus"
+      },
+      "PriorNoteOverview": {
+        "properties": {
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/PriorNotePreview"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "included_count": {
+            "type": "integer",
+            "title": "Included Count"
+          },
+          "more_notes": {
+            "type": "boolean",
+            "title": "More Notes"
+          },
+          "selection_limited": {
+            "type": "boolean",
+            "title": "Selection Limited"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notes",
+          "included_count",
+          "more_notes",
+          "selection_limited"
+        ],
+        "title": "PriorNoteOverview"
+      },
+      "PriorNotePreview": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "title": "Note Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "included",
+              "reviewed",
+              "needs_review",
+              "unavailable"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_id",
+          "appointment_id",
+          "appointment_date",
+          "note_type",
+          "status"
+        ],
+        "title": "PriorNotePreview"
       },
       "PronounStyle": {
         "type": "string",

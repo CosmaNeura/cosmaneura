@@ -63,6 +63,7 @@ function show({
   transcript = { id: "source_a" } as { id: string } | null,
   captureRequired = false,
   sources = undefined as { id: string }[] | undefined,
+  focusedNoteId = null as string | null,
 } = {}) {
   const source = ({ id }: { id: string }): AiVisitTranscript => ({
     id,
@@ -95,12 +96,25 @@ function show({
   }
   return render(
     <NoteDetailPage
-      {...({ loaderData } as Parameters<typeof NoteDetailPage>[0])}
+      {...({ loaderData: { ...loaderData, focusedNoteId } } as Parameters<
+        typeof NoteDetailPage
+      >[0])}
     />,
   )
 }
 
 describe("note transcript provenance", () => {
+  it("opens the exact note requested from the prior-visit review list", () => {
+    show({
+      notes: [note("soap", "source_a"), note("summary", "source_a", "Summary")],
+      focusedNoteId: "summary",
+    })
+    expect(screen.getByText("Synthetic summary note")).toBeVisible()
+    expect(document.getElementById("note-summary")).toHaveAttribute(
+      "data-state",
+      "open",
+    )
+  })
   it("explains how to resume a capture with no generated note", () => {
     show({ notes: [], captureRequired: true })
     expect(screen.getByText(/Reopen it in Scribe/)).toHaveTextContent(
