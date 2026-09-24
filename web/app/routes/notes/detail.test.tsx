@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from "react"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { AiVisitTranscript, NoteDetail } from "~/configuration/client"
 
@@ -63,6 +63,8 @@ function show({
   transcript = { id: "source_a" } as { id: string } | null,
   captureRequired = false,
   sources = undefined as { id: string }[] | undefined,
+  focusedNoteId = null as string | null,
+  priorNotes = undefined as NoteDetail["session_prep_prior_notes"],
 } = {}) {
   const source = ({ id }: { id: string }): AiVisitTranscript => ({
     id,
@@ -89,18 +91,51 @@ function show({
       date_of_birth: "2001-01-01",
     },
     notes,
+    session_prep_prior_notes: priorNotes,
     capture_workflow_required: captureRequired,
     transcript: transcript ? source(transcript) : null,
     ...(sources === undefined ? {} : { note_transcripts: sources.map(source) }),
   }
   return render(
     <NoteDetailPage
-      {...({ loaderData } as Parameters<typeof NoteDetailPage>[0])}
+      {...({ loaderData: { ...loaderData, focusedNoteId } } as Parameters<
+        typeof NoteDetailPage
+      >[0])}
     />,
   )
 }
 
 describe("note transcript provenance", () => {
+  afterEach(() => vi.restoreAllMocks())
+  it("opens the exact note requested from the prior-visit review list", () => {
+    const scroll = vi
+      .spyOn(HTMLElement.prototype, "scrollIntoView")
+      .mockImplementation(() => {})
+    show({
+      notes: [note("soap", "source_a"), note("summary", "source_a", "Summary")],
+      focusedNoteId: "summary",
+      priorNotes: {
+        notes: [],
+        included_count: 0,
+        more_notes: false,
+        selection_limited: false,
+      },
+    })
+    expect(screen.getByText("Synthetic summary note")).toBeVisible()
+    expect(document.getElementById("note-summary")).toHaveAttribute(
+      "data-state",
+      "open",
+    )
+    expect(document.getElementById("note-soap")).toHaveAttribute(
+      "data-state",
+      "closed",
+    )
+    expect(
+      screen.queryByText("Prior visits for Session Prep"),
+    ).not.toBeInTheDocument()
+    expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: "start" })
+    expect(scroll.mock.instances[0]).toHaveAttribute("id", "note-summary")
+  })
   it("explains how to resume a capture with no generated note", () => {
     show({ notes: [], captureRequired: true })
     expect(screen.getByText(/Reopen it in Scribe/)).toHaveTextContent(
