@@ -232,6 +232,7 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
     additional_visit = Appointment(
         doctor_id=f.additional.id,
         patient_id=additional_patient.id,
+        external_id=None,
         appointment_date=datetime.now(UTC),
     )
     session.add(additional_visit)
