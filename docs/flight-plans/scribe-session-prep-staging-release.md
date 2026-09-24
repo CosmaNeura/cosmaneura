@@ -49,6 +49,12 @@ After deployment, verify browser access and synthetic recording/upload through t
 
 Private local evidence: `/private/tmp/cosmaneura-staging-release-evidence-20260923`. Final PR review comments and release receipt supply the actual merged/deployed identities and completed verification; this flight plan does not claim deployment has happened.
 
+### Migration launcher compatibility
+
+The first combined-image migration stopped before connecting to PostgreSQL: the historical launcher escaped percent signs a second time after the current `migrations/env.py` had already escaped them. The encoded TLS certificate path became `%/etc%/ssl%/certs%/ca-certificates.crt`. Independent before/after schema probes both reported `c8526f5e8d80`; the transient job was removed and no application revision was updated.
+
+Version-2 releases therefore use the ordinary Alembic entry point, with escaping owned by the candidate's migration environment. The historical pinned release retains its compatibility bootstrap. The job-template guard selects the same exact command as job creation and rejects the command for the other release mode. Tests execute the actual candidate configuration expression through Alembic and the PostgreSQL driver with encoded synthetic passwords and certificate paths, while preserving hostname verification. Rebuild and publish the merged reviewed fix, rehearse its source archive, then use the same guarded deployment and application recovery procedure above. No migration revision or stored-data contract changes.
+
 ### Checked runtime recovery and warm Scribe API
 
 From the same clean merged controller, run `python scripts/staging_runtime_operations.py recover-check PLAN PLAN_SHA256 PUBLICATION PUBLICATION_SHA256` to verify all three retained revision templates and current candidate/old image identities. `recover` with the same arguments copies each old revision's complete template into a new recovery revision, scheduler then worker then web. It checks each app for intervening changes and verifies each restored image is Healthy/Provisioned and latest-ready. The additive database and captured records are retained. Recovery remains available after build-plan expiry; it accepts only the bound retained revisions and refuses an unrelated current image.

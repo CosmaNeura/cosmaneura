@@ -998,6 +998,12 @@ done
 verify_migration_job_template() {
 	# Query only the fields needed for the contract; never request env values.
 	local migration_template secret_env_names public_env_names
+	local compatibility_args=()
+	# Version-2 candidates already escape the URL in migrations/env.py.
+	# Keep the old bootstrap only for the historical pinned release.
+	if [[ -z "${RELEASE_V2_JSON:-}" ]]; then
+		compatibility_args+=(--staging-alembic-compatibility)
+	fi
 	if ! migration_template=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
 		--query '{containers:properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}},secretNames:properties.configuration.secrets[].name}' \
@@ -1013,7 +1019,7 @@ verify_migration_job_template() {
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
 			--database-secret-name "$ALEMBIC_COMPAT_DATABASE_SECRET_NAME" \
 			--raw-database-secret-name database-url \
-			--staging-alembic-compatibility \
+			"${compatibility_args[@]}" \
 			--secret-env-names "$secret_env_names" \
 			--public-env-names "$public_env_names"; then
 		echo "Migration job template is not approved for schema mutation."
@@ -1159,10 +1165,13 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
-	local migration_command
+	local migration_command command_flag=--staging-alembic-command
+	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+		command_flag=--alembic-command
+	fi
 	migration_command=$("$PYTHON_BIN" -I -S -B \
 		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
-		--staging-alembic-command) || return 1
+		"$command_flag") || return 1
 	local secrets_args=()
 	local env_args=()
 
