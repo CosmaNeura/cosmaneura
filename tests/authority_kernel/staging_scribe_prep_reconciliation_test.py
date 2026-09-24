@@ -136,6 +136,106 @@ def case(capture_case, monkeypatch):
     return session, current
 
 
+def install_exact_authority_pair(session, f, *, conflicting_doctor=False):
+    mapping = ProviderPracticeAuthority(
+        practice_id=f.practice.id, tenant_id=f.tenant.id
+    )
+    session.add(mapping)
+    session.flush()
+    record = ProviderRecordAuthority(
+        binding_id=f.person_binding.id,
+        practice_authority_id=mapping.id,
+        doctor_id=f.additional.id if conflicting_doctor else f.doctor.id,
+        appointment_id=f.appointment.id,
+        patient_id=f.patient.id,
+        context_snapshot_ref=f"context_prep_{uuid4().hex}",
+    )
+    session.add(record)
+    session.flush()
+    return mapping, record
+
+
+def test_existing_exact_pair_is_preserved_while_membership_is_added(case):
+    session, f = case
+    mapping, record = install_exact_authority_pair(session, f)
+    before = (mapping.model_dump(), record.model_dump(), f.capture_binding.model_dump())
+    plan = repair.reconcile(session, **f.kwargs)
+    assert plan["plan"]["existing_authority"]["record_mapping"] == str(record.id)
+    assert (
+        session.exec(
+            select(PracticeMember).where(PracticeMember.doctor_id == f.additional.id)
+        ).one_or_none()
+        is None
+    )
+    assert (
+        repair.reconcile(session, **f.kwargs, confirm_plan_sha256=plan["plan_sha256"])[
+            "status"
+        ]
+        == "applied"
+    )
+    assert (
+        mapping.model_dump(),
+        record.model_dump(),
+        f.capture_binding.model_dump(),
+    ) == before
+    member = session.exec(
+        select(PracticeMember).where(PracticeMember.doctor_id == f.additional.id)
+    ).one()
+    assert member.practice_id == f.practice.id and member.role == "workforce"
+    assert member.attested_at is None and member.attestation_name is None
+    assert (
+        validate_provider_record_scope(
+            session=session,
+            binding=f.person_binding,
+            actor_id=f.actor.id,
+            clerk_subject=f.doctor.clerk_id,
+        )
+        is not None
+    )
+    assert (
+        repair.reconcile(session, **f.kwargs, confirm_plan_sha256=plan["plan_sha256"])[
+            "status"
+        ]
+        == "already_applied"
+    )
+
+
+@pytest.mark.parametrize("drift", ["new_pair", "context_snapshot"])
+def test_existing_mapping_state_is_bound_into_plan(case, drift):
+    session, f = case
+    record = None
+    if drift == "context_snapshot":
+        _, record = install_exact_authority_pair(session, f)
+    plan = repair.reconcile(session, **f.kwargs)
+    if drift == "new_pair":
+        install_exact_authority_pair(session, f)
+    else:
+        plan["plan"]["existing_authority"]["context_snapshot_sha256"] = "0" * 64
+        plan["plan_sha256"] = repair._digest(plan["plan"])
+    with pytest.raises(repair.ReconciliationRefused):
+        repair.reconcile(session, **f.kwargs, confirm_plan_sha256=plan["plan_sha256"])
+    assert (
+        session.exec(
+            select(PracticeMember).where(PracticeMember.doctor_id == f.additional.id)
+        ).one_or_none()
+        is None
+    )
+
+
+@pytest.mark.parametrize("conflict", ["partial_pair", "different_doctor"])
+def test_partial_or_conflicting_existing_authority_is_refused(case, conflict):
+    session, f = case
+    if conflict == "partial_pair":
+        session.add(
+            ProviderPracticeAuthority(practice_id=f.practice.id, tenant_id=f.tenant.id)
+        )
+    else:
+        install_exact_authority_pair(session, f, conflicting_doctor=True)
+    session.flush()
+    with pytest.raises(repair.ReconciliationRefused):
+        repair.reconcile(session, **f.kwargs)
+
+
 def test_plan_writes_nothing_and_unreconciled_exchange_is_denied(case):
     session, f = case
     before = f.capture_binding.model_dump()
@@ -288,7 +388,7 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
         "unknown_origin",
         "reserved_practice",
         "managed_domain",
-        "another_tenant_binding",
+        "another_binding_for_same_person",
     ],
 )
 def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, change):
@@ -345,7 +445,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
         f.practice.baa_version = None
         f.practice.baa_accepted_at = None
     elif change == "managed_domain":
-        domain = f"{uuid4().hex}.synthetic.invalid"
+        domain = f.additional.email.rsplit("@", 1)[1]
         session.add(
             ProviderOrganization(
                 legal_name="Invented managed organization",
@@ -356,8 +456,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
                 access_code_created_at=datetime.now(UTC),
             )
         )
-        f.additional.email = f"provider@{domain}"
-    elif change == "another_tenant_binding":
+    elif change == "another_binding_for_same_person":
         session.add(
             AuthorityPersonBinding(
                 tenant_id=f.tenant.id,
@@ -463,6 +562,41 @@ def test_other_legacy_binding_is_reported_and_never_adopted(case):
         ).one_or_none()
         is None
     )
+
+
+def test_second_capture_under_a_different_person_is_refused(case):
+    session, f = case
+    person = AuthorityPerson(lifecycle_state="patient")
+    appointment = Appointment(
+        doctor_id=f.doctor.id,
+        patient_id=f.patient.id,
+        external_id=None,
+        appointment_date=datetime.now(UTC),
+    )
+    session.add(person)
+    session.add(appointment)
+    session.flush()
+    other_binding = AuthorityPersonBinding(
+        tenant_id=f.tenant.id,
+        person_id=person.id,
+        actor_id=f.actor.id,
+        binding_ref=str(appointment.id),
+        binding_kind="provider_record",
+        verified_at=datetime.now(UTC),
+    )
+    session.add(other_binding)
+    session.flush()
+    assert repair.reconcile(session, **f.kwargs)["status"] == "planned"
+    values = f.capture_binding.model_dump(exclude={"id", "created_at", "updated_at"})
+    values.update(
+        workspace_id=uuid4(),
+        person_binding_id=other_binding.id,
+        appointment_id=appointment.id,
+    )
+    session.add(ScribeCaptureBinding(**values))
+    session.flush()
+    with pytest.raises(repair.ReconciliationRefused):
+        repair.reconcile(session, **f.kwargs)
 
 
 @pytest.mark.parametrize("lock_kind", ["lineage", "email"])
