@@ -1,8 +1,10 @@
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
 import app.commands.uploads.sas as upload_sas
 import app.jobs.extract_labs as extract_labs_job
+import app.services.reference_labs_gate as lab_gate
 from app.server import api_app
 
 from app.models.doctor import Doctor
@@ -10,6 +12,11 @@ from app.models.lab_panel import LabPanel, LabPanelStatus
 
 from tests.factories import DoctorFactory, PatientFactory
 from tests.routes.utils import get_clerk_dev_user
+
+
+@pytest.fixture(autouse=True)
+def _enable_labs_for_existing_feature_tests(monkeypatch):
+    monkeypatch.setattr(lab_gate, "REFERENCE_LABS_ENABLED", True)
 
 
 def _authed_doctor() -> Doctor:

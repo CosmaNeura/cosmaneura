@@ -21,6 +21,7 @@ from azure.storage.blob import BlobServiceClient
 from pdf2image import convert_from_path
 from typeid import TypeID
 
+import app.services.reference_labs_gate as reference_labs_gate
 from app import log
 from app.celery import celery_app
 from app.configuration.azure import (
@@ -137,6 +138,10 @@ def persist_results(panel: LabPanel, raw_results: list[dict]) -> int:
 
 
 def perform(lab_panel_id: str | TypeID | TypeIDType):
+    if not reference_labs_gate.REFERENCE_LABS_ENABLED:
+        log.info("lab extraction disabled", event_code="reference_labs_disabled")
+        return
+
     panel_ref = provider_log_ref(f"lab-panel:{lab_panel_id}")
     log.info("extracting labs", panel_ref=panel_ref)
 
@@ -152,6 +157,10 @@ def perform(lab_panel_id: str | TypeID | TypeIDType):
             event_code="lab_extraction_access_not_in_force",
             panel_ref=panel_ref,
         )
+        return
+
+    if not reference_labs_gate.reference_labs_enabled_for(doctor.email):
+        log.info("lab extraction unavailable", event_code="reference_labs_unavailable")
         return
 
     if panel.status == LabPanelStatus.completed:

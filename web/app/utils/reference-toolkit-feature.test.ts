@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { isReferenceToolkitEnabled } from "./reference-toolkit-feature"
+import {
+  isReferenceLabsEnabled,
+  isReferenceToolkitEnabled,
+} from "./reference-toolkit-feature"
 
 const STAGING_URL = "https://staging-app.cosmaneura.com/"
 const PROD_URL = "https://app.cosmaneura.com/"
@@ -59,5 +62,28 @@ describe("isReferenceToolkitEnabled", () => {
     vi.stubEnv("VITE_PYTHON_URL", PROD_URL)
     expect(isReferenceToolkitEnabled(null)).toBe(false)
     expect(isReferenceToolkitEnabled("")).toBe(false)
+  })
+})
+
+describe("independent lab release gate", () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it.each([undefined, "false", "1", "TRUE"])(
+    "keeps labs off without literal true (%s)",
+    (value) => {
+      vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
+      vi.stubEnv("VITE_REFERENCE_LABS_ENABLED", value)
+      expect(isReferenceToolkitEnabled("john@cosmaneura.com")).toBe(true)
+      expect(isReferenceLabsEnabled("john@cosmaneura.com")).toBe(false)
+    },
+  )
+
+  it("requires the existing cohort even when the lab build flag is on", () => {
+    vi.stubEnv("VITE_REFERENCE_LABS_ENABLED", "true")
+    vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
+    expect(isReferenceLabsEnabled("john@cosmaneura.com")).toBe(true)
+    expect(isReferenceLabsEnabled("stranger@example.com")).toBe(false)
+    vi.stubEnv("VITE_PYTHON_URL", PROD_URL)
+    expect(isReferenceLabsEnabled("john@cosmaneura.com")).toBe(false)
   })
 })
