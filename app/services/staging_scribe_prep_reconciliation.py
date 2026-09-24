@@ -258,7 +258,6 @@ def reconcile(
     captures = session.exec(
         select(ScribeCaptureBinding).where(ScribeCaptureBinding.tenant_id == tenant.id)
     ).all()
-    _require(len(tenant_bindings) == 1 and tenant_bindings[0].id == person_binding.id)
     _require(len(captures) == 1 and captures[0].id == binding.id)
     origins = session.exec(
         select(AuthorityPersonOrigin).where(
@@ -353,6 +352,24 @@ def reconcile(
             for d in doctors.values()
         ),
         "capture_scope_sha256": binding.scope_sha256,
+        "tenant_capture_count": len(captures),
+        # Bare legacy record bindings are not Scribe captures. Preserve them
+        # without adopting them, and bind their inventory into plan review.
+        "other_tenant_binding_count": len(tenant_bindings) - 1,
+        "tenant_binding_inventory_sha256": _digest(
+            sorted(
+                (
+                    str(row.id),
+                    str(row.person_id),
+                    str(row.actor_id),
+                    row.binding_kind,
+                    row.binding_ref,
+                    row.status,
+                    str(row.revoked_at),
+                )
+                for row in tenant_bindings
+            )
+        ),
         "review_ref_sha256": _digest(link.review_ref),
         "origins_sha256": _digest(
             sorted((str(o.id), o.origin, o.source_ref) for o in origins)

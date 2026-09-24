@@ -42,9 +42,12 @@ No BAA, billing, trial or public enrollment settings are changed.
 
 The existing provider must have one unambiguous active provider tenant, one
 active reviewed Scribe provider link for the practice, and one unshared person
-binding, with exactly one binding and capture in that tenant. A second legacy
+binding, with exactly one Scribe capture in that tenant. A second legacy
 capture requires a different reviewed reconciliation, before any mapping is
-added. All capture scope columns and the stored digest must match. Existing
+added. Other bare legacy bindings are counted and fingerprinted in the plan;
+they are preserved without adoption or access changes. This operator does not
+make those already-unmapped records accessible. All capture scope columns and
+the stored digest must match. Existing
 identity, actor, tenant, link, membership, person and binding tombstones deny.
 The original Scribe staging provenance marker may be supplemented with the
 current patient reference, but is never replaced. Another patient reference or

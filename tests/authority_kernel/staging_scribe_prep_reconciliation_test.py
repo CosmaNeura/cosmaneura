@@ -23,7 +23,11 @@ from app.services.scribe_capture_scope import (
 )
 
 from app.models.appointment import Appointment
-from app.models.authority import AuthorityPersonBinding, AuthorityPersonOrigin
+from app.models.authority import (
+    AuthorityPerson,
+    AuthorityPersonBinding,
+    AuthorityPersonOrigin,
+)
 from app.models.doctor import Doctor
 from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
@@ -428,6 +432,37 @@ def test_seat_limit_refuses_addition(case):
     session.flush()
     with pytest.raises(ActiveClinicianSeatLimitReached):
         repair.reconcile(session, **f.kwargs)
+
+
+def test_other_legacy_binding_is_reported_and_never_adopted(case):
+    session, f = case
+    person = AuthorityPerson(lifecycle_state="patient")
+    session.add(person)
+    session.flush()
+    other = AuthorityPersonBinding(
+        tenant_id=f.tenant.id,
+        person_id=person.id,
+        actor_id=None,
+        binding_ref=f"synthetic_old_{uuid4().hex}",
+        binding_kind="provider_record",
+        verified_at=datetime.now(UTC),
+    )
+    session.add(other)
+    session.flush()
+    before = other.model_dump()
+    plan = repair.reconcile(session, **f.kwargs)
+    assert plan["plan"]["other_tenant_binding_count"] == 1
+    assert plan["plan"]["tenant_capture_count"] == 1
+    repair.reconcile(session, **f.kwargs, confirm_plan_sha256=plan["plan_sha256"])
+    assert other.model_dump() == before
+    assert (
+        session.exec(
+            select(ProviderRecordAuthority).where(
+                ProviderRecordAuthority.binding_id == other.id
+            )
+        ).one_or_none()
+        is None
+    )
 
 
 @pytest.mark.parametrize("lock_kind", ["lineage", "email"])
