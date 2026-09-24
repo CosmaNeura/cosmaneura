@@ -202,14 +202,18 @@ def validate_plan(plan: dict[str, Any]) -> None:
                 and re.fullmatch(r"[0-9a-f]{12}", release[key])
             )
         revisions = cast(list[str], release["migration_revisions"])
-        require(type(revisions) is list and 0 < len(revisions) <= 64)
+        require(type(revisions) is list and len(revisions) <= 64)
         require(
             all(type(v) is str and re.fullmatch(r"[0-9a-f]{12}", v) for v in revisions)
         )
-        require(
-            len(revisions) == len(set(revisions))
-            and revisions[-1] == release["schema_after"]
-        )
+        require(len(revisions) == len(set(revisions)))
+        if revisions:
+            require(
+                release["schema_before"] != release["schema_after"]
+                and revisions[-1] == release["schema_after"]
+            )
+        else:
+            require(release["schema_before"] == release["schema_after"])
     require(plan["action"] == "build_selected_staging_candidate")
     require(plan["actor"] == "delegated_assistant")
     require(
@@ -289,6 +293,7 @@ def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     before = (
         plan["release"]["schema_before"] if plan["version"] == 2 else "89c31f0ae275"
     )
+    after = plan["release"]["schema_after"] if plan["version"] == 2 else REVISIONS[-1]
     selection = record(bound_input(plan, "selection"))
     require(selection["founder_selected"] is True and selection["candidate_pr"] == pr)
     require(selection["candidate_sha"] == candidate)
@@ -332,7 +337,7 @@ def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     )
     outcome = rehearsal["rehearsal"]
     require(outcome["result"] == "PASS" and outcome["source_revision"] == before)
-    require(outcome["target_revision"] == revisions[-1])
+    require(outcome["target_revision"] == after)
     required_checks = (
         "committed_revision_verified",
         "original_rows_preserved",
@@ -368,10 +373,8 @@ def run(
     plan = record(raw_plan)
     validate_plan(plan)
     candidate, pr = plan["candidate_sha"], plan["candidate_pr"]
-    revisions = (
-        tuple(plan["release"]["migration_revisions"])
-        if plan["version"] == 2
-        else REVISIONS
+    schema_after = (
+        plan["release"]["schema_after"] if plan["version"] == 2 else REVISIONS[-1]
     )
     raw_modules = module_bytes(root, plan)
     frontend, rehearsal = input_evidence(plan)
@@ -394,7 +397,7 @@ def run(
     context = modules["verify_staging_candidate"].HumanCandidateContext(
         candidate,
         str(pr),
-        revisions[-1],
+        schema_after,
         plan["controller_sha"],
         "CosmaNeura/cosmaneura",
     )
@@ -420,7 +423,7 @@ def run(
             "plan_sha256": expected,
             "candidate_sha": candidate,
             "approval_pr_number": pr,
-            "schema_head": revisions[-1],
+            "schema_head": schema_after,
             "controller_sha": plan["controller_sha"],
             "github_user_sha256": observed.github_user_sha256,
             "source_archive_sha256": observed.source_archive_sha256,
