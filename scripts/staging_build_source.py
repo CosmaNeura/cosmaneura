@@ -136,7 +136,12 @@ def validate_request(request: SourceRequest) -> None:
 def validate_local_cursor_review(
     comment: dict[str, Any], request: SourceRequest
 ) -> None:
-    """Bind the published local Cursor report; this is not GitHub approval."""
+    """Bind a published independent local report; this is not GitHub approval.
+
+    Keep the legacy plan kind and Cursor envelope valid for retained releases.
+    New agent reports identify their actual reviewer under the owner's local
+    validation policy, while preserving every source, author and hash check.
+    """
     require(comment.get("id") == request.controller_review_id)
     require(comment.get("user", {}).get("login") == candidate.FOUNDER_LOGIN)
     require(comment.get("user", {}).get("type") == "User")
@@ -151,8 +156,13 @@ def validate_local_cursor_review(
     require(type(body) is str and 0 < len(body) <= 65536)
     body = cast(str, body)
     require(sha(body.encode()) == request.controller_review_sha256)
-    prefix = "<!-- COSMANEURA_LOCAL_CURSOR_REVIEW "
-    require(body.startswith(prefix))
+    envelopes = {
+        "<!-- COSMANEURA_LOCAL_CURSOR_REVIEW ": {"Cursor"},
+        "<!-- COSMANEURA_LOCAL_AGENT_REVIEW ": {"Codex", "Claude Code"},
+    }
+    prefixes = [prefix for prefix in envelopes if body.startswith(prefix)]
+    require(len(prefixes) == 1)
+    prefix = prefixes[0]
     metadata, separator, report = body[len(prefix) :].partition(" -->\n")
     require(separator and report.strip())
     parsed = source.record(metadata.encode())
@@ -166,7 +176,11 @@ def validate_local_cursor_review(
             "report_sha256",
         }
     )
-    require(parsed["reviewer"] == "Cursor" and parsed["result"] == "accepted")
+    require(
+        type(parsed["reviewer"]) is str
+        and parsed["reviewer"] in envelopes[prefix]
+        and parsed["result"] == "accepted"
+    )
     require(parsed["reviewed_head"] == request.controller_reviewed_head)
     require(parsed["after_final_substantive_push"] is True)
     require(parsed["report_sha256"] == sha(report.encode()))
