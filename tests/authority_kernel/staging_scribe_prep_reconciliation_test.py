@@ -1,7 +1,11 @@
 """Explicit reconciliation on disposable PostgreSQL; all identities invented."""
 
 import hashlib
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from threading import Event
 from uuid import uuid4
 
 import pytest
@@ -9,14 +13,20 @@ import pytest
 import app.services.staging_scribe_prep_reconciliation as repair
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.services import authority
+from app.services.organization_access import lock_roster_enrollment_email
+from app.services.pilot_access_lock import lock_pilot_access_lineage
 from app.services.provider_record_authority import validate_provider_record_scope
+from app.services.public_entitlements import ActiveClinicianSeatLimitReached
 from app.services.scribe_capture_scope import (
     authorize_capture_binding,
     resolve_capture_binding,
 )
 
-from app.models.authority import AuthorityPersonOrigin
+from app.models.appointment import Appointment
+from app.models.authority import AuthorityPersonBinding, AuthorityPersonOrigin
 from app.models.doctor import Doctor
+from app.models.organization_access import ProviderOrganization
+from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
 from app.models.practice_access_audit import PracticeAccessAudit
@@ -25,7 +35,8 @@ from app.models.provider_record_authority import (
     ProviderRecordAuthority,
 )
 from app.models.scribe_capture_binding import ScribeCaptureBinding
-from sqlmodel import select
+from sqlalchemy import text
+from sqlmodel import Session, select
 
 from tests.authority_kernel.scribe_capture_scope_test import (
     SETTINGS,
@@ -43,7 +54,7 @@ base_engine = _base_engine
 
 @pytest.fixture
 def capture_engine(base_engine):
-    return base_engine.execution_options(isolation_level="SERIALIZABLE")
+    return base_engine.execution_options(isolation_level="READ COMMITTED")
 
 
 def grant(session, doctor):
@@ -211,6 +222,45 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
         capture_settings=f.arguments["capture_settings"],
     )
     assert reopened.id == f.capture_binding.id and reopened.model_dump() == before
+    additional_patient = Patient(
+        doctor_id=f.additional.id,
+        name="Invented additional patient",
+        date_of_birth=datetime(1990, 1, 1, tzinfo=UTC),
+    )
+    session.add(additional_patient)
+    session.flush()
+    additional_visit = Appointment(
+        doctor_id=f.additional.id,
+        patient_id=additional_patient.id,
+        appointment_date=datetime.now(UTC),
+    )
+    session.add(additional_visit)
+    session.flush()
+    additional_token = authority.exchange_context_token(
+        clerk_issuer=SETTINGS.clerk_issuer,
+        clerk_subject=f.additional.clerk_id,
+        requested_surface="provider_assistant",
+        record_ref=str(additional_visit.id),
+        session=session,
+        settings=SETTINGS,
+    )
+    additional_context = authority.bootstrap_mount_context(
+        mount_context_token=additional_token.context_token,
+        session=session,
+        settings=SETTINGS,
+    )
+    assert additional_context.tenant_id == str(f.tenant.id)
+    assert additional_context.actor_id != str(f.actor.id)
+    assert "session-prep:read" in additional_context.capabilities
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        authority.exchange_context_token(
+            clerk_issuer=SETTINGS.clerk_issuer,
+            clerk_subject=f.additional.clerk_id,
+            requested_surface="provider_assistant",
+            record_ref=str(f.appointment.id),
+            session=session,
+            settings=SETTINGS,
+        )
 
 
 @pytest.mark.parametrize(
@@ -225,12 +275,15 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
         "binding_revoked",
         "scope_digest",
         "foreign_origin",
-        "foreign_member",
+        "nonprovider_tenant_membership",
         "wrong_hash",
         "changed_email",
         "subscription",
         "solo_without_confirmation",
         "unknown_origin",
+        "reserved_practice",
+        "managed_domain",
+        "another_tenant_binding",
     ],
 )
 def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, change):
@@ -264,7 +317,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
                 source_ref="patient_01j00000000000000000000000",
             )
         )
-    elif change == "foreign_member":
+    elif change == "nonprovider_tenant_membership":
         f.membership.membership_kind = "staff"
     elif change == "wrong_hash":
         plan["plan_sha256"] = "0" * 64
@@ -280,6 +333,34 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
                 person_id=f.person.id,
                 origin="provider_entry",
                 source_ref="unknown_import",
+            )
+        )
+    elif change == "reserved_practice":
+        f.practice.negotiated_baa_required = True
+        f.practice.baa_version = None
+        f.practice.baa_accepted_at = None
+    elif change == "managed_domain":
+        domain = f"{uuid4().hex}.synthetic.invalid"
+        session.add(
+            ProviderOrganization(
+                legal_name="Invented managed organization",
+                slug=uuid4().hex,
+                email_domain=domain,
+                access_code_salt="a" * 32,
+                access_code_digest=uuid4().hex * 2,
+                access_code_created_at=datetime.now(UTC),
+            )
+        )
+        f.additional.email = f"provider@{domain}"
+    elif change == "another_tenant_binding":
+        session.add(
+            AuthorityPersonBinding(
+                tenant_id=f.tenant.id,
+                person_id=f.person.id,
+                actor_id=f.actor.id,
+                binding_ref=f"synthetic_other_{uuid4().hex}",
+                binding_kind="provider_record",
+                verified_at=datetime.now(UTC),
             )
         )
     session.flush()
@@ -332,6 +413,81 @@ def test_failed_postcondition_rolls_back_all_new_rows(case, monkeypatch):
     )
 
 
+def test_seat_limit_refuses_addition(case):
+    session, f = case
+    for _ in range(19):
+        doctor = Doctor(clerk_id=f"user_seat_{uuid4().hex}", biography=None)
+        session.add(doctor)
+        session.flush()
+        session.add(
+            PracticeMember(
+                doctor_id=doctor.id, practice_id=f.practice.id, role="workforce"
+            )
+        )
+    session.flush()
+    with pytest.raises(ActiveClinicianSeatLimitReached):
+        repair.reconcile(session, **f.kwargs)
+
+
+@pytest.mark.parametrize("lock_kind", ["lineage", "email"])
+def test_waited_advisory_lock_observes_committed_changes(base_engine, lock_kind):
+    """Reproduce the stale-snapshot race with two real PostgreSQL sessions.
+
+    Only a uniquely named disposable fixture table is created and removed.
+    This checks lock/snapshot semantics, not a simulated roster or seat writer.
+    """
+    table = f"reconciliation_snapshot_{uuid4().hex}"
+    email = f"{uuid4().hex}@synthetic.invalid"
+
+    def acquire(session):
+        if lock_kind == "lineage":
+            lock_pilot_access_lineage(session)
+        else:
+            lock_roster_enrollment_email(session, email)
+
+    started = Event()
+    backend = []
+
+    def waiting_reader():
+        with Session(base_engine) as session:
+            session.connection(execution_options={"isolation_level": "READ COMMITTED"})
+            backend.append(session.execute(text("SELECT pg_backend_pid()")).scalar())
+            started.set()
+            acquire(session)
+            return session.execute(text(f"SELECT value FROM {table}")).scalar()
+
+    with base_engine.begin() as connection:
+        connection.execute(text(f"CREATE TABLE {table} (value integer NOT NULL)"))
+        connection.execute(text(f"INSERT INTO {table} VALUES (0)"))
+    try:
+        with (
+            ThreadPoolExecutor(max_workers=1) as executor,
+            Session(base_engine) as writer,
+        ):
+            acquire(writer)
+            future = executor.submit(waiting_reader)
+            assert started.wait(5)
+            deadline = time.monotonic() + 5
+            waiting = False
+            while time.monotonic() < deadline:
+                waiting = writer.execute(
+                    text(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE pid=:pid AND locktype='advisory' AND NOT granted)"
+                    ),
+                    {"pid": backend[0]},
+                ).scalar()
+                if waiting:
+                    break
+                time.sleep(0.01)
+            assert waiting, "Reader did not reach the advisory lock"
+            writer.execute(text(f"UPDATE {table} SET value=1"))
+            writer.commit()
+            assert future.result(timeout=5) == 1
+    finally:
+        with base_engine.begin() as connection:
+            connection.execute(text(f"DROP TABLE {table}"))
+
+
 @pytest.mark.parametrize(
     "change", ["environment", "app", "host", "database", "owner_confirmation"]
 )
@@ -380,4 +536,7 @@ def test_cli_rejects_wrong_target_before_opening_a_session(monkeypatch, capsys, 
         lambda: pytest.fail("target refusal opened a database session"),
     )
     assert main() == 1
-    assert capsys.readouterr().out.strip() == '{"status": "refused_or_unconfirmed"}'
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "refused_or_unconfirmed",
+        "phase": "target_validation",
+    }

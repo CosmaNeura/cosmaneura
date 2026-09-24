@@ -27,6 +27,7 @@ def main() -> int:
     )
     parser.add_argument("--preserve-solo-enrollment", action="store_true")
     arguments = parser.parse_args()
+    phase = "target_validation"
     try:
         url = make_url(os.environ["DATABASE_URL"])
         if (
@@ -45,13 +46,16 @@ def main() -> int:
         ):
             raise ValueError
 
+        phase = "source_import"
         from app.services.staging_scribe_prep_reconciliation import reconcile
 
         from activemodel.session_manager import global_session
         from activemodel.types import TypeIDType
 
+        phase = "database_session"
         with global_session() as session:
-            session.connection(execution_options={"isolation_level": "SERIALIZABLE"})
+            session.connection(execution_options={"isolation_level": "READ COMMITTED"})
+            phase = "reconcile"
             result = reconcile(
                 session,
                 additional_doctor_id=cast(TypeIDType, doctor_id),
@@ -61,13 +65,14 @@ def main() -> int:
                 confirm_plan_sha256=arguments.confirm_plan_sha256,
             )
             if arguments.confirm_plan_sha256:
+                phase = "commit"
                 session.commit()
             else:
                 session.rollback()
         print(json.dumps(result, sort_keys=True))
         return 0
     except Exception:  # noqa: BLE001 -- operator output must not contain private data
-        print(json.dumps({"status": "refused_or_unconfirmed"}))
+        print(json.dumps({"status": "refused_or_unconfirmed", "phase": phase}))
         return 1
 
 

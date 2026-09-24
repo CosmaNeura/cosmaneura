@@ -35,13 +35,16 @@ practice can retain its legacy solo enrollment setting only with the separate
 `--preserve-solo-enrollment` selection, bound into the reviewed plan. That
 selection does not open public join-code enrollment or alter owner closure
 rules. It is for the specifically authorized staging test membership, not a
-new general enrollment path. Managed practices are refused. Practices with a
+new general enrollment path. Organization-owned and negotiated-BAA reserved
+practices, managed-domain identities and roster assignments are refused. Practices with a
 Stripe subscription are refused, and the normal active-seat ceiling is checked.
 No BAA, billing, trial or public enrollment settings are changed.
 
 The existing provider must have one unambiguous active provider tenant, one
 active reviewed Scribe provider link for the practice, and one unshared person
-binding. All capture scope columns and the stored digest must match. Existing
+binding, with exactly one binding and capture in that tenant. A second legacy
+capture requires a different reviewed reconciliation, before any mapping is
+added. All capture scope columns and the stored digest must match. Existing
 identity, actor, tenant, link, membership, person and binding tombstones deny.
 The original Scribe staging provenance marker may be supplemented with the
 current patient reference, but is never replaced. Another patient reference or
@@ -54,6 +57,16 @@ mappings are refused. The final state must pass the ordinary runtime
 1. Select a clean, merged and independently Cursor-reviewed operator commit.
    Check exact source file hashes and the unchanged deployed Core source and
    schema. Do not execute a draft or use another task's working checkout.
+   Normal execution is `python -m scripts.staging_reconcile_scribe_prep` from
+   the repository root (`/app` in the image). Do not execute the script by
+   path with only `scripts/` on Python's import path.
+   When the deployed image predates this operator, retain its exact digest and
+   verify the imported `app` helper files and activemodel version against the
+   locally tested baseline. A private execution wrapper may load only the two
+   exact merged operator files into memory with verified SHA256 hashes, then
+   invoke the same CLI `main()` and arguments. It must not replace application
+   files, alter helpers or invoke `reconcile` around the CLI's target checks.
+   Retain the wrapper and dependency-hash receipt with the concrete plan.
 2. Invoke the script without `--confirm-plan-sha256`, with the exact additional
    Doctor, existing capture binding and stable opaque operator reference. The
    owner-directed membership flag records the already-received authorization;
@@ -61,10 +74,14 @@ mappings are refused. The final state must pass the ordinary runtime
    scope identifiers and fingerprints only, then rolls back.
 3. Inspect the concrete plan. Preserve its hash, source commit/file hashes,
    current staging revision and owner authorization in private local evidence.
-4. Apply with the exact plan SHA. The script opens a SERIALIZABLE transaction,
+4. Apply with the exact plan SHA. The script opens a READ COMMITTED transaction,
    locks pilot lineage before practice/doctor rows, rechecks current access and
    scope, and appends the membership, mapping, provenance and operational audit
    rows atomically. No network model, messaging or billing call occurs.
+   Fresh statement snapshots after the advisory/row locks observe a concurrent
+   committed roster import or seat activation. A repeatable/serializable
+   snapshot could predate a lock wait and is deliberately refused. Tenant and
+   person row locks also fence new foreign-key dependent binding inserts.
 5. Re-observe the rows and capture digest. Verify fresh authenticated dashboard
    Session Prep and native Scribe reopening. Continue synthetic note review,
    later-visit Prep, correction invalidation and persistence verification.
@@ -83,6 +100,16 @@ plan drift and current-access refusals, and rollback after a failed final
 postcondition. Run surrounding authority/capture tests and Python checks, then
 independent Cursor review after the final substantive push. GitHub Actions is
 unavailable; local results are the primary verification.
+
+The review follow-up adds real two-session advisory-lock snapshot checks,
+reserved-practice/managed-domain/extra-binding refusals, the seat ceiling, and
+the added provider's own-record exchange plus cross-provider denial. Those
+checks do not claim a concurrent full roster import, outer CLI commit/rollback
+or cross-transaction retry: the operator fixtures retain outer rollback and
+use savepoints. Exact retry remains limited to before intervening scope changes.
+Adding a workforce member leaves the existing owner-closure rule in force;
+that rule requires revoking the workforce member before closing the owner.
+CLI failures expose only a fixed execution phase, never exception values.
 
 Before commit, any error rolls back the whole operation. After commit, retain
 the additive mappings and audit history. They have no rollback-by-deletion

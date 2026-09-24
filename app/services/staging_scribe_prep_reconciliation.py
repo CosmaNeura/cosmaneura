@@ -2,7 +2,7 @@
 
 This operator is never called by token exchange or a public route. It preserves
 all existing identity and capture rows. The caller supplies a reviewed plan
-digest and owns a SERIALIZABLE transaction, including rollback on refusal.
+digest and owns a READ COMMITTED transaction, including rollback on refusal.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.session_prep import SESSION_PREP_PROVIDER_SETTINGS
 from app.environments import is_staging
 from app.services.doctor_access import resolve_doctor_access
+from app.services.managed_organization_access import uses_managed_organization_path
 from app.services.organization_access import (
     doctor_has_managed_roster_assignment,
     lock_roster_enrollment_email,
@@ -106,12 +107,14 @@ def reconcile(
     _require(all(c.isalnum() or c in "._-" for c in operator_ref))
     lock = confirm_plan_sha256 is not None
     if lock:
-        _require(session.connection().get_isolation_level() == "SERIALIZABLE")
+        _require(session.connection().get_isolation_level() == "READ COMMITTED")
+        # Advisory locks must precede fresh READ COMMITTED statement snapshots.
+        # A repeatable snapshot taken before a wait can miss roster/seat changes.
         lock_pilot_access_lineage(session)
 
     candidate = _get(session, ScribeCaptureBinding, capture_binding_id, False)
     practice = _get(session, Practice, candidate.practice_id, lock)
-    _require(practice.organization_id is None)
+    _require(practice.organization_id is None and not practice.negotiated_baa_required)
     _require(not practice.stripe_subscription_id)
     # Explicit owner-directed pilot membership may preserve a legacy solo
     # enrollment setting. It never opens the public join-code route.
@@ -127,6 +130,7 @@ def reconcile(
     _require(len(doctors) == 2)
     doctor = doctors[str(candidate.doctor_id)]
     additional = doctors[str(additional_doctor_id)]
+    _require(not uses_managed_organization_path(additional))
     _require(not doctor_has_managed_roster_assignment(additional, session=session))
     for row in doctors.values():
         decision = resolve_doctor_access(row)
@@ -246,6 +250,16 @@ def reconcile(
         )
     ).all()
     _require(len(person_bindings) == 1 and person_bindings[0].id == person_binding.id)
+    tenant_bindings = session.exec(
+        select(AuthorityPersonBinding).where(
+            AuthorityPersonBinding.tenant_id == tenant.id
+        )
+    ).all()
+    captures = session.exec(
+        select(ScribeCaptureBinding).where(ScribeCaptureBinding.tenant_id == tenant.id)
+    ).all()
+    _require(len(tenant_bindings) == 1 and tenant_bindings[0].id == person_binding.id)
+    _require(len(captures) == 1 and captures[0].id == binding.id)
     origins = session.exec(
         select(AuthorityPersonOrigin).where(
             AuthorityPersonOrigin.person_id == person.id
