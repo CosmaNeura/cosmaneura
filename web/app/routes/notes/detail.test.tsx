@@ -2,6 +2,10 @@ import type { PropsWithChildren } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import type { AiVisitTranscript, NoteDetail } from "~/configuration/client"
+import {
+  isReferenceLabsEnabled,
+  isReferenceToolkitEnabled,
+} from "~/utils/reference-toolkit-feature"
 
 import NoteDetailPage from "./detail"
 import { fireEvent, render, screen, within } from "@testing-library/react"
@@ -15,7 +19,8 @@ vi.mock("~/utils/engagement-feature", () => ({
   isEngagementEnabled: () => false,
 }))
 vi.mock("~/utils/reference-toolkit-feature", () => ({
-  isReferenceToolkitEnabled: () => false,
+  isReferenceToolkitEnabled: vi.fn(() => false),
+  isReferenceLabsEnabled: vi.fn(() => false),
 }))
 vi.mock("~/sovereign/SovereignPanelHost", () => ({
   SovereignPanelHost: () => null,
@@ -37,8 +42,12 @@ vi.mock("~/components/shared/StatusBadge", () => ({ StatusBadge: () => null }))
 vi.mock("~/components/shared/EngagementBadge", () => ({
   EngagementBadge: () => null,
 }))
-vi.mock("~/components/MedicationPanel", () => ({ MedicationPanel: () => null }))
-vi.mock("~/components/LabResultsPanel", () => ({ LabResultsPanel: () => null }))
+vi.mock("~/components/MedicationPanel", () => ({
+  MedicationPanel: () => <div>Medication tools</div>,
+}))
+vi.mock("~/components/LabResultsPanel", () => ({
+  LabResultsPanel: () => <div>Lab tools</div>,
+}))
 
 // Keep the real note component/collapsible/copy behavior. Replace the transcript
 // renderer only, so these tests focus on which source the page supplies to it.
@@ -210,4 +219,19 @@ describe("note transcript provenance", () => {
       "source_a",
     )
   })
+})
+
+it("keeps medications available while the independent lab release gate is off", () => {
+  vi.mocked(isReferenceToolkitEnabled).mockReturnValueOnce(true)
+  vi.mocked(isReferenceLabsEnabled).mockReturnValueOnce(false)
+  show()
+  expect(screen.getByText("Medication tools")).toBeVisible()
+  expect(screen.queryByText("Lab tools")).not.toBeInTheDocument()
+})
+
+it("shows labs only when the independent lab gate permits them", () => {
+  vi.mocked(isReferenceToolkitEnabled).mockReturnValueOnce(true)
+  vi.mocked(isReferenceLabsEnabled).mockReturnValueOnce(true)
+  show()
+  expect(screen.getByText("Lab tools")).toBeVisible()
 })

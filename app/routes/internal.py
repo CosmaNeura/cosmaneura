@@ -28,6 +28,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.reference_labs_gate as reference_labs_gate
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -2840,6 +2841,14 @@ def medication_nutrient_depletions(
     )
 
 
+def _require_reference_labs(request: Request) -> None:
+    # Check the release latch before resolving any provider email or lab data.
+    if not reference_labs_gate.REFERENCE_LABS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if not reference_labs_gate.reference_labs_enabled_for(request.state.doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 class LabResultData(BaseModel, extra="forbid"):
     id: str
     biomarker: str
@@ -2878,7 +2887,11 @@ def _lab_panel_data(panel: LabPanel, results: list[LabResult]) -> LabPanelData:
     )
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-panels", name="lab_panel_list")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_list(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> list[LabPanelData]:
@@ -2919,7 +2932,11 @@ class CreateLabPanel(BaseModel, extra="forbid"):
     results: list[ManualLabResult] = Field(min_length=1)
 
 
-@internal_api_app.post("/patients/{patient_id}/lab-panels", name="lab_panel_create")
+@internal_api_app.post(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_create",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_create(
     request: Request, patient_id: Annotated[str, Path()], data: CreateLabPanel
 ) -> LabPanelData:
@@ -2962,7 +2979,9 @@ def lab_panel_create(
     return _lab_panel_data(panel, results)
 
 
-@internal_api_app.post("/lab-panels/get-signed-url")
+@internal_api_app.post(
+    "/lab-panels/get-signed-url", dependencies=[Depends(_require_reference_labs)]
+)
 def generate_signed_lab_upload_url(
     request: Request,
     data: ClinicalUploadGrantRequest,
@@ -2998,6 +3017,7 @@ class LabUploadComplete(BaseModel, extra="forbid"):
 @internal_api_app.post(
     "/patients/{patient_id}/lab-panels/upload-complete",
     name="lab_panel_upload_complete",
+    dependencies=[Depends(_require_reference_labs)],
 )
 def lab_panel_upload_complete(
     request: Request, patient_id: Annotated[str, Path()], data: LabUploadComplete
@@ -3089,6 +3109,7 @@ def lab_panel_upload_complete(
 @internal_api_app.delete(
     "/lab-panels/{lab_panel_id}",
     name="lab_panel_delete",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_panel_delete(request: Request, lab_panel_id: Annotated[str, Path()]) -> None:
@@ -3141,7 +3162,11 @@ class LabEvaluationPanel(BaseModel, extra="forbid"):
     entries: list[LabEvaluationEntry]
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-evaluations", name="lab_evaluations")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-evaluations",
+    name="lab_evaluations",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_evaluations(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> LabEvaluationPanel:
@@ -3230,7 +3255,11 @@ def _lab_range_data(biomarker: str, doctor_id) -> LabRangeData:
     )
 
 
-@internal_api_app.get("/lab-ranges", name="lab_range_list")
+@internal_api_app.get(
+    "/lab-ranges",
+    name="lab_range_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_list(request: Request) -> list[LabRangeData]:
     "effective ranges (defaults merged with this doctor's overrides) for all biomarkers"
     doctor: Doctor = request.state.doctor
@@ -3279,7 +3308,11 @@ class UpdateLabRange(BaseModel, extra="forbid"):
         return self
 
 
-@internal_api_app.put("/lab-ranges/{biomarker}", name="lab_range_upsert")
+@internal_api_app.put(
+    "/lab-ranges/{biomarker}",
+    name="lab_range_upsert",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_upsert(
     request: Request, biomarker: Annotated[str, Path()], data: UpdateLabRange
 ) -> LabRangeData:
@@ -3304,6 +3337,7 @@ def lab_range_upsert(
 @internal_api_app.delete(
     "/lab-ranges/{biomarker}",
     name="lab_range_reset",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_range_reset(request: Request, biomarker: Annotated[str, Path()]) -> None:

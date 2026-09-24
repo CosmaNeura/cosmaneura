@@ -23,7 +23,10 @@ import {
 } from "~/lib/practice-gate-error"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
-import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
+import {
+  isReferenceLabsEnabled,
+  isReferenceToolkitEnabled,
+} from "~/utils/reference-toolkit-feature"
 import { useTerminology } from "~/utils/terminology"
 
 import { useUser } from "@clerk/clerk-react"
@@ -170,6 +173,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const referenceToolkitEnabled = isReferenceToolkitEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const referenceLabsEnabled = isReferenceLabsEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
 
   return (
     <SidebarInset>
@@ -223,7 +229,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         {referenceToolkitEnabled && (
           <MedicationPanel patientId={loaderData.patient.id} />
         )}
-        {referenceToolkitEnabled && (
+        {referenceLabsEnabled && (
           <LabResultsPanel patientId={loaderData.patient.id} />
         )}
 
