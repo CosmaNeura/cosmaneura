@@ -16,7 +16,7 @@ import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import type { EngagementRole } from "~/configuration/client"
-import { standardDateFormat } from "~/lib/date"
+import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
@@ -177,7 +177,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           status={hasNotes ? "completed" : "not-started"}
           engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
-            "Appointment Date": standardDateFormat(
+            "Appointment Date": appointmentDateFormat(
               loaderData.appointment.appointment_date,
             ),
             // "Notes Created At": "Completed at",
