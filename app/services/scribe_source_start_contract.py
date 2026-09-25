@@ -13,6 +13,8 @@ from pydantic import (
     model_serializer,
 )
 
+from app.services.scribe_capture_limits import MAX_CAPTURE_CHUNKS
+
 
 class NativeStartContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
@@ -40,7 +42,9 @@ class NativeStartPayload(NativeStartContract):
     lease_receipt_id: UUID
     lease_generation: int = Field(strict=True, ge=1)
     capture_authorized_until: AwareDatetime
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
 
 
 class NativeSourceStart(NativeStartContract):
@@ -66,7 +70,9 @@ class NativeStartReceipt(NativeStartContract):
     issued_at: AwareDatetime | None
     expires_at: AwareDatetime | None
     capability_id: UUID
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
 
 
 class NativeStartDecision(NativeStartContract):
@@ -88,7 +94,9 @@ class NativeUnstartedRetirement(NativeStartContract):
     lease_receipt_id: UUID
     lease_generation: int = Field(strict=True, ge=1)
     capture_authorized_until: AwareDatetime
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
     retired_at: AwareDatetime
 
 

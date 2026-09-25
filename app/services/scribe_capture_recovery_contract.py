@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from app.services.scribe_capture_limits import MAX_CAPTURE_CHUNKS
 from app.services.scribe_capture_working_contract import (
     canonical_hash as canonical_sha256,
 )
@@ -21,7 +22,7 @@ SessionStatus = Literal[
     "failed",
 ]
 
-SequenceBoundary = Annotated[int, Field(strict=True, ge=0, le=1000)]
+SequenceBoundary = Annotated[int, Field(strict=True, ge=0, le=MAX_CAPTURE_CHUNKS)]
 GapReason = Literal[
     "audio_context_suspended",
     "audio_device_disconnected",
@@ -62,7 +63,7 @@ class CaptureRecoveryRequest(_ClosedModel):
     channel: Literal["microphone"] = "microphone"
     segment_id: UUID
     segment_ordinal: int = Field(strict=True, ge=0, lt=1000)
-    first_sequence_number: int = Field(strict=True, ge=0, lt=1000)
+    first_sequence_number: int = Field(strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS)
     next_sequence_number: SequenceBoundary
     segment_started_at: AwareDatetime
     gap_id: UUID
@@ -77,7 +78,10 @@ class CaptureRecoveryRequest(_ClosedModel):
             self.segment_id == self.gap_id
             or self.next_sequence_number < self.first_sequence_number
             or not self.segment_started_at <= self.observed_at <= self.acknowledged_at
-            or (self.decision == "resume_capture" and self.next_sequence_number == 1000)
+            or (
+                self.decision == "resume_capture"
+                and self.next_sequence_number == MAX_CAPTURE_CHUNKS
+            )
             or (self.decision == "finish_capture" and self.next_sequence_number == 0)
         ):
             raise ValueError("capture_recovery_observation_invalid")
