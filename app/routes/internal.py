@@ -299,14 +299,20 @@ def note_detail(
     appointment_id: Annotated[TypeIDType, Path()],
 ) -> NoteDetail:
     response.headers["Cache-Control"] = "no-store"
-    # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
     appointment = cast(
-        Appointment,
+        Appointment | None,
         Appointment.where(
             Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-        ).one(),
+        ).first(),
     )
+    if appointment is None:
+        # A stale link and a visit owned by another doctor have the same result.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Visit unavailable",
+            headers={"Cache-Control": "no-store"},
+        )
 
     visit_notes = cast(
         list[AIVisitNote],

@@ -1,7 +1,8 @@
-import { type MetaFunction, data, isRouteErrorResponse } from "react-router"
+import { type MetaFunction, isRouteErrorResponse } from "react-router"
 
 import type { Route } from "./+types/detail"
 
+import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
@@ -14,13 +15,9 @@ import { EngagementBadge } from "~/components/shared/EngagementBadge"
 import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
-import {
-  practiceAgreementBlockFromClientResult,
-  practiceAgreementBlockFromUnknown,
-} from "~/lib/practice-gate-error"
+import { loadNoteDetail } from "~/lib/note-detail-load"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 import {
@@ -30,7 +27,6 @@ import {
 import { useTerminology } from "~/utils/terminology"
 
 import { useUser } from "@clerk/clerk-react"
-import { invariant } from "@epic-web/invariant"
 
 type Status = Parameters<typeof StatusBadge>[0]["status"]
 
@@ -52,37 +48,32 @@ export function EmptyNotes({
 }
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
-  try {
-    const result = await noteDetail({
-      throwOnError: false,
-      signal: loaderArgs.request.signal,
-      path: {
-        appointment_id: loaderArgs.params.id,
-      },
-    })
-    const blocked = practiceAgreementBlockFromClientResult(result)
-    if (blocked) {
-      throw data(blocked, { status: 403 })
-    }
-
-    invariant(result.data, "data should exist")
-    const requestedNoteId = new URL(loaderArgs.request.url).searchParams.get(
-      "reviewNote",
-    )
-    return {
-      ...result.data,
-      focusedNoteId: result.data.notes?.some(
-        (note) => note.id === requestedNoteId,
-      )
-        ? requestedNoteId
-        : null,
-    }
-  } catch (error) {
-    if (isRouteErrorResponse(error)) throw error
-    const blocked = practiceAgreementBlockFromUnknown(error)
-    if (blocked) throw data(blocked, { status: 403 })
-    throw error
+  const result = await loadNoteDetail(loaderArgs.params.id, loaderArgs.request)
+  const requestedNoteId = new URL(loaderArgs.request.url).searchParams.get(
+    "reviewNote",
+  )
+  return {
+    ...result,
+    focusedNoteId: result.notes?.some((note) => note.id === requestedNoteId)
+      ? requestedNoteId
+      : null,
   }
+}
+
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  if (isRouteErrorResponse(error)) {
+    const kind = error.data?.noteLoadFailure
+    if (
+      (error.status === 404 && kind === "unavailable") ||
+      (error.status === 401 && kind === "session") ||
+      (error.status === 503 && kind === "temporary")
+    ) {
+      return <NoteDetailRecovery kind={kind} />
+    }
+  }
+  // Existing practice/view-as recovery and unexpected render errors retain
+  // their enclosing guards; only this loader's safe failures are handled here.
+  throw error
 }
 
 // TODO can we make this dynamic?
