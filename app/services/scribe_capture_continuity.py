@@ -5,12 +5,13 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from app.services.scribe_capture_limits import MAX_CAPTURE_CHUNKS
 from app.services.scribe_capture_working_contract import ProtectedContract
 
 
 class NativeIntervalStart(ProtectedContract):
     source_start_id: UUID
-    first_sequence_number: int = Field(strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS)
 
 
 class CaptureContinuity(ProtectedContract):
