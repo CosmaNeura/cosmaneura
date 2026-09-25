@@ -70,6 +70,9 @@ export async function loadNoteDetail(id: string, request: Request) {
     request.signal.removeEventListener("abort", cancel)
   }
 
+  // The generated client can return a transport exception when throwOnError is
+  // false. Retain the existing redirect signal in that shape as well.
+  if (isBillingRecoveryRedirectError(result.error)) throw result.error
   const blocked = practiceAgreementBlockFromClientResult(result)
   if (blocked) throw data(blocked, { status: 403 })
   if (!result.data || (result.response && !result.response.ok)) {

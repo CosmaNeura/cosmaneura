@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { BillingRecoveryRedirectError } from "~/lib/billing-recovery"
 import { NOTE_DETAIL_TIMEOUT_MS } from "~/lib/note-detail-load"
 import {
   PRACTICE_BAA_REQUIRED_DETAIL,
@@ -30,6 +31,17 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers())
 
 describe("notes detail access recovery", () => {
+  it.each(["thrown", "returned"])(
+    "preserves a %s billing redirect signal",
+    async (shape) => {
+      const signal = new BillingRecoveryRedirectError(
+        "/settings?billing=required",
+      )
+      if (shape === "thrown") noteDetailMock.mockRejectedValue(signal)
+      else noteDetailMock.mockResolvedValue({ error: signal })
+      await expect(clientLoader(args())).rejects.toBe(signal)
+    },
+  )
   it.each([
     [PRACTICE_MEMBERSHIP_REQUIRED_DETAIL, "join_practice"],
     [PRACTICE_BAA_REQUIRED_DETAIL, "accept_agreement"],
