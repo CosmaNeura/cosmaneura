@@ -1,6 +1,8 @@
 import { format } from "date-fns"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { appointmentDateFormat } from "~/lib/date"
+
 import { UploadRecordingButton } from "./UploadRecordingButton"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
@@ -103,10 +105,43 @@ describe("date-only recording upload", () => {
     await waitFor(() => expect(upload).toHaveBeenCalledOnce())
     expect(upload).toHaveBeenCalledWith(
       expect.objectContaining({
-        appointmentDate: `${displayedDay}T00:00:00`,
+        appointmentDate: new Date(now).toISOString(),
         dateOfBirth: "2000-01-01T00:00:00",
         patientName: "Synthetic date check",
       }),
     )
+    // The API emits the stored UTC instant without an offset. Its display must
+    // round-trip to the calendar day seen by the provider, not the UTC day.
+    const persistedDate = upload.mock.calls[0][0].appointmentDate.slice(0, -1)
+    expect(appointmentDateFormat(persistedDate)).toBe(
+      format(new Date(now), "M/d/yy"),
+    )
+  })
+
+  it("retains the order of morning and afternoon uploads on the same day", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] })
+    upload.mockResolvedValue({ ok: true })
+    for (const hour of [9, 15]) {
+      vi.setSystemTime(new Date(2026, 8, 24, hour, 30))
+      const view = render(<UploadRecordingButton />)
+      fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+      fireEvent.click(
+        screen.getByRole("button", { name: /Synthetic date check/ }),
+      )
+      fireEvent.click(
+        screen.getByRole("button", { name: "Choose synthetic audio" }),
+      )
+      fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+      await waitFor(() =>
+        expect(upload).toHaveBeenCalledTimes(hour === 9 ? 1 : 2),
+      )
+      view.unmount()
+    }
+    const [morning, afternoon] = upload.mock.calls.map(
+      ([value]) => value.appointmentDate,
+    )
+    expect(Date.parse(afternoon) - Date.parse(morning)).toBe(6 * 60 * 60 * 1000)
+    expect(appointmentDateFormat(morning.slice(0, -1))).toBe("9/24/26")
+    expect(appointmentDateFormat(afternoon.slice(0, -1))).toBe("9/24/26")
   })
 })

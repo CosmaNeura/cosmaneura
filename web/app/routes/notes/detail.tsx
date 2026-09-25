@@ -16,7 +16,7 @@ import { InnerScrollableContent } from "~/components/shared/InnerScrollableConte
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
-import { standardDateFormat } from "~/lib/date"
+import { appointmentDateFormat } from "~/lib/date"
 import {
   practiceAgreementBlockFromClientResult,
   practiceAgreementBlockFromUnknown,
@@ -186,7 +186,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           status={hasNotes ? "completed" : "not-started"}
           engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
-            "Appointment Date": standardDateFormat(
+            "Appointment Date": appointmentDateFormat(
               loaderData.appointment.appointment_date,
             ),
             // "Notes Created At": "Completed at",

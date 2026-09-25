@@ -188,10 +188,8 @@ function VisitAudioUploadForm({
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const result = await submitVisitAudioUpload({
-      // These controls collect days, not instants. Keep the displayed calendar
-      // day in the API's existing naive-datetime representation; UTC conversion
-      // can move a visit or birthday to the preceding/following day.
-      appointmentDate: format(values.appointment_date, "yyyy-MM-dd'T'00:00:00"),
+      // Encounters retain their instant and ordering; birthdays are calendar days.
+      appointmentDate: values.appointment_date.toISOString(),
       dateOfBirth: format(values.date_of_birth, "yyyy-MM-dd'T'00:00:00"),
       file: values.file,
       patientName: values.patient_name,
@@ -236,7 +234,7 @@ function VisitAudioUploadForm({
               <FormControl>
                 <DateTimePicker
                   {...field}
-                  showTimePicker={false}
+                  showTimePicker
                   suggestions={[
                     "Today",
                     "Yesterday",

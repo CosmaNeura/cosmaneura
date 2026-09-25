@@ -5,7 +5,7 @@ import type {
   PriorNoteOverview,
   PriorNotePreview,
 } from "~/configuration/client"
-import { standardDateFormat } from "~/lib/date"
+import { appointmentDateFormat } from "~/lib/date"
 
 const labels: Record<PriorNotePreview["status"], string> = {
   included: "Included in the next preparation",
@@ -57,7 +57,8 @@ export function SessionPrepPriorNotes({
             >
               <div>
                 <p className="text-sm font-medium">
-                  {note.note_type} · {standardDateFormat(note.appointment_date)}
+                  {note.note_type} ·{" "}
+                  {appointmentDateFormat(note.appointment_date)}
                 </p>
                 <p className="text-muted-foreground text-sm">
                   {labels[note.status]}
