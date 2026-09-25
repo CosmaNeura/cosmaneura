@@ -1,3 +1,4 @@
+import { withReadDeadline } from "~/lib/read-deadline"
 import {
   type ViewAsRequestBinding,
   commitViewAsControlTransition,
@@ -34,8 +35,13 @@ async function viewAsRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return rawViewAsControlRequest<T>(path, init)
 }
 
-export async function getViewAsStatus() {
-  const status = await viewAsRequest<ViewAsStatus>("/status")
+export async function getViewAsStatus(signal?: AbortSignal) {
+  const status = await withReadDeadline(
+    (readSignal) =>
+      viewAsRequest<ViewAsStatus>("/status", { signal: readSignal }),
+    { signal },
+  )
+  // A late status response must not establish or change the browser binding.
   return observeViewAsStatusBinding(status)
 }
 

@@ -6,8 +6,9 @@ import {
   practiceAgreementBlockFromClientResult,
   practiceAgreementBlockFromUnknown,
 } from "~/lib/practice-gate-error"
+import { READ_DEADLINE_MS, withReadDeadline } from "~/lib/read-deadline"
 
-export const NOTE_DETAIL_TIMEOUT_MS = 30_000
+export const NOTE_DETAIL_TIMEOUT_MS = READ_DEADLINE_MS
 
 export type NoteLoadFailure = "unavailable" | "session" | "temporary"
 
@@ -26,48 +27,23 @@ function loadFailure(status?: number) {
 
 /** Bound the full SDK read, including token acquisition and response parsing. */
 export async function loadNoteDetail(id: string, request: Request) {
-  const controller = new AbortController()
-  let timeout: ReturnType<typeof setTimeout> | undefined
-  let cancel = () => {}
   let result: Awaited<ReturnType<typeof noteDetail>>
   try {
-    const deadline = new Promise<never>((_, reject) => {
-      cancel = () => {
-        controller.abort()
-        reject(
-          request.signal.reason ?? new DOMException("Cancelled", "AbortError"),
-        )
-      }
-      request.signal.addEventListener("abort", cancel, { once: true })
-      if (request.signal.aborted) {
-        cancel()
-        return
-      }
-      timeout = setTimeout(() => {
-        // Reject before aborting the transport so both paths have safe UI copy.
-        reject(new Error("Visit request deadline reached"))
-        controller.abort()
-      }, NOTE_DETAIL_TIMEOUT_MS)
-    })
-    result = await Promise.race([
-      deadline,
-      request.signal.aborted
-        ? new Promise<never>(() => {})
-        : noteDetail({
-            throwOnError: false,
-            signal: controller.signal,
-            path: { appointment_id: id },
-          }),
-    ])
+    result = await withReadDeadline(
+      (signal) =>
+        noteDetail({
+          throwOnError: false,
+          signal,
+          path: { appointment_id: id },
+        }),
+      { signal: request.signal },
+    )
   } catch (error) {
     if (request.signal.aborted || isBillingRecoveryRedirectError(error))
       throw error
     const blocked = practiceAgreementBlockFromUnknown(error)
     if (blocked) throw data(blocked, { status: 403 })
     throw loadFailure()
-  } finally {
-    clearTimeout(timeout)
-    request.signal.removeEventListener("abort", cancel)
   }
 
   // The generated client can return a transport exception when throwOnError is

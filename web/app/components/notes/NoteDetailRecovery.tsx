@@ -23,10 +23,18 @@ const messages = {
 }
 
 /** Keep the notes sidebar available; never mount a record or assistant on failure. */
-export function NoteDetailRecovery({ kind }: { kind: NoteLoadFailure }) {
+export function NoteDetailRecovery({
+  kind,
+  visits = false,
+}: {
+  kind: NoteLoadFailure
+  visits?: boolean
+}) {
   const revalidator = useRevalidator()
   const pending = revalidator.state === "loading"
-  const message = messages[kind]
+  const message = visits
+    ? { ...messages.temporary, title: "Couldn’t load your visits" }
+    : messages[kind]
   return (
     <SidebarInset>
       <header className="flex items-center gap-2 border-b p-4">
