@@ -17,6 +17,8 @@ EXPECTED_SCHEMA_BEFORE="${EXPECTED_SCHEMA_BEFORE:-}"
 EXPECTED_SCHEMA_AFTER="${EXPECTED_SCHEMA_AFTER:-}"
 EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
+STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
+EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
@@ -257,7 +259,7 @@ fi
 # drop them immediately on either success or failure. ENV_JSON is deliberately
 # not exported, so later child processes receive only explicitly scoped values.
 CONFIGURATION_STATUS=0
-ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend) || \
+ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend 2>/dev/null) || \
 	CONFIGURATION_STATUS=$?
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
@@ -296,6 +298,24 @@ if [[ ! "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" =~ ^sha256:[0-9a-f]{64}
 	echo "Expected staging identity fingerprint-set hash must use the canonical sha256 form."
 	exit 1
 fi
+case "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" in
+true)
+	if [[ ! "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		echo "Configuration preservation requires the reviewed full runtime fingerprint."
+		exit 1
+	fi
+	;;
+false)
+	if [[ -n "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" ]]; then
+		echo "A full runtime fingerprint requires configuration preservation."
+		exit 1
+	fi
+	;;
+*)
+	echo "Invalid staging configuration preservation mode."
+	exit 1
+	;;
+esac
 if ! RESOLVED_GIT_SHA=$(git -C "$REPOSITORY_ROOT" rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
 	echo "Error: staging source is not a valid commit in this repository."
 	exit 1
@@ -549,6 +569,44 @@ configure_workload_contract() {
 		fi
 	fi
 }
+
+runtime_contracts_json() {
+	local container secret_names public_names args
+	local container_secret_vars=() container_public_vars=()
+	local contracts=()
+	for container in $CRITICAL_CONTAINERS; do
+		configure_workload_contract "$container"
+		secret_names=$(printf '%s\n' "${container_secret_vars[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		public_names=$(printf '%s\n' "${container_public_vars[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		case "$container" in
+		"$API_CONTAINER") args=$STAGING_API_COMMAND ;;
+		"$WORKER_CONTAINER") args=$STAGING_WORKER_COMMAND ;;
+		"$SCHEDULER_CONTAINER") args=$SCHEDULER_COMMAND ;;
+		esac
+		contracts+=("$(jq -cn --arg name "$container" --arg args "$args" \
+			--argjson secrets "$secret_names" --argjson public "$public_names" \
+			'{name:$name,args:[$args],secret_names:$secrets,public_names:$public}')")
+	done
+	printf '%s\n' "${contracts[@]}" | jq -sc '.'
+}
+
+verify_effective_configuration_fingerprint() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
+	local observed
+	observed=$(printf '%s\n%s\n' "$ENV_JSON" "$RUNTIME_CONTRACTS_JSON" |
+		jq -sc '{configuration:.[0],contracts:.[1]}' |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_runtime_configuration.py" --fingerprint) || return 1
+	if [[ "$observed" != "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" ]]; then
+		echo "Resolved staging configuration differs from the reviewed full runtime fingerprint." >&2
+		return 1
+	fi
+}
+
+RUNTIME_CONTRACTS_JSON=""
+if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
+	verify_effective_configuration_fingerprint || exit 1
+fi
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 	exit 1
@@ -814,6 +872,31 @@ verify_workload_state_ready() {
 		echo "Staging workloads are not uniformly ready in Single mode with API traffic on the ready revision."
 		return 1
 	fi
+}
+
+verify_preserved_runtime() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
+	local selected=${1:-$CRITICAL_CONTAINERS}
+	local observed container state contract expected_revision secrets
+	verify_effective_configuration_fingerprint || return 1
+	observed=$(collect_workload_state safe) || return 1
+	verify_workload_state_ready "$observed" || return 1
+	for container in $selected; do
+		state=$(jq -ce --arg name "$container" '.[] | select(.name == $name)' <<<"$observed") || return 1
+		contract=$(jq -ce --arg name "$container" '.[] | select(.name == $name)' <<<"$RUNTIME_CONTRACTS_JSON") || return 1
+		expected_revision=$(jq -er --arg name "$container" '.[] | select(.name == $name) | .latestReadyRevision' <<<"$WORKLOADS_BEFORE_JSON") || return 1
+		secrets=$(az containerapp secret list -n "$container" -g "$RESOURCE_GROUP" --show-values -o json) || return 1
+		# Values are consumed over stdin only and never included in evidence.
+		if ! printf '%s\n%s\n%s\n%s\n' "$ENV_JSON" "$contract" "$state" "$secrets" |
+			jq -sc --arg revision "$expected_revision" \
+			'{configuration:.[0],contract:.[1],state:.[2],secrets:.[3],expected_revision:$revision}' |
+			"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_runtime_configuration.py" --check-workload; then
+			unset secrets
+			echo "Staging runtime preservation failed for $container." >&2
+			return 1
+		fi
+		unset secrets
+	done
 }
 
 verify_candidate_workload_state() {
@@ -1311,6 +1394,7 @@ initiate_deployment() {
 	local container_name=$1
 	local git_sha=$2
 	local image="$STAGING_IMAGE_REFERENCE"
+	verify_preserved_runtime "$container_name" || return 1
 
 	# Build secrets and env var args — only include vars that have a value in 1Password.
 	# We skip missing vars so we never reference a secretref that doesn't exist.
@@ -1347,7 +1431,7 @@ initiate_deployment() {
 	echo "Initiating deployment for $container_name with image $image..."
 
 	# Secrets must be set separately; az containerapp update does not support --secrets.
-	if [[ ${#secrets_args[@]} -gt 0 ]]; then
+	if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" && ${#secrets_args[@]} -gt 0 ]]; then
 		if ! az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
 			--secrets "${secrets_args[@]}"; then
 			echo "Failed to configure secrets for $container_name."
@@ -1402,6 +1486,7 @@ initiate_deployment() {
 }
 
 remove_unowned_billing_secrets() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	local remove_names=()
 	if ! billing_integration_enabled_for "$container_name"; then
@@ -1423,6 +1508,7 @@ remove_unowned_billing_secrets() {
 }
 
 remove_disabled_record_grant_secret() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	if record_grants_enabled_for "$container_name"; then
 		return 0
@@ -1439,6 +1525,7 @@ remove_disabled_record_grant_secret() {
 }
 
 remove_disallowed_recall_secret() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		return 0
@@ -1615,6 +1702,7 @@ wait_for_incompatible_worker_replicas_to_drain() {
 # Run migrations before deploying new containers
 verify_founder_release_source || exit 1
 verify_azure_deployment_identity || exit 1
+verify_preserved_runtime || exit 1
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."

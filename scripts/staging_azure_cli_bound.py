@@ -72,6 +72,7 @@ ALLOWED_CONTAINERAPP_COMMANDS = {
     ("containerapp", "revision", "show"),
     ("containerapp", "secret", "remove"),
     ("containerapp", "secret", "set"),
+    ("containerapp", "secret", "list"),
 }
 ALLOWED_OPTION_TOKENS = {
     "--args",
@@ -103,6 +104,7 @@ ALLOWED_OPTION_TOKENS = {
     "--secret-names",
     "--secrets",
     "--set-env-vars",
+    "--show-values",
     "--subscription",
     "--tail",
     "--trigger-type",
@@ -294,6 +296,31 @@ def non_secret_argv(argv: list[str]) -> tuple[str, ...]:
 
 
 def validate_staging_scope(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
+    if argv[:3] == ["containerapp", "secret", "list"]:
+        names = flag_values(argv, {"-n"})
+        require(
+            len(names) == 1
+            and names[0] in STAGING_CONTAINER_NAMES - {"cosmaneura-staging-migrate"}
+        )
+        require(
+            argv
+            == [
+                "containerapp",
+                "secret",
+                "list",
+                "-n",
+                names[0],
+                "-g",
+                STAGING_RESOURCE_GROUP,
+                "--show-values",
+                "-o",
+                "json",
+                "--subscription",
+                SUBSCRIPTION,
+            ]
+        )
+        return
+    require("--show-values" not in argv)
     if argv[0] == "containerapp":
         require(command_matches(argv, ALLOWED_CONTAINERAPP_COMMANDS))
         require(
