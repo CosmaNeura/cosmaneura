@@ -33,7 +33,8 @@ explicitly selected. No Scribe or Sovereign release is required for this change.
 
 Local regression coverage checks named empty visits, unnamed visits with notes,
 superseded notes, owner isolation, multiple notes per visit, bounded query count,
-and an empty list. Frontend checks exercise backend status propagation, denial
+an empty list, a constant PostgreSQL bind count, and visits added between reads.
+Frontend checks exercise backend status propagation, denial
 cleanup, older-backend compatibility, and appointment-keyed badges. Validate the
 generated client against the actual router schema and run frontend type checks.
 

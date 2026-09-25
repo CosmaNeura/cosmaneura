@@ -18,7 +18,9 @@ import activemodel.base_model as active_base
 import activemodel.query_wrapper as active_query
 from activemodel import BaseModel as ActiveModel
 from sqlalchemy import Table, event, inspect, update
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql import Select
 from sqlmodel import Field as SqlField
 from sqlmodel import Relationship, Session, SQLModel, create_engine, select
 
@@ -121,11 +123,22 @@ def sidebar(monkeypatch):
     monkeypatch.setattr(active_query, "get_session", session_factory)
     route, response_model = load_route(session_factory)
     statements = []
+    note_statements = []
 
     def record(_conn, _cursor, statement, _params, _context, _many):
-        statements.append(" ".join(statement.lower().split()))
+        sql = " ".join(statement.lower().split())
+        statements.append(sql)
+
+    def record_query(_conn, statement, _multiparams, _params, _options):
+        # Capture before compilation caching so the current expanding-bind
+        # values are preserved, rather than the first cached query's values.
+        if isinstance(statement, Select) and "from sidebarnote" in " ".join(
+            str(statement).lower().split()
+        ):
+            note_statements.append(statement)
 
     event.listen(engine, "before_cursor_execute", record)
+    event.listen(engine, "before_execute", record_query)
 
     def insert(*rows):
         with Session(engine) as session:
@@ -134,6 +147,7 @@ def sidebar(monkeypatch):
 
     def read():
         statements.clear()
+        note_statements.clear()
         result = route(
             SimpleNamespace(
                 state=SimpleNamespace(doctor=SimpleNamespace(id="doctor_a"))
@@ -147,10 +161,13 @@ def sidebar(monkeypatch):
         insert=insert,
         read=read,
         statements=statements,
+        note_statements=note_statements,
         response_model=response_model,
         session=session_factory,
+        route=route,
     )
     event.remove(engine, "before_cursor_execute", record)
+    event.remove(engine, "before_execute", record_query)
     engine.dispose()
 
 
@@ -239,6 +256,44 @@ def test_supersession_and_replacement_change_status_without_title_changes(sideba
     assert sidebar.read()["note_statuses"] == {"visit": "not-started"}
     sidebar.insert(SidebarNote(id="replacement", appointment_id="visit"))
     assert sidebar.read()["note_statuses"] == {"visit": "completed"}
+
+
+def test_status_keys_exclude_an_appointment_added_between_reads(sidebar, monkeypatch):
+    sidebar.insert(SidebarAppointment(id="listed_visit"))
+
+    def concurrent_status_session():
+        # The owner list has already been materialized before this second read.
+        sidebar.insert(
+            SidebarAppointment(id="arrived_later"),
+            SidebarNote(id="new_note", appointment_id="arrived_later"),
+        )
+        return sidebar.session()
+
+    monkeypatch.setitem(
+        sidebar.route.__globals__, "get_session", concurrent_status_session
+    )
+    result = sidebar.read()
+    assert [row["id"] for row in result["appointments"]] == ["listed_visit"]
+    assert result["note_statuses"] == {"listed_visit": "not-started"}
+
+
+def test_postgresql_note_query_bind_count_does_not_expand_with_owner_list(sidebar):
+    counts = []
+    for start, stop in ((0, 3), (3, 17)):
+        sidebar.insert(
+            *(SidebarAppointment(id=f"visit_{index}") for index in range(start, stop))
+        )
+        assert len(sidebar.read()["appointments"]) == stop
+        assert len(sidebar.note_statements) == 1
+        # Compile the actual executed route query, including expanded IN binds.
+        # A tiny fixture catches the PostgreSQL 65,535-parameter failure without
+        # seeding tens of thousands of appointments or contacting PostgreSQL.
+        compiled = sidebar.note_statements[0].compile(
+            dialect=postgresql.dialect(), compile_kwargs={"render_postcompile": True}
+        )
+        counts.append(len(compiled.params))
+    assert len(set(counts)) == 1
+    assert max(counts) <= 2
 
 
 @pytest.mark.parametrize("count", [1, 25, 501])

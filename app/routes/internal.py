@@ -265,20 +265,27 @@ def note_list(request: Request) -> NotetakingData:
         str(appointment_id): "not-started" for appointment_id in appointment_ids
     }
     if appointment_ids:
-        # Match note_detail's current-note scope without loading note content or
-        # issuing a query for each appointment. Titles do not indicate completion.
+        # Match note_detail's current-note scope without loading note content.
+        # The owner join keeps bind count constant for this unpaginated list.
         with get_session() as session:
             completed_ids = session.exec(
                 select(cast(Any, AIVisitNote.appointment_id))
+                .join(
+                    Appointment,
+                    cast(Any, Appointment.id) == AIVisitNote.appointment_id,
+                )
                 .where(
                     AIVisitNote.doctor_id == doctor.id,
-                    cast(Any, AIVisitNote.appointment_id).in_(appointment_ids),
+                    Appointment.doctor_id == doctor.id,
                     cast(Any, AIVisitNote.superseded_at).is_(None),
                 )
                 .distinct()
             ).all()
         for appointment_id in completed_ids:
-            note_statuses[str(appointment_id)] = "completed"
+            # A new appointment may appear after the list read. Never introduce
+            # a status key for a visit absent from this response's appointments.
+            if str(appointment_id) in note_statuses:
+                note_statuses[str(appointment_id)] = "completed"
 
     return NotetakingData(appointments=appointments, note_statuses=note_statuses)
 
