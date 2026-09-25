@@ -233,6 +233,9 @@ def intake_list(request: Request) -> IntakeList:
 
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = Field(
+        default_factory=dict
+    )
 
 
 @internal_api_app.get("/notes")
@@ -256,7 +259,35 @@ def note_list(request: Request) -> NotetakingData:
         .all()
     )
 
-    return NotetakingData(appointments=cast(list[Appointment], list(appointment_list)))
+    appointments = cast(list[Appointment], list(appointment_list))
+    appointment_ids = [appointment.id for appointment in appointments]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = {
+        str(appointment_id): "not-started" for appointment_id in appointment_ids
+    }
+    if appointment_ids:
+        # Match note_detail's current-note scope without loading note content.
+        # The owner join keeps bind count constant for this unpaginated list.
+        with get_session() as session:
+            completed_ids = session.exec(
+                select(cast(Any, AIVisitNote.appointment_id))
+                .join(
+                    Appointment,
+                    cast(Any, Appointment.id) == AIVisitNote.appointment_id,
+                )
+                .where(
+                    AIVisitNote.doctor_id == doctor.id,
+                    Appointment.doctor_id == doctor.id,
+                    cast(Any, AIVisitNote.superseded_at).is_(None),
+                )
+                .distinct()
+            ).all()
+        for appointment_id in completed_ids:
+            # A new appointment may appear after the list read. Never introduce
+            # a status key for a visit absent from this response's appointments.
+            if str(appointment_id) in note_statuses:
+                note_statuses[str(appointment_id)] = "completed"
+
+    return NotetakingData(appointments=appointments, note_statuses=note_statuses)
 
 
 # TODO what about doctors who have an insane patient list?

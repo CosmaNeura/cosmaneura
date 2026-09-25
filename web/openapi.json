@@ -4595,6 +4595,17 @@
             },
             "type": "array",
             "title": "Appointments"
+          },
+          "note_statuses": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "not-started",
+                "completed"
+              ]
+            },
+            "type": "object",
+            "title": "Note Statuses"
           }
         },
         "additionalProperties": false,

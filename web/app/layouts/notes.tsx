@@ -8,7 +8,10 @@ import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { type Appointment, noteList } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
-import { appointmentsToSidebarEntries } from "~/lib/appointment"
+import {
+  type NoteStatuses,
+  appointmentsToSidebarEntries,
+} from "~/lib/appointment"
 import {
   type PracticeAgreementBlock,
   PracticeAgreementError,
@@ -22,11 +25,12 @@ import { noteListOptions } from "client/@tanstack/react-query.gen"
 
 export type NotesLayoutData = {
   appointments: Appointment[]
+  noteStatuses: NoteStatuses
   blocked: PracticeAgreementBlock | null
 }
 
 function blockedNotesData(blocked: PracticeAgreementBlock): NotesLayoutData {
-  return { appointments: [], blocked }
+  return { appointments: [], noteStatuses: {}, blocked }
 }
 
 export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
@@ -44,7 +48,11 @@ export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
         return result.data
       },
     })
-    return { appointments: result.appointments, blocked: null }
+    return {
+      appointments: result.appointments,
+      noteStatuses: result.note_statuses ?? {},
+      blocked: null,
+    }
   } catch (error) {
     const blocked = practiceAgreementBlockFromRouteFailure(error)
     if (blocked) {
@@ -104,7 +112,7 @@ export default function NotesLayout({
     return <PracticeAgreementWall block={loaderData.blocked} />
   }
 
-  const { appointments } = loaderData
+  const { appointments, noteStatuses } = loaderData
 
   return (
     <SidebarProvider
@@ -117,8 +125,10 @@ export default function NotesLayout({
       <AppSidebar
         isLoading={!appointments}
         header={"Notes"}
-        entries={appointmentsToSidebarEntries(appointments, (id: string) =>
-          href("/notes/:id", { id }),
+        entries={appointmentsToSidebarEntries(
+          appointments,
+          (id: string) => href("/notes/:id", { id }),
+          noteStatuses,
         )}
       />
       <Outlet />
