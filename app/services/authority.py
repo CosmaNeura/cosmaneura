@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -556,6 +557,7 @@ def _active_token(
     plaintext: str,
     *,
     lock_for_update: bool = False,
+    _before_view_as: Callable[[MountContextSession], None] | None = None,
 ) -> tuple[MountContextToken, MountContextSession]:
     # Resolve without a token lock first. Actor-bound view-as state must always
     # be locked before the token row so ``begin_view_as`` and every Agent API
@@ -586,6 +588,11 @@ def _active_token(
         absolute_now = absolute_now.replace(tzinfo=None)
     if absolute_expires_at <= absolute_now:
         raise ContextTokenExpiredError
+
+    # Capture adds the shared Practice -> Doctor order after bearer/session
+    # validation and before the mandatory Doctor -> view-as -> token locks.
+    if _before_view_as is not None:
+        _before_view_as(mount_session)
 
     # Local import avoids coupling the authority model layer to the Platform's
     # support UI at module import time. The helper locks Doctor -> ViewAsSession
@@ -813,6 +820,7 @@ def authorize_interaction(
     interaction_ref: str,
     client_turn_id: UUID,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+    _before_view_as: Callable[[MountContextSession], None] | None = None,
 ) -> AuthorizedInteraction:
     """Re-resolve and lock one exact provider interaction for a durable action."""
 
@@ -821,6 +829,7 @@ def authorize_interaction(
         session,
         mount_context_token,
         lock_for_update=True,
+        _before_view_as=_before_view_as,
     )
     context = _context_for_session(
         session,
