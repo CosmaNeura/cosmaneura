@@ -742,6 +742,7 @@ BILLING_PUBLIC_VARS=()
 GRANT_SECRET_ENV_NAME=SOVEREIGN_RECORD_GRANT_SECRET
 RECALL_SECRET_ENV_NAME=RECALL_WEBHOOK_SECRET
 STRIPE_INTEGRATION_ENABLED=false
+STAGING_PRESERVE_EFFECTIVE_CONFIGURATION=false
 configure_workload_contract() { container_secret_vars=(); container_public_vars=(); }
 record_grants_enabled_for() { return 1; }
 billing_integration_enabled_for() { return 1; }
@@ -754,6 +755,8 @@ az() { printf '%s\n' "$@" > "$CAPTURE"; }
             "-c",
             script
             + parsing
+            + _shell_function(deploy, "verify_preserved_runtime")
+            + "\n"
             + _shell_function(deploy, "initiate_deployment")
             + '\ninitiate_deployment "$ROLE" synthetic-sha\n',
         ],
