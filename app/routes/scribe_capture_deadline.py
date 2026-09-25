@@ -7,6 +7,7 @@ from contextvars import Context
 from threading import BoundedSemaphore, Lock, Thread
 from typing import ClassVar
 
+from anyio import create_task_group
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, iter_route_contexts
@@ -320,7 +321,18 @@ class CaptureDeadlineRoute(APIRoute, _CaptureBoundary):
     async def _dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
         # FastAPI resolves included-router dependencies in handle(). Calling
         # the original self.app would bypass that effective route context.
-        await APIRoute.handle(self, scope, receive, send)
+        # Keep AnyIO sync dependencies owned after cancellation, as the main
+        # middleware's task group does. The slot outlives every child task.
+        try:
+            async with create_task_group() as tasks:
+                tasks.start_soon(APIRoute.handle, self, scope, receive, send)
+        except BaseExceptionGroup as errors:
+            if len(errors.exceptions) != 1:
+                raise
+            # Preserve the route exception's deadline/error classification.
+            error = errors.exceptions[0]
+            context = None if error.__suppress_context__ else error.__context__
+            raise error from error.__cause__ or context
 
     async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (

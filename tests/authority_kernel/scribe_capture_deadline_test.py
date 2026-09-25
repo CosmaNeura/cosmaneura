@@ -17,6 +17,7 @@ from azure.core.credentials import AccessToken
 from fastapi import FastAPI
 
 from app.configuration.scribe_capture import ScribeCaptureSettings
+from app.routes import middleware
 from app.routes import scribe_capture as route
 from app.routes import scribe_capture_deadline as boundary
 from app.routes.agent import agent_api_app
@@ -190,6 +191,52 @@ async def test_slow_sync_auth_is_private_and_never_reaches_body_or_scope(
         release.set()
         inherited.reset(token)
     await until(settled)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outer_boundary", [False, True])
+async def test_sync_auth_retains_one_slot_until_dependency_settles(
+    monkeypatch, outer_boundary
+):
+    target = app(monkeypatch)
+    slots = BoundedSemaphore(1)
+    monkeypatch.setattr(boundary, "_workers", slots)
+    if outer_boundary:
+        monkeypatch.setattr(middleware, "ALLOWED_HOST_LIST", "testserver")
+        middleware.add_middleware(target)
+        boundary.install_capture_boundaries(target)
+    release, entered, settled = Event(), [], []
+
+    def auth():
+        entered.append(get_ident())
+        release.wait(2)
+        settled.append(get_ident())
+        return EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+
+    target.dependency_overrides[authenticate_scribe_capture_request] = auth
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=target), base_url="http://testserver"
+        ) as client:
+            first = await client.post(PREFIX + "capture-bindings/resolve", json={})
+            assert first.status_code == 504 and len(entered) == 1 and not settled
+            await asyncio.sleep(0.04)  # Allow the cancelled private task to unwind.
+            second = await client.post(PREFIX + "capture-bindings/resolve", json={})
+            assert second.status_code == 503
+            assert len(entered) == 1 and not settled
+    finally:
+        release.set()
+        expires = time.monotonic() + 2
+        while len(settled) != len(entered):
+            assert time.monotonic() < expires, "sync authentication did not settle"
+            await asyncio.sleep(0.002)
+    # Returning the dependency result grants no late route work; capacity is
+    # restored only after the dependency and its private request have settled.
+    expires = time.monotonic() + 2
+    while not slots.acquire(blocking=False):
+        assert time.monotonic() < expires, "settled request retained its slot"
+        await asyncio.sleep(0.002)
+    slots.release()
 
 
 @pytest.mark.asyncio
