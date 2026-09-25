@@ -125,11 +125,70 @@ export function resolveSovereignProviderConfig(
   }
 }
 
-let panelLoad: Promise<PanelApi> | null = null
+type PendingPanelLoad = {
+  promise: Promise<PanelApi>
+  consumers: number
+  cancel: () => void
+}
+
+let panelLoad: PendingPanelLoad | null = null
 let verifiedPanel: PanelApi | null = null
 let verifiedMount: PanelApi["mount"] | null = null
 
-function loadPinnedPanel(): Promise<PanelApi> {
+function startPinnedPanelLoad(): PendingPanelLoad {
+  let resolveLoad!: (panel: PanelApi) => void
+  let rejectLoad!: (error: Error) => void
+  const load: PendingPanelLoad = {
+    promise: new Promise<PanelApi>((resolve, reject) => {
+      resolveLoad = resolve
+      rejectLoad = reject
+    }),
+    consumers: 0,
+    cancel: () => rejectAndRemove(new DOMException("Cancelled", "AbortError")),
+  }
+  const script = document.createElement("script")
+  const detach = () => {
+    script.onload = null
+    script.onerror = null
+  }
+  const rejectAndRemove = (error: Error) => {
+    if (panelLoad !== load) return
+    panelLoad = null
+    detach()
+    script.remove()
+    rejectLoad(error)
+  }
+
+  script.src = SOVEREIGN_PANEL_ASSET_PATH
+  script.integrity = SOVEREIGN_PANEL_INTEGRITY
+  script.crossOrigin = "anonymous"
+  script.referrerPolicy = "no-referrer"
+  script.async = true
+  script.dataset.cosmaneuraSovereignPanel = "v1"
+  script.onload = () => {
+    if (panelLoad !== load) return
+    const registered = window.CosmaNeuraPanel
+    if (!registered || typeof registered.mount !== "function") {
+      rejectAndRemove(new Error("Pinned panel did not register its API"))
+      return
+    }
+    verifiedPanel = registered
+    verifiedMount = registered.mount
+    panelLoad = null
+    detach()
+    resolveLoad(registered)
+  }
+  script.onerror = () =>
+    rejectAndRemove(new Error("Pinned panel failed to load"))
+  panelLoad = load
+  document.head.appendChild(script)
+  return load
+}
+
+function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Cancelled", "AbortError"))
+  }
   if (window.CosmaNeuraPanel) {
     if (
       window.CosmaNeuraPanel === verifiedPanel &&
@@ -142,44 +201,35 @@ function loadPinnedPanel(): Promise<PanelApi> {
   if (verifiedPanel) {
     return Promise.reject(new Error("The verified panel global was removed"))
   }
-  if (panelLoad) return panelLoad
-
-  panelLoad = new Promise<PanelApi>((resolve, reject) => {
-    const script = document.createElement("script")
-    const rejectAndRemove = (error: Error) => {
-      script.onload = null
-      script.onerror = null
-      script.remove()
-      reject(error)
+  const load = panelLoad ?? startPinnedPanelLoad()
+  load.consumers += 1
+  return new Promise<PanelApi>((resolve, reject) => {
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      signal.removeEventListener("abort", cancel)
+      load.consumers -= 1
+      // One departing host cannot cancel a load still needed by another.
+      if (load.consumers === 0) load.cancel()
     }
-
-    script.src = SOVEREIGN_PANEL_ASSET_PATH
-    script.integrity = SOVEREIGN_PANEL_INTEGRITY
-    script.crossOrigin = "anonymous"
-    script.referrerPolicy = "no-referrer"
-    script.async = true
-    script.dataset.cosmaneuraSovereignPanel = "v1"
-    script.onload = () => {
-      const registered = window.CosmaNeuraPanel
-      if (!registered || typeof registered.mount !== "function") {
-        rejectAndRemove(new Error("Pinned panel did not register its API"))
-        return
-      }
-      verifiedPanel = registered
-      verifiedMount = registered.mount
-      script.onload = null
-      script.onerror = null
-      resolve(registered)
+    const cancel = () => {
+      release()
+      reject(new DOMException("Cancelled", "AbortError"))
     }
-    script.onerror = () =>
-      rejectAndRemove(new Error("Pinned panel failed to load"))
-    document.head.appendChild(script)
-  }).catch((error: unknown) => {
-    panelLoad = null
-    throw error
+    load.promise.then(
+      (panel) => {
+        release()
+        resolve(panel)
+      },
+      (error: unknown) => {
+        release()
+        reject(error)
+      },
+    )
+    signal.addEventListener("abort", cancel, { once: true })
+    if (signal.aborted) cancel()
   })
-
-  return panelLoad
 }
 
 async function platformSessionToken(): Promise<string> {
@@ -440,7 +490,7 @@ export function SovereignPanelHost({
           if (mountAttempt > 0) setRecovery("unavailable")
           return null
         }
-        return loadPinnedPanel()
+        return loadPinnedPanel(statusController.signal)
       })
       .then(async (panel) => {
         if (cancelled || panel === null) return
