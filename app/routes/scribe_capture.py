@@ -29,11 +29,16 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_scribe_capture_request,
 )
+from app.routes.scribe_capture_deadline import CaptureDeadlineRoute
 from app.services import authority, encounter_prep
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_note_edits as note_edits
 from app.services import scribe_capture_notes as notes
+from app.services.scribe_capture_deadline import (
+    DeadlineScribeClient,
+    check_capture_deadline,
+)
 from app.services.scribe_capture_notebook import ScratchNotes
 from app.services.scribe_capture_protocol import CaptureOperation
 from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
@@ -44,7 +49,7 @@ from app.services.scribe_workflow import (
 
 from sqlalchemy.exc import SQLAlchemyError
 
-capture_api_app = APIRouter()
+capture_api_app = APIRouter(route_class=CaptureDeadlineRoute)
 MAX_BODY_BYTES = 2048
 NOTE_REQUEST_TIMEOUT_SECONDS = 90
 
@@ -296,7 +301,8 @@ async def perform_capture_operation(
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _problem(422)
     try:
-        client = client_factory()
+        check_capture_deadline()
+        client = DeadlineScribeClient(client_factory())
     except ValueError:
         return _problem(503)
     try:
@@ -433,7 +439,8 @@ async def prepare_or_read_note(
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _note_problem(422, "VALIDATION_FAILED")
     try:
-        client = client_factory()
+        check_capture_deadline()
+        client = DeadlineScribeClient(client_factory())
     except ValueError:
         return _note_problem(503, "CAPTURE_NOTES_UNAVAILABLE")
     try:
@@ -549,7 +556,8 @@ async def admit_session(
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _problem(422)
     try:
-        client = client_factory()
+        check_capture_deadline()
+        client = DeadlineScribeClient(client_factory())
     except ValueError:
         return _problem(503)
     try:

@@ -40,6 +40,7 @@ from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
+from .routes.scribe_capture_deadline import install_capture_boundaries
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 
@@ -109,6 +110,9 @@ def register_public_onboarding_routes(app) -> bool:
 register_public_onboarding_routes(api_app)
 
 add_middleware(api_app)
+# Final-send budgets must wrap the full middleware chain, including no-store,
+# logging and session response transforms; route-level sends are intermediate.
+install_capture_boundaries(api_app)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 
