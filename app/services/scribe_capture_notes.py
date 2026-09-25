@@ -31,6 +31,7 @@ from app.services.scribe_capture_admission import (
     authorize_admitted_capture_locked,
 )
 from app.services.scribe_capture_continuity import continuity_grounding
+from app.services.scribe_capture_deadline import capture_call, check_capture_deadline
 from app.services.scribe_capture_gateway import (
     CaptureOperationUnavailable,
     CaptureReceiptInvalid,
@@ -152,10 +153,12 @@ class ConfiguredNoteModel:
 
     async def complete(self, prompt: str, *, json_output: bool) -> str:
         def request() -> str:
+            check_capture_deadline()
             client = openai.with_options(timeout=30.0, max_retries=0)
             options: dict[str, Any] = {}
             if json_output:
                 options["response_format"] = {"type": "json_object"}
+            check_capture_deadline()
             response = client.chat.completions.create(
                 model=DEFAULT_MULTI_MODAL_MODEL,
                 messages=[
@@ -923,7 +926,9 @@ async def _model_call(model: NoteModel, prompt: str, *, json_output: bool) -> st
         if len(prompt.encode("utf-8")) > 4_194_304:
             raise ValueError
         async with asyncio.timeout(35):
-            result = await model.complete(prompt, json_output=json_output)
+            result = await capture_call(
+                lambda: model.complete(prompt, json_output=json_output)
+            )
         if (
             not isinstance(result, str)
             or not result.strip()

@@ -26,6 +26,7 @@ from app.configuration.scribe_workflow import (
     ScribeWorkflowSettings,
 )
 from app.services import scribe_capture_protocol as capture_protocol
+from app.services.scribe_capture_deadline import check_async_capture_deadline
 from app.services.scribe_capture_recovery_contract import (
     MAX_RECOVERY_STATE_BYTES,
     CaptureRecoveryReceipt,
@@ -452,7 +453,9 @@ class HttpScribeWorkflowClient:
         if not isinstance(tenant_id, UUID):
             raise ScribeWorkflowRejectedError("scribe_invalid_scope")
         try:
+            check_async_capture_deadline()
             access_token = await self._credential.get_token(self._scope)
+            check_async_capture_deadline()
             async with self._client.stream(
                 "POST",
                 path,
@@ -504,6 +507,7 @@ class HttpScribeWorkflowClient:
                     raise ScribeWorkflowRetryableError("scribe_invalid_response")
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
+                    check_async_capture_deadline()
                     if len(body) + len(chunk) > max_bytes:
                         raise ScribeWorkflowRetryableError("scribe_response_too_large")
                     body.extend(chunk)
@@ -514,6 +518,7 @@ class HttpScribeWorkflowClient:
         except httpx.HTTPError:
             raise ScribeWorkflowRetryableError("scribe_transport_unavailable") from None
         try:
+            check_async_capture_deadline()
             return response_model.model_validate_json(body)
         except (ValueError, ValidationError):
             raise ScribeWorkflowRetryableError("scribe_invalid_response") from None
@@ -583,7 +588,9 @@ class HttpScribeWorkflowClient:
         creator_actor_id: str | None = None,
     ) -> ResponseModel:
         try:
+            check_async_capture_deadline()
             access_token = await self._credential.get_token(self._scope)
+            check_async_capture_deadline()
             async with self._client.stream(
                 "GET",
                 path,
@@ -633,6 +640,7 @@ class HttpScribeWorkflowClient:
                     raise ScribeWorkflowRetryableError("scribe_invalid_response")
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
+                    check_async_capture_deadline()
                     if len(body) + len(chunk) > max_bytes:
                         raise ScribeWorkflowRetryableError("scribe_response_too_large")
                     body.extend(chunk)
@@ -644,6 +652,7 @@ class HttpScribeWorkflowClient:
             # Remote payloads and credentials must not appear in error text.
             raise ScribeWorkflowRetryableError("scribe_transport_unavailable") from None
         try:
+            check_async_capture_deadline()
             result = response_model.model_validate_json(body)
         except (ValueError, ValidationError):
             raise ScribeWorkflowRetryableError("scribe_invalid_response") from None
