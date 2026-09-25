@@ -16,6 +16,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from starlette.concurrency import run_in_threadpool
 
 import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
@@ -663,7 +664,11 @@ async def invoke_tool(
     invocation = SessionPrepContextReadInvocation.model_validate(
         data.model_dump(mode="json", exclude_unset=True)
     )
-    try:
+
+    def invoke_in_session() -> app.services.session_prep.SessionPrepInvocation:
+        # Keep authorization, row locks, and commit in one sequential worker
+        # call. The threadpool carries aglobal_session's ContextVar; it waits
+        # for the worker before request teardown can close the shared session.
         with get_session() as managed:
             session = cast(Session, managed)
             authorized = app.services.session_prep.authorize_session_prep_read(
@@ -709,6 +714,10 @@ async def invoke_tool(
                 )
             else:
                 raise app.services.session_prep.SessionPrepScopeDenied
+        return result
+
+    try:
+        result = await run_in_threadpool(invoke_in_session)
     except app.services.authority.AuthorityKernelDisabledError:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -839,7 +848,8 @@ async def bootstrap_mount_context(
         )
 
     try:
-        context = app.services.authority.bootstrap_mount_context(
+        context = await run_in_threadpool(
+            app.services.authority.bootstrap_mount_context,
             mount_context_token=mount_context_token,
             settings=settings,
         )
@@ -1107,7 +1117,8 @@ async def write_conversation_turn(
         )
 
     try:
-        result = app.services.authority_conversation.write_conversation_turn(
+        result = await run_in_threadpool(
+            app.services.authority_conversation.write_conversation_turn,
             workload_client_id=principal.client_id,
             mount_context_token=mount_context_token,
             interaction_ref=interaction_ref,
@@ -1276,7 +1287,8 @@ async def write_audit_event(
     if isinstance(data, JSONResponse):
         return data
     try:
-        result = app.services.authority_audit.write_observational_audit_event(
+        result = await run_in_threadpool(
+            app.services.authority_audit.write_observational_audit_event,
             workload_client_id=principal.client_id,
             interaction_ref=interaction_ref,
             idempotency_key=idempotency_key,
@@ -1423,7 +1435,8 @@ async def report_model_usage_event(
     if isinstance(data, JSONResponse):
         return data
     try:
-        result = app.services.authority_usage.report_model_usage_event(
+        result = await run_in_threadpool(
+            app.services.authority_usage.report_model_usage_event,
             workload_client_id=principal.client_id,
             interaction_ref=interaction_ref,
             idempotency_key=idempotency_key,
