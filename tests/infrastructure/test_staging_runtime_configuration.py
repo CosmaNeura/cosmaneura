@@ -29,6 +29,62 @@ SENSITIVE_KEYS = (
 REFUSAL = "staging_runtime_configuration_refused\n"
 
 
+@pytest.mark.parametrize(
+    ("mode", "fingerprint", "accepted"),
+    [
+        ("false", "", True),
+        ("true", "sha256:" + "a" * 64, True),
+        ("true", "", False),
+        ("false", "sha256:" + "a" * 64, False),
+        ("invalid", "", False),
+    ],
+)
+def test_preservation_inputs_are_an_explicit_complete_pair(mode, fingerprint, accepted):
+    source = DEPLOY.read_text()
+    start = source.index('case "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" in')
+    guard = source[start : source.index("\nesac", start) + len("\nesac")]
+    result = subprocess.run(
+        ["bash", "-c", guard],
+        env={
+            **_environment(),
+            "STAGING_PRESERVE_EFFECTIVE_CONFIGURATION": mode,
+            "EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256": fingerprint,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) == accepted
+
+
+def test_resolver_runs_once_and_does_not_emit_arbitrary_secret_errors(tmp_path):
+    source = DEPLOY.read_text()
+    start = source.index("CONFIGURATION_STATUS=0\n")
+    block = source[start : source.index("if ! printf '%s'", start)]
+    calls = tmp_path / "resolver-calls"
+    program = f"""
+REPOSITORY_ROOT={shlex.quote(str(ROOT))}
+just() {{
+    printf 'called\\n' >> {shlex.quote(str(calls))}
+    printf 'export AZURE_OPENAI_API_KEY=synthetic-new-secret-never-log\\n' >&2
+    return 1
+}}
+{block}
+"""
+    result = subprocess.run(
+        ["bash", "-c", program],
+        env=_environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert calls.read_text() == "called\n"
+    assert result.stdout == "Failed to load staging deployment configuration.\n"
+    assert result.stderr == ""
+    assert "synthetic-new-secret" not in result.stdout
+
+
 def _function(source: str, name: str) -> str:
     start = source.index(f"\n{name}() {{") + 1
     return source[start : source.index("\n}", start) + 2]
