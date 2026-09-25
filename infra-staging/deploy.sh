@@ -1456,6 +1456,11 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+		# Zero retention deletes the previous template when this revision becomes
+		# active, making the release's bound revision-copy recovery impossible.
+		update_args+=(--max-inactive-revisions 10)
+	fi
 	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		update_args+=(--args "$STAGING_API_COMMAND")
 	fi
@@ -1493,6 +1498,37 @@ initiate_deployment() {
 
 	echo "Deployment initiated for $container_name."
 	return 0
+}
+
+verify_retained_recovery_revision() {
+	[[ -n "${RELEASE_V2_JSON:-}" ]] || return 0
+	local container_name=$1
+	case "$container_name" in
+	"$API_CONTAINER"|"$WORKER_CONTAINER"|"$SCHEDULER_CONTAINER") ;;
+	*) return 1 ;;
+	esac
+	local expected_revision expected_image retention retained
+	expected_revision=$(jq -er --arg name "$container_name" '.recovery[$name].revision' <<<"$RELEASE_V2_JSON") || return 1
+	expected_image=$(jq -er --arg name "$container_name" '.recovery[$name].image' <<<"$RELEASE_V2_JSON") || return 1
+	retention=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query 'properties.configuration.maxInactiveRevisions' -o tsv) || return 1
+	if [[ "$retention" != "10" ]]; then
+		echo "Inactive revision retention was not preserved for $container_name." >&2
+		return 1
+	fi
+	retained=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--revision "$expected_revision" \
+		--query '{image:properties.template.containers[0].image,provisioning:properties.provisioningState}' \
+		-o json) || {
+		echo "The bound recovery revision is unavailable for $container_name." >&2
+		return 1
+	}
+	if ! jq -e --arg image "$expected_image" \
+		'.image == $image and .provisioning == "Provisioned"' <<<"$retained" >/dev/null; then
+		echo "The retained recovery revision does not match $container_name's release plan." >&2
+		return 1
+	fi
+	echo "Verified the bound recovery revision remains available for $container_name."
 }
 
 remove_unowned_billing_secrets() {
@@ -1731,6 +1767,7 @@ for container in $BACKEND_CONTAINERS; do
 		echo "Deployment failed for $container. Exiting."
 		exit 1
 	fi
+	verify_retained_recovery_revision "$container" || exit 1
 	if [[ "$container" == "$WORKER_CONTAINER" ]]; then
 		wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
 	fi
@@ -1738,6 +1775,7 @@ done
 
 initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+verify_retained_recovery_revision "$API_CONTAINER" || exit 1
 
 for container in $CRITICAL_CONTAINERS; do
 	remove_unowned_billing_secrets "$container"
