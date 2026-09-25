@@ -92,6 +92,7 @@ async function fixture() {
     now: Date.UTC(2026, 8, 24, 12),
     denyExchange: false,
     heldExchange: null as Promise<Response> | null,
+    heldWelcome: null as Promise<Response> | null,
   }
   vi.spyOn(Date, "now").mockImplementation(() => control.now)
   authority.getViewAsStatus.mockResolvedValue(inactiveViewAs)
@@ -107,6 +108,7 @@ async function fixture() {
   }> = []
   const prepRequests: Array<{ turn: string; authorization: string | null }> = []
   const welcomes: Array<string | null> = []
+  const welcomeSignals: AbortSignal[] = []
   const tokens = ["a", "b", "c"].map((letter) => `mctx_${letter.repeat(48)}`)
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -125,6 +127,9 @@ async function fixture() {
       }
       if (url.endsWith("/welcome")) {
         welcomes.push(authorization)
+        welcomeSignals.push(init!.signal!)
+        if (welcomes.length === 2 && control.heldWelcome)
+          return control.heldWelcome
         return json({
           partner_name: "Synthetic provider",
           persona: "provider",
@@ -195,6 +200,7 @@ async function fixture() {
     exchanges,
     prepRequests,
     welcomes,
+    welcomeSignals,
     tokens,
     mounts,
     fetchMock,
@@ -207,6 +213,7 @@ async function fixture() {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   vi.unstubAllEnvs()
@@ -215,6 +222,80 @@ afterEach(() => {
 })
 
 describe("explicit assistant session reconnection", () => {
+  it.each(["exchange", "welcome"])(
+    "times out a stalled %s and fences its late result from the same-record retry",
+    async (phase) => {
+      const f = await fixture()
+      await f.expireAndLock()
+      let resolveStalled!: (response: Response) => void
+      const stalled = new Promise<Response>((resolve) => {
+        resolveStalled = resolve
+      })
+      if (phase === "exchange") f.control.heldExchange = stalled
+      else f.control.heldWelcome = stalled
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Reconnect assistant" }),
+        )
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      const old = f.mounts[1]
+      expect(f.exchanges).toHaveLength(2)
+      expect(
+        screen.getByRole("button", { name: "Reconnecting assistant…" }),
+      ).toBeDisabled()
+      await act(async () => vi.advanceTimersByTimeAsync(30_000))
+      expect(
+        screen.getByRole("button", { name: "Reconnect assistant" }),
+      ).toBeEnabled()
+      expect(old.panel.root.isConnected).toBe(false)
+      expect(
+        (phase === "exchange" ? f.exchanges[1].signal : f.welcomeSignals[1])
+          .aborted,
+      ).toBe(true)
+      await expect(old.options.getAuthToken()).rejects.toThrow()
+      vi.useRealTimers()
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Reconnect assistant" }),
+      )
+      await waitFor(() => expect(f.exchanges).toHaveLength(3))
+      await waitFor(() =>
+        expect(
+          document.querySelector<HTMLButtonElement>(".cnp-send")?.disabled,
+        ).toBe(false),
+      )
+      await act(async () => {
+        resolveStalled(
+          phase === "exchange"
+            ? tokenResponse(f.tokens[1], f.control.now)
+            : json({
+                persona: "provider",
+                greeting: "Late obsolete welcome",
+                paths: [],
+              }),
+        )
+        old.options.onAccessChange(true)
+        old.options.onAccessChange(false)
+      })
+      expect(
+        screen.queryByRole("button", { name: "Reconnect assistant" }),
+      ).toBeNull()
+      expect(document.querySelectorAll(".cnp-root")).toHaveLength(1)
+      expect(document.body.textContent).not.toContain("Late obsolete welcome")
+      expect(
+        f.exchanges.every(({ record }) => record === "appointment_synthetic_a"),
+      ).toBe(true)
+      expect(f.welcomes.at(-1)).toBe(`Bearer ${f.tokens[2]}`)
+      expect(f.prepRequests).toHaveLength(0)
+      await expect(old.options.getContext()).rejects.toThrow()
+      await expect(f.mounts[2].options.getContext()).resolves.toEqual({
+        clientId: "appointment_synthetic_a",
+      })
+    },
+  )
+
   it("reconnects after idle expiry with fresh authority and no replay of old content or turns", async () => {
     const f = await fixture()
     document.querySelector<HTMLButtonElement>(".cnp-fab")!.click()

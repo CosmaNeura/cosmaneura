@@ -410,6 +410,24 @@ export function SovereignPanelHost({
     const mountTokenProvider =
       createProviderMountContextTokenProvider(appointmentId)
     setRecovery(mountAttempt > 0 ? "connecting" : null)
+    const finishBootstrap = () => clearTimeout(bootstrapTimeout)
+    const discardMounted = () => {
+      cancelled = true
+      finishBootstrap()
+      statusController.abort()
+      mountTokenProvider.discard()
+      const previous = mounted
+      mounted = null
+      if (panelRef.current === previous) panelRef.current = null
+      if (previous) resetAndDestroy(previous)
+    }
+    // Bound the whole handshake, including script loading, authority exchange,
+    // and welcome. A timed-out generation can never complete a later retry.
+    const bootstrapTimeout = setTimeout(() => {
+      if (cancelled) return
+      discardMounted()
+      setRecovery("unavailable")
+    }, 30_000)
 
     // Fail closed before loading the platform context-token path. A Clerk
     // session token is accepted only by the same-origin exchange endpoint and
@@ -418,6 +436,7 @@ export function SovereignPanelHost({
       .then((viewAs) => {
         if (cancelled) return null
         if (viewAs.active) {
+          finishBootstrap()
           if (mountAttempt > 0) setRecovery("unavailable")
           return null
         }
@@ -448,6 +467,7 @@ export function SovereignPanelHost({
               // action below may create a new authenticated mount; no old
               // request, turn ID, draft or preparation is replayed into it.
               accessLost = true
+              finishBootstrap()
               mountTokenProvider.discard()
               setRecovery("unavailable")
             }
@@ -467,30 +487,19 @@ export function SovereignPanelHost({
         // dereference `mounted` here: cleanup deliberately nulls it while an
         // asynchronous initial bind may still be resolving.
         if (cancelled || accessLost) return
+        finishBootstrap()
         panelRef.current = candidate
         setRecovery(null)
       })
       .catch(() => {
         if (cancelled) return
-        mountTokenProvider.discard()
-        const failed = mounted
-        mounted = null
-        if (panelRef.current === failed) panelRef.current = null
-        if (failed) resetAndDestroy(failed)
+        discardMounted()
         setRecovery("unavailable")
         // The Notes surface remains usable when the separately deployed panel
         // is unavailable. The panel itself renders network errors per turn.
       })
 
-    return () => {
-      cancelled = true
-      statusController.abort()
-      mountTokenProvider.discard()
-      panelRef.current = null
-      const previous = mounted
-      mounted = null
-      if (previous) resetAndDestroy(previous)
-    }
+    return discardMounted
   }, [appointmentId, config?.origin, mountAttempt])
 
   return config ? (
