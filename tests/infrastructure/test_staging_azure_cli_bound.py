@@ -188,10 +188,15 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
             ("containerapp", "job", "start"),
         }:
             command.extend(["--image", image])
-        if prefix == ("containerapp", "job", "stop"):
+        if prefix in {
+            ("containerapp", "job", "stop"),
+            ("containerapp", "job", "execution", "show"),
+        }:
             command.extend(
                 ["--job-execution-name", "cosmaneura-staging-migrate-abc123"]
             )
+        if prefix == ("containerapp", "job", "logs", "show"):
+            command.extend(["--execution", "cosmaneura-staging-migrate-abc123"])
         m.validate_argv(command + subscription)
 
 

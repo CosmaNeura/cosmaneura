@@ -46,6 +46,8 @@ STAGING_REGISTRY = "cosmaneurastagingregistry"
 STAGING_REGISTRY_HOST = "cosmaneurastagingregistry.azurecr.io"
 STAGING_REPOSITORY = "cosmaneura/cosmaneura"
 CANDIDATE_SHA = "866bd4bc01e0e7be32c59eccdaf9dac3f495c7de"
+LEGACY_MIGRATION_JOB = "cosmaneura-staging-migrate"
+MIGRATION_JOB_PATTERN = r"cn-stg-mig-[0-9a-f]{20}"
 STAGING_CONTAINER_NAMES = {
     "cosmaneura-staging-app",
     "cosmaneura-staging-migrate",
@@ -295,7 +297,55 @@ def non_secret_argv(argv: list[str]) -> tuple[str, ...]:
     return tuple(visible)
 
 
-def validate_staging_scope(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
+def validate_migration_job_scope(argv: list[str], migration_job: str) -> None:
+    """Bind every job selector to this invocation, never to the app allowlist."""
+    command = tuple(argv[:4]) if argv[2] in {"execution", "logs"} else tuple(argv[:3])
+    queries = {
+        ("containerapp", "job", "list"): {f"[?name=='{migration_job}'] | length(@)"},
+        ("containerapp", "job", "show"): {
+            "properties.template.containers[].name",
+            "{containers:properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}},secretNames:properties.configuration.secrets[].name}",
+        },
+        ("containerapp", "job", "start"): {"name"},
+        ("containerapp", "job", "execution", "show"): {"properties.status"},
+    }
+    query = flag_values(argv, {"--query"})
+    require(not query or (len(query) == 1 and query[0] in queries.get(command, set())))
+    if command == ("containerapp", "job", "list"):
+        require(query == [f"[?name=='{migration_job}'] | length(@)"])
+        require(not flag_values(argv, {"-n", "--name"}))
+        require(flag_values(argv, {"-o", "--output"}) == ["tsv"])
+    else:
+        require(flag_values(argv, {"-n", "--name"}) == [migration_job])
+    execution_flags = {
+        ("containerapp", "job", "execution", "show"): "--job-execution-name",
+        ("containerapp", "job", "stop"): "--job-execution-name",
+        ("containerapp", "job", "logs", "show"): "--execution",
+    }
+    for flag in {"--execution", "--job-execution-name"}:
+        values = flag_values(argv, {flag})
+        if execution_flags.get(command) == flag:
+            require(
+                len(values) == 1
+                and re.fullmatch(re.escape(migration_job) + r"-[a-z0-9]+", values[0])
+            )
+        else:
+            require(not values)
+    for flag, allowed_command in (
+        ("--container", ("containerapp", "job", "logs", "show")),
+        ("--container-name", ("containerapp", "job", "start")),
+    ):
+        values = flag_values(argv, {flag})
+        require(
+            not values or (command == allowed_command and values == [migration_job])
+        )
+
+
+def validate_staging_scope(
+    argv: list[str],
+    candidate: str = CANDIDATE_SHA,
+    migration_job: str = LEGACY_MIGRATION_JOB,
+) -> None:
     if argv[:3] == ["containerapp", "secret", "list"]:
         names = flag_values(argv, {"-n"})
         require(
@@ -326,30 +376,12 @@ def validate_staging_scope(argv: list[str], candidate: str = CANDIDATE_SHA) -> N
         require(
             flag_values(argv, {"-g", "--resource-group"}) == [STAGING_RESOURCE_GROUP]
         )
-        if argv[:3] == ["containerapp", "job", "list"]:
-            require(not flag_values(argv, {"-n", "--name"}))
+        if argv[:2] == ["containerapp", "job"]:
+            validate_migration_job_scope(argv, migration_job)
+        else:
             require(
-                flag_values(argv, {"--query"})
-                == ["[?name=='cosmaneura-staging-migrate'] | length(@)"]
-            )
-            require(flag_values(argv, {"-o", "--output"}) == ["tsv"])
-            require("--ids" not in argv)
-            return
-        require(
-            flag_values(argv, {"-n", "--name"})
-            in [[name] for name in STAGING_CONTAINER_NAMES]
-        )
-        if argv[:3] == ["containerapp", "job", "stop"]:
-            require(
-                flag_values(argv, {"-n", "--name"}) == ["cosmaneura-staging-migrate"]
-            )
-            execution_names = flag_values(argv, {"--job-execution-name"})
-            require(
-                len(execution_names) == 1
-                and re.fullmatch(
-                    r"cosmaneura-staging-migrate-[a-z0-9]+", execution_names[0]
-                )
-                is not None
+                flag_values(argv, {"-n", "--name"})
+                in [[name] for name in STAGING_CONTAINER_NAMES - {LEGACY_MIGRATION_JOB}]
             )
         require("--ids" not in argv)
         for image in flag_values(argv, {"-i", "--image"}):
@@ -386,8 +418,16 @@ def validate_staging_scope(argv: list[str], candidate: str = CANDIDATE_SHA) -> N
         require(flag_values(argv, {"-n", "--name"}) == [STAGING_REGISTRY])
 
 
-def validate_argv(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
+def validate_argv(
+    argv: list[str],
+    candidate: str = CANDIDATE_SHA,
+    migration_job: str = LEGACY_MIGRATION_JOB,
+) -> None:
     require(re.fullmatch(r"[0-9a-f]{40}", candidate))
+    require(
+        migration_job == LEGACY_MIGRATION_JOB
+        or re.fullmatch(MIGRATION_JOB_PATTERN, migration_job)
+    )
     if argv == ["--verify-only"]:
         return
     require(argv and argv[0] in {"acr", "containerapp"})
@@ -398,7 +438,7 @@ def validate_argv(argv: list[str], candidate: str = CANDIDATE_SHA) -> None:
     require(
         not any("cosmaneuraprod" in value.lower() for value in non_secret_argv(argv))
     )
-    validate_staging_scope(argv, candidate)
+    validate_staging_scope(argv, candidate, migration_job)
 
 
 def validate_runtime_operation(argv: list[str], operation: str) -> None:
@@ -488,12 +528,16 @@ def main() -> int:
         require(len(argv) > 2)
         operation, argv = argv[1], argv[2:]
         validate_runtime_operation(argv, operation)
-    elif argv[:1] == ["--candidate-sha"]:
-        require(len(argv) > 2)
-        candidate, argv = argv[1], argv[2:]
-        validate_argv(argv, candidate)
     else:
-        validate_argv(argv, candidate)
+        if argv[:1] == ["--candidate-sha"]:
+            require(len(argv) > 2)
+            candidate, argv = argv[1], argv[2:]
+        migration_job = LEGACY_MIGRATION_JOB
+        if argv[:1] == ["--migration-job-name"]:
+            require(len(argv) > 2)
+            migration_job, argv = argv[1], argv[2:]
+            require(re.fullmatch(MIGRATION_JOB_PATTERN, migration_job))
+        validate_argv(argv, candidate, migration_job)
     token, expiry = token_record(3, MANAGEMENT_AUDIENCES)
     if argv == ["--verify-only"]:
         print(

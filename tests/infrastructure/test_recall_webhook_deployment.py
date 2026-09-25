@@ -177,7 +177,6 @@ def test_staging_recall_secret_validation_precedes_all_azure_mutation() -> None:
     assert deploy.index("unset RECALL_WEBHOOK_SECRET_INPUT") > validation
     assert validation < deploy.index("\nrun_migrations\n")
     for mutation in (
-        "az containerapp job delete",
         "az containerapp job create",
         "az containerapp job start",
         "az containerapp secret set",

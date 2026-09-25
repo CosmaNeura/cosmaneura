@@ -42,7 +42,7 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 # Define variables
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
-MIGRATION_JOB="cosmaneura-staging-migrate"
+MIGRATION_JOB=""
 BACKEND_CONTAINERS="cosmaneura-staging-worker cosmaneura-staging-scheduler"
 API_CONTAINER="cosmaneura-staging-app"
 CRITICAL_CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
@@ -91,6 +91,18 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
 fi
 
+initialize_migration_job() {
+	[[ -z "$MIGRATION_JOB" ]] || return 0
+	MIGRATION_JOB=$("$PYTHON_BIN" -I -S -B -c \
+		'import secrets;print("cn-stg-mig-"+secrets.token_hex(10))') || return 1
+	[[ "$MIGRATION_JOB" =~ ^cn-stg-mig-[0-9a-f]{20}$ ]] || return 1
+}
+
+# One invocation owns one unpredictable job name, including schema probes and
+# cleanup. A name collision is a refusal, never permission to replace a job.
+initialize_migration_job || exit 1
+readonly MIGRATION_JOB
+
 AZ_EXECUTABLE=$(command -v az) || {
 	echo "Azure CLI is unavailable."
 	exit 1
@@ -110,7 +122,8 @@ az() {
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			--resource https://containerregistry.azure.net \
 			--only-show-errors --output json) || return
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" \
+			--migration-job-name "$MIGRATION_JOB" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json") \
 			4< <(printf '%s' "$registry_token_json"); then
@@ -120,7 +133,8 @@ az() {
 		fi
 		unset registry_token_json
 	else
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" \
+			--migration-job-name "$MIGRATION_JOB" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json"); then
 			status=0
@@ -1284,21 +1298,13 @@ run_migrations() {
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
-	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Deleting existing migration job to recreate with fresh config..."
-		if ! az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes; then
-			echo "Failed to delete the existing migration job."
-			return 1
-		fi
-	fi
 	local remaining_jobs
 	remaining_jobs=$(az containerapp job list -g "$RESOURCE_GROUP" \
 		--query "[?name=='$MIGRATION_JOB'] | length(@)" -o tsv) || return 1
 	if [[ "$remaining_jobs" != "0" ]]; then
-		echo "Existing migration job deletion was not observed."
+		echo "Invocation migration job name is already present; refusing to replace it."
 		return 1
 	fi
-	MIGRATION_JOB_CLEANUP_REQUIRED="true"
 
 	echo "Creating migration job..."
 	if ! az containerapp job create \
@@ -1316,9 +1322,13 @@ run_migrations() {
 		--registry-server "$ACR_SERVER" \
 		--registry-username "$ACR_USERNAME" \
 		--registry-password "$ACR_PASSWORD"; then
-		echo "Failed to configure migration job."
+		# A failed create may have reached Azure. Do not claim or delete a job
+		# whose ownership was not confirmed by this invocation's successful create.
+		echo "Migration job creation was not confirmed; retaining any ambiguous job: $MIGRATION_JOB"
 		return 1
 	fi
+	MIGRATION_JOB_CLEANUP_REQUIRED="true"
+	echo "Created invocation migration job: $MIGRATION_JOB"
 	local migration_container_name
 	if ! migration_container_name=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
