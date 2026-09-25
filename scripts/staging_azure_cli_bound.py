@@ -88,6 +88,7 @@ ALLOWED_OPTION_TOKENS = {
     "--format",
     "--image",
     "--job-execution-name",
+    "--max-inactive-revisions",
     "--memory",
     "--name",
     "--only-show-errors",
@@ -346,6 +347,9 @@ def validate_staging_scope(
     candidate: str = CANDIDATE_SHA,
     migration_job: str = LEGACY_MIGRATION_JOB,
 ) -> None:
+    retention = flag_values(argv, {"--max-inactive-revisions"})
+    if "--max-inactive-revisions" in argv:
+        require(argv[:2] == ["containerapp", "update"] and retention == ["10"])
     if argv[:3] == ["containerapp", "secret", "list"]:
         names = flag_values(argv, {"-n"})
         require(
