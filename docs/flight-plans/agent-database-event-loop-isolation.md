@@ -11,8 +11,10 @@ including health checks and teardown of other requests that may hold that lock.
 Run the synchronous service calls through Starlette's existing threadpool helper.
 For Session Prep, keep authorization, invocation, and its existing commit inside
 one sequential worker call. Body reads and validation remain on the async route.
-The helper propagates the request's ActiveModel ContextVar and waits for its
-worker before cancellation can tear down the shared session. Preserve Doctor
+The threadpool propagates the request's ActiveModel ContextVar. An owned asyncio
+task shields its worker and drains it before re-raising cancellation, including
+repeated direct `Task.cancel()` calls, so request teardown cannot close the shared
+session while the worker uses it. Preserve Doctor
 and view-as locking, authorization checks, transaction boundaries, error mappings,
 and response contracts. No dependency, pool-size, protocol, or schema changes.
 
@@ -27,8 +29,12 @@ Before the fix, all ten route/error combinations reproduce a PostgreSQL Doctor
 lock wait that prevents health responses until an independent holder releases
 the lock. After the fix, health responds while the lock is still held. Tests also
 check the same request session, no early commit, denial/error rollback, and lock
-reacquisition after teardown. A cancellation case verifies that a running worker
-finishes before session cleanup and its uncommitted write rolls back. Retain the
+reacquisition after teardown. For every affected route, AnyIO scope cancellation,
+direct `Task.cancel()`, and repeated direct cancellation verify that a running
+worker retains its transaction until completion, the first cancellation is
+preserved, and teardown rolls back its uncommitted write and releases the lock.
+The direct cancellation cases reproduce premature session closure with the
+unshielded threadpool await. Retain the
 affected mount, turn, audit, usage, and Session Prep contract suites.
 
 ## Release and recovery
@@ -42,3 +48,5 @@ candidate regresses. No schema migration or data rollback is needed.
 This fixes the reproduced event-loop amplification mechanism. It does not prove
 which live request originally held the Doctor lock, remove intentional
 authorization serialization, or impose new database lock/statement timeouts.
+Cancellation cleanup waits for the synchronous worker to finish; it cannot make
+forced process termination safe or interrupt a database call already in flight.

@@ -279,12 +279,22 @@ def test_doctor_lock_wait_keeps_health_responsive_and_cleans_request(
     assert state.health_before_release, "Doctor lock wait blocked the ASGI event loop"
 
 
+@pytest.mark.parametrize("route", ["bootstrap", "tool", "turn", "audit", "usage"])
+@pytest.mark.parametrize(
+    "direct_cancels", [0, 1, 3], ids=["scope", "task", "repeated-task"]
+)
 def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
-    database, monkeypatch
+    database, monkeypatch, direct_cancels, route
 ):
     engine, doctor_id = database
     entered, release, worker_finished, request_finished = (Event() for _ in range(4))
-    state = SimpleNamespace(session=None, scope=None)
+    state = SimpleNamespace(
+        session=None,
+        scope=None,
+        task=None,
+        cancellation=None,
+        transaction_alive_when_released=False,
+    )
     application = FastAPI()
     application.include_router(agent.agent_api_app)
 
@@ -299,10 +309,19 @@ def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
     application.dependency_overrides[agent.authenticate_agent_api_request] = (
         authenticate
     )
+    application.dependency_overrides[agent.authenticate_sovereign_tool_request] = (
+        authenticate
+    )
+    monkeypatch.setattr(
+        prep_configuration,
+        "SESSION_PREP_PROVIDER_SETTINGS",
+        SessionPrepProviderSettings(True, frozenset()),
+    )
 
-    def blocked_bootstrap(**_kwargs):
+    def blocked_service(**kwargs):
         with get_session() as session:
             assert session is state.session
+            assert kwargs.get("session", session) is session
             doctor = session.exec(
                 select(Doctor).where(Doctor.id == doctor_id).with_for_update()
             ).one()
@@ -310,13 +329,23 @@ def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
             session.flush()
             entered.set()
             assert release.wait(3)
-            assert session.in_transaction(), "Teardown closed an active worker session"
+            state.transaction_alive_when_released = session.in_transaction()
             worker_finished.set()
+            assert session.in_transaction(), "Teardown closed an active worker session"
             raise SQLAlchemyError("synthetic database failure after cancellation")
 
-    monkeypatch.setattr(
-        agent.app.services.authority, "bootstrap_mount_context", blocked_bootstrap
-    )
+    services = {
+        "bootstrap": (agent.app.services.authority, "bootstrap_mount_context"),
+        "tool": (agent.app.services.session_prep, "authorize_session_prep_read"),
+        "turn": (agent.app.services.authority_conversation, "write_conversation_turn"),
+        "audit": (
+            agent.app.services.authority_audit,
+            "write_observational_audit_event",
+        ),
+        "usage": (agent.app.services.authority_usage, "report_model_usage_event"),
+    }
+    target, name = services[route]
+    monkeypatch.setattr(target, name, blocked_service)
 
     async def exercise():
         async with httpx.AsyncClient(
@@ -327,8 +356,12 @@ def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
                 try:
                     with anyio.CancelScope() as scope:
                         state.scope = scope
-                        path, kwargs = request_case("bootstrap")
+                        state.task = asyncio.current_task()
+                        path, kwargs = request_case(route)
                         await client.post("/service/v1/agent" + path, **kwargs)
+                except asyncio.CancelledError as error:
+                    state.cancellation = error
+                    raise
                 finally:
                     request_finished.set()
 
@@ -336,17 +369,28 @@ def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
                 group.start_soon(request)
                 try:
                     assert await run_sync(entered.wait, 3)
-                    state.scope.cancel()
-                    await anyio.sleep(0.02)
-                    assert not request_finished.is_set()
-                    assert state.session.in_transaction()
+                    if direct_cancels:
+                        for index in range(direct_cancels):
+                            state.task.cancel(f"synthetic cancellation {index}")
+                            await anyio.sleep(0.02)
+                            assert not request_finished.is_set()
+                            assert state.session.in_transaction()
+                    else:
+                        state.scope.cancel()
+                        await anyio.sleep(0.02)
+                        assert not request_finished.is_set()
+                        assert state.session.in_transaction()
                     assert (await client.get("/healthcheck")).status_code == 200
                 finally:
                     release.set()
+                    assert await run_sync(worker_finished.wait, 3)
         assert _session_context.get() is None
 
     anyio.run(exercise)
     assert worker_finished.is_set() and request_finished.is_set()
+    assert state.transaction_alive_when_released
+    if direct_cancels:
+        assert state.cancellation.args == ("synthetic cancellation 0",)
     assert not state.session.in_transaction()
     with Session(engine) as session:
         doctor = session.exec(

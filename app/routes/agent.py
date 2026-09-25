@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
+from anyio import CancelScope
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import (
@@ -52,6 +55,30 @@ agent_api_app = APIRouter(
     dependencies=[Depends(aglobal_session)],
 )
 agent_api_app.include_router(capture_api_app)
+
+
+async def _run_agent_database[T, **P](
+    function: Callable[P, T], *args: P.args, **kwargs: P.kwargs
+) -> T:
+    # Retain the worker task: cancelling the route must not let aglobal_session
+    # close its ContextVar session while synchronous database work still uses it.
+    worker = asyncio.create_task(run_in_threadpool(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        # AnyIO shields level cancellation; asyncio.shield keeps direct (even
+        # repeated) Task.cancel() calls from cancelling the retained worker.
+        with CancelScope(shield=True):
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            if not worker.cancelled():
+                worker.exception()  # Retrieve failure; preserve original cancellation.
+        raise
 
 
 class MountContextResponse(BaseModel):
@@ -667,8 +694,8 @@ async def invoke_tool(
 
     def invoke_in_session() -> app.services.session_prep.SessionPrepInvocation:
         # Keep authorization, row locks, and commit in one sequential worker
-        # call. The threadpool carries aglobal_session's ContextVar; it waits
-        # for the worker before request teardown can close the shared session.
+        # call. The threadpool carries aglobal_session's ContextVar, and the
+        # await boundary drains this worker before request session teardown.
         with get_session() as managed:
             session = cast(Session, managed)
             authorized = app.services.session_prep.authorize_session_prep_read(
@@ -717,7 +744,7 @@ async def invoke_tool(
         return result
 
     try:
-        result = await run_in_threadpool(invoke_in_session)
+        result = await _run_agent_database(invoke_in_session)
     except app.services.authority.AuthorityKernelDisabledError:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -848,7 +875,7 @@ async def bootstrap_mount_context(
         )
 
     try:
-        context = await run_in_threadpool(
+        context = await _run_agent_database(
             app.services.authority.bootstrap_mount_context,
             mount_context_token=mount_context_token,
             settings=settings,
@@ -1117,7 +1144,7 @@ async def write_conversation_turn(
         )
 
     try:
-        result = await run_in_threadpool(
+        result = await _run_agent_database(
             app.services.authority_conversation.write_conversation_turn,
             workload_client_id=principal.client_id,
             mount_context_token=mount_context_token,
@@ -1287,7 +1314,7 @@ async def write_audit_event(
     if isinstance(data, JSONResponse):
         return data
     try:
-        result = await run_in_threadpool(
+        result = await _run_agent_database(
             app.services.authority_audit.write_observational_audit_event,
             workload_client_id=principal.client_id,
             interaction_ref=interaction_ref,
@@ -1435,7 +1462,7 @@ async def report_model_usage_event(
     if isinstance(data, JSONResponse):
         return data
     try:
-        result = await run_in_threadpool(
+        result = await _run_agent_database(
             app.services.authority_usage.report_model_usage_event,
             workload_client_id=principal.client_id,
             interaction_ref=interaction_ref,
