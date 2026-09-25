@@ -1,5 +1,5 @@
-import { addDays, subMonths } from "date-fns"
-import { ChangeEventHandler, useState } from "react"
+import { addDays, format, parseISO, subMonths } from "date-fns"
+import { useState } from "react"
 import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
 import { z } from "zod"
 
@@ -32,11 +32,9 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { Input } from "~/components/ui/input"
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import { standardDateFormat } from "~/lib/date"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
@@ -51,6 +49,11 @@ type UploadRecordingFormValues = {
   patient_name: string
   date_of_birth: Date
   file: File
+}
+
+// Birthdays are calendar dates, even when an API datetime includes a timezone.
+function patientBirthDate(value: string) {
+  return parseISO(value.slice(0, 10))
 }
 
 // TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
@@ -71,7 +74,7 @@ function PatientComboboxSearch({
     "patient_name"
   >["value"]
 }) {
-  const { data, error } = useQuery({ ...patientListOptions({ client }) })
+  const { data } = useQuery({ ...patientListOptions({ client }) })
   const patients = data ?? []
 
   if (!data) {
@@ -110,7 +113,7 @@ function PatientComboboxSearch({
       // update the patient name field with the name of the patient, not the ID
       onChange(patient.name)
 
-      form.setValue("date_of_birth", new Date(patient.date_of_birth))
+      form.setValue("date_of_birth", patientBirthDate(patient.date_of_birth))
     }
   }
 
@@ -134,7 +137,7 @@ function PatientComboboxSearch({
                 {patientItem.label}
               </span>
               <span className="text-muted-foreground text-xs">
-                {standardDateFormat(patientItem.date_of_birth)}
+                {format(patientBirthDate(patientItem.date_of_birth), "M/d/yy")}
               </span>
               {patientItem.isSelected && (
                 <span className="absolute start-2 top-0 flex h-full items-center justify-center">
@@ -185,8 +188,11 @@ function VisitAudioUploadForm({
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const result = await submitVisitAudioUpload({
-      appointmentDate: values.appointment_date.toISOString(),
-      dateOfBirth: values.date_of_birth.toISOString(),
+      // These controls collect days, not instants. Keep the displayed calendar
+      // day in the API's existing naive-datetime representation; UTC conversion
+      // can move a visit or birthday to the preceding/following day.
+      appointmentDate: format(values.appointment_date, "yyyy-MM-dd'T'00:00:00"),
+      dateOfBirth: format(values.date_of_birth, "yyyy-MM-dd'T'00:00:00"),
       file: values.file,
       patientName: values.patient_name,
     })
@@ -291,7 +297,7 @@ function VisitAudioUploadForm({
         <FormField
           control={form.control}
           name="file"
-          render={({ field }) => (
+          render={() => (
             <FormItem>
               <FormDescription>
                 Upload an audio recording from a {t.patient} visit.
