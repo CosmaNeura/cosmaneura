@@ -71,6 +71,10 @@ def desired(configuration: dict[str, Any], contract: dict[str, Any]) -> dict[str
         require(value is None or type(value) is str)
         # This is the deployer's existing empty-value removal behavior.
         if value:
+            # jq -r is consumed through Bash command substitution. Trailing
+            # LF and NUL bytes would be removed before deployment, so strict
+            # preservation must refuse them rather than compare other bytes.
+            require(not value.endswith("\n") and "\x00" not in value)
             environment[name] = value
     return {"environment": environment, "args": contract["args"], "command": []}
 

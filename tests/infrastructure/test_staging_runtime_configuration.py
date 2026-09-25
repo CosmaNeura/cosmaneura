@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -545,6 +546,44 @@ def test_reviewed_fingerprint_mismatch_stops_before_any_azure_call(
     assert result.returncode != 0
     assert "reviewed full runtime fingerprint" in result.stderr
     assert calls == []
+    _no_secret_output(result, configuration)
+
+
+@pytest.mark.parametrize(
+    "key", ["EMAIL_FROM_ADDRESS", "ENCRYPTION_KEY", "DATABASE_URL"]
+)
+@pytest.mark.parametrize("unpreservable", ["\n", "\x00"])
+def test_shell_unrepresentable_values_refuse_before_any_mutation(
+    tmp_path, configuration, contracts, key, unpreservable
+):
+    configuration[key] += unpreservable
+    # The reviewed baseline is captured from Azure's actual values. Before
+    # this guard, the helper accepted that fingerprint but Bash stripped these
+    # bytes when extracting values for migration/app arguments.
+    current = {}
+    for contract in contracts:
+        state = _workload_payload(configuration, contract)["state"]
+        current[contract["name"]] = {
+            "environment": {
+                name: configuration[name]
+                for name in contract["secret_names"] + contract["public_names"]
+                if configuration.get(name)
+            },
+            "args": state["readyRevisionArgs"],
+            "command": state["readyRevisionCommand"],
+        }
+    reviewed = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
+    result, calls = _shell_harness(
+        tmp_path, configuration, contracts, fingerprint=reviewed
+    )
+    assert result.returncode != 0
+    assert calls == []
+    assert REFUSAL.strip() in result.stderr
     _no_secret_output(result, configuration)
 
 
