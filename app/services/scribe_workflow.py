@@ -80,7 +80,7 @@ class ConsentCreate(BaseModel):
     practitioner_id: str = Field(min_length=1, max_length=128)
     patient_id: str = Field(min_length=1, max_length=128)
     modality: Literal["in_person", "virtual", "phone"]
-    participant_regions: set[str] = Field(min_length=1)
+    participant_regions: set[str]
     method: Literal["pre_visit_form", "verbal_attestation", "phone_ivr"]
     all_parties_consented: bool
     granted_at: datetime
