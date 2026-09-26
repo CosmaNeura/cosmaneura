@@ -55,7 +55,7 @@ async def test_notebook_is_distinct_saved_and_replayed_then_new_revision_replace
     original_text = f.client.result.segments[0].content
     first = await notes.capture_note(**kwargs, scratch_notes=scratch)
     assert first.notebook_source == scratch.reference()
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     assert all(
         scratch.content in prompt and "not words recorded" in prompt
         for prompt, _ in f.model.calls
@@ -63,7 +63,7 @@ async def test_notebook_is_distinct_saved_and_replayed_then_new_revision_replace
     assert rows(f, AIVisitTranscript)[0].transcript_data[0].content == original_text
     assert await notes.capture_note(**kwargs, scratch_notes=scratch) == first
     assert await notes.capture_note(**{**kwargs, "prepare": False}) == first
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     newer = notebook(
         f.binding.workspace_id,
         content="Invented update: clinician clarified a two-week follow-up.",

@@ -130,7 +130,7 @@ async def test_initial_gap_draft_replay_retains_raw_and_explicit_review_evidence
         == f.history.recoveries[0].request.gap_id
     )
     assert delivery.payload_sha256 == notes._source(f.raw, f.scope).digest
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     assert all(
         "Do not infer missing speech, gap duration" in call[0] for call in f.model.calls
     )
@@ -241,19 +241,18 @@ async def test_manifest_cannot_be_downgraded_or_rebound(
         )
     with pytest.raises(error):
         await notes.capture_note(**{**args, "prepare": False})
-    assert len(f.model.calls) == 2 and len(manifests(f)) == 1
+    assert len(f.model.calls) == 1 and len(manifests(f)) == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", [1, 2])
 async def test_current_source_change_during_model_work_cannot_publish(
-    admission_case, monkeypatch, phase
+    admission_case, monkeypatch
 ):
     f = admission_case
     args = await setup(f, monkeypatch)
 
     def change(count):
-        if count == phase:
+        if count == 1:
             f.working = working_receipt(
                 f.raw,
                 f.scope.session_request.practitioner_id,

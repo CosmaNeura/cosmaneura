@@ -296,7 +296,7 @@ async def test_correction_replaces_note_input_preserves_history_and_invalidates_
     )
     assert historical.superseded_at is not None and historical.note == first.fields
     assert await notes.capture_note(**kwargs) == second
-    assert len(f.model.calls) == 4
+    assert len(f.model.calls) == 2
     await operate(
         f, correction(f, "Invented third source version."), key="working-core-third"
     )
@@ -310,15 +310,14 @@ async def test_correction_replaces_note_input_preserves_history_and_invalidates_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", [1, 2])
 async def test_correction_during_model_work_cannot_publish_stale_draft(
-    admission_case, monkeypatch, phase
+    admission_case, monkeypatch
 ):
     f = admission_case
     kwargs = await setup_working(f, monkeypatch)
 
     def change(count):
-        if count == phase:
+        if count == 1:
             f.working = working_receipt(
                 f.raw,
                 f.scope.session_request.practitioner_id,

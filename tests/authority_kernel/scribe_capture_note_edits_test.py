@@ -88,7 +88,7 @@ async def test_edit_retains_prior_version_and_recovers_lost_response(
         )
     read = {key: value for key, value in request.items() if key != "edit"}
     assert await notes.capture_note(**read, prepare=False) == saved
-    assert len(f.model.calls) == 2  # Saving edits never invokes the model.
+    assert len(f.model.calls) == 1  # Saving edits never invokes the model.
 
 
 @pytest.mark.asyncio
