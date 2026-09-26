@@ -13,6 +13,7 @@ from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_protocol as protocol
 from app.services.scribe_capture_admission import CaptureCaller
 from app.services.scribe_creator_review_contract import (
+    MAX_CREATOR_REVIEW_BYTES,
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
@@ -329,7 +330,7 @@ async def test_review_transport_is_bounded_and_never_automatically_retries(failu
             return httpx.Response(
                 200,
                 headers={"Content-Type": "application/json"},
-                content=b" " * (8 * 1024 * 1024 + 1),
+                content=b" " * (MAX_CREATOR_REVIEW_BYTES + 1),
             )
         return httpx.Response(
             200,

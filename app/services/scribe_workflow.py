@@ -547,7 +547,7 @@ class HttpScribeWorkflowClient:
             session_id,
             "transcript",
             CaptureTranscript,
-            max_bytes=4_194_304,
+            max_bytes=MAX_CAPTURE_SOURCE_BYTES,
         )
 
     async def _get_capture(
