@@ -36,6 +36,9 @@ from .routes.authority_errors import (
     token_problem_response,
 )
 from .routes.chat import chat_api_app
+from .routes.companion_appointment_setup import (
+    install as install_companion_appointment_setup,
+)
 from .routes.companion_encounters import install as install_companion_encounters
 from .routes.companion_records import install as install_companion_records
 from .routes.embed_context import embed_context_api_app
@@ -116,6 +119,7 @@ add_middleware(api_app)
 # logging and session response transforms; route-level sends are intermediate.
 install_companion_records(api_app)
 install_companion_encounters(api_app)
+install_companion_appointment_setup(api_app)
 install_capture_boundaries(api_app)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
