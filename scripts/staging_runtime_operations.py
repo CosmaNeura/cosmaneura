@@ -267,6 +267,7 @@ def main(argv):
     plan = CONTRACT["bound_json"](plan_path, plan_hash)
     publication = CONTRACT["bound_json"](receipt_path, receipt_hash)
     CONTRACT["deployment_inputs"](plan, plan_hash, publication)
+    publication = CONTRACT["resolve_publication"](plan, plan_hash, publication)
     verify_controller(plan)
     if action.startswith("recover"):
         require(not extra)
