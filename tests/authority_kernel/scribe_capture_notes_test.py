@@ -120,9 +120,9 @@ async def test_prepare_retry_read_and_lost_response_recover_one_source_and_note(
     assert list(first.fields) == ["CC", "Plan"]
     assert first.fields is not None
     assert "Greater than" not in first.fields["Plan"]
-    assert len(f.model.calls) == 2
-    assert "infer it from the clinical context" not in f.model.calls[1][0]
-    assert "example_note" not in f.model.calls[1][0]
+    assert len(f.model.calls) == 1
+    assert "infer it from the clinical context" not in f.model.calls[0][0]
+    assert "example_note" not in f.model.calls[0][0]
     assert len(rows(f, AIVisitTranscript)) == len(rows(f, AIVisitNote)) == 1
     delivery = rows(f, ScribeTranscriptDelivery)[0]
     assert delivery.pipeline_dispatched_at is None
@@ -130,16 +130,40 @@ async def test_prepare_retry_read_and_lost_response_recover_one_source_and_note(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", [1, 2])
+async def test_capture_drafts_once_from_source_without_an_intermediate_action_list(
+    admission_case, monkeypatch
+):
+    f = admission_case
+    kwargs = await setup(f, monkeypatch)
+
+    def unexpected_extraction(*args, **kwargs):
+        pytest.fail("capture must not extract a second generated source")
+
+    monkeypatch.setattr(notes.summarize, "extract_action_items", unexpected_extraction)
+    monkeypatch.setattr(
+        notes.summarize, "build_action_item_prompt", unexpected_extraction
+    )
+    source = f.client.result
+    source_content = tuple(segment.content for segment in source.segments)
+    result = await notes.capture_note(**kwargs)
+    assert result.review_required and result.status == "draft"
+    assert len(f.model.calls) == 1
+    prompt, json_output = f.model.calls[0]
+    assert json_output and all(content in prompt for content in source_content)
+    assert "- Discuss sleep at follow-up." not in prompt  # Fake extractor output.
+    assert len(rows(f, AIVisitNote)) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("mutation", ["identity", "schema", "source", "consent"])
 async def test_pending_generation_rechecks_scope_and_inputs(
-    admission_case, monkeypatch, phase, mutation
+    admission_case, monkeypatch, mutation
 ):
     f = admission_case
     kwargs = await setup(f, monkeypatch)
 
     def change(count):
-        if count != phase:
+        if count != 1:
             return
         if mutation == "consent":
 
@@ -184,7 +208,7 @@ async def test_pending_generation_rechecks_scope_and_inputs(
     with pytest.raises(error) as failure:
         await notes.capture_note(**kwargs)
     assert "private sentinel" not in str(failure.value)
-    assert len(f.model.calls) == phase
+    assert len(f.model.calls) == 1
     assert not rows(f, AIVisitNote)
     assert len(rows(f, AIVisitTranscript)) == 1
 
@@ -389,7 +413,7 @@ async def test_finalization_rechecks_authority_in_the_publication_transaction(
     )
     with pytest.raises(authority.AuthorityKernelError):
         await notes.capture_note(**kwargs)
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     assert not rows(f, AIVisitNote)
 
 
@@ -401,7 +425,7 @@ async def test_concurrent_restored_current_version_is_not_overwritten(
     kwargs = await setup(f, monkeypatch)
 
     def restore(count):
-        if count != 2:
+        if count != 1:
             return
         with Session(f.engine) as session:
             transcript = session.exec(
@@ -630,4 +654,4 @@ async def test_note_hash_changes_when_existing_core_editor_changes_same_record(
         second.note_sha256
         == hashlib.sha256(orjson.dumps(list(second.fields.items()))).hexdigest()
     )
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1

@@ -239,7 +239,7 @@ def test_total_character_boundary_preserves_segment_and_lineage_guards():
 
 
 @pytest.mark.asyncio
-async def test_dense_three_hour_source_reaches_both_prompts_and_saved_reopened_note(
+async def test_dense_three_hour_source_reaches_prompt_and_saved_reopened_note(
     admission_case, monkeypatch
 ):
     f = admission_case
@@ -249,7 +249,7 @@ async def test_dense_three_hour_source_reaches_both_prompts_and_saved_reopened_n
     f.working = working_receipt(f.raw, f.scope.session_request.practitioner_id)
     snapshot = copy.deepcopy(f.raw.model_dump(mode="json"))
     first = await notes.capture_note(**kwargs)
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     for prompt, _ in f.model.calls:
         assert len(prompt.encode()) <= 4_194_304
         assert all(segment.content in prompt for segment in f.raw.segments)
@@ -276,5 +276,5 @@ async def test_dense_three_hour_source_reaches_both_prompts_and_saved_reopened_n
     assert await edits.save_capture_note(**request) == saved
     reopened = await notes.capture_note(**{**kwargs, "prepare": False})
     assert reopened == saved and reopened.source_sha256 == first.source_sha256
-    assert len(f.model.calls) == 2 and len(rows(f, AIVisitNote)) == 2
+    assert len(f.model.calls) == 1 and len(rows(f, AIVisitNote)) == 2
     assert f.raw.model_dump(mode="json") == snapshot

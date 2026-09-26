@@ -276,7 +276,7 @@ async def test_configured_admission_review_and_existing_soap_routes(
                                 headers=headers,
                             )
                             assert recovered.json()["receipt"] == draft
-                            assert len(model.calls) == 2
+                            assert len(model.calls) == 1
                             assert all(
                                 "No tengo fiebre" not in p for p, _ in model.calls
                             )
