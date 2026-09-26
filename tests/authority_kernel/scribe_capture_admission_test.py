@@ -202,10 +202,15 @@ async def test_failed_consent_keeps_safe_cause_and_same_recovery_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("regions", [frozenset({"US-NY"}), frozenset()])
 async def test_committed_journal_precedes_remote_work_and_keys_survive_new_retry(
     admission_case,
+    regions,
 ):
     fixture = admission_case
+    fixture.attestation = admission.ConsentAttestation.model_validate(
+        {**fixture.attestation.model_dump(), "participant_regions": regions}
+    )
     observed = []
 
     def before_return(phase, _receipt):
@@ -224,6 +229,7 @@ async def test_committed_journal_precedes_remote_work_and_keys_survive_new_retry
     assert first.session_id == second.session_id
     assert observed == ["consent", "session", "session"]
     assert len(fixture.client.consents) == len(fixture.client.sessions) == 1
+    assert next(iter(fixture.client.consents.values())).participant_regions == regions
     row = journal(fixture)
     assert row.status == "ready"
     assert row.lease_token is None
@@ -330,12 +336,13 @@ async def test_no_attestation_or_stale_attestation_cannot_start_new_admission(
 
 
 @pytest.mark.parametrize("value", [False, 1, "true", None])
-def test_attestation_requires_an_explicit_true_boolean(value):
+@pytest.mark.parametrize("regions", [["US-NY"], []])
+def test_attestation_requires_an_explicit_true_boolean(value, regions):
     with pytest.raises(ValidationError):
         admission.ConsentAttestation.model_validate(
             {
                 "modality": "in_person",
-                "participant_regions": ["US-NY"],
+                "participant_regions": regions,
                 "method": "verbal_attestation",
                 "all_parties_consented": value,
                 "granted_at": datetime.now(UTC),

@@ -92,7 +92,9 @@ class ConsentAttestation(BaseModel):
     modality: Literal["in_person", "virtual", "phone"]
     participant_regions: frozenset[
         Annotated[str, Field(pattern=r"^[A-Z]{2}(?:-[A-Z0-9]{1,3})?$")]
-    ] = Field(min_length=1, max_length=16)
+    ] = Field(max_length=16)
+    # Optional location metadata; all-party consent is required in every region.
+    # An empty set means not collected, never an inferred or fabricated location.
     method: Literal["verbal_attestation"]
     all_parties_consented: StrictBool
     granted_at: AwareDatetime
