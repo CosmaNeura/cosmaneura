@@ -112,7 +112,14 @@ def test_context_uses_existing_no_store_facade(monkeypatch):
     assert response.json()["receipt"] == expected.model_dump(mode="json")
 
 
-async def exercise(monkeypatch, *, status="created", failure=None, calls=None):
+async def exercise(
+    monkeypatch,
+    *,
+    status="created",
+    failure=None,
+    calls=None,
+    kind="native_recording_context",
+):
     selected = scope()
     if failure != "legacy":
         selected = replace(
@@ -159,7 +166,7 @@ async def exercise(monkeypatch, *, status="created", failure=None, calls=None):
         caller=cast(CaptureCaller, None),
         binding_ref="synthetic-binding",
         workspace_id=workspace,
-        operation=protocol.ReadOperation(kind="native_recording_context"),
+        operation=protocol.ReadOperation(kind=kind),
         client_request_key="synthetic-native-context",
         client=cast(ScribeWorkflowClient, Remote()),
     )
