@@ -511,6 +511,31 @@ async def execute_capture_operation(
     except (ValueError, TypeError, AttributeError):
         raise CaptureReceiptInvalid from None
     scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    if operation.kind == "native_recording_context":
+        if not isinstance(scope.session_request, ConfiguredSessionCreate):
+            raise CaptureOperationUnavailable
+        # Reuse the creator/consent receiver and the post-I/O admission check.
+        # The Scribe tenant is an admitted binding, not the provider's Core
+        # authority-tenant reference or a caller-supplied namespace.
+        view = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.ReadOperation(kind="creator_review"),
+            client_request_key,
+            client,
+        )
+        if not isinstance(view, CreatorReviewView) or (
+            view.status != "created" and view.status != "capturing"
+        ):
+            raise CaptureOperationUnavailable
+        return protocol.NativeRecordingContext(
+            workspace_id=workspace_id,
+            tenant_id=scope.tenant_id,
+            session_id=scope.session_id,
+            status=view.status,
+        )
     if operation.kind in {"creator_review", "decide_translation", "source_start"}:
         return await _execute_creator_review(
             caller,
