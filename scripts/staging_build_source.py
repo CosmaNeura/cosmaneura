@@ -461,11 +461,22 @@ class BuildSourceReader(source.ReadOnlySource):
             for v in raw.split(b"\n\n", 1)[0].splitlines()
             if v.startswith(b"parent ")
         ]
-        require(
-            len(parents) == 2
-            and parents[1] == head
-            and head == request.controller_reviewed_head
-        )
+        require(head == request.controller_reviewed_head)
+        if len(parents) == 1 and request.review_kind == "local_cursor":
+            # GitHub squash merges retain a different commit ID. Require the
+            # complete reviewed tree, not just a matching PR or module list.
+            reviewed = self.git_bytes("cat-file", "commit", head)
+            require(
+                hashlib.sha1(
+                    b"commit " + str(len(reviewed)).encode() + b"\0" + reviewed
+                ).hexdigest()
+                == head
+            )
+            tree = raw.split(b"\n", 1)[0]
+            require(re.fullmatch(rb"tree [0-9a-f]{40}", tree) is not None)
+            require(tree == reviewed.split(b"\n", 1)[0])
+        else:
+            require(len(parents) == 2 and parents[1] == head)
         self.is_ancestor(merged, context.controller_sha)
         if request.review_kind == "local_cursor":
             comment = self.gh(
