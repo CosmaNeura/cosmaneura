@@ -12,12 +12,11 @@ FORCED_FALSE_FLAGS = (
     "SCRIBE_HANDOFF_ENABLED",
     "SCRIBE_WORKFLOW_ENABLED",
     "SESSION_PREP_SYNTHETIC_ENABLED",
-    "STRIPE_INTEGRATION_ENABLED",
-    "STRIPE_BILLING_ENABLED",
     "STRIPE_LIVE_MODE",
     "DURABLE_WEBHOOK_INBOX_ENABLED",
     "ZOOM_WATCHDOG_ENABLED",
 )
+STRIPE_ROLLOUT_FLAGS = ("STRIPE_INTEGRATION_ENABLED", "STRIPE_BILLING_ENABLED")
 FRONTEND_FLAG = "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"
 PROVIDER_ORIGIN = (
     "https://cosmaneura-sovereign-staging-app.happygrass-736dc5a6."
@@ -61,7 +60,8 @@ def _hcl_variable(source: str, name: str) -> str:
     return source[start : end + 2]
 
 
-def _deploy_control_prefix() -> str:
+def _deploy_control_prefix(configuration: dict[str, str] | None = None) -> str:
+    rendered = {"SOVEREIGN_RECORD_GRANT_SECRET": "synthetic", **(configuration or {})}
     deploy = _read("infra-staging/deploy.sh")
     capture_start = deploy.index(f'{CONTROL}="${{{CONTROL}:-}}"')
     capture_end = deploy.index("# Resolve protected configuration", capture_start)
@@ -71,17 +71,19 @@ def _deploy_control_prefix() -> str:
     reconciliation_end = deploy.index("\nemit_github_output() {", reconciliation_start)
     return (
         deploy[capture_start:capture_end]
-        + 'ENV_JSON=\'{"SOVEREIGN_RECORD_GRANT_SECRET":"synthetic"}\'\n'
+        + f"ENV_JSON='{json.dumps(rendered)}'\n"
         + deploy[reconciliation_start:reconciliation_end]
     )
 
 
 def _run_deploy_control(
-    value: str | None, record_grants: str | None = "true"
+    value: str | None,
+    record_grants: str | None = "true",
+    configuration: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     # Execute the real validation and JSON reconciliation statements without
     # entering the protected configuration resolver.
-    script = _deploy_control_prefix()
+    script = _deploy_control_prefix(configuration)
     script += '\nprintf "%s\\n" "$ENV_JSON"\n'
     environment = os.environ.copy()
     if record_grants is None:
@@ -296,11 +298,22 @@ def test_true_switch_executably_injects_both_backend_gates() -> None:
     rendered = json.loads(result.stdout)
     assert all(rendered[name] == "true" for name in BACKEND_FLAGS)
     assert all(rendered[name] == "false" for name in FORCED_FALSE_FLAGS)
+    assert all(rendered[name] == "false" for name in STRIPE_ROLLOUT_FLAGS)
 
     frontend = _read(".env.staging.frontend")
     assert f'export {FRONTEND_FLAG}="${{{CONTROL}:-false}}"' in frontend
     assert frontend_result.returncode == 0, frontend_result.stderr
     assert frontend_result.stdout.strip() == "true"
+
+
+def test_staging_stripe_rollout_flags_follow_reviewed_configuration() -> None:
+    configured = {name: "true" for name in (*STRIPE_ROLLOUT_FLAGS, *FORCED_FALSE_FLAGS)}
+    result = _run_deploy_control("true", configuration=configured)
+
+    assert result.returncode == 0, result.stderr
+    rendered = json.loads(result.stdout)
+    assert all(rendered[name] == "true" for name in STRIPE_ROLLOUT_FLAGS)
+    assert all(rendered[name] == "false" for name in FORCED_FALSE_FLAGS)
 
 
 def test_staging_contract_derives_issuer_and_pins_provider_origin() -> None:

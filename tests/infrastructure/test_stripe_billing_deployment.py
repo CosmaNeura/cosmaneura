@@ -120,3 +120,11 @@ def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
     assert 'update_args+=(--args "$SCHEDULER_COMMAND")' in deploy
     assert "Staging Stripe mode must remain explicitly false" in deploy
     assert "rk_test_" in deploy
+    forced_false = next(
+        line.split('"')[1].split()
+        for line in _shell_function(deploy, "build_configuration_evidence").splitlines()
+        if line.startswith("forced_false =")
+    )
+    assert "STRIPE_LIVE_MODE" in forced_false
+    assert "STRIPE_INTEGRATION_ENABLED" not in forced_false
+    assert "STRIPE_BILLING_ENABLED" not in forced_false
