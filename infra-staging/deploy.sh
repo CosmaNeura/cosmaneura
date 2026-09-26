@@ -937,7 +937,7 @@ verify_candidate_workload_state() {
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
 	' <<<"$state_json" >/dev/null; then
-		echo "Candidate workload image or disabled feature-gate evidence is inconsistent."
+		echo "Candidate workload image or feature-gate evidence is inconsistent."
 		return 1
 	fi
 }
