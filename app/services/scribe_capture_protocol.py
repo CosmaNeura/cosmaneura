@@ -156,6 +156,7 @@ class ReadOperation(ProtectedContract):
         "capture_source",
         "capture_profile",
         "creator_review",
+        "native_recording_context",
     ]
     profile_receipt_id: UUID | None = None
 
@@ -263,6 +264,16 @@ class EncryptionKey(ProtectedContract):
     key_version: KeyVersion
     algorithm: Literal["RSA-OAEP-256"]
     public_jwk: PublicJwk
+
+
+class NativeRecordingContext(ProtectedContract):
+    """Core-admitted key namespace; never permission to open a microphone."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    workspace_id: UUID
+    tenant_id: UUID
+    session_id: UUID
+    status: Literal["created", "capturing"]
 
 
 class KeyReceipt(ProtectedContract):
