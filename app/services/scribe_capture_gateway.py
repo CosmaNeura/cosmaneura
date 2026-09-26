@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from app.services import scribe_capture_protocol as protocol
 from app.services.scribe_capture_admission import (
+    AdmissionConsentRequired,
     AdmittedCaptureScope,
     CaptureCaller,
     authorize_admitted_capture,
@@ -510,7 +511,30 @@ async def execute_capture_operation(
         operation = protocol.OPERATION_ADAPTER.validate_python(operation.model_dump())
     except (ValueError, TypeError, AttributeError):
         raise CaptureReceiptInvalid from None
-    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    try:
+        scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    except AdmissionConsentRequired:
+        # authorize_admitted_capture checks current caller/binding access before
+        # discovering that no admission exists. Other conflicts, revocations and
+        # uncertain admission states must never masquerade as a fresh encounter.
+        if operation.kind == "provider_encounter":
+            return protocol.ProviderEncounter(status="not_prepared", review=None)
+        raise
+    if operation.kind == "provider_encounter":
+        if not isinstance(scope.session_request, ConfiguredSessionCreate):
+            raise CaptureOperationUnavailable
+        view = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.ReadOperation(kind="creator_review"),
+            client_request_key,
+            client,
+        )
+        if not isinstance(view, CreatorReviewView):
+            raise CaptureReceiptInvalid
+        return protocol.ProviderEncounter(status="available", review=view)
     if operation.kind == "native_recording_context":
         if not isinstance(scope.session_request, ConfiguredSessionCreate):
             raise CaptureOperationUnavailable

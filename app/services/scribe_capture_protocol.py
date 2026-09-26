@@ -28,7 +28,10 @@ from app.services.scribe_capture_limits import (
 )
 from app.services.scribe_capture_recovery_contract import CaptureRecoveryRequest
 from app.services.scribe_capture_working_contract import TranscriptCorrection
-from app.services.scribe_creator_review_contract import CreatorTranslationDecision
+from app.services.scribe_creator_review_contract import (
+    CreatorReviewView,
+    CreatorTranslationDecision,
+)
 from app.services.scribe_source_start_contract import NativeSourceStart
 
 Channel = Literal["microphone", "system_audio", "mixed"]
@@ -157,6 +160,7 @@ class ReadOperation(ProtectedContract):
         "capture_profile",
         "creator_review",
         "native_recording_context",
+        "provider_encounter",
     ]
     profile_receipt_id: UUID | None = None
 
@@ -274,6 +278,20 @@ class NativeRecordingContext(ProtectedContract):
     tenant_id: UUID
     session_id: UUID
     status: Literal["created", "capturing"]
+
+
+class ProviderEncounter(ProtectedContract):
+    """Discover existing configured work without creating another admission."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["not_prepared", "available"]
+    review: CreatorReviewView | None
+
+    @model_validator(mode="after")
+    def consistent_review(self) -> ProviderEncounter:
+        if (self.status == "available") != (self.review is not None):
+            raise ValueError("Invalid provider encounter")
+        return self
 
 
 class KeyReceipt(ProtectedContract):
