@@ -99,6 +99,51 @@ def test_runtime_rejects_unbounded_or_wrong_target_values(key, value):
         m["validate_runtime"](candidate)
 
 
+def companion_runtime():
+    return runtime() | {
+        "AGENT_API_COMPANION_CLIENT_ID": "33333333-3333-3333-3333-333333333333",
+        "COMPANION_ENCOUNTER_READ_ENABLED": "true",
+        "COMPANION_RECORD_READ_ENABLED": "true",
+        "COMPANION_APPOINTMENT_SETUP_ENABLED": "true",
+    }
+
+
+def test_runtime_accepts_legacy_companion_and_explicit_withdrawal_without_mutation():
+    withdrawn = runtime() | {key: "false" for key in m["COMPANION_FLAGS"]}
+    withdrawn["AGENT_API_COMPANION_CLIENT_ID"] = ""
+    for candidate in (runtime(), companion_runtime(), withdrawn):
+        before = dict(candidate)
+        m["validate_runtime"](candidate)
+        assert candidate == before
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("AGENT_API_COMPANION_CLIENT_ID", ""),
+        ("AGENT_API_COMPANION_CLIENT_ID", "not-a-client-id"),
+        ("AGENT_API_COMPANION_CLIENT_ID", "00000000-0000-0000-0000-000000000000"),
+        ("AGENT_API_COMPANION_CLIENT_ID", "22222222-2222-2222-2222-222222222222"),
+        ("COMPANION_ENCOUNTER_READ_ENABLED", "yes"),
+        ("COMPANION_RECORD_READ_ENABLED", True),
+        ("COMPANION_APPOINTMENT_SETUP_ENABLED", "1"),
+    ],
+)
+def test_runtime_rejects_invalid_companion_admission(key, value):
+    candidate = companion_runtime()
+    candidate[key] = value
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
+
+
+@pytest.mark.parametrize("key", sorted(m["COMPANION_FIELDS"]))
+def test_runtime_rejects_partial_companion_groups(key):
+    candidate = companion_runtime()
+    del candidate[key]
+    with pytest.raises(ValueError):
+        m["validate_runtime"](candidate)
+
+
 def test_recovery_accepts_split_baseline_but_rejects_image_revision_or_workload_drift():
     plan, _ = fixtures()
     recovery = plan["release"]["recovery"]
