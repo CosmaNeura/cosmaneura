@@ -75,6 +75,7 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
+from app.services.practice_invitations import ACCOUNT_IN_ANOTHER_PRACTICE
 from app.services.public_entitlements import (
     ActiveClinicianSeatLimitReached,
     ClinicianSeatPolicyError,
@@ -1905,6 +1906,21 @@ def _consume_legacy_join_attempt(doctor: Doctor) -> None:
         )
 
 
+def _refuse_join_code_of_another_practice(
+    own_practice: Practice | None, supplied_code: str
+) -> None:
+    # Compared against the member's own code rather than looked up, so an
+    # unknown code and another practice's code give the same answer.
+    if (
+        own_practice is None
+        or _normalize_join_code(supplied_code) != own_practice.join_code
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=ACCOUNT_IN_ANOTHER_PRACTICE,
+        )
+
+
 @internal_api_app.post("/practice/lookup", name="lookup_practice")
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
@@ -1919,6 +1935,10 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
         verified_primary_email=verified_email,
     ) or doctor_has_managed_roster_assignment(doctor):
         return PracticeLookupResult()
+    if existing := _membership_for(doctor):
+        _refuse_join_code_of_another_practice(
+            Practice.get(id=existing.practice_id), data.join_code
+        )
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
     if (
@@ -2028,6 +2048,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                     "Use that enrollment path."
                 ),
             )
+        _refuse_join_code_of_another_practice(practice, data.join_code)
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -2093,14 +2114,14 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             .with_for_update()
         ).one_or_none()
         if existing is not None:
+            if existing.practice_id != locked_practice.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=ACCOUNT_IN_ANOTHER_PRACTICE,
+                )
             session.commit()
             session.refresh(existing)
-            existing_practice = (
-                locked_practice
-                if existing.practice_id == locked_practice.id
-                else Practice.get(id=existing.practice_id)
-            )
-            payload = _practice_payload(existing_practice, existing)
+            payload = _practice_payload(locked_practice, existing)
             assert payload
             return payload
         if (
