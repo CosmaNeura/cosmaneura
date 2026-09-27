@@ -436,6 +436,20 @@ describe("PracticeJoinPanel seat summary", () => {
     },
   )
 
+  it("renders nothing when there is neither a billed count nor a pending update", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed(
+          { billed_seats: null },
+          { subscription_status: "invalid" },
+        )}
+        showBillingActions
+      />,
+    )
+
+    expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
+  })
+
   it("shows the cost of a subscription kept alongside pilot access", () => {
     render(
       <PracticeJoinPanel

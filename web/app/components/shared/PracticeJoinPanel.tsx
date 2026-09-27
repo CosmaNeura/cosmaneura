@@ -89,6 +89,7 @@ function SeatSummary({ practice }: { practice: PracticeStatus }) {
           ? `You are paying for ${seats(billed)} · ${cost}`
           : `Your subscription covers ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
   }
+  if (!line && !summary.seat_sync_pending) return null
 
   return (
     <div className="mt-1 text-sm" data-testid="seat-summary">
