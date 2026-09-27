@@ -76,6 +76,7 @@ from app.services.public_entitlements import (
     ClinicianSeatPolicyError,
     active_clinician_seat_count,
     lock_practice_for_active_seat_mutation,
+    occupies_active_clinician_seat,
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
 )
@@ -140,7 +141,6 @@ from app.models.patient_medication import (
 )
 from app.models.practice import (
     TRIAL_LENGTH,
-    ClinicianSeatState,
     OriginChannel,
     Practice,
     PracticeAcquisitionSource,
@@ -1836,35 +1836,34 @@ def practice_roster(request: Request) -> PracticeRoster:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the practice owner can view the practice roster.",
         )
-    memberships = cast(
-        list[PracticeMember],
-        PracticeMember.where(PracticeMember.practice_id == member.practice_id)
-        .order_by(
-            col(PracticeMember.role) != PracticeRole.owner.value,
-            col(PracticeMember.created_at),
-            col(PracticeMember.id),
-        )
-        .all(),
-    )
-    roster: list[PracticeRosterMember] = []
-    for row in memberships:
-        assert row.created_at is not None
-        subject = Doctor.get(id=row.doctor_id)
-        roster.append(
-            PracticeRosterMember(
-                display_name=row.attestation_name,
-                role=cast(Literal["owner", "workforce"], row.role),
-                is_self=row.doctor_id == doctor.id,
-                seat_active=(
-                    row.seat_state == ClinicianSeatState.active.value
-                    and row.access_revoked_at is None
-                ),
-                access_in_force=(
-                    subject is not None and resolve_doctor_access(subject).allowed
-                ),
-                joined_at=row.created_at,
+    with get_session() as session:
+        rows = session.exec(
+            select(
+                PracticeMember,
+                Doctor,
+                occupies_active_clinician_seat(),
             )
-        )
+            .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
+            .where(PracticeMember.practice_id == member.practice_id)
+            .order_by(
+                col(PracticeMember.role) != PracticeRole.owner.value,
+                col(PracticeMember.created_at),
+                col(PracticeMember.id),
+            )
+        ).all()
+        roster: list[PracticeRosterMember] = []
+        for row, subject, seat_active in rows:
+            assert row.created_at is not None
+            roster.append(
+                PracticeRosterMember(
+                    display_name=row.attestation_name,
+                    role=cast(Literal["owner", "workforce"], row.role),
+                    is_self=row.doctor_id == doctor.id,
+                    seat_active=seat_active,
+                    access_in_force=resolve_doctor_access(subject).allowed,
+                    joined_at=row.created_at,
+                )
+            )
     return PracticeRoster(members=roster)
 
 

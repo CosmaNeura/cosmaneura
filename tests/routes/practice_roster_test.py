@@ -5,7 +5,9 @@ from fastapi import status
 from fastapi.testclient import TestClient
 
 from app.server import api_app
+from app.services.public_entitlements import active_clinician_seat_count
 
+from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
 
@@ -92,7 +94,8 @@ def test_owner_sees_active_inactive_and_revoked_members(
         access_records_retain_until=now + timedelta(days=366 * 7),
     )
 
-    by_name = {m["display_name"]: m for m in _roster(authenticated_client)}
+    members = _roster(authenticated_client)
+    by_name = {m["display_name"]: m for m in members}
 
     assert set(by_name) == {
         "Test Owner",
@@ -112,6 +115,9 @@ def test_owner_sees_active_inactive_and_revoked_members(
         "Paused Clinician": ("workforce", False, False, False),
         "Revoked Clinician": ("workforce", False, False, False),
     }
+    with get_session() as session:
+        billed = active_clinician_seat_count(session, practice.id)
+    assert sum(m["seat_active"] for m in members) == billed
 
 
 def test_roster_lists_owner_first_then_by_join_date(
