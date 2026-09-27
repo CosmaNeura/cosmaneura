@@ -57,7 +57,11 @@ export function PracticeRoster({
       </div>
     )
   }
-  const onlyYou = members.every((member) => member.is_self)
+  // a solo account never admits other clinicians, so "so far" would mislead;
+  // without a seat summary the account kind is unknown and the line is omitted
+  const onlyYou =
+    practice.seat_summary?.account_kind === "practice" &&
+    members.every((member) => member.is_self)
 
   return (
     <div className="not-prose rounded-lg border p-4 text-sm">

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { PracticeRosterMember } from "~/configuration/client"
-import type { PracticeStatus } from "~/lib/practice-api"
+import type { BillingSeatSummary, PracticeStatus } from "~/lib/practice-api"
 
 import { PracticeRoster, loadPracticeRoster } from "./PracticeRoster"
 import { render, screen } from "@testing-library/react"
@@ -37,6 +37,20 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     subscription_status: null,
     seat_summary: null,
     ...overrides,
+  }
+}
+
+function seatSummary(
+  account_kind: BillingSeatSummary["account_kind"],
+): BillingSeatSummary {
+  return {
+    account_kind,
+    active_clinicians: 1,
+    billed_seats: 1,
+    seat_sync_pending: false,
+    unit_amount: 8900,
+    currency: "usd",
+    interval: "month",
   }
 }
 
@@ -111,10 +125,27 @@ describe("PracticeRoster", () => {
     expect(screen.queryByText(/only you so far/i)).not.toBeInTheDocument()
   })
 
-  it("says so when the owner is the only member", () => {
-    render(<PracticeRoster practice={practice()} members={[member()]} />)
+  it("says so when the owner is the only member of a practice", () => {
+    render(
+      <PracticeRoster
+        practice={practice({ seat_summary: seatSummary("practice") })}
+        members={[member()]}
+      />,
+    )
 
     expect(screen.getByText("Only you so far.")).toBeInTheDocument()
+  })
+
+  it("does not suggest a solo account will gain members", () => {
+    render(
+      <PracticeRoster
+        practice={practice({ seat_summary: seatSummary("solo") })}
+        members={[member()]}
+      />,
+    )
+
+    expect(screen.getAllByRole("listitem")).toHaveLength(1)
+    expect(screen.queryByText(/only you so far/i)).not.toBeInTheDocument()
   })
 
   it("offers no invite or remove actions yet", () => {
