@@ -128,3 +128,14 @@ def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
     assert "STRIPE_LIVE_MODE" in forced_false
     assert "STRIPE_INTEGRATION_ENABLED" not in forced_false
     assert "STRIPE_BILLING_ENABLED" not in forced_false
+
+
+def test_staging_stripe_flags_are_never_inherited_from_the_operator_shell() -> None:
+    # direnv exports only values that differ from its environment. An inherited
+    # Stripe flag equal to the reviewed value would drop out of the export and
+    # the deploy would fall back to false.
+    recipes = _read("just/direnv.just")
+    start = recipes.index("@direnv_export target")
+    recipe = recipes[start : recipes.index("\n@", start + 1)]
+    assert "env -i " in recipe
+    assert "STRIPE_" not in recipe
