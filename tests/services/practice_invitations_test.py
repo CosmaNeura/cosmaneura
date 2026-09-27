@@ -251,6 +251,30 @@ def test_issue_at_the_seat_cap_is_refused():
     assert _invitation_rows(practice) == []
 
 
+def test_every_owner_action_rechecks_the_owner_role_in_the_database():
+    practice, owner = _practice(is_solo=False)
+    live = _issue(owner, "owner-only@clinic-invite.example")
+    workforce = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=_doctor(label="workforce").id,
+            role="workforce",
+        )
+    )
+    # A caller holding a stale "owner" copy of what is now a workforce row.
+    stale_owner = workforce.model_copy(update={"role": "owner"})
+
+    with pytest.raises(invitations.InvitationNotFound):
+        _issue(stale_owner, "not-by-workforce@clinic-invite.example")
+    with pytest.raises(invitations.InvitationNotFound):
+        _revoke(stale_owner, live.invitation.id)
+    with pytest.raises(invitations.InvitationNotFound):
+        _resend(stale_owner, live.invitation.id, "workforce-resend-1")
+
+    rows = _invitation_rows(practice)
+    assert [(row.id, row.revoked_at) for row in rows] == [(live.invitation.id, None)]
+
+
 def _revoke(owner: PracticeMember, invitation_id) -> PracticeInvitation:
     with get_session() as session:
         return invitations.revoke_invitation(
