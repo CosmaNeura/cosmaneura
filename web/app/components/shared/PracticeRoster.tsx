@@ -1,12 +1,16 @@
 import { useEffect, useState } from "react"
 
 import { CopyButton } from "~/components/shared/CopyButton"
+import {
+  MemberAccessActions,
+  accessEnding,
+  memberAccessLabel,
+} from "~/components/shared/PracticeMemberAccess"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import {
   type PracticeInvitationIssued,
   type PracticeRosterInvitation,
-  type PracticeRosterMember,
   type PracticeRoster as Roster,
   createPracticeInvitation,
   practiceRoster,
@@ -47,13 +51,6 @@ function errorDetail(error: unknown, fallback: string) {
 
 function count(n: number, singular: string, plural: string) {
   return `${n} ${n === 1 ? singular : plural}`
-}
-
-function accessLabel(member: PracticeRosterMember) {
-  if (member.revoked) return "Revoked"
-  if (!member.seat_active) return "Inactive"
-  if (!member.access_in_force) return "No access"
-  return "Active"
 }
 
 function InvitationLink({ issued }: { issued: PracticeInvitationIssued }) {
@@ -252,6 +249,7 @@ export function PracticeRoster({
   }
   const { members, invitations } = roster
   const pending = invitations.filter((invitation) => !invitation.expired).length
+  const freeingTonight = members.filter(accessEnding).length
   // a solo account has no one else yet, so "so far" would mislead; without a
   // seat summary the account kind is unknown and the line is omitted
   const onlyYou =
@@ -264,6 +262,9 @@ export function PracticeRoster({
       <p className="font-semibold">Practice members</p>
       <p className="text-muted-foreground mt-1">
         {count(roster.occupied_seats, "seat", "seats")} in use
+        {freeingTonight > 0
+          ? ` · ${count(freeingTonight, "seat frees", "seats free")} at midnight ET`
+          : null}
         {pending > 0
           ? ` · ${count(pending, "invitation", "invitations")} pending — not billed until accepted`
           : null}
@@ -293,12 +294,13 @@ export function PracticeRoster({
                   : "text-muted-foreground"
               }
             >
-              {accessLabel(member)}
+              {memberAccessLabel(member)}
               <span className="text-muted-foreground">
                 {" "}
                 · joined {new Date(member.joined_at).toLocaleDateString()}
               </span>
             </span>
+            <MemberAccessActions member={member} onChanged={reload} />
           </li>
         ))}
         {invitations.map((invitation) => (

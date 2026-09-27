@@ -16,6 +16,8 @@ const client = vi.hoisted(() => ({
   createPracticeInvitation: vi.fn(),
   resendPracticeInvitation: vi.fn(),
   revokePracticeInvitation: vi.fn(),
+  revokePracticeMember: vi.fn(),
+  restorePracticeMember: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => client)
 const { practiceRoster } = client
@@ -33,6 +35,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: true,
     authorization_basis: "workforce_attestation",
     access_revoked: false,
+    access_ends_at: null,
     pilot_access_grant_active: false,
     trial_ends_at: null,
     billing_exempt: false,
@@ -349,6 +352,182 @@ describe("PracticeRoster", () => {
     )
     expect(screen.queryByText(/refresh/i)).not.toBeInTheDocument()
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+  })
+})
+
+describe("revoking and restoring members", () => {
+  const ENDS_AT = "2026-09-28T04:00:00Z"
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    practiceRoster.mockResolvedValue({
+      data: roster([member()]),
+      response: new Response(null, { status: 200 }),
+    })
+  })
+
+  function clinician(overrides: Partial<PracticeRosterMember> = {}) {
+    return member({
+      member_id: "practice_member_alex",
+      display_name: "Alex Active",
+      role: "workforce",
+      is_self: false,
+      ...overrides,
+    })
+  }
+
+  it("offers revoke only for other active clinicians", () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician(),
+          clinician({
+            member_id: "practice_member_rae",
+            display_name: "Rae Revoked",
+            seat_active: false,
+            revoked: true,
+            access_in_force: false,
+            // support closed the account after the owner had revoked it
+            access_ends_at: ENDS_AT,
+          }),
+        ])}
+      />,
+    )
+
+    const rows = screen.getAllByRole("listitem")
+    expect(within(rows[0]).queryByRole("button")).not.toBeInTheDocument()
+    expect(
+      within(rows[1]).getByRole("button", { name: "Revoke Alex Active" }),
+    ).toBeInTheDocument()
+    expect(rows[2]).toHaveTextContent(/Revoked · joined/)
+    expect(within(rows[2]).queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("explains the midnight cut-off before revoking, then reloads", async () => {
+    client.revokePracticeMember.mockResolvedValue({ data: clinician() })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(dialog).toHaveTextContent(
+      "They keep access until midnight Eastern tonight. Their seat frees " +
+        "then. No credit for the rest of this billing period; your bill " +
+        "drops at renewal. You can restore them anytime.",
+    )
+    expect(client.revokePracticeMember).not.toHaveBeenCalled()
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke access" }),
+    )
+
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    expect(client.revokePracticeMember).toHaveBeenCalledWith({
+      path: { member_id: "practice_member_alex" },
+    })
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
+  })
+
+  it("cancelling the confirmation revokes nothing", async () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
+    expect(client.revokePracticeMember).not.toHaveBeenCalled()
+  })
+
+  it("shows a clinician whose access ends tonight and the seat it frees", () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician({ access_ends_at: ENDS_AT })])}
+      />,
+    )
+
+    expect(
+      screen.getByText("2 seats in use · 1 seat frees at midnight ET"),
+    ).toBeInTheDocument()
+    const row = screen.getAllByRole("listitem")[1]
+    expect(row).toHaveTextContent(/Access ends tonight at midnight ET · joined/)
+    expect(
+      within(row).getByRole("button", { name: "Restore Alex Active" }),
+    ).toBeInTheDocument()
+    expect(
+      within(row).queryByRole("button", { name: /revoke/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("restores a clinician after the cut-off and reloads", async () => {
+    client.restorePracticeMember.mockResolvedValue({ data: clinician() })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician({
+            access_ends_at: ENDS_AT,
+            seat_active: false,
+            access_in_force: false,
+          }),
+        ])}
+      />,
+    )
+
+    const row = screen.getAllByRole("listitem")[1]
+    expect(row).toHaveTextContent(/Access revoked · joined/)
+    fireEvent.click(
+      within(row).getByRole("button", { name: "Restore Alex Active" }),
+    )
+
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    expect(client.restorePracticeMember).toHaveBeenCalledWith({
+      path: { member_id: "practice_member_alex" },
+    })
+  })
+
+  it("passes on the contact-us wording when a restore meets the seat cap", async () => {
+    client.restorePracticeMember.mockResolvedValue({
+      error: {
+        detail: "To add more clinicians, contact us at info@cosmaneura.com.",
+      },
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician({
+            access_ends_at: ENDS_AT,
+            seat_active: false,
+            access_in_force: false,
+          }),
+        ])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "To add more clinicians, contact us at info@cosmaneura.com.",
+    )
+    expect(practiceRoster).not.toHaveBeenCalled()
   })
 })
 
