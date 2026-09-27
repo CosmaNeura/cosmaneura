@@ -34,7 +34,14 @@ from app.services.public_legal import current_legal_acceptance_flags
 
 from activemodel.session_manager import aglobal_session, get_session
 from app.models.doctor import Doctor
-from app.models.practice import ENTITLED_SUBSCRIPTION_STATUSES, Practice, PracticeMember
+from app.models.practice import (
+    ENTITLED_SUBSCRIPTION_STATUSES,
+    SEAT_HOLDING_ACCESS_STATES,
+    MemberAccessState,
+    Practice,
+    PracticeMember,
+    member_access_state,
+)
 from app.models.public_onboarding import PracticeInvitation
 from sqlmodel import col, func, select
 
@@ -129,8 +136,14 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
             detail="Practice record is unavailable.",
         )
 
-    revoked = member.access_revoked_at is not None
-    membership_state = "revoked" if revoked else member.seat_state
+    generated_at = datetime.now(timezone.utc)
+    access_state = member_access_state(member, at=generated_at)
+    if access_state is MemberAccessState.permanently_revoked:
+        membership_state = "revoked"
+    elif access_state in SEAT_HOLDING_ACCESS_STATES:
+        membership_state = "active"
+    else:
+        membership_state = "inactive"
     terms_accepted, privacy_accepted = current_legal_acceptance_flags(
         session, practice.id
     )
@@ -168,7 +181,6 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
         public_pilot_cohort=practice.public_pilot_cohort,
     )
 
-    generated_at = datetime.now(timezone.utc)
     return CapabilityEntitlement(
         contract_version=PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
         policy_revision=PUBLIC_ENTITLEMENT_POLICY_REVISION,
@@ -189,7 +201,9 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
             tenant_isolation_verified=facts.tenant_isolation_verified,
         ),
         seats=CapabilitySeats(
-            active_clinician_seats=active_clinician_seat_count(session, practice.id),
+            active_clinician_seats=active_clinician_seat_count(
+                session, practice.id, at=generated_at
+            ),
             maximum_active_clinician_seats=MAX_ACTIVE_CLINICIAN_SEATS,
             pending_invitations=_pending_invitation_count(
                 session, practice.id, generated_at

@@ -80,16 +80,23 @@ def test_membership_insert_under_practice_lock_succeeds():
     assert PracticeMember.get(doctor_id=doctor.id) is not None
 
 
-@pytest.mark.parametrize("change", ["seat_state", "access_revoked_at"])
+@pytest.mark.parametrize(
+    "change", ["seat_state", "access_ends_at", "access_revoked_at"]
+)
 def test_seat_occupancy_change_without_practice_lock_fails(change: str):
     member = _member(_practice())
     now = datetime.now(timezone.utc)
+    if change == "access_ends_at":
+        member.seat_state = "inactive"
+        save_practice_member(member)
 
     with get_session() as session:
         loaded = session.get(PracticeMember, member.id)
         assert loaded is not None
         if change == "seat_state":
             loaded.seat_state = "inactive"
+        elif change == "access_ends_at":
+            loaded.access_ends_at = now + timedelta(hours=1)
         else:
             loaded.access_revoked_at = now
             loaded.access_revoked_by_ref = "operator"

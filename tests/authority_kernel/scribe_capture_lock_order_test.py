@@ -200,7 +200,9 @@ def case(monkeypatch):
     )
     monkeypatch.setattr(capture, "doctor_access_in_force", lambda _: True)
     monkeypatch.setattr(
-        provider_record_authority, "doctor_access_in_force", lambda _: True
+        provider_record_authority,
+        "doctor_access_in_force",
+        lambda _doctor, **_kwargs: True,
     )
     monkeypatch.setattr(
         provider_record_authority.configuration,

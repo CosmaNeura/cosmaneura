@@ -318,6 +318,23 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         _token(doctor, str(appointment.id))
 
 
+def test_record_scope_follows_an_owner_revocation_grace_period(scope):
+    doctor, _practice, _patient, appointment = scope
+    token = _token(doctor, str(appointment.id))
+    member = PracticeMember.one(doctor_id=doctor.id)
+    member.seat_state = "inactive"
+    member.access_ends_at = datetime.now(UTC) + timedelta(hours=1)
+    save_practice_member(member)
+
+    assert _context(token).session_prep_context_ref
+    assert _token(doctor, str(appointment.id))
+
+    member.access_ends_at = datetime.now(UTC) - timedelta(seconds=1)
+    save_practice_member(member)
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        _context(token)
+
+
 def test_wrong_issuer_and_expired_token_are_denied(scope):
     doctor, _practice, _patient, appointment = scope
     with pytest.raises(authority.AuthorityRequestDeniedError):

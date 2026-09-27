@@ -1898,12 +1898,13 @@ def practice_roster(request: Request) -> PracticeRoster:
     member = _owner_membership(
         doctor, "Only the practice owner can view the practice roster."
     )
+    now = datetime.now(timezone.utc)
     with get_session() as session:
         rows = session.exec(
             select(
                 PracticeMember,
                 Doctor,
-                occupies_active_clinician_seat(),
+                occupies_active_clinician_seat(now),
             )
             .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
             .where(PracticeMember.practice_id == member.practice_id)
@@ -1916,7 +1917,7 @@ def practice_roster(request: Request) -> PracticeRoster:
         practice = session.get(Practice, member.practice_id)
         assert practice is not None
         access = practice_members_access_in_force(
-            practice, [(row, subject) for row, subject, _ in rows]
+            practice, [(row, subject) for row, subject, _ in rows], at=now
         )
         roster: list[PracticeRosterMember] = []
         for (row, _, seat_active), access_in_force in zip(rows, access, strict=True):
@@ -1936,11 +1937,9 @@ def practice_roster(request: Request) -> PracticeRoster:
         include_email = request.state.view_as is None
         invitations = [
             _roster_invitation(invitation, expired=expired, include_email=include_email)
-            for invitation, expired in pending_invitations(
-                session, practice.id, datetime.now(timezone.utc)
-            )
+            for invitation, expired in pending_invitations(session, practice.id, now)
         ]
-        occupied_seats = active_clinician_seat_count(session, practice.id)
+        occupied_seats = active_clinician_seat_count(session, practice.id, at=now)
     return PracticeRoster(
         members=roster, invitations=invitations, occupied_seats=occupied_seats
     )

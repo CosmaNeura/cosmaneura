@@ -46,7 +46,12 @@ from app.models.authority import (
 )
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import (
+    SEAT_HOLDING_ACCESS_STATES,
+    Practice,
+    PracticeMember,
+    member_access_state,
+)
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
@@ -155,8 +160,8 @@ def reconcile(
         if member is not None:
             _require(
                 member.practice_id == practice.id
-                and member.access_revoked_at is None
-                and member.seat_state == "active"
+                and member_access_state(member, at=datetime.now(UTC))
+                in SEAT_HOLDING_ACCESS_STATES
             )
 
     binding = _get(session, ScribeCaptureBinding, capture_binding_id, lock)

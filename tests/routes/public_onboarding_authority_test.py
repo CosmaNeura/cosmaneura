@@ -154,6 +154,27 @@ def test_inactive_or_revoked_membership_denies_capabilities(
         assert not result.gates.membership_authorized
 
 
+def test_access_ending_tonight_stays_active_until_the_cutoff(authorized_preflight):
+    doctor, _ = authorized_preflight
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member is not None
+    member.seat_state = "inactive"
+    member.access_ends_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    save_practice_member(member)
+
+    ending = _preflight(doctor)
+    assert ending.actor.membership_state == "active"
+    assert ending.seats.active_clinician_seats == 1
+    assert ending.capabilities["soap_note"]["decision"] == "allowed"
+
+    member.access_ends_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    save_practice_member(member)
+    ended = _preflight(doctor)
+    assert ended.actor.membership_state == "inactive"
+    assert ended.seats.active_clinician_seats == 0
+    assert ended.capabilities["soap_note"]["decision"] == "denied"
+
+
 def test_unaffiliated_actor_cannot_read_another_practice(authorized_preflight):
     _, practice = authorized_preflight
     stranger = Doctor(
