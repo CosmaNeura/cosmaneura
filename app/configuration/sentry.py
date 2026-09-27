@@ -2,6 +2,7 @@ import sentry_sdk
 import sentry_sdk.integrations
 from decouple import config
 from posthog.sentry.posthog_integration import PostHogIntegration
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 from ..environments import is_job_monitor, is_production, is_staging, python_environment
 
@@ -181,6 +182,10 @@ def configure_sentry(integrations=None):
         # posthog integration is not a standard integration included with Sentry
         # https://docs.sentry.io/platforms/python/integrations/
         integrations=[PostHogIntegration()] + (integrations or []),
+        # FastAPI rebuilds included-route handlers per request. Sentry 2.26
+        # wraps their shared sync callable each time, eventually recursing.
+        # Keep Starlette request/error monitoring, without the FastAPI patch.
+        disabled_integrations=[FastApiIntegration],
         before_send=scrub_event,
         before_send_transaction=filter_transactions,
         # stack locals regularly hold transcripts/notes/prompts in this app

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import UUID
 
 from decouple import config
@@ -179,11 +179,69 @@ SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(
 )
 
 
+# Optional additional receiver, with the existing one-caller policy unchanged
+# when unset. This deployment-owned value is not accepted from request data.
+_AGENT_SCRIBE_RECEIVER = config(
+    "AGENT_API_SCRIBE_RECEIVER_CLIENT_ID", default="", cast=str
+).strip()
+_AGENT_COMPANION_RECEIVER = config(
+    "AGENT_API_COMPANION_CLIENT_ID", default="", cast=str
+).strip()
+_AGENT_SOVEREIGN_IDS = _client_id_allowlist(
+    config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
+)
+_AGENT_PROVIDER_IDS = _AGENT_SOVEREIGN_IDS
+_AGENT_CAPTURE_IDS: frozenset[str] = frozenset()
+_AGENT_REQUIRED_CLIENT_COUNT = 1
+if _AGENT_SCRIBE_RECEIVER:
+    try:
+        _receiver_id = UUID(_AGENT_SCRIBE_RECEIVER)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("agent_api_receiver_configuration_invalid") from None
+    if (
+        not _receiver_id.int
+        or len(_AGENT_SOVEREIGN_IDS) != 1
+        or str(_receiver_id) in _AGENT_SOVEREIGN_IDS
+    ):
+        raise ValueError("agent_api_receiver_configuration_invalid")
+    _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_receiver_id)}
+    _AGENT_CAPTURE_IDS = frozenset({str(_receiver_id)})
+    _AGENT_REQUIRED_CLIENT_COUNT = 2
+
+if _AGENT_COMPANION_RECEIVER:
+    try:
+        _companion_id = UUID(_AGENT_COMPANION_RECEIVER)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("agent_api_companion_configuration_invalid") from None
+    if (
+        not _companion_id.int
+        or len(_AGENT_PROVIDER_IDS) != 1
+        or str(_companion_id) in _AGENT_SOVEREIGN_IDS
+    ):
+        raise ValueError("agent_api_companion_configuration_invalid")
+    # The companion shares capture and context protocols only. It must never
+    # enter the Sovereign tool caller set or impersonate the Scribe receiver.
+    _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_companion_id)}
+    _AGENT_CAPTURE_IDS = _AGENT_CAPTURE_IDS | {str(_companion_id)}
+    _AGENT_REQUIRED_CLIENT_COUNT += 1
+
 AGENT_API_AUTH_SETTINGS = EntraAgentAuthSettings(
     enabled=config("AGENT_API_ENABLED", default=False, cast=bool),
     tenant_id=config("ENTRA_TENANT_ID", default="", cast=str),
     audience=config("AGENT_API_AUDIENCE", default="", cast=str),
-    sovereign_client_ids=_client_id_allowlist(
-        config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
-    ),
+    sovereign_client_ids=_AGENT_SOVEREIGN_IDS,
+    required_client_count=_AGENT_REQUIRED_CLIENT_COUNT,
+)
+
+# Context resolution and conversation receipts are shared protocol operations.
+# Feature endpoints use separate callers even when both hold AgentApi.Access.
+SOVEREIGN_TOOL_AUTH_SETTINGS = replace(
+    AGENT_API_AUTH_SETTINGS,
+    sovereign_client_ids=_AGENT_PROVIDER_IDS,
+    required_client_count=1,
+)
+SCRIBE_CAPTURE_AUTH_SETTINGS = replace(
+    AGENT_API_AUTH_SETTINGS,
+    sovereign_client_ids=_AGENT_CAPTURE_IDS,
+    required_client_count=max(1, len(_AGENT_CAPTURE_IDS)),
 )

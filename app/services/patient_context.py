@@ -10,7 +10,7 @@ integrates with Cosmas. Do not re-implement these queries inside job files.
 Everything returned here is PHI: log IDs, never content.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -37,11 +37,16 @@ def days_since(past_dt: datetime) -> int:
 
 
 def recent_notes_for_patient(
-    doctor_id: TypeIDType, patient_id: TypeIDType, *, limit: int
+    doctor_id: TypeIDType,
+    patient_id: TypeIDType,
+    *,
+    limit: int,
+    before: datetime | None = None,
+    exclude_appointment_id: TypeIDType | None = None,
 ) -> list[AIVisitNote]:
     "clinical notes for a patient, most recent appointment first, capped at NOTE_LOOKBACK"
 
-    cutoff = datetime.now() - NOTE_LOOKBACK
+    cutoff = datetime.now(UTC).replace(tzinfo=None) - NOTE_LOOKBACK
 
     query = (
         AIVisitNote.select()
@@ -54,10 +59,19 @@ def recent_notes_for_patient(
             & (cast(Any, AIVisitNote.superseded_at).is_(None))
         )
         # the visit that happened last, not the row that was written last
-        .order_by(cast(Any, Appointment.appointment_date).desc())
+        .order_by(
+            cast(Any, Appointment.appointment_date).desc(),
+            cast(Any, AIVisitNote.id).desc(),
+        )
         .limit(limit)
     )
 
+    if before is not None:
+        if before.tzinfo is not None:
+            before = before.astimezone(UTC).replace(tzinfo=None)
+        query = query.where(Appointment.appointment_date < before)
+    if exclude_appointment_id is not None:
+        query = query.where(Appointment.id != exclude_appointment_id)
     return cast(list[AIVisitNote], list(query.all()))
 
 

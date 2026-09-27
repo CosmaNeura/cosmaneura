@@ -1,8 +1,19 @@
-import { Outlet, href, redirect } from "react-router"
+import {
+  Outlet,
+  data,
+  href,
+  isRouteErrorResponse,
+  redirect,
+  useRevalidator,
+} from "react-router"
 
 import type { Route } from "./+types/authenticated"
 
-import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
+import { Button } from "@/components/ui/button"
+import {
+  ViewAsProtectedErrorGuard,
+  ViewAsRouteGuard,
+} from "~/components/ViewAsRouteGuard"
 import { ZoomConnectionAlert } from "~/components/ZoomConnectionAlert"
 import {
   SETTINGS_STALE_TIME,
@@ -10,7 +21,8 @@ import {
 } from "~/configuration/tanstack-query"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import { billingRecoveryLocation } from "~/lib/billing-recovery"
-import { checkViewAsStatus } from "~/lib/view-as-api"
+import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
+import { checkViewAsStatus, getViewAsStatus } from "~/lib/view-as-api"
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
@@ -69,7 +81,78 @@ export function shouldRetrySettingsQuery(failureCount: number, error: unknown) {
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  const viewAsCheck = await checkViewAsStatus()
+  const settings = settingsDataOptions()
+  let settingsStarted = false
+  try {
+    return await withReadDeadline(
+      (signal) =>
+        loadAuthenticatedData(request, signal, () => {
+          settingsStarted = true
+        }),
+      {
+        signal: request.signal,
+        onTimeout: () => {
+          // Cancel only the timed-out shared read, fencing its late cache write.
+          if (settingsStarted)
+            void queryClient.cancelQueries({
+              queryKey: settings.queryKey,
+              exact: true,
+            })
+        },
+      },
+    )
+  } catch (error) {
+    if (error instanceof ReadDeadlineError) {
+      // Settings is part of the access decision too. Never expose the outlet
+      // when either settings or support-view verification could not complete.
+      throw data({ authenticatedLoadFailure: "temporary" }, { status: 503 })
+    }
+    throw error
+  }
+}
+
+function AuthenticatedLoadRecovery() {
+  const revalidator = useRevalidator()
+  const pending = revalidator.state === "loading"
+  return (
+    <ViewAsProtectedErrorGuard>
+      <main className="mx-auto w-full max-w-lg px-6 py-12" role="alert">
+        <h1 className="text-xl font-semibold">
+          Couldn’t verify account access
+        </h1>
+        <p className="text-muted-foreground mt-3">
+          Check your connection and try again to open your dashboard.
+        </p>
+        <Button
+          className="mt-6"
+          disabled={pending}
+          onClick={() => void revalidator.revalidate()}
+        >
+          {pending ? "Trying again…" : "Try again"}
+        </Button>
+      </main>
+    </ViewAsProtectedErrorGuard>
+  )
+}
+
+export function ErrorBoundary({ error }: { error: unknown }) {
+  if (
+    isRouteErrorResponse(error) &&
+    error.status === 503 &&
+    error.data?.authenticatedLoadFailure === "temporary"
+  ) {
+    return <AuthenticatedLoadRecovery />
+  }
+  throw error
+}
+
+async function loadAuthenticatedData(
+  request: Request,
+  signal: AbortSignal,
+  onSettingsRead: () => void,
+) {
+  const viewAsCheck = await checkViewAsStatus(() => getViewAsStatus(signal))
+  signal.throwIfAborted()
   if (viewAsCheck.state !== "ready") {
     return { viewAsCheck }
   }
@@ -79,11 +162,13 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 
   let data
   try {
+    onSettingsRead()
     data = await queryClient.ensureQueryData({
       ...settingsDataOptions(),
       staleTime: SETTINGS_STALE_TIME,
       retry: shouldRetrySettingsQuery,
     })
+    signal.throwIfAborted()
   } catch (error) {
     if (isAccountRecoveryRequired(error)) {
       throw redirect(href("/onboarding"))

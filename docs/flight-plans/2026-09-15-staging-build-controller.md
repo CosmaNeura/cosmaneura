@@ -109,3 +109,26 @@ source authentication, native binary bytes and final image execution. It fails
 at the real timestamp guard on the original source and passes with the fix.
 The original neutral review/finding remains recorded; the corrected exact head
 requires a new independent review before normal merge or use.
+
+## Unchanged schema releases — September 24
+
+Version-2 plans also support an application release whose observed staging schema
+already equals the candidate's single head. Such a plan must bind equal
+`schema_before` and `schema_after` values and an empty `migration_revisions` list.
+The bound rehearsal must independently record those same source/target revisions,
+zero actual online migrations, preserved synthetic rows and database structures,
+and a verified restore. A nonempty migration list requires different endpoints
+and must still end at the exact target. Version-1 behavior is unchanged.
+
+Source verification and build receipts take the schema head directly from the
+validated release target, so an empty migration list never supplies a guessed
+revision or replays historical migrations. Candidate/PR/review, archive, runtime,
+recovery, and per-workload deployment checks remain in place. There is no new
+migration or staging mutation in this tooling change. Recovery uses the existing
+application image procedure while retaining the schema and data.
+
+Local controller fixtures cover the unchanged-schema path through check-only,
+authenticated source verification and mocked build completion. They also reject
+unequal endpoints, invented actual/declared migrations, mismatched rehearsal
+endpoints and missing restore evidence. Final commands/results and independent
+post-push review are recorded in the PR; these fixtures are not deployed evidence.

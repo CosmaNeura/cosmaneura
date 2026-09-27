@@ -132,7 +132,8 @@ def normalized_scopes(scopes: object) -> set[str]:
     return set(cast(list[str] | tuple[str, ...] | set[str], exact))
 
 
-def validate_argv(argv: list[str]) -> None:
+def validate_argv(argv: list[str], candidate: str = CANDIDATE) -> None:
+    require(type(candidate) is str and re.fullmatch(r"[0-9a-f]{40}", candidate))
     require(argv[-2:] == ["--subscription", SUBSCRIPTION])
     command = argv[:-2]
     exact_commands = (
@@ -155,7 +156,7 @@ def validate_argv(argv: list[str]) -> None:
             "--repository",
             REPOSITORY,
             "--query",
-            f"[?@=='{CANDIDATE}']",
+            f"[?@=='{candidate}']",
             "--output",
             "json",
         ],
@@ -166,7 +167,7 @@ def validate_argv(argv: list[str]) -> None:
             "--registry",
             REGISTRY,
             "--name",
-            f"{REPOSITORY}:{CANDIDATE}",
+            f"{REPOSITORY}:{candidate}",
             "--query",
             "digest",
             "--output",
@@ -179,7 +180,7 @@ def validate_argv(argv: list[str]) -> None:
             "--name",
             REGISTRY,
             "--image",
-            f"{REPOSITORY}:{CANDIDATE}",
+            f"{REPOSITORY}:{candidate}",
             "--write-enabled",
             "false",
             "--delete-enabled",
@@ -195,7 +196,7 @@ def validate_argv(argv: list[str]) -> None:
             "--name",
             REGISTRY,
             "--image",
-            f"{REPOSITORY}:{CANDIDATE}",
+            f"{REPOSITORY}:{candidate}",
             "--output",
             "json",
         ],
@@ -211,7 +212,7 @@ def validate_argv(argv: list[str]) -> None:
         and command[8:]
         == [
             "--image",
-            f"{REPOSITORY}:{CANDIDATE}",
+            f"{REPOSITORY}:{candidate}",
             "--only-show-errors",
             "--output",
             "none",
@@ -224,7 +225,11 @@ def main() -> int:
     require(os.getuid() == os.geteuid() != 0)
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     argv = sys.argv[1:]
-    validate_argv(argv)
+    candidate = CANDIDATE
+    if argv[:1] == ["--candidate-sha"]:
+        require(len(argv) >= 3)
+        candidate, argv = argv[1], argv[2:]
+    validate_argv(argv, candidate)
     management_token, management_expiry = token_record(3, MANAGEMENT_AUDIENCES)
     registry_token, registry_expiry = token_record(4, {REGISTRY_AUDIENCE})
 

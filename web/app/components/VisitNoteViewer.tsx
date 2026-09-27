@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Markdown from "react-markdown"
 
 import { ChevronDown } from "lucide-react"
@@ -9,21 +9,45 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { CopyButton } from "~/components/shared/CopyButton"
-import type { AiVisitNote } from "~/configuration/client"
+import type {
+  AiVisitNote,
+  AiVisitTranscript,
+  SessionPrepNoteReview,
+} from "~/configuration/client"
+
+import { SessionPrepNoteReviewButton } from "./SessionPrepNoteReviewButton"
 
 export default function VisitNoteViewer({
   note,
   defaultOpen = false,
+  review,
+  transcript,
+  focusOnMount = false,
 }: {
   note: AiVisitNote
   defaultOpen: boolean
+  review?: SessionPrepNoteReview
+  transcript?: AiVisitTranscript | null
+  focusOnMount?: boolean
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
   const contentRef = useRef<HTMLDivElement>(null)
+  const noteRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (focusOnMount) noteRef.current?.scrollIntoView({ block: "start" })
+  }, [focusOnMount, note.id])
 
   return (
-    <Collapsible className="mb-5" open={isOpen} onOpenChange={setOpen}>
+    <Collapsible
+      ref={noteRef}
+      id={`note-${note.id}`}
+      className="mb-5 scroll-mt-24"
+      open={isOpen}
+      onOpenChange={setOpen}
+    >
       <div className="flex items-start">
         <CollapsibleTrigger asChild>
           <Button variant="ghost" size="sm" className="h-auto p-2">
@@ -49,6 +73,18 @@ export default function VisitNoteViewer({
             </div>
           ))}
         </div>
+        {review && (
+          <SessionPrepNoteReviewButton
+            key={`${note.id}:${review.content_sha256}`}
+            noteId={note.id}
+            review={review}
+          />
+        )}
+        {transcript !== undefined && (
+          <div className="mt-4 border-t pt-4">
+            <VisitTranscriptViewer transcript={transcript} />
+          </div>
+        )}
       </CollapsibleContent>
     </Collapsible>
   )

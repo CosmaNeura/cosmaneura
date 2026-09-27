@@ -52,7 +52,10 @@ import {
   getBaaAcceptances,
   getPractice,
 } from "~/lib/practice-api"
-import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
+import {
+  isReferenceLabsEnabled,
+  isReferenceToolkitEnabled,
+} from "~/utils/reference-toolkit-feature"
 import { useTerminology } from "~/utils/terminology"
 import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
@@ -666,6 +669,9 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const referenceToolkitEnabled = isReferenceToolkitEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const referenceLabsEnabled = isReferenceLabsEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
   const terminologyEnabled = isTerminologyEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
@@ -708,7 +714,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
                   hasSubscription={loaderData.has_natmed_subscription}
                 />
               )}
-              {referenceToolkitEnabled && <LabRangeSettings />}
+              {referenceLabsEnabled && <LabRangeSettings />}
             </>
           ) : null}
         </InnerScrollableContent>

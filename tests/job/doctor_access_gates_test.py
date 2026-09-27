@@ -107,6 +107,9 @@ def test_example_note_extraction_denial_skips_blob_download(monkeypatch):
 
 
 def test_lab_extraction_denial_leaves_upload_pending(monkeypatch):
+    import app.services.reference_labs_gate as lab_gate
+
+    monkeypatch.setattr(lab_gate, "REFERENCE_LABS_ENABLED", True)
     doctor, patient, _appointment = _visit()
     panel = LabPanel(
         doctor_id=doctor.id,

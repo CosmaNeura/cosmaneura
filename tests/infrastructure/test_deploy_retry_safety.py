@@ -4,7 +4,9 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -373,7 +375,7 @@ def test_staging_transient_migration_job_cleanup_is_fail_closed() -> None:
     exit_trap = _shell_function(deploy, "capture_failed_workload_state")
 
     assert 'MIGRATION_JOB_CLEANUP_REQUIRED="true"' in migration
-    assert migration.index('MIGRATION_JOB_CLEANUP_REQUIRED="true"') < migration.index(
+    assert migration.index('MIGRATION_JOB_CLEANUP_REQUIRED="true"') > migration.index(
         "az containerapp job create"
     )
     assert 'az containerapp job delete -n "$MIGRATION_JOB"' in cleanup
@@ -742,6 +744,7 @@ BILLING_PUBLIC_VARS=()
 GRANT_SECRET_ENV_NAME=SOVEREIGN_RECORD_GRANT_SECRET
 RECALL_SECRET_ENV_NAME=RECALL_WEBHOOK_SECRET
 STRIPE_INTEGRATION_ENABLED=false
+STAGING_PRESERVE_EFFECTIVE_CONFIGURATION=false
 configure_workload_contract() { container_secret_vars=(); container_public_vars=(); }
 record_grants_enabled_for() { return 1; }
 billing_integration_enabled_for() { return 1; }
@@ -754,6 +757,8 @@ az() { printf '%s\n' "$@" > "$CAPTURE"; }
             "-c",
             script
             + parsing
+            + _shell_function(deploy, "verify_preserved_runtime")
+            + "\n"
             + _shell_function(deploy, "initiate_deployment")
             + '\ninitiate_deployment "$ROLE" synthetic-sha\n',
         ],
@@ -917,7 +922,14 @@ def test_configuration_blockers_stop_before_any_azure_call(
     az_log = tmp_path / "az.log"
     commands = {
         "just": "#!/bin/sh\nprintf '%s' \"$FAKE_CONFIG\"\n",
-        "python": "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+        "python": (
+            "#!/bin/sh\n"
+            # Keep the real OS-random job allocation; this fixture only stubs
+            # the unrelated deployment capability check that consumes stdin.
+            'if [ "$1 $2 $3 $4" = "-I -S -B -c" ]; then\n'
+            f'  exec {shlex.quote(sys.executable)} "$@"\n'
+            "fi\ncat >/dev/null\nexit 0\n"
+        ),
         "git": (
             "#!/bin/sh\n"
             'if [ "$1" = "-C" ]; then shift 2; fi\n'
