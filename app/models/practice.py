@@ -8,8 +8,8 @@ from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from sqlalchemy import event
+from sqlalchemy.orm import PassiveFlag, SessionTransaction
 from sqlalchemy.orm import Session as OrmSession
-from sqlalchemy.orm import SessionTransaction
 from sqlalchemy.orm.attributes import get_history
 from sqlmodel import Column, Field, Relationship, Session, select
 
@@ -488,16 +488,34 @@ def _hand_released_savepoint_locks_to_parent(session: OrmSession) -> None:
         _seat_locked_practices.setdefault(released.parent, set()).update(locked)
 
 
+@event.listens_for(PracticeMember.practice_id, "set", active_history=True)
+def _load_replaced_practice_id(target, value, oldvalue, initiator) -> None:
+    # active_history loads an expired practice_id before it is replaced, so
+    # the flush guard still sees the practice a member is moving out of.
+    pass
+
+
 def _seat_affected_practice_ids(member: PracticeMember, *, whole_row: bool) -> set:
-    if whole_row:
-        return {member.practice_id}
-    affected = set()
-    for name in _SEAT_OCCUPANCY_FIELDS:
-        history = get_history(member, name)
-        if history.has_changes():
-            affected.add(member.practice_id)
-            if name == "practice_id":
-                affected.update(history.deleted)
+    # A relationship assignment reaches practice_id only inside the flush.
+    assigned = get_history(
+        member, "practice", passive=PassiveFlag.PASSIVE_NO_INITIALIZE
+    )
+    affected = {
+        practice.id
+        for practice in (*assigned.added, *assigned.deleted)
+        if practice is not None
+    }
+    affected.update(get_history(member, "practice_id").deleted)
+    if not (
+        whole_row
+        or affected
+        or any(
+            get_history(member, name).has_changes() for name in _SEAT_OCCUPANCY_FIELDS
+        )
+    ):
+        return set()
+    if member.practice_id is not None or not affected:
+        affected.add(member.practice_id)
     return affected
 
 

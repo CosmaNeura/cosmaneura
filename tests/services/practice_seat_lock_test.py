@@ -139,6 +139,70 @@ def test_moving_a_member_requires_both_practice_locks():
     assert moved.practice_id == destination.id
 
 
+def test_moving_an_expired_member_still_requires_the_source_practice_lock():
+    source = _practice()
+    destination = _practice()
+    member = _member(source)
+
+    with get_session() as session:
+        loaded = session.get(PracticeMember, member.id)
+        assert loaded is not None
+        session.commit()
+        lock_practice_seats(session, destination.id)
+        loaded.practice_id = destination.id
+        session.add(loaded)
+        with pytest.raises(PracticeSeatLockNotHeld):
+            session.flush()
+
+
+def test_moving_a_member_by_relationship_requires_both_practice_locks():
+    source = _practice()
+    destination = _practice()
+    member = _member(source)
+
+    with get_session() as session:
+        loaded = session.get(PracticeMember, member.id)
+        assert loaded is not None
+        loaded.practice = lock_practice_for_active_seat_mutation(
+            session, destination.id
+        )
+        session.add(loaded)
+        with pytest.raises(PracticeSeatLockNotHeld):
+            session.flush()
+        session.rollback()
+
+    with get_session() as session:
+        lock_practice_seats(session, source.id)
+        loaded = session.get(PracticeMember, member.id)
+        assert loaded is not None
+        loaded.practice = lock_practice_for_active_seat_mutation(
+            session, destination.id
+        )
+        session.add(loaded)
+        session.commit()
+
+    moved = PracticeMember.get(id=member.id)
+    assert moved is not None
+    assert moved.practice_id == destination.id
+
+
+def test_membership_insert_by_relationship_under_practice_lock_succeeds():
+    practice = _practice()
+    doctor = _doctor()
+
+    with get_session() as session:
+        session.add(
+            PracticeMember(
+                practice=lock_practice_for_active_seat_mutation(session, practice.id),
+                doctor_id=doctor.id,
+                role="workforce",
+            )
+        )
+        session.commit()
+
+    assert PracticeMember.get(doctor_id=doctor.id) is not None
+
+
 def test_lock_from_an_earlier_transaction_does_not_authorize_a_later_change():
     practice = _practice()
 
