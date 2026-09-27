@@ -2862,24 +2862,22 @@ def sync_subscription_quantity(
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
             if item["quantity"] != target:
-                # A seat added to a paid-up subscription is charged part-month now.
-                # While payment is failing or collection is paused, the same
-                # proration waits for the next invoice instead of stacking another
-                # charge on one that is already failing. Removals give no credit
-                # (the lower count bills from renewal). A trial has nothing
-                # billable, and always_invoice there creates a $0 invoice the
-                # customer may be emailed about. A drift repair realigns Stripe to
-                # Core's count rather than adding a seat, so it must never bill.
-                if (
-                    target < item["quantity"]
-                    or subscription["status"] == "trialing"
-                    or repairing_remote_quantity
-                ):
+                # The mirrored status treats a portal pause_collection as paused;
+                # Stripe's raw status stays "active" there. While payment is
+                # failing the part-month waits for the next invoice rather than
+                # stacking on one that is already failing. A trial, a paused
+                # subscription (which restarts its cycle on resume) and an
+                # incomplete first payment have nothing to prorate, and a drift
+                # repair realigns Stripe to Core rather than adding a seat.
+                status = _mirrored_subscription_status(subscription)
+                if target < item["quantity"] or repairing_remote_quantity:
                     proration_behavior = "none"
-                elif subscription["status"] == "active":
+                elif status == "active":
                     proration_behavior = "always_invoice"
-                else:
+                elif status in {"past_due", "unpaid"}:
                     proration_behavior = "create_prorations"
+                else:
+                    proration_behavior = "none"
                 key_source = (
                     f"quantity:{subscription['id']}:{target}:version:{version}"
                     f":proration:{proration_behavior}"

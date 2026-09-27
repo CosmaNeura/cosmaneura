@@ -3541,8 +3541,8 @@ def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
         ("active", 1, 2, "always_invoice"),
         ("past_due", 1, 2, "create_prorations"),
         ("unpaid", 1, 2, "create_prorations"),
-        ("paused", 1, 2, "create_prorations"),
-        ("incomplete", 1, 2, "create_prorations"),
+        ("paused", 1, 2, "none"),
+        ("incomplete", 1, 2, "none"),
         ("active", 2, 1, "none"),
         ("past_due", 2, 1, "none"),
         ("paused", 2, 1, "none"),
@@ -3568,6 +3568,24 @@ def test_quantity_sync_charges_only_mid_cycle_seat_additions(
     assert len(updates) == 1
     assert updates[0][0]["quantity"] == str(seats)
     assert updates[0][0]["proration_behavior"] == expected
+
+
+def test_portal_paused_collection_never_charges_a_seat_addition(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    assert practice.stripe_subscription_id
+    # A customer-portal pause keeps Stripe's top-level status "active".
+    remote.subscriptions[practice.stripe_subscription_id]["pause_collection"] = {
+        "behavior": "void"
+    }
+
+    stripe_billing.mark_quantity_sync_required(practice)
+    stripe_billing.sync_subscription_quantity(practice)
+
+    updates = _quantity_updates(remote)
+    assert updates
+    assert {data["proration_behavior"] for data, _key in updates} == {"none"}
 
 
 def test_quantity_idempotency_key_binds_the_proration_behavior(remote: FakeStripe):
