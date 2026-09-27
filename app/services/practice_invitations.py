@@ -25,6 +25,7 @@ from app.services.organization_access import (
     lock_roster_enrollment_email,
     normalize_email,
 )
+from app.services.practice_member_access import access_cutoff_after
 from app.services.public_entitlements import (
     lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
@@ -32,7 +33,13 @@ from app.services.public_entitlements import (
 )
 
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    MemberAccessState,
+    Practice,
+    PracticeMember,
+    PracticeRole,
+    member_access_state,
+)
 from app.models.public_onboarding import PracticeInvitation
 from sqlalchemy import func
 from sqlmodel import Session, col, select
@@ -45,6 +52,7 @@ ACCOUNT_IN_ANOTHER_PRACTICE = (
 INVITATION_TTL = timedelta(days=7)
 OWNER_REVOCATION_REASON = "Revoked by the practice owner."
 REPLACEMENT_REVOCATION_REASON = "Replaced by a new invitation."
+_RESTORABLE_STATES = frozenset({MemberAccessState.ending, MemberAccessState.revoked})
 
 
 class PracticeInvitationError(Exception):
@@ -218,7 +226,7 @@ def _issue_locked(
     # Membership elsewhere is deliberately not checked: it would disclose an
     # invitee's employer to this owner. Acceptance refuses it instead.
     existing_member = session.exec(
-        select(col(PracticeMember.id))
+        select(PracticeMember)
         .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
         .where(
             PracticeMember.practice_id == practice.id,
@@ -226,6 +234,11 @@ def _issue_locked(
         )
     ).first()
     if existing_member is not None:
+        if member_access_state(existing_member, at=now) in _RESTORABLE_STATES:
+            raise InvitationConflict(
+                "This clinician is already a member of the practice. "
+                "Restore them from the roster instead."
+            )
         raise InvitationConflict("This clinician is already a member of the practice.")
 
     email_digest = _email_digest(email)
@@ -260,7 +273,10 @@ def _issue_locked(
             "An invitation to this address is already pending. Resend it instead."
         )
     # Advisory only: the seat is claimed, under this same lock, at acceptance.
-    require_active_clinician_seat_capacity(session, practice)
+    # Seats that free at tonight's cut-off already count as free here.
+    require_active_clinician_seat_capacity(
+        session, practice, at=access_cutoff_after(now)
+    )
 
     # The token binds the id, and the database forbids changing token_digest
     # later, so the id is chosen here rather than at insert.
