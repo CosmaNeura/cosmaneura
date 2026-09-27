@@ -205,19 +205,13 @@ def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scop
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _token(doctor, str(appointment.id))
     assert AuthorityTenantMembership.get(id=fixture_membership.id).status == "active"
-    assert (
-        AuthorityTenantMembership.where(
-            AuthorityTenantMembership.actor_id == binding.actor_id,
-            AuthorityTenantMembership.status == "active",
-        ).count()
-        == 2
-    )
-    assert (
-        AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
-        ).count()
-        == 0
-    )
+    assert AuthorityTenantMembership.where(
+        AuthorityTenantMembership.actor_id == binding.actor_id,
+        AuthorityTenantMembership.status == "active",
+    ).count() == 2
+    assert AuthorityAuditEvent.where(
+        AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+    ).count() == 0
 
 
 @pytest.mark.parametrize("same_practice", [False, True])
