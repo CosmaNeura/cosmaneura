@@ -2862,19 +2862,24 @@ def sync_subscription_quantity(
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
             if item["quantity"] != target:
-                # Only a real seat addition on a billable subscription is charged
-                # part-month now; removals give no credit (the lower count bills
-                # from renewal). A trial has nothing billable, and always_invoice
-                # there creates a $0 invoice the customer may be emailed about.
-                # A drift repair realigns Stripe to Core's count rather than
-                # adding a seat, so it must never surprise-bill.
-                proration_behavior = (
-                    "always_invoice"
-                    if target > item["quantity"]
-                    and subscription["status"] != "trialing"
-                    and not repairing_remote_quantity
-                    else "none"
-                )
+                # A seat added to a paid-up subscription is charged part-month now.
+                # While payment is failing or collection is paused, the same
+                # proration waits for the next invoice instead of stacking another
+                # charge on one that is already failing. Removals give no credit
+                # (the lower count bills from renewal). A trial has nothing
+                # billable, and always_invoice there creates a $0 invoice the
+                # customer may be emailed about. A drift repair realigns Stripe to
+                # Core's count rather than adding a seat, so it must never bill.
+                if (
+                    target < item["quantity"]
+                    or subscription["status"] == "trialing"
+                    or repairing_remote_quantity
+                ):
+                    proration_behavior = "none"
+                elif subscription["status"] == "active":
+                    proration_behavior = "always_invoice"
+                else:
+                    proration_behavior = "create_prorations"
                 key_source = (
                     f"quantity:{subscription['id']}:{target}:version:{version}"
                     f":proration:{proration_behavior}"

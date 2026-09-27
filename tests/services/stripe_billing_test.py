@@ -124,6 +124,7 @@ class FakeStripe:
                     assert data
                     assert data.get("proration_behavior") in {
                         "always_invoice",
+                        "create_prorations",
                         "none",
                     }
                     if not self.drop_quantity_updates:
@@ -3538,10 +3539,13 @@ def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
     ("status", "remote_quantity", "seats", "expected"),
     [
         ("active", 1, 2, "always_invoice"),
-        ("past_due", 1, 2, "always_invoice"),
-        ("unpaid", 1, 2, "always_invoice"),
+        ("past_due", 1, 2, "create_prorations"),
+        ("unpaid", 1, 2, "create_prorations"),
+        ("paused", 1, 2, "create_prorations"),
+        ("incomplete", 1, 2, "create_prorations"),
         ("active", 2, 1, "none"),
         ("past_due", 2, 1, "none"),
+        ("paused", 2, 1, "none"),
         ("trialing", 1, 2, "none"),
         ("trialing", 2, 1, "none"),
     ],
