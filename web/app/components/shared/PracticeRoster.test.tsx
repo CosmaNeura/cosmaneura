@@ -58,7 +58,7 @@ const TEAM: PracticeRosterMember[] = [
   member(),
   member({ display_name: "Alex Active", role: "workforce", is_self: false }),
   member({
-    display_name: "Paige Paused",
+    display_name: "Nora NoAccess",
     role: "workforce",
     is_self: false,
     access_in_force: false,
@@ -90,7 +90,7 @@ describe("PracticeRoster", () => {
       /^Alex Active · Clinician\s*Active · joined/,
     )
     expect(rows[2]).toHaveTextContent(
-      /^Paige Paused · Clinician\s*Access paused · joined/,
+      /^Nora NoAccess · Clinician\s*No access · joined/,
     )
     expect(rows[3]).toHaveTextContent(
       /^Ian Inactive · Clinician\s*Inactive · joined/,
