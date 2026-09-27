@@ -380,6 +380,54 @@ describe("PracticeRoster", () => {
     expect(screen.getByRole("status")).toBeEmptyDOMElement()
   })
 
+  it("uses a new resend key per click, and the same key to retry a lost one", async () => {
+    client.resendPracticeInvitation
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue({ data: issued({ invitation: invitation() }) })
+    practiceRoster.mockResolvedValue({
+      data: roster([member()], { invitations: [invitation()] }),
+      response: new Response(null, { status: 200 }),
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member()], { invitations: [invitation()] })}
+      />,
+    )
+    const resend = () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      )
+
+    resend()
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That did not work. Try again.",
+    )
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      ).toBeEnabled(),
+    )
+    resend()
+    await screen.findByText("Send this link to riley@gmail.com.")
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      ).toBeEnabled(),
+    )
+    resend()
+    await vi.waitFor(() =>
+      expect(client.resendPracticeInvitation).toHaveBeenCalledTimes(3),
+    )
+
+    const [lost, retried, again] =
+      client.resendPracticeInvitation.mock.calls.map(
+        ([options]) => options.headers["Idempotency-Key"],
+      )
+    expect(retried).toBe(lost)
+    expect(again).not.toBe(retried)
+  })
+
   it("renders nothing for a workforce member", () => {
     const { container } = render(
       <PracticeRoster
@@ -534,12 +582,63 @@ describe("InviteClinicianForm", () => {
     expect(new Set(keys).size).toBe(2)
   })
 
+  function keys() {
+    return client.createPracticeInvitation.mock.calls.map(
+      ([options]) => options.headers["Idempotency-Key"],
+    )
+  }
+
   function submitAgain(email: string) {
     fireEvent.change(screen.getByLabelText("Invite a clinician"), {
       target: { value: email },
     })
     fireEvent.click(screen.getByRole("button", { name: "Send invitation" }))
   }
+
+  it("retries an ambiguous failure with the same key", async () => {
+    client.createPracticeInvitation
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({
+        error: { detail: "Internal Server Error" },
+        response: new Response(null, { status: 502 }),
+      })
+      .mockResolvedValue({ data: issued() })
+
+    invite("retry@gmail.com")
+    await screen.findByText("The invitation could not be sent.")
+    submitAgain(" Retry@Gmail.com")
+    await screen.findByText("Internal Server Error")
+    submitAgain("retry@gmail.com")
+    await screen.findByText("Send this link to new@gmail.com.")
+
+    const [lost, failed, succeeded] = keys()
+    expect(failed).toBe(lost)
+    expect(succeeded).toBe(lost)
+  })
+
+  it("uses a new key after a success, a refusal, or a changed address", async () => {
+    client.createPracticeInvitation
+      .mockResolvedValueOnce({ data: issued() })
+      .mockResolvedValueOnce({
+        error: { detail: "An invitation to this address is already pending." },
+        response: new Response(null, { status: 409 }),
+      })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue({ data: issued() })
+
+    invite("same@gmail.com")
+    await screen.findByText("Send this link to new@gmail.com.")
+    submitAgain("same@gmail.com")
+    await screen.findByText(/already pending/)
+    submitAgain("same@gmail.com")
+    await screen.findByText("The invitation could not be sent.")
+    submitAgain("other@gmail.com")
+    await vi.waitFor(() =>
+      expect(client.createPracticeInvitation).toHaveBeenCalledTimes(4),
+    )
+
+    expect(new Set(keys()).size).toBe(4)
+  })
 
   it("says it is sending while the request is in flight", async () => {
     let finish: (value: unknown) => void = () => {}

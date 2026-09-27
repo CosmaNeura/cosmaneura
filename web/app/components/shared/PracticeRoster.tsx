@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { CopyButton } from "~/components/shared/CopyButton"
 import { Button } from "~/components/ui/button"
@@ -43,6 +43,32 @@ function errorDetail(error: unknown, fallback: string) {
     if (typeof detail === "string") return detail
   }
   return fallback
+}
+
+type Outcome = { data?: unknown; error?: unknown; response?: Response }
+
+// A request that may have reached the server: retrying it must reuse its
+// Idempotency-Key so the server replays it instead of acting twice.
+function ambiguous(outcome: Outcome | null) {
+  return !outcome?.response || outcome.response.status >= 500
+}
+
+/** Reuse a key only to retry an ambiguous failure of the same request. */
+function useRetryKey() {
+  const pending = useRef<{ scope: string; key: string } | null>(null)
+  return {
+    keyFor(scope: string) {
+      if (pending.current?.scope !== scope) {
+        pending.current = { scope, key: crypto.randomUUID() }
+      }
+      return pending.current.key
+    },
+    settle(outcome: Outcome | null) {
+      if (outcome?.data !== undefined || !ambiguous(outcome)) {
+        pending.current = null
+      }
+    },
+  }
 }
 
 function count(n: number, singular: string, plural: string) {
@@ -95,18 +121,23 @@ export function InviteClinicianForm({
   const [email, setEmail] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const retryKey = useRetryKey()
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError(null)
+    // the server refuses a key reused for a different address, so the key
+    // survives only a retry of the same address
+    const key = retryKey.keyFor(email.trim().toLowerCase())
+    let outcome: Outcome | null = null
     try {
-      const { data, error: failure } = await createPracticeInvitation({
+      const result = await createPracticeInvitation({
         body: { email },
-        // a fresh key per submit: the server replays a retried request and
-        // refuses the same key for a different address
-        headers: { "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Idempotency-Key": key },
       })
+      outcome = result
+      const { data, error: failure } = result
       if (data) {
         setEmail("")
         onIssued(data)
@@ -116,6 +147,7 @@ export function InviteClinicianForm({
     } catch {
       setError("The invitation could not be sent.")
     } finally {
+      retryKey.settle(outcome)
       setBusy(false)
     }
   }
@@ -162,10 +194,11 @@ function InvitationRow({
 }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const retryKey = useRetryKey()
   const path = { invitation_id: invitation.invitation_id }
   const invitee = invitation.invitee_email ?? "invited clinician"
 
-  async function act(run: () => Promise<{ error?: unknown; data?: unknown }>) {
+  async function act(run: () => Promise<Outcome>) {
     setBusy(true)
     setError(null)
     try {
@@ -185,12 +218,18 @@ function InvitationRow({
 
   async function resend() {
     await act(async () => {
-      const result = await resendPracticeInvitation({
-        path,
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-      })
-      if (result.data) onIssued(result.data)
-      return result
+      let outcome: Outcome | null = null
+      try {
+        const result = await resendPracticeInvitation({
+          path,
+          headers: { "Idempotency-Key": retryKey.keyFor("resend") },
+        })
+        outcome = result
+        if (result.data) onIssued(result.data)
+        return result
+      } finally {
+        retryKey.settle(outcome)
+      }
     })
   }
 
