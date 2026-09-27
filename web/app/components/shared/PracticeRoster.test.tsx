@@ -150,6 +150,16 @@ describe("PracticeRoster", () => {
     )
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
   })
+
+  it("does not suggest refreshing when the owner's access is restricted", () => {
+    render(<PracticeRoster practice={practice()} members="restricted" />)
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Practice members are not available while your access is restricted.",
+    )
+    expect(screen.queryByText(/refresh/i)).not.toBeInTheDocument()
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+  })
 })
 
 describe("loadPracticeRoster", () => {
@@ -173,6 +183,15 @@ describe("loadPracticeRoster", () => {
     })
 
     await expect(loadPracticeRoster()).resolves.toBeNull()
+  })
+
+  it("reports restricted access when the owner is refused", async () => {
+    practiceRoster.mockResolvedValue({
+      data: undefined,
+      response: new Response(null, { status: 403 }),
+    })
+
+    await expect(loadPracticeRoster()).resolves.toBe("restricted")
   })
 
   it("reports a server failure instead of hiding it", async () => {

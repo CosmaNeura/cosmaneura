@@ -4,8 +4,15 @@ import {
 } from "~/configuration/client"
 import type { PracticeStatus } from "~/lib/practice-api"
 
-/** null when there is nothing to show; "unavailable" when the load failed. */
-export type PracticeRosterLoad = PracticeRosterMember[] | "unavailable" | null
+/**
+ * null when there is nothing to show; "restricted" when the owner's own access
+ * is not in force; "unavailable" when the load failed.
+ */
+export type PracticeRosterLoad =
+  | PracticeRosterMember[]
+  | "restricted"
+  | "unavailable"
+  | null
 
 export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
   try {
@@ -13,7 +20,11 @@ export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
     if (data) return data.members
     // a lapsed practice's roster is behind the entitlement gate; the billing
     // panel already explains that state
-    return response?.status === 402 ? null : "unavailable"
+    if (response?.status === 402) return null
+    // settings stays reachable for an owner whose access was revoked, unseated
+    // or lost its BAA; refreshing cannot change that answer
+    if (response?.status === 403) return "restricted"
+    return "unavailable"
   } catch {
     return "unavailable"
   }
@@ -34,12 +45,14 @@ export function PracticeRoster({
   members: PracticeRosterLoad
 }) {
   if (practice.role !== "owner" || !members) return null
-  if (members === "unavailable") {
+  if (members === "unavailable" || members === "restricted") {
     return (
       <div className="not-prose rounded-lg border p-4 text-sm">
         <p className="font-semibold">Practice members</p>
         <p role="alert" className="text-muted-foreground mt-2">
-          Practice members could not be loaded. Refresh to try again.
+          {members === "restricted"
+            ? "Practice members are not available while your access is restricted."
+            : "Practice members could not be loaded. Refresh to try again."}
         </p>
       </div>
     )
