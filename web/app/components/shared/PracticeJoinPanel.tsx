@@ -75,6 +75,9 @@ function SeatSummary({ practice }: { practice: PracticeStatus }) {
   if (!summary || !practice.billing_subscription_manageable) return null
   const { billed_seats: billed, active_clinicians: active } = summary
   const trialing = practice.subscription_status === "trialing"
+  // Only a paid-up subscription is "paying"; past_due, unpaid, paused and
+  // incomplete keep a quantity while payment is failing or not yet collected.
+  const paying = practice.subscription_status === "active"
 
   let line: string | null = null
   if (billed !== null) {
@@ -82,9 +85,9 @@ function SeatSummary({ practice }: { practice: PracticeStatus }) {
     line =
       summary.account_kind === "solo"
         ? `Solo practice · ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
-        : trialing
-          ? `Your subscription covers ${seats(billed)} · ${cost} after your trial`
-          : `You are paying for ${seats(billed)} · ${cost}`
+        : paying
+          ? `You are paying for ${seats(billed)} · ${cost}`
+          : `Your subscription covers ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
   }
 
   return (
