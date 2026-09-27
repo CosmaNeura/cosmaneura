@@ -1893,7 +1893,11 @@ def _roster_invitation(
 
 @internal_api_app.get("/practice/members", name="practice_roster")
 def practice_roster(request: Request) -> PracticeRoster:
-    """The practice's members, for its owner. Carries no contact details."""
+    """The practice's members and pending invitations, for its owner.
+
+    Members carry no contact details; an invitation carries the address the
+    owner typed, except under support view-as.
+    """
     doctor: Doctor = request.state.doctor
     member = _owner_membership(
         doctor, "Only the practice owner can view the practice roster."
