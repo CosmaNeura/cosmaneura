@@ -1,11 +1,17 @@
 from datetime import datetime, timedelta, timezone
 from enum import Enum
+from typing import Any
+from weakref import WeakKeyDictionary
 
 import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
-from sqlmodel import Column, Field, Relationship
+from sqlalchemy import event
+from sqlalchemy.orm import Session as OrmSession
+from sqlalchemy.orm import SessionTransaction
+from sqlalchemy.orm.attributes import get_history
+from sqlmodel import Column, Field, Relationship, Session, select
 
 from .doctor import Doctor
 
@@ -423,3 +429,80 @@ class PracticeMember(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+
+
+class PracticeSeatLockNotHeld(RuntimeError):
+    """A seat-affecting membership write was flushed without the practice lock."""
+
+
+_SEAT_OCCUPANCY_FIELDS = ("practice_id", "seat_state", "access_revoked_at")
+
+_seat_locked_practices: WeakKeyDictionary[SessionTransaction, set[str]] = (
+    WeakKeyDictionary()
+)
+"Practices row-locked by lock_practice_seats, per root transaction."
+
+
+def lock_practice_seats(session: Session, practice_id: Any) -> Practice | None:
+    """Row-lock a practice for the rest of this transaction.
+
+    This is the only way to satisfy the flush guard below. Two concurrent
+    membership changes would otherwise both count the same free seat and
+    record conflicting Stripe quantity targets.
+    """
+
+    practice = session.exec(
+        select(Practice)
+        .where(Practice.id == practice_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if practice is not None:
+        transaction = session.get_transaction()
+        assert transaction is not None
+        _seat_locked_practices.setdefault(transaction, set()).add(str(practice.id))
+    return practice
+
+
+def practice_seat_lock_held(session: OrmSession, practice_id: Any) -> bool:
+    transaction = session.get_transaction()
+    return transaction is not None and str(practice_id) in _seat_locked_practices.get(
+        transaction, ()
+    )
+
+
+def _seat_affected_practice_ids(member: PracticeMember, *, whole_row: bool) -> set:
+    if whole_row:
+        return {member.practice_id}
+    affected = set()
+    for name in _SEAT_OCCUPANCY_FIELDS:
+        history = get_history(member, name)
+        if history.has_changes():
+            affected.add(member.practice_id)
+            if name == "practice_id":
+                affected.update(history.deleted)
+    return affected
+
+
+@event.listens_for(OrmSession, "before_flush")
+def _require_practice_seat_lock(session: OrmSession, flush_context, instances) -> None:
+    # Unit-of-work writes only: ORM bulk UPDATE/DELETE statements and raw SQL
+    # never reach before_flush, so seat changes must stay on mapped instances.
+    for collection, whole_row in (
+        (session.new, True),
+        (session.deleted, True),
+        (session.dirty, False),
+    ):
+        for instance in collection:
+            if not isinstance(instance, PracticeMember):
+                continue
+            for practice_id in _seat_affected_practice_ids(
+                instance, whole_row=whole_row
+            ):
+                if practice_id is None or not practice_seat_lock_held(
+                    session, practice_id
+                ):
+                    raise PracticeSeatLockNotHeld(
+                        "practice membership seat changes require "
+                        "lock_practice_seats in the same transaction"
+                    )

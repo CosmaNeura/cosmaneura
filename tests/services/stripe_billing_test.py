@@ -36,6 +36,8 @@ from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
 
+from tests.factories import save_practice_member
+
 WEBHOOK_SECRET = "whsec_test_secret"
 NOW = datetime(2026, 8, 20, 20, 0, tzinfo=timezone.utc)
 
@@ -175,12 +177,14 @@ def _practice() -> Practice:
         email=f"owner-{secrets.token_hex(4)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=owner.id,
-        role=PracticeRole.owner.value,
-        attested_at=NOW,
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=owner.id,
+            role=PracticeRole.owner.value,
+            attested_at=NOW,
+        )
+    )
     return practice
 
 

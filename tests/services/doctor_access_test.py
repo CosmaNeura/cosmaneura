@@ -11,6 +11,8 @@ from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
 
+from tests.factories import save_practice_member
+
 
 def _doctor(label: str) -> Doctor:
     nonce = secrets.token_hex(4)
@@ -58,13 +60,15 @@ def _practice(
         join_code=f"A{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
     ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-        attested_at=datetime.now(timezone.utc) if attested else None,
-        attestation_name="Test Clinician" if attested else None,
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+            attested_at=datetime.now(timezone.utc) if attested else None,
+            attestation_name="Test Clinician" if attested else None,
+        )
+    )
     return practice, member
 
 
@@ -192,7 +196,7 @@ def test_revoked_membership_outranks_active_pilot_grant():
     member.access_revoked_by_ref = "test-suite"
     member.access_revocation_reason = "Test offboarding"
     member.access_records_retain_until = now + timedelta(days=365 * 8)
-    member.save()
+    save_practice_member(member)
     _grant(doctor, practice=practice)
 
     decision = resolve_doctor_access(doctor)
@@ -208,7 +212,7 @@ def test_inactive_membership_outranks_active_pilot_grant():
     doctor.save()
     practice, member = _practice(doctor)
     member.seat_state = "inactive"
-    member.save()
+    save_practice_member(member)
     _grant(doctor, practice=practice)
 
     decision = resolve_doctor_access(doctor)

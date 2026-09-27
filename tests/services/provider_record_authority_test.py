@@ -37,7 +37,12 @@ from app.models.provider_record_authority import (
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
-from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
+from tests.factories import (
+    AppointmentFactory,
+    DoctorFactory,
+    PatientFactory,
+    save_practice_member,
+)
 from tests.routes.utils import provision_practice_in_force
 from tests.services.session_prep_authority_test import (
     AUTHORITY_SETTINGS,
@@ -134,7 +139,7 @@ def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
     next_practice = provision_practice_in_force(other_doctor)
     member = PracticeMember.get(doctor_id=doctor.id)
     member.practice_id = next_practice.id
-    member.save()
+    save_practice_member(member)
     next_appointment = AppointmentFactory.build(
         doctor_id=doctor.id, patient_id=patient.id
     ).save()
@@ -200,13 +205,19 @@ def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scop
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _token(doctor, str(appointment.id))
     assert AuthorityTenantMembership.get(id=fixture_membership.id).status == "active"
-    assert AuthorityTenantMembership.where(
-        AuthorityTenantMembership.actor_id == binding.actor_id,
-        AuthorityTenantMembership.status == "active",
-    ).count() == 2
-    assert AuthorityAuditEvent.where(
-        AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
-    ).count() == 0
+    assert (
+        AuthorityTenantMembership.where(
+            AuthorityTenantMembership.actor_id == binding.actor_id,
+            AuthorityTenantMembership.status == "active",
+        ).count()
+        == 2
+    )
+    assert (
+        AuthorityAuditEvent.where(
+            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+        ).count()
+        == 0
+    )
 
 
 @pytest.mark.parametrize("same_practice", [False, True])
@@ -220,7 +231,7 @@ def test_other_selected_provider_cannot_exchange_or_reuse_record(
     if same_practice:
         member = PracticeMember.get(doctor_id=outsider.id)
         member.practice_id = practice.id
-        member.save()
+        save_practice_member(member)
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
@@ -275,14 +286,14 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         member.access_records_retain_until = member.access_revoked_at + timedelta(
             days=2922
         )
-        member.save()
+        save_practice_member(member)
     elif change == "seat":
         member.seat_state = "inactive"
-        member.save()
+        save_practice_member(member)
     elif change == "practice":
         other = DoctorFactory.build().save()
         member.practice_id = provision_practice_in_force(other).id
-        member.save()
+        save_practice_member(member)
     elif change == "patient":
         patient.doctor_id = DoctorFactory.build().save().id
         patient.save()
