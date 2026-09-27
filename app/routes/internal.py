@@ -140,6 +140,7 @@ from app.models.patient_medication import (
 )
 from app.models.practice import (
     TRIAL_LENGTH,
+    ClinicianSeatState,
     OriginChannel,
     Practice,
     PracticeAcquisitionSource,
@@ -151,7 +152,7 @@ from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import col, select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -1799,6 +1800,64 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
         )
         for r in records
     ]
+
+
+class PracticeRosterMember(BaseModel, extra="forbid"):
+    display_name: str | None
+    "Name recorded at attestation; null for roster-authorized members who never attested."
+    role: Literal["owner", "workforce"]
+    is_self: bool
+    seat_active: bool
+    "Holds a clinician seat: active seat state and no access revocation."
+    access_in_force: bool
+    "Passes the same effective-access decision that gates protected routes."
+    joined_at: datetime
+
+
+class PracticeRoster(BaseModel, extra="forbid"):
+    members: list[PracticeRosterMember]
+
+
+@internal_api_app.get("/practice/members", name="practice_roster")
+def practice_roster(request: Request) -> PracticeRoster:
+    """The practice's members, for its owner. Carries no contact details."""
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the practice owner can view the practice roster.",
+        )
+    memberships = cast(
+        list[PracticeMember],
+        PracticeMember.where(PracticeMember.practice_id == member.practice_id)
+        .order_by(
+            col(PracticeMember.role) != PracticeRole.owner.value,
+            col(PracticeMember.created_at),
+            col(PracticeMember.id),
+        )
+        .all(),
+    )
+    roster: list[PracticeRosterMember] = []
+    for row in memberships:
+        assert row.created_at is not None
+        subject = Doctor.get(id=row.doctor_id)
+        roster.append(
+            PracticeRosterMember(
+                display_name=row.attestation_name,
+                role=cast(Literal["owner", "workforce"], row.role),
+                is_self=row.doctor_id == doctor.id,
+                seat_active=(
+                    row.seat_state == ClinicianSeatState.active.value
+                    and row.access_revoked_at is None
+                ),
+                access_in_force=(
+                    subject is not None and resolve_doctor_access(subject).allowed
+                ),
+                joined_at=row.created_at,
+            )
+        )
+    return PracticeRoster(members=roster)
 
 
 class JoinCodeBody(BaseModel, extra="forbid"):

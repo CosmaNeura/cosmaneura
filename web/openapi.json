@@ -1203,6 +1203,33 @@
         ]
       }
     },
+    "/internal/v1/practice/members": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Roster",
+        "description": "The practice's members, for its owner. Carries no contact details.",
+        "operationId": "practice_roster",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRoster"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/practice/lookup": {
       "post": {
         "tags": [
@@ -4933,6 +4960,74 @@
         "additionalProperties": false,
         "type": "object",
         "title": "PracticeLookupResult"
+      },
+      "PracticeRoster": {
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeRosterMember"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "members"
+        ],
+        "title": "PracticeRoster"
+      },
+      "PracticeRosterMember": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          },
+          "is_self": {
+            "type": "boolean",
+            "title": "Is Self"
+          },
+          "seat_active": {
+            "type": "boolean",
+            "title": "Seat Active"
+          },
+          "access_in_force": {
+            "type": "boolean",
+            "title": "Access In Force"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Joined At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name",
+          "role",
+          "is_self",
+          "seat_active",
+          "access_in_force",
+          "joined_at"
+        ],
+        "title": "PracticeRosterMember"
       },
       "PracticeStatus": {
         "properties": {
