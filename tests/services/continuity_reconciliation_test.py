@@ -56,6 +56,8 @@ from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGran
 from app.models.practice import Practice, PracticeMember
 from sqlalchemy import text
 
+from tests.factories import save_practice_member
+
 ISSUER = "https://continuity-test.clerk.invalid"
 SOURCE_REF = "change:continuity-omission-source"
 OPERATOR_REF = "change:continuity-operator"
@@ -473,15 +475,17 @@ def test_amendment_refuses_revoked_or_conflicting_practice_state(monkeypatch):
         join_code=f"C{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-        access_revoked_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
-        access_revoked_by_ref="change:offboard",
-        access_revocation_reason="Prior offboarding",
-        access_records_retain_until=datetime(2033, 8, 24, 10, 0, tzinfo=UTC),
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+            access_revoked_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
+            access_revoked_by_ref="change:offboard",
+            access_revocation_reason="Prior offboarding",
+            access_records_retain_until=datetime(2033, 8, 24, 10, 0, tzinfo=UTC),
+        )
+    )
     manifest = _manifest(
         _identity(subject=subject, email=email, doctor=doctor, practice=practice)
     )
@@ -545,11 +549,13 @@ def test_amendment_refuses_expired_or_suspended_organization_authority(
         expires_at=expires_at,
     ).save()
     doctor = Doctor(clerk_id=subject, email=email, biography="").save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+        )
+    )
     manifest = _manifest(
         _identity(subject=subject, email=email, doctor=doctor, practice=practice)
     )
@@ -586,11 +592,13 @@ def test_amendment_refuses_claimed_roster_with_conflicting_email(monkeypatch):
         organization_id=organization.id,
     ).save()
     doctor = Doctor(clerk_id=subject, email=email, biography="").save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+        )
+    )
     OrganizationRosterApproval(
         organization_id=organization.id,
         target_practice_id=practice.id,
@@ -661,7 +669,9 @@ def test_audit_accepts_audited_rebind_without_redefining_base_cohort():
         join_code=f"B{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
     ).save()
-    PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="owner").save()
+    save_practice_member(
+        PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="owner")
+    )
     _seed_base(entries)
     replacement = ClerkCohortIdentity(
         clerk_id=f"user_replacement_{secrets.token_hex(6)}",
@@ -731,7 +741,9 @@ def test_audit_accepts_audited_rebind_of_an_amendment(monkeypatch):
         join_code=f"R{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
     ).save()
-    PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="owner").save()
+    save_practice_member(
+        PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="owner")
+    )
     manifest = _manifest(
         _identity(
             subject=original_subject,

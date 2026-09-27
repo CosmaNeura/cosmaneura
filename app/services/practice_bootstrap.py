@@ -22,6 +22,7 @@ from app.services.organization_access import (
     lock_roster_enrollment_email,
     normalize_email,
 )
+from app.services.public_entitlements import lock_practice_for_active_seat_mutation
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -538,6 +539,7 @@ def bootstrap_provider_practice(
         )
         session.add(practice)
         session.flush()
+        practice = lock_practice_for_active_seat_mutation(session, practice.id)
         owner_member = PracticeMember(
             practice_id=practice.id,
             doctor_id=owner.id,

@@ -1593,6 +1593,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         )
         session.add(practice)
         session.flush()
+        practice = lock_practice_for_active_seat_mutation(session, practice.id)
         member = PracticeMember(
             practice_id=practice.id,
             doctor_id=locked_doctor.id,
