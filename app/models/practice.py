@@ -440,7 +440,11 @@ _SEAT_OCCUPANCY_FIELDS = ("practice_id", "seat_state", "access_revoked_at")
 _seat_locked_practices: WeakKeyDictionary[SessionTransaction, set[str]] = (
     WeakKeyDictionary()
 )
-"Practices row-locked by lock_practice_seats, per root transaction."
+"Practices row-locked by lock_practice_seats, per transaction or savepoint."
+
+
+def _innermost_transaction(session: OrmSession) -> SessionTransaction | None:
+    return session.get_nested_transaction() or session.get_transaction()
 
 
 def lock_practice_seats(session: Session, practice_id: Any) -> Practice | None:
@@ -458,17 +462,30 @@ def lock_practice_seats(session: Session, practice_id: Any) -> Practice | None:
         .execution_options(populate_existing=True)
     ).one_or_none()
     if practice is not None:
-        transaction = session.get_transaction()
+        transaction = _innermost_transaction(session)
         assert transaction is not None
         _seat_locked_practices.setdefault(transaction, set()).add(str(practice.id))
     return practice
 
 
 def practice_seat_lock_held(session: OrmSession, practice_id: Any) -> bool:
-    transaction = session.get_transaction()
-    return transaction is not None and str(practice_id) in _seat_locked_practices.get(
-        transaction, ()
-    )
+    transaction = _innermost_transaction(session)
+    while transaction is not None:
+        if str(practice_id) in _seat_locked_practices.get(transaction, ()):
+            return True
+        transaction = transaction.parent
+    return False
+
+
+@event.listens_for(OrmSession, "after_commit")
+def _hand_released_savepoint_locks_to_parent(session: OrmSession) -> None:
+    # PostgreSQL keeps a released savepoint's row locks in its parent but drops
+    # them when the savepoint rolls back, so only a release carries the record.
+    released = session.get_nested_transaction()
+    if released is None or released.parent is None:
+        return
+    if locked := _seat_locked_practices.pop(released, None):
+        _seat_locked_practices.setdefault(released.parent, set()).update(locked)
 
 
 def _seat_affected_practice_ids(member: PracticeMember, *, whole_row: bool) -> set:

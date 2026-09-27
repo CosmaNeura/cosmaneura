@@ -156,6 +156,47 @@ def test_lock_from_an_earlier_transaction_does_not_authorize_a_later_change():
             session.flush()
 
 
+def test_lock_taken_in_a_rolled_back_savepoint_does_not_authorize_a_change():
+    practice = _practice()
+
+    with get_session() as session:
+        savepoint = session.begin_nested()
+        lock_practice_seats(session, practice.id)
+        savepoint.rollback()
+        session.add(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=_doctor().id,
+                role="workforce",
+            )
+        )
+        with pytest.raises(PracticeSeatLockNotHeld):
+            session.flush()
+
+
+def test_lock_survives_savepoint_release_and_unrelated_savepoint_rollback():
+    released = _practice()
+    outer = _practice()
+
+    with get_session() as session:
+        lock_practice_seats(session, outer.id)
+        with session.begin_nested():
+            lock_practice_seats(session, released.id)
+        session.begin_nested().rollback()
+        for practice in (released, outer):
+            session.add(
+                PracticeMember(
+                    practice_id=practice.id,
+                    doctor_id=_doctor().id,
+                    role="workforce",
+                )
+            )
+        session.commit()
+
+    assert PracticeMember.get(practice_id=released.id) is not None
+    assert PracticeMember.get(practice_id=outer.id) is not None
+
+
 def test_non_seat_membership_fields_do_not_require_the_practice_lock():
     member = _member(_practice())
 
