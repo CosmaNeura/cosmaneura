@@ -2018,6 +2018,23 @@ def _consume_practice_invitation_attempt(practice_id: Any) -> None:
         )
 
 
+def _first_resend_with_key(invitation_id: Any, idempotency_key: str) -> bool:
+    """Whether this key has not already re-sent this unchanged invitation.
+
+    Re-sending a live invitation writes no row, so the key is remembered here
+    to keep a retried request from emailing the invitee twice.
+    """
+
+    key_id = hashlib.sha256(
+        f"{invitation_id}:{idempotency_key}".encode("utf-8")
+    ).hexdigest()
+    return bool(
+        get_redis().set(
+            f"practice-invitation-resend:{key_id}", "1", nx=True, ex=24 * 60 * 60
+        )
+    )
+
+
 def _invitation_web_origin(request: Request) -> str:
     return _validated_web_origin(
         request, detail="Invitations require a recognized web origin."
@@ -2146,8 +2163,14 @@ def resend_practice_invitation(
         raise _invitation_http_error(
             exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
         ) from None
+    email_due = issued.created or (
+        not issued.replayed and _first_resend_with_key(invitation_id, idempotency_key)
+    )
     return _issued_invitation_payload(
-        origin, issued, now, email_queued=_queue_invitation_email(issued.invitation)
+        origin,
+        issued,
+        now,
+        email_queued=email_due and _queue_invitation_email(issued.invitation),
     )
 
 

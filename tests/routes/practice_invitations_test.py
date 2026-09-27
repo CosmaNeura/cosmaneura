@@ -296,10 +296,10 @@ def test_revoke_pending_twice_and_refuse_accepted_or_foreign(
     assert other.status_code == status.HTTP_404_NOT_FOUND
 
 
-def _resend(client: TestClient, invitation_id: str):
+def _resend(client: TestClient, invitation_id: str, *, key: str | None = None):
     return client.post(
         api_app.url_path_for("resend_practice_invitation", invitation_id=invitation_id),
-        headers={"origin": ORIGIN, "Idempotency-Key": secrets.token_hex(8)},
+        headers={"origin": ORIGIN, "Idempotency-Key": key or secrets.token_hex(8)},
     )
 
 
@@ -734,6 +734,40 @@ def test_email_is_queued_by_invitation_id_only_when_enabled(
     assert resent.json()["email_queued"] is True
     assert queued == [((on["invitation"]["invitation_id"],), {})] * 2
     assert token not in repr(queued)
+
+
+def test_a_retried_resend_does_not_email_twice(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _owner_practice()
+    live, _ = _invited(authenticated_client, "retry-live@gmail.com")
+    stale, _ = _invited(authenticated_client, "retry-stale@gmail.com")
+    _expire(stale["invitation"]["invitation_id"])
+    queued: list[str] = []
+    monkeypatch.setattr(
+        practice_invitation_email.perform_celery,
+        "delay",
+        lambda invitation_id: queued.append(invitation_id),
+    )
+    monkeypatch.setattr(practice_invitation_email, "email_enabled", lambda: True)
+    live_id = live["invitation"]["invitation_id"]
+    stale_id = stale["invitation"]["invitation_id"]
+    live_key, stale_key = secrets.token_hex(8), secrets.token_hex(8)
+
+    live_first = _resend(authenticated_client, live_id, key=live_key).json()
+    live_retry = _resend(authenticated_client, live_id, key=live_key).json()
+    live_again = _resend(authenticated_client, live_id).json()
+    stale_first = _resend(authenticated_client, stale_id, key=stale_key).json()
+    stale_retry = _resend(authenticated_client, stale_id, key=stale_key).json()
+
+    replacement_id = stale_first["invitation"]["invitation_id"]
+    assert stale_retry["invitation"]["invitation_id"] == replacement_id
+    assert [
+        body["email_queued"]
+        for body in (live_first, live_retry, live_again, stale_first, stale_retry)
+    ] == [True, False, True, True, False]
+    assert queued == [live_id, live_id, replacement_id]
 
 
 def test_a_broker_outage_still_returns_the_link(

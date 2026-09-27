@@ -360,6 +360,28 @@ def test_resend_of_an_expired_invitation_replaces_it():
     assert len(_invitation_rows(practice)) == 2
 
 
+def test_resending_an_expired_replacement_with_its_own_key_replaces_it_again():
+    practice, owner = _practice()
+    original = _issue(
+        owner, "cycle@clinic-invite.example", now=_now() - timedelta(days=16)
+    )
+    first = _resend(
+        owner, original.invitation.id, "cycle-key-1", now=_now() - timedelta(days=8)
+    )
+    retried = _resend(
+        owner, original.invitation.id, "cycle-key-1", now=_now() - timedelta(days=8)
+    )
+
+    second = _resend(owner, first.invitation.id, "cycle-key-1")
+
+    assert (first.created, first.replayed) == (True, False)
+    assert (retried.created, retried.replayed) == (False, True)
+    assert retried.invitation.id == first.invitation.id
+    assert (second.created, second.replayed) == (True, False)
+    assert second.invitation.id not in {original.invitation.id, first.invitation.id}
+    assert len(_invitation_rows(practice)) == 3
+
+
 def test_resend_refuses_a_revoked_invitation_that_has_not_expired():
     practice, owner = _practice()
     issued = _issue(owner, "revoked-live@clinic-invite.example")
