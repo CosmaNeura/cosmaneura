@@ -144,12 +144,21 @@ describe("invite link", () => {
 
   it("stores the token before a signed-out visitor is sent to sign in", async () => {
     window.history.replaceState(null, "", "/invite#t=before-sign-in")
-    clerk.getClient.mockResolvedValue(undefined)
+    let storedWhenRedirected: string | null = null
+    clerk.getClient.mockImplementation(async () => {
+      // getClient() sends a signed-out visitor to sign-in with only the path
+      storedWhenRedirected = window.sessionStorage.getItem(
+        PENDING_INVITATION_KEY,
+      )
+      window.history.replaceState(null, "", "/sign-in?redirect_url=%2Finvite")
+      return undefined
+    })
 
     expect(await clientLoader()).toEqual({ kind: "signing_in" })
     expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
       "before-sign-in",
     )
+    expect(storedWhenRedirected).toBe("before-sign-in")
     expect(client.inspectPracticeInvitation).not.toHaveBeenCalled()
   })
 
@@ -220,6 +229,31 @@ describe("invite link", () => {
     })
     expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
     expect(router.state.location.pathname).toBe("/onboarding")
+  })
+
+  it("keeps joining disabled until every acknowledgement is checked", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "ready-token")
+    inspected()
+    openInvite()
+
+    const join = await screen.findByRole("button", {
+      name: "Attest and join Harbor Family Medicine",
+    })
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "Riley Clinician" },
+    })
+    const boxes = screen.getAllByRole("checkbox")
+    for (const box of boxes.slice(0, 3)) fireEvent.click(box)
+    expect(join).toBeDisabled()
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "R" },
+    })
+    fireEvent.click(boxes[3])
+    expect(join).toBeDisabled()
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "Ri" },
+    })
+    expect(join).toBeEnabled()
   })
 
   it("shows why acceptance was refused", async () => {
