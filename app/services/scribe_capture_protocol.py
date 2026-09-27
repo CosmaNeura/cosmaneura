@@ -32,6 +32,7 @@ from app.services.scribe_creator_review_contract import (
     CreatorReviewView,
     CreatorTranslationDecision,
 )
+from app.services.scribe_source_extension_contract import NativeSourceExtension
 from app.services.scribe_source_start_contract import NativeSourceStart
 
 Channel = Literal["microphone", "system_audio", "mixed"]
@@ -158,6 +159,7 @@ class ReadOperation(ProtectedContract):
         "capture_recovery_state",
         "capture_source",
         "capture_profile",
+        "capture_lease_state",
         "creator_review",
         "native_recording_context",
         "provider_encounter",
@@ -249,6 +251,7 @@ CaptureOperation = Annotated[
     | RecoverCapture
     | DecideTranslation
     | NativeSourceStart
+    | NativeSourceExtension
     | SelectCaptureProfile,
     Field(discriminator="kind"),
 ]
@@ -346,6 +349,36 @@ class LeaseReceipt(ProtocolPayload):
     generation: Generation
     issued_at: AwareDatetime
     expires_at: AwareDatetime
+
+
+class LeaseState(ProtectedContract):
+    session_id: UUID
+    current_lease: LeaseReceipt | None
+    lease_closed: bool = Field(strict=True)
+    session_status: Literal[
+        "created",
+        "capturing",
+        "uploaded",
+        "processing",
+        "transcript_ready",
+        "handed_off",
+        "failed",
+    ]
+
+    @model_validator(mode="after")
+    def scoped_lease(self):
+        lease = self.current_lease
+        if (
+            lease is None
+            and self.lease_closed
+            or lease is not None
+            and (
+                lease.session_id != self.session_id
+                or lease.expires_at <= lease.issued_at
+            )
+        ):
+            raise ValueError("Capture lease state invalid")
+        return self
 
 
 class Reservation(ProtocolPayload):
