@@ -19,6 +19,7 @@ import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
+import { PracticeRoster } from "~/components/shared/PracticeRoster"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -30,6 +31,8 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
+  type PracticeRosterMember,
+  practiceRoster,
   settingsData,
   updateSettingsData,
   zoomAuthUrl,
@@ -69,11 +72,13 @@ type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
 function PracticeSettings({
   practice,
+  roster,
   acceptances,
   onPracticeChange,
   billingReturnTo,
 }: {
   practice: PracticeStatus | null
+  roster: PracticeRosterMember[] | null
   acceptances: BaaAcceptanceRecord[]
   onPracticeChange: (practice: PracticeStatus) => void
   billingReturnTo: string
@@ -91,6 +96,7 @@ function PracticeSettings({
         showBillingActions
         billingReturnTo={billingReturnTo}
       />
+      <PracticeRoster practice={practice} members={roster} />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>
@@ -593,7 +599,13 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
   const baa_acceptances = await getBaaAcceptances().catch(
     () => [] as BaaAcceptanceRecord[],
   )
-  return { ...data, practice, baa_acceptances }
+  const practice_roster =
+    practice?.role === "owner"
+      ? await practiceRoster()
+          .then(({ data }) => data?.members ?? null)
+          .catch(() => null)
+      : null
+  return { ...data, practice, baa_acceptances, practice_roster }
 }
 export const meta: MetaFunction = () => {
   return [
@@ -690,6 +702,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <PracticeSettings
             practice={practice}
+            roster={loaderData.practice_roster}
             acceptances={loaderData.baa_acceptances}
             onPracticeChange={handlePracticeChange}
             billingReturnTo={billingReturnTo}
