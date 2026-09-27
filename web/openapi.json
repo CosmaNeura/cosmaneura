@@ -5007,6 +5007,10 @@
             "type": "boolean",
             "title": "Seat Active"
           },
+          "revoked": {
+            "type": "boolean",
+            "title": "Revoked"
+          },
           "access_in_force": {
             "type": "boolean",
             "title": "Access In Force"
@@ -5024,6 +5028,7 @@
           "role",
           "is_self",
           "seat_active",
+          "revoked",
           "access_in_force",
           "joined_at"
         ],

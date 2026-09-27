@@ -7,10 +7,12 @@ from fastapi.testclient import TestClient
 from app.server import api_app
 from app.services.public_entitlements import active_clinician_seat_count
 
-from activemodel.session_manager import get_session
+from activemodel.session_manager import get_engine, get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
+from sqlalchemy import event
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 ROSTER_FIELDS = {
@@ -18,6 +20,7 @@ ROSTER_FIELDS = {
     "role",
     "is_self",
     "seat_active",
+    "revoked",
     "access_in_force",
     "joined_at",
 }
@@ -49,15 +52,27 @@ def _add_member(
         email=f"roster-{secrets.token_hex(4)}@{practice.email_domain}",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=clinician.id,
-        role="workforce",
-        attested_at=datetime.now(timezone.utc) if attested else None,
-        attestation_name=name,
-        **overrides,
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=clinician.id,
+            role="workforce",
+            attested_at=datetime.now(timezone.utc) if attested else None,
+            attestation_name=name,
+            **overrides,
+        )
+    )
     return clinician
+
+
+def _revocation() -> dict:
+    now = datetime.now(timezone.utc)
+    return {
+        "access_revoked_at": now,
+        "access_revoked_by_ref": "test-suite",
+        "access_revocation_reason": "Test revocation",
+        "access_records_retain_until": now + timedelta(days=366 * 7),
+    }
 
 
 def _roster(client: TestClient) -> list[dict]:
@@ -84,15 +99,7 @@ def test_owner_sees_active_inactive_and_revoked_members(
     _add_member(practice, "Active Clinician")
     _add_member(practice, "Unattested Clinician", attested=False)
     _add_member(practice, "Paused Clinician", seat_state="inactive")
-    now = datetime.now(timezone.utc)
-    _add_member(
-        practice,
-        "Revoked Clinician",
-        access_revoked_at=now,
-        access_revoked_by_ref="test-suite",
-        access_revocation_reason="Test revocation",
-        access_records_retain_until=now + timedelta(days=366 * 7),
-    )
+    _add_member(practice, "Revoked Clinician", **_revocation())
 
     members = _roster(authenticated_client)
     by_name = {m["display_name"]: m for m in members}
@@ -105,15 +112,21 @@ def test_owner_sees_active_inactive_and_revoked_members(
         "Revoked Clinician",
     }
     states = {
-        name: (m["role"], m["is_self"], m["seat_active"], m["access_in_force"])
+        name: (
+            m["role"],
+            m["is_self"],
+            m["seat_active"],
+            m["revoked"],
+            m["access_in_force"],
+        )
         for name, m in by_name.items()
     }
     assert states == {
-        "Test Owner": ("owner", True, True, True),
-        "Active Clinician": ("workforce", False, True, True),
-        "Unattested Clinician": ("workforce", False, True, False),
-        "Paused Clinician": ("workforce", False, False, False),
-        "Revoked Clinician": ("workforce", False, False, False),
+        "Test Owner": ("owner", True, True, False, True),
+        "Active Clinician": ("workforce", False, True, False, True),
+        "Unattested Clinician": ("workforce", False, True, False, False),
+        "Paused Clinician": ("workforce", False, False, False, False),
+        "Revoked Clinician": ("workforce", False, False, True, False),
     }
     with get_session() as session:
         billed = active_clinician_seat_count(session, practice.id)
@@ -156,6 +169,52 @@ def test_roster_exposes_no_contact_or_identity_fields(
         str(owner.id),
     ):
         assert secret not in resp.text
+
+
+def test_member_without_attested_name_is_listed_without_a_name(
+    authenticated_client: TestClient,
+):
+    practice = _owned_group_practice()
+    clinician = _add_member(practice, None, attested=False)
+
+    resp = authenticated_client.get(api_app.url_path_for("practice_roster"))
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    unnamed = [m for m in resp.json()["members"] if not m["is_self"]]
+    assert len(unnamed) == 1
+    assert unnamed[0]["display_name"] is None
+    assert "@" not in resp.text
+    assert clinician.email not in resp.text
+
+
+def _roster_statement_count(client: TestClient) -> int:
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        _roster(client)
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return len(statements)
+
+
+def test_retained_revoked_and_inactive_rows_do_not_add_queries(
+    authenticated_client: TestClient,
+):
+    practice = _owned_group_practice()
+    _add_member(practice, "Active Clinician")
+    baseline = _roster_statement_count(authenticated_client)
+
+    for index in range(15):
+        _add_member(practice, f"Revoked {index}", **_revocation())
+        _add_member(practice, f"Paused {index}", seat_state="inactive")
+
+    assert len(_roster(authenticated_client)) == 32
+    assert _roster_statement_count(authenticated_client) <= baseline + 2
 
 
 def test_roster_is_scoped_to_the_callers_practice(

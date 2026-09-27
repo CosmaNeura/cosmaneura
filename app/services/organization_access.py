@@ -1034,13 +1034,21 @@ def doctor_has_managed_roster_assignment(
 
 
 def member_authorization_basis(
-    member: PracticeMember, *, at: datetime | None = None
+    member: PracticeMember,
+    *,
+    at: datetime | None = None,
+    practice: Practice | None = None,
 ) -> str | None:
-    """Return the live authorization basis without manufacturing attestation."""
+    """Return the live authorization basis without manufacturing attestation.
+
+    ``practice`` lets a caller that already loaded the member's practice skip
+    reloading it.
+    """
 
     if member.access_revoked_at is not None:
         return None
-    practice = Practice.get(id=member.practice_id)
+    if practice is None or practice.id != member.practice_id:
+        practice = Practice.get(id=member.practice_id)
     if practice is None:
         return None
     # Once a practice is organization-managed, exact roster authorization is

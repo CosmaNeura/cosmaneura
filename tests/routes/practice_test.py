@@ -1295,11 +1295,13 @@ def _add_active_clinicians(practice: Practice, count: int) -> None:
             email=f"seat-{secrets.token_hex(4)}@{practice.email_domain}",
             biography="",
         ).save()
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=clinician.id,
-            role="workforce",
-        ).save()
+        save_practice_member(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=clinician.id,
+                role="workforce",
+            )
+        )
 
 
 def _bind_subscription(
@@ -1512,9 +1514,9 @@ def test_workforce_member_does_not_receive_seat_summary(
         origin_channel="direct",
         is_solo=False,
     ).save()
-    PracticeMember(
-        practice_id=practice.id, doctor_id=doctor.id, role="workforce"
-    ).save()
+    save_practice_member(
+        PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="workforce")
+    )
     _bind_subscription(practice, subscription_status="active", quantity=1)
 
     assert _seat_summary(bare_authenticated_client) is None
