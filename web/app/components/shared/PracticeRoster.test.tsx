@@ -319,9 +319,14 @@ describe("PracticeRoster", () => {
     expect(options.headers["Idempotency-Key"]).toMatch(/.{8,}/)
   })
 
-  it("shows the reason a revoke was refused", async () => {
+  it("shows the reason a revoke was refused and reloads the roster", async () => {
     client.revokePracticeInvitation.mockResolvedValue({
       error: { detail: "An accepted invitation cannot be revoked." },
+      response: new Response(null, { status: 409 }),
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([member()], { invitations: [invitation()] }),
+      response: new Response(null, { status: 200 }),
     })
     render(
       <PracticeRoster
@@ -335,6 +340,44 @@ describe("PracticeRoster", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "An accepted invitation cannot be revoked.",
     )
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalledTimes(1))
+  })
+
+  it("drops the copyable link once its invitation is revoked", async () => {
+    client.resendPracticeInvitation.mockResolvedValue({
+      data: issued({ invitation: invitation() }),
+    })
+    client.revokePracticeInvitation.mockResolvedValue({ data: undefined })
+    practiceRoster
+      .mockResolvedValueOnce({
+        data: roster([member()], { invitations: [invitation()] }),
+        response: new Response(null, { status: 200 }),
+      })
+      .mockResolvedValueOnce({
+        data: roster([member()]),
+        response: new Response(null, { status: 200 }),
+      })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member()], { invitations: [invitation()] })}
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: /^Resend invitation/ }))
+    expect(
+      await screen.findByText(
+        "https://app.cosmaneura.com/invite#t=secret-token",
+      ),
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
+
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByText("https://app.cosmaneura.com/invite#t=secret-token"),
+      ).not.toBeInTheDocument(),
+    )
+    expect(screen.getByRole("status")).toBeEmptyDOMElement()
   })
 
   it("renders nothing for a workforce member", () => {

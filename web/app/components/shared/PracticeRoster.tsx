@@ -172,14 +172,15 @@ function InvitationRow({
       const { error: failure } = await run()
       if (failure) {
         setError(errorDetail(failure, "That did not work. Try again."))
-        return
       }
-      await onChanged()
     } catch {
       setError("That did not work. Try again.")
     } finally {
       setBusy(false)
     }
+    // a refusal usually means the row changed elsewhere (accepted, revoked,
+    // replaced), so the list is refreshed either way
+    await onChanged()
   }
 
   async function resend() {
@@ -248,7 +249,19 @@ export function PracticeRoster({
   useEffect(() => setRoster(loaded), [loaded])
 
   async function reload() {
-    setRoster(await loadPracticeRoster())
+    const next = await loadPracticeRoster()
+    setRoster(next)
+    // a revoked, replaced or accepted invitation's link no longer works
+    if (next && typeof next === "object") {
+      setIssued((shown) =>
+        shown &&
+        next.invitations.some(
+          (row) => row.invitation_id === shown.invitation.invitation_id,
+        )
+          ? shown
+          : null,
+      )
+    }
   }
 
   async function onIssued(next: PracticeInvitationIssued) {
