@@ -98,7 +98,7 @@ function PracticeSettings({
         showBillingActions
         billingReturnTo={billingReturnTo}
       />
-      <PracticeRoster practice={practice} members={roster} />
+      <PracticeRoster practice={practice} roster={roster} />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>

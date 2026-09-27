@@ -129,7 +129,7 @@ beforeEach(() => {
     response: new Response(null, { status: 200 }),
   })
   client.practiceRoster.mockResolvedValue({
-    data: { members: MEMBERS },
+    data: { members: MEMBERS, invitations: [], occupied_seats: 2 },
     response: new Response(null, { status: 200 }),
   })
   practiceApi.getBaaAcceptances.mockResolvedValue([])
