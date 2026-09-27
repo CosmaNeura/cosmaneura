@@ -5,6 +5,7 @@ import pytest
 
 from app.routes.public_onboarding import _pending_invitation_count
 from app.services import practice_invitations as invitations
+from app.services.organization_access import configure_provider_organization
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
     ActiveClinicianSeatLimitReached,
@@ -426,6 +427,42 @@ def test_accept_refuses_a_practice_without_a_baa():
     with pytest.raises(invitations.InvitationConflict):
         _accept(issued.token, invitee)
 
+    assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+@pytest.mark.parametrize("conversion", ["negotiated_baa_required", "organization"])
+def test_accept_refuses_a_practice_converted_to_managed_after_issue(conversion: str):
+    domain = f"converted-{secrets.token_hex(4)}.example"
+    practice, owner = _practice(
+        is_solo=False,
+        email_domain=domain,
+        baa_accepted_at=None,
+        baa_version=None,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=_now() - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+    )
+    invitee = _doctor(domain="gmail.com", label="converted")
+    issued = _issue(owner, invitee.email)
+    if conversion == "organization":
+        configure_provider_organization(
+            practice,
+            legal_name=f"{domain} Provider Organization",
+            slug=f"converted-{secrets.token_hex(5)}",
+            email_domain=domain,
+            operator_ref="test-operator",
+            reason="Convert after an invitation was issued",
+        )
+    else:
+        practice.negotiated_baa_required = True
+        practice.save()
+    practice.refresh()
+    assert practice.baa_in_force()
+
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+
+    assert "organization-managed enrollment" in str(exc_info.value)
     assert PracticeMember.get(doctor_id=invitee.id) is None
 
 
