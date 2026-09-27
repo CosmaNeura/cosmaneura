@@ -351,3 +351,55 @@ async def test_lease_state_uses_its_own_route_and_validates_nested_scope():
         protocol.LeaseState.model_validate(
             result.model_dump() | {"current_lease": lease}
         )
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "generation_gap", "long_capability", "past_prior_window"]
+)
+def test_subsequent_extension_keeps_original_owner_and_short_capability(fault):
+    selected, operation, decision, now = extension()
+    previous_id = uuid4()
+    previous_deadline = operation.payload.owner.capture_authorized_until + timedelta(
+        minutes=15
+    )
+    payload = operation.payload.model_copy(
+        update={
+            "previous_extension_id": previous_id,
+            "lease_generation": 3,
+            "capture_authorized_until": previous_deadline + timedelta(minutes=15),
+            "first_sequence_number": 180,
+        }
+    )
+    operation = operation.model_copy(update={"payload": payload})
+    receipt = decision.receipt.model_copy(
+        update={
+            "previous_extension_id": previous_id,
+            "previous_capture_authorized_until": previous_deadline,
+            "lease_generation": 3,
+            "capture_authorized_until": payload.capture_authorized_until,
+            "first_sequence_number": 180,
+            "maximum_sequence_number": 269,
+        }
+    )
+    if fault == "generation_gap":
+        operation = operation.model_copy(
+            update={"payload": payload.model_copy(update={"lease_generation": 2})}
+        )
+        receipt = receipt.model_copy(update={"lease_generation": 2})
+    elif fault == "long_capability":
+        receipt = receipt.model_copy(update={"expires_at": now + timedelta(seconds=16)})
+    elif fault == "past_prior_window":
+        receipt = receipt.model_copy(update={"previous_capture_authorized_until": now})
+    decision = decision.model_copy(update={"receipt": receipt})
+    if fault is None:
+        assert (
+            gateway.validate_receipt(
+                operation, decision, selected, upload_origins=(), now=now
+            )
+            == decision
+        )
+    else:
+        with pytest.raises(gateway.CaptureReceiptInvalid):
+            gateway.validate_receipt(
+                operation, decision, selected, upload_origins=(), now=now
+            )
