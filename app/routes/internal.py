@@ -75,7 +75,22 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
-from app.services.practice_invitations import ACCOUNT_IN_ANOTHER_PRACTICE
+from app.services.practice_invitations import (
+    ACCOUNT_IN_ANOTHER_PRACTICE,
+    InspectionState,
+    InvalidInvitationEmail,
+    InvitationNotFound,
+    InvitationWrongAccount,
+    IssuedInvitation,
+    PracticeInvitationError,
+    accept_invitation,
+    inspect_invitation,
+    invitation_expired,
+    issue_invitation,
+    pending_invitations,
+    resend_invitation,
+    revoke_invitation,
+)
 from app.services.public_entitlements import (
     ActiveClinicianSeatLimitReached,
     ClinicianSeatPolicyError,
@@ -152,6 +167,7 @@ from app.models.practice import (
     PracticeMember,
     PracticeRole,
 )
+from app.models.public_onboarding import PracticeInvitation
 from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
@@ -1831,6 +1847,7 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
 
 
 class PracticeRosterMember(BaseModel, extra="forbid"):
+    member_id: str
     display_name: str | None
     "Name recorded at attestation; null for roster-authorized members who never attested."
     role: Literal["owner", "workforce"]
@@ -1844,8 +1861,33 @@ class PracticeRosterMember(BaseModel, extra="forbid"):
     joined_at: datetime
 
 
+class PracticeRosterInvitation(BaseModel, extra="forbid"):
+    invitation_id: str
+    invitee_email: str | None
+    "Null under support view-as."
+    issued_at: datetime
+    expires_at: datetime
+    expired: bool
+
+
 class PracticeRoster(BaseModel, extra="forbid"):
     members: list[PracticeRosterMember]
+    invitations: list[PracticeRosterInvitation]
+    "Unanswered invitations. They occupy no seat and are not billed."
+    occupied_seats: int
+    "The billed clinician seat count."
+
+
+def _roster_invitation(
+    invitation: PracticeInvitation, *, expired: bool, include_email: bool = True
+) -> PracticeRosterInvitation:
+    return PracticeRosterInvitation(
+        invitation_id=str(invitation.id),
+        invitee_email=invitation.invitee_email if include_email else None,
+        issued_at=invitation.issued_at,
+        expires_at=invitation.expires_at,
+        expired=expired,
+    )
 
 
 @internal_api_app.get("/practice/members", name="practice_roster")
@@ -1880,6 +1922,7 @@ def practice_roster(request: Request) -> PracticeRoster:
             assert row.created_at is not None
             roster.append(
                 PracticeRosterMember(
+                    member_id=str(row.id),
                     display_name=row.attestation_name,
                     role=cast(Literal["owner", "workforce"], row.role),
                     is_self=row.doctor_id == doctor.id,
@@ -1889,7 +1932,294 @@ def practice_roster(request: Request) -> PracticeRoster:
                     joined_at=row.created_at,
                 )
             )
-    return PracticeRoster(members=roster)
+        include_email = request.state.view_as is None
+        invitations = [
+            _roster_invitation(invitation, expired=expired, include_email=include_email)
+            for invitation, expired in pending_invitations(
+                session, practice.id, datetime.now(timezone.utc)
+            )
+        ]
+        occupied_seats = active_clinician_seat_count(session, practice.id)
+    return PracticeRoster(
+        members=roster, invitations=invitations, occupied_seats=occupied_seats
+    )
+
+
+# Seat-cap wording for the owner; the soft cap is lifted on request.
+SEAT_LIMIT_OWNER_DETAIL = "To add more clinicians, contact us at info@cosmaneura.com."
+
+
+class CreatePracticeInvitationBody(BaseModel, extra="forbid"):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PracticeInvitationIssued(BaseModel, extra="forbid"):
+    invitation: PracticeRosterInvitation
+    invite_url: str
+    "Carries the token in the URL fragment so it stays out of logs and Referer."
+    email_queued: bool
+
+
+class PracticeInvitationTokenBody(BaseModel, extra="forbid"):
+    token: str = Field(min_length=16, max_length=128)
+
+
+class AcceptPracticeInvitationBody(BaseModel, extra="forbid"):
+    token: str = Field(min_length=16, max_length=128)
+    attestation_name: str = Field(min_length=2, max_length=120)
+    checks: list[str]
+
+
+class PracticeInvitationInspection(BaseModel, extra="forbid"):
+    state: InspectionState
+    legal_name: str | None
+    "Only for the account the invitation was addressed to."
+    baa_accepted: bool
+
+
+_WORKFORCE_ATTESTATION_CHECKS = {"workforce", "not-party", "direction", "phi"}
+
+
+def _invitation_http_error(
+    exc: PracticeInvitationError | ActiveClinicianSeatLimitReached,
+    *,
+    seat_limit_detail: str,
+) -> HTTPException:
+    if isinstance(exc, ActiveClinicianSeatLimitReached):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=seat_limit_detail
+        )
+    if isinstance(exc, InvitationNotFound):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, InvitationWrongAccount):
+        code = status.HTTP_403_FORBIDDEN
+    elif isinstance(exc, InvalidInvitationEmail):
+        code = status.HTTP_400_BAD_REQUEST
+    else:
+        code = status.HTTP_409_CONFLICT
+    return HTTPException(status_code=code, detail=str(exc))
+
+
+def _consume_practice_invitation_attempt(practice_id: Any) -> None:
+    """Bound how many invitations one practice can send per hour."""
+
+    key_id = hashlib.sha256(str(practice_id).encode("ascii")).hexdigest()
+    key = f"practice-invitation-attempt:{key_id}"
+    redis = get_redis()
+    pipe = redis.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.expire(key, 60 * 60)
+    attempts, _ = pipe.execute()
+    if int(attempts) > 20:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many invitations sent. Try again later.",
+        )
+
+
+def _invitation_web_origin(request: Request) -> str:
+    return _validated_web_origin(
+        request, detail="Invitations require a recognized web origin."
+    )
+
+
+def _issued_invitation_payload(
+    origin: str, issued: IssuedInvitation, now: datetime
+) -> PracticeInvitationIssued:
+    return PracticeInvitationIssued(
+        invitation=_roster_invitation(
+            issued.invitation,
+            expired=invitation_expired(issued.invitation, now),
+        ),
+        invite_url=f"{origin}/invite#t={issued.token}",
+        email_queued=False,
+    )
+
+
+_INVITATION_OWNER_ONLY = "Only the practice owner can invite clinicians."
+
+
+@internal_api_app.post(
+    "/practice/invitations",
+    name="create_practice_invitation",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_practice_invitation(
+    request: Request,
+    data: CreatePracticeInvitationBody,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=255)
+    ],
+) -> PracticeInvitationIssued:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    origin = _invitation_web_origin(request)
+    _consume_practice_invitation_attempt(owner.practice_id)
+    now = datetime.now(timezone.utc)
+    try:
+        with get_session() as session:
+            issued = issue_invitation(
+                session,
+                owner_member=owner,
+                email=data.email,
+                idempotency_key=idempotency_key,
+                now=now,
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    return _issued_invitation_payload(origin, issued, now)
+
+
+@internal_api_app.post(
+    "/practice/invitations/{invitation_id}/revoke",
+    name="revoke_practice_invitation",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_practice_invitation(
+    request: Request,
+    invitation_id: Annotated[TypeIDType, Path()],
+) -> None:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    try:
+        with get_session() as session:
+            revoke_invitation(
+                session,
+                owner_member=owner,
+                invitation_id=invitation_id,
+                now=datetime.now(timezone.utc),
+            )
+    except PracticeInvitationError as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+
+
+@internal_api_app.post(
+    "/practice/invitations/{invitation_id}/resend",
+    name="resend_practice_invitation",
+)
+def resend_practice_invitation(
+    request: Request,
+    invitation_id: Annotated[TypeIDType, Path()],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=255)
+    ],
+) -> PracticeInvitationIssued:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    origin = _invitation_web_origin(request)
+    _consume_practice_invitation_attempt(owner.practice_id)
+    now = datetime.now(timezone.utc)
+    try:
+        with get_session() as session:
+            issued = resend_invitation(
+                session,
+                owner_member=owner,
+                invitation_id=invitation_id,
+                idempotency_key=idempotency_key,
+                now=now,
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    return _issued_invitation_payload(origin, issued, now)
+
+
+def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
+    """The invitee's live verified email, refusing any borrowed identity."""
+
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invitation could not be verified.",
+        )
+    if uses_managed_organization_path(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(doctor, verified_primary_email=verified_email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
+    return verified_email
+
+
+@internal_api_app.post(
+    "/practice/invitations/inspect",
+    name="inspect_practice_invitation",
+)
+def inspect_practice_invitation(
+    request: Request, data: PracticeInvitationTokenBody
+) -> PracticeInvitationInspection:
+    doctor: Doctor = request.state.doctor
+    verified_email = _invitee_verified_email(request, doctor)
+    _consume_legacy_join_attempt(doctor)
+    try:
+        with get_session() as session:
+            inspection = inspect_invitation(
+                session,
+                token=data.token,
+                doctor=doctor,
+                verified_email=verified_email,
+                now=datetime.now(timezone.utc),
+            )
+    except PracticeInvitationError as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL
+        ) from None
+    return PracticeInvitationInspection(
+        state=inspection.state,
+        legal_name=inspection.legal_name,
+        baa_accepted=inspection.baa_accepted,
+    )
+
+
+@internal_api_app.post(
+    "/practice/invitations/accept",
+    name="accept_practice_invitation",
+)
+def accept_practice_invitation(
+    request: Request, data: AcceptPracticeInvitationBody
+) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    verified_email = _invitee_verified_email(request, doctor)
+    if not _WORKFORCE_ATTESTATION_CHECKS.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All workforce acknowledgements are required.",
+        )
+    _consume_legacy_join_attempt(doctor)
+    try:
+        with get_session() as session:
+            practice, member = accept_invitation(
+                session,
+                token=data.token,
+                doctor=doctor,
+                verified_email=verified_email,
+                attestation_name=data.attestation_name,
+                reverify_email=_verified_legacy_enrollment_email,
+                now=datetime.now(timezone.utc),
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL
+        ) from None
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
 
 
 class JoinCodeBody(BaseModel, extra="forbid"):
@@ -2224,7 +2554,11 @@ def _owner_practice_for_billing(doctor: Doctor) -> Practice:
     return practice
 
 
-def _validated_web_origin(request: Request) -> str:
+def _validated_web_origin(
+    request: Request,
+    *,
+    detail: str = "Billing requires a recognized web origin.",
+) -> str:
     """Stripe redirect targets always point back at one of our own origins;
     the client only ever chooses the path."""
     from .middleware import allowed_hosts
@@ -2237,10 +2571,7 @@ def _validated_web_origin(request: Request) -> str:
     for candidate in allowed:
         if referer == candidate or referer.startswith(f"{candidate}/"):
             return candidate
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Billing requires a recognized web origin.",
-    )
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 def _safe_redirect_path(path: str) -> str:

@@ -70,6 +70,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
 
 const MEMBERS: PracticeRosterMember[] = [
   {
+    member_id: "practice_member_owner",
     display_name: "Pat Owner",
     role: "owner",
     is_self: true,
@@ -79,6 +80,7 @@ const MEMBERS: PracticeRosterMember[] = [
     joined_at: "2026-08-20T20:00:00Z",
   },
   {
+    member_id: "practice_member_clinician",
     display_name: "Alex Clinician",
     role: "workforce",
     is_self: false,

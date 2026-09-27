@@ -54,10 +54,14 @@ function seatSummary(
   }
 }
 
+let memberSequence = 0
+
 function member(
   overrides: Partial<PracticeRosterMember> = {},
 ): PracticeRosterMember {
+  memberSequence += 1
   return {
+    member_id: `practice_member_${memberSequence}`,
     display_name: "Pat Owner",
     role: "owner",
     is_self: true,

@@ -67,9 +67,9 @@ export function PracticeRoster({
     <div className="not-prose rounded-lg border p-4 text-sm">
       <p className="font-semibold">Practice members</p>
       <ul className="mt-2 divide-y">
-        {members.map((member, index) => (
+        {members.map((member) => (
           <li
-            key={index}
+            key={member.member_id}
             className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2"
           >
             <span>
