@@ -79,6 +79,7 @@ function member(
     seat_active: true,
     revoked: false,
     access_in_force: true,
+    access_ends_at: null,
     joined_at: "2026-08-20T20:00:00Z",
     ...overrides,
   }

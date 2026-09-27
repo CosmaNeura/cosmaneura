@@ -23,6 +23,7 @@ ROSTER_FIELDS = {
     "seat_active",
     "revoked",
     "access_in_force",
+    "access_ends_at",
     "joined_at",
 }
 

@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
@@ -92,6 +93,13 @@ from app.services.practice_invitations import (
     resend_invitation,
     revoke_invitation,
 )
+from app.services.practice_member_access import (
+    MemberAccessChange,
+    MemberNotFound,
+    PracticeMemberAccessError,
+    restore_member_access,
+    revoke_member_access,
+)
 from app.services.public_entitlements import (
     ActiveClinicianSeatLimitReached,
     ClinicianSeatPolicyError,
@@ -161,12 +169,14 @@ from app.models.patient_medication import (
     PatientMedication,
 )
 from app.models.practice import (
+    SEAT_HOLDING_ACCESS_STATES,
     TRIAL_LENGTH,
     OriginChannel,
     Practice,
     PracticeAcquisitionSource,
     PracticeMember,
     PracticeRole,
+    member_access_state,
 )
 from app.models.public_onboarding import PracticeInvitation
 from app.models.scribe_capture_binding import ScribeCaptureBinding
@@ -1240,6 +1250,7 @@ def _practice_payload(
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
+        access_ends_at=member.access_ends_at,
         pilot_access_grant_active=pilot_access_grant_active,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
@@ -1322,6 +1333,8 @@ class PracticeStatus(BaseModel, extra="forbid"):
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
+    access_ends_at: datetime | None
+    "Set once the practice owner revoked this member; access stops at this instant."
     pilot_access_grant_active: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
@@ -1854,11 +1867,13 @@ class PracticeRosterMember(BaseModel, extra="forbid"):
     role: Literal["owner", "workforce"]
     is_self: bool
     seat_active: bool
-    "Holds a clinician seat: active seat state and no access revocation."
+    "Holds a clinician seat, which an owner-revoked member keeps until access_ends_at."
     revoked: bool
-    "Access was revoked, as distinct from a seat that is merely inactive."
+    "Access was permanently revoked by support, as distinct from an owner revocation."
     access_in_force: bool
     "Passes the same effective-access decision that gates protected routes."
+    access_ends_at: datetime | None
+    "When an owner revocation ends, or ended, this member's access; null otherwise."
     joined_at: datetime
 
 
@@ -1877,6 +1892,23 @@ class PracticeRoster(BaseModel, extra="forbid"):
     "Unanswered invitations. They occupy no seat and are not billed."
     occupied_seats: int
     "The billed clinician seat count."
+
+
+def _roster_member(
+    row: PracticeMember, *, is_self: bool, seat_active: bool, access_in_force: bool
+) -> PracticeRosterMember:
+    assert row.created_at is not None
+    return PracticeRosterMember(
+        member_id=str(row.id),
+        display_name=row.attestation_name,
+        role=cast(Literal["owner", "workforce"], row.role),
+        is_self=is_self,
+        seat_active=seat_active,
+        revoked=row.access_revoked_at is not None,
+        access_in_force=access_in_force,
+        access_ends_at=row.access_ends_at,
+        joined_at=row.created_at,
+    )
 
 
 def _roster_invitation(
@@ -1919,21 +1951,15 @@ def practice_roster(request: Request) -> PracticeRoster:
         access = practice_members_access_in_force(
             practice, [(row, subject) for row, subject, _ in rows], at=now
         )
-        roster: list[PracticeRosterMember] = []
-        for (row, _, seat_active), access_in_force in zip(rows, access, strict=True):
-            assert row.created_at is not None
-            roster.append(
-                PracticeRosterMember(
-                    member_id=str(row.id),
-                    display_name=row.attestation_name,
-                    role=cast(Literal["owner", "workforce"], row.role),
-                    is_self=row.doctor_id == doctor.id,
-                    seat_active=seat_active,
-                    revoked=row.access_revoked_at is not None,
-                    access_in_force=access_in_force,
-                    joined_at=row.created_at,
-                )
+        roster = [
+            _roster_member(
+                row,
+                is_self=row.doctor_id == doctor.id,
+                seat_active=seat_active,
+                access_in_force=access_in_force,
             )
+            for (row, _, seat_active), access_in_force in zip(rows, access, strict=True)
+        ]
         include_email = request.state.view_as is None
         invitations = [
             _roster_invitation(invitation, expired=expired, include_email=include_email)
@@ -1947,6 +1973,64 @@ def practice_roster(request: Request) -> PracticeRoster:
 
 # Seat-cap wording for the owner; the soft cap is lifted on request.
 SEAT_LIMIT_OWNER_DETAIL = "To add more clinicians, contact us at info@cosmaneura.com."
+
+_MEMBER_ACCESS_OWNER_ONLY = "Only the practice owner can revoke or restore clinicians."
+
+
+def _change_member_access(
+    request: Request,
+    member_id: TypeIDType,
+    change: Callable[..., MemberAccessChange],
+) -> PracticeRosterMember:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _MEMBER_ACCESS_OWNER_ONLY)
+    now = datetime.now(timezone.utc)
+    try:
+        with get_session() as session:
+            result = change(session, owner_member=owner, member_id=member_id, now=now)
+    except ActiveClinicianSeatLimitReached:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    except PracticeMemberAccessError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if isinstance(exc, MemberNotFound)
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=str(exc),
+        ) from None
+    [access_in_force] = practice_members_access_in_force(
+        result.practice, [(result.member, result.doctor)], at=now
+    )
+    return _roster_member(
+        result.member,
+        is_self=result.member.doctor_id == doctor.id,
+        seat_active=member_access_state(result.member, at=now)
+        in SEAT_HOLDING_ACCESS_STATES,
+        access_in_force=access_in_force,
+    )
+
+
+@internal_api_app.post(
+    "/practice/members/{member_id}/revoke", name="revoke_practice_member"
+)
+def revoke_practice_member(
+    request: Request, member_id: Annotated[TypeIDType, Path()]
+) -> PracticeRosterMember:
+    """End a clinician's access at midnight US Eastern tonight; reversible."""
+    return _change_member_access(request, member_id, revoke_member_access)
+
+
+@internal_api_app.post(
+    "/practice/members/{member_id}/restore", name="restore_practice_member"
+)
+def restore_practice_member(
+    request: Request, member_id: Annotated[TypeIDType, Path()]
+) -> PracticeRosterMember:
+    """Undo a revocation; after its cut-off the clinician takes a seat again."""
+    return _change_member_access(request, member_id, restore_member_access)
 
 
 class CreatePracticeInvitationBody(BaseModel, extra="forbid"):
@@ -2328,6 +2412,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             access_authorized=False,
             authorization_basis=None,
             access_revoked=False,
+            access_ends_at=None,
             pilot_access_grant_active=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
