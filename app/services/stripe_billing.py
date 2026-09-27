@@ -2862,11 +2862,30 @@ def sync_subscription_quantity(
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
             if item["quantity"] != target:
-                key_source = f"quantity:{subscription['id']}:{target}:version:{version}"
+                # Only a real seat addition on a billable subscription is charged
+                # part-month now; removals give no credit (the lower count bills
+                # from renewal). A trial has nothing billable, and always_invoice
+                # there creates a $0 invoice the customer may be emailed about.
+                # A drift repair realigns Stripe to Core's count rather than
+                # adding a seat, so it must never surprise-bill.
+                proration_behavior = (
+                    "always_invoice"
+                    if target > item["quantity"]
+                    and subscription["status"] != "trialing"
+                    and not repairing_remote_quantity
+                    else "none"
+                )
+                key_source = (
+                    f"quantity:{subscription['id']}:{target}:version:{version}"
+                    f":proration:{proration_behavior}"
+                )
                 _request(
                     "POST",
                     f"/subscription_items/{item['id']}",
-                    {"quantity": str(target)},
+                    {
+                        "quantity": str(target),
+                        "proration_behavior": proration_behavior,
+                    },
                     idempotency_key=(
                         "cosmas-quantity-"
                         + hashlib.sha256(key_source.encode()).hexdigest()

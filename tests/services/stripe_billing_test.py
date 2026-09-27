@@ -62,6 +62,7 @@ class FakeStripe:
         self.sessions: dict[str, dict] = {}
         self.calls: list[tuple[str, str, dict | None, str | None]] = []
         self.fail_subscription_reads = False
+        self.drop_quantity_updates = False
 
     def __call__(
         self,
@@ -121,7 +122,12 @@ class FakeStripe:
                 item = subscription["items"]["data"][0]
                 if item["id"] == item_id:
                     assert data
-                    item["quantity"] = int(data["quantity"])
+                    assert data.get("proration_behavior") in {
+                        "always_invoice",
+                        "none",
+                    }
+                    if not self.drop_quantity_updates:
+                        item["quantity"] = int(data["quantity"])
                     return deepcopy(item)
         raise AssertionError(f"unexpected Stripe request: {method} {path}")
 
@@ -3416,10 +3422,9 @@ def test_quantity_sync_repairs_remote_quantity_outside_pilot_bounds(
     assert practice.stripe_quantity_sync_target == 1
     assert practice.stripe_quantity_sync_error is None
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
-    quantity_updates = [
-        call for call in remote.calls if call[1].startswith("/subscription_items/")
-    ]
+    quantity_updates = _quantity_updates(remote)
     assert len(quantity_updates) == 1
+    assert quantity_updates[0][0]["proration_behavior"] == "none"
 
 
 def test_quantity_sync_never_mutates_a_bound_subscription_with_identity_drift(
@@ -3478,6 +3483,113 @@ def test_repeated_quantity_target_uses_a_new_idempotency_key_per_obligation(
     ][-1]
 
     assert first_key and second_key and first_key != second_key
+
+
+def _add_attested_clinician(practice: Practice) -> None:
+    clinician = Doctor(
+        clerk_id=f"user_stripe_clinician_{secrets.token_hex(8)}",
+        email=f"clinician-{secrets.token_hex(4)}@example.com",
+        biography="",
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=clinician.id,
+        role=PracticeRole.workforce.value,
+        attested_at=NOW,
+    ).save()
+
+
+def _quantity_sync_practice(
+    remote: FakeStripe, *, status: str, remote_quantity: int, seats: int
+) -> Practice:
+    practice = _practice()
+    for _ in range(seats - 1):
+        _add_attested_clinician(practice)
+    subscription = _subscription(
+        practice,
+        subscription_id=f"sub_proration_{secrets.token_hex(4)}",
+        customer_id=f"cus_proration_{secrets.token_hex(4)}",
+        status=status,
+        quantity=remote_quantity,
+    )
+    trial_end = None
+    if status == "trialing":
+        trial_end = NOW + timedelta(days=7)
+        subscription["trial_start"] = int(NOW.timestamp())
+        subscription["trial_end"] = int(trial_end.timestamp())
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice, subscription, status=status, trial_ends_at=trial_end
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    return practice
+
+
+def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
+    return [
+        (data or {}, key)
+        for _method, path, data, key in remote.calls
+        if path.startswith("/subscription_items/")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "remote_quantity", "seats", "expected"),
+    [
+        ("active", 1, 2, "always_invoice"),
+        ("past_due", 1, 2, "always_invoice"),
+        ("unpaid", 1, 2, "always_invoice"),
+        ("active", 2, 1, "none"),
+        ("past_due", 2, 1, "none"),
+        ("trialing", 1, 2, "none"),
+        ("trialing", 2, 1, "none"),
+    ],
+)
+def test_quantity_sync_charges_only_mid_cycle_seat_additions(
+    remote: FakeStripe,
+    status: str,
+    remote_quantity: int,
+    seats: int,
+    expected: str,
+):
+    practice = _quantity_sync_practice(
+        remote, status=status, remote_quantity=remote_quantity, seats=seats
+    )
+
+    stripe_billing.mark_quantity_sync_required(practice)
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    updates = _quantity_updates(remote)
+    assert len(updates) == 1
+    assert updates[0][0]["quantity"] == str(seats)
+    assert updates[0][0]["proration_behavior"] == expected
+
+
+def test_quantity_idempotency_key_binds_the_proration_behavior(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="trialing", remote_quantity=1, seats=2
+    )
+    stripe_billing.mark_quantity_sync_required(practice)
+    practice.refresh()
+    version = practice.stripe_quantity_sync_version
+    remote.drop_quantity_updates = True
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    [(uncharged, uncharged_key)] = _quantity_updates(remote)
+    assert uncharged["proration_behavior"] == "none"
+
+    # The trial ends before the retry of the same obligation. Stripe rejects a
+    # reused idempotency key with different parameters, so the key must change.
+    assert practice.stripe_subscription_id
+    remote.subscriptions[practice.stripe_subscription_id]["status"] = "active"
+    remote.drop_quantity_updates = False
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_version == version
+    [_, (charged, charged_key)] = _quantity_updates(remote)
+    assert charged["quantity"] == uncharged["quantity"] == "2"
+    assert charged["proration_behavior"] == "always_invoice"
+    assert uncharged_key and charged_key and uncharged_key != charged_key
 
 
 def test_unsupported_event_type_is_ignored_without_remote_call(remote: FakeStripe):
