@@ -589,7 +589,20 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 }
 
 export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
-  const { data, error, response } = await settingsData()
+  const practiceLoad = getPractice().catch(() => null)
+  const [
+    { data, error, response },
+    practice,
+    baa_acceptances,
+    practice_roster,
+  ] = await Promise.all([
+    settingsData(),
+    practiceLoad,
+    getBaaAcceptances().catch(() => [] as BaaAcceptanceRecord[]),
+    practiceLoad.then((practice) =>
+      practice?.role === "owner" ? loadPracticeRoster() : null,
+    ),
+  ])
 
   if (!data) {
     throw new Error(
@@ -597,12 +610,6 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
     )
   }
 
-  const practice = await getPractice().catch(() => null)
-  const baa_acceptances = await getBaaAcceptances().catch(
-    () => [] as BaaAcceptanceRecord[],
-  )
-  const practice_roster =
-    practice?.role === "owner" ? await loadPracticeRoster() : null
   return { ...data, practice, baa_acceptances, practice_roster }
 }
 export const meta: MetaFunction = () => {
