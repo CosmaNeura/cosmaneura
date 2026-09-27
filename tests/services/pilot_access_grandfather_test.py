@@ -25,6 +25,8 @@ from app.models.superadmin_capability import (
     SuperadminCapabilityKind,
 )
 
+from tests.factories import save_practice_member
+
 SOURCE_REF = "clerk-export:legacy-pilot-2026-08-23"
 GRANT_OPERATOR = "change:legacy-pilot-grant"
 GRANT_REASON = "Preserve approved legacy pilot access"
@@ -120,11 +122,13 @@ def test_grant_records_all_47_clerk_accounts_without_mutating_tenant_state():
         negotiated_baa_on_file=False,
         negotiated_baa_required=False,
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=existing.id,
-        role="workforce",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=existing.id,
+            role="workforce",
+        )
+    )
 
     result = _grant(entries, now=now)
 
@@ -272,15 +276,17 @@ def test_plan_rejects_a_previously_revoked_member_without_roster_pii():
         email_domain="example.com",
     ).save()
     revoked_at = datetime.now(timezone.utc)
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-        access_revoked_at=revoked_at,
-        access_revoked_by_ref="test-suite",
-        access_revocation_reason="Prior approved offboarding",
-        access_records_retain_until=revoked_at + timedelta(days=365 * 8),
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+            access_revoked_at=revoked_at,
+            access_revoked_by_ref="test-suite",
+            access_revocation_reason="Prior approved offboarding",
+            access_records_retain_until=revoked_at + timedelta(days=365 * 8),
+        )
+    )
 
     with pytest.raises(
         PilotAccessGrandfatherError, match="prior access revocation"

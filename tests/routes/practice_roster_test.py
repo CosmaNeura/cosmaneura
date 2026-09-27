@@ -11,6 +11,7 @@ from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 ROSTER_FIELDS = {
@@ -49,14 +50,16 @@ def _add_member(
         email=f"roster-{secrets.token_hex(4)}@{practice.email_domain}",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=clinician.id,
-        role="workforce",
-        attested_at=datetime.now(timezone.utc) if attested else None,
-        attestation_name=name,
-        **overrides,
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=clinician.id,
+            role="workforce",
+            attested_at=datetime.now(timezone.utc) if attested else None,
+            attestation_name=name,
+            **overrides,
+        )
+    )
     return clinician
 
 
