@@ -171,6 +171,22 @@ def test_roster_exposes_no_contact_or_identity_fields(
         assert secret not in resp.text
 
 
+def test_member_without_attested_name_is_listed_without_a_name(
+    authenticated_client: TestClient,
+):
+    practice = _owned_group_practice()
+    clinician = _add_member(practice, None, attested=False)
+
+    resp = authenticated_client.get(api_app.url_path_for("practice_roster"))
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    unnamed = [m for m in resp.json()["members"] if not m["is_self"]]
+    assert len(unnamed) == 1
+    assert unnamed[0]["display_name"] is None
+    assert "@" not in resp.text
+    assert clinician.email not in resp.text
+
+
 def _roster_statement_count(client: TestClient) -> int:
     statements: list[str] = []
 
