@@ -2,6 +2,16 @@ import { getClient } from "~/configuration/clerk"
 import { internalApiFetch, safeBillingReturnTo } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 
+export type BillingSeatSummary = {
+  account_kind: "solo" | "practice"
+  active_clinicians: number
+  billed_seats: number | null
+  seat_sync_pending: boolean
+  unit_amount: number
+  currency: "usd"
+  interval: "month"
+}
+
 export type PracticeStatus = {
   legal_name: string
   join_code: string | null
@@ -27,6 +37,7 @@ export type PracticeStatus = {
   billing_checkout_available_at: string | null
   entitled: boolean
   subscription_status: string | null
+  seat_summary: BillingSeatSummary | null
 }
 
 export type PracticeLookupResult = {

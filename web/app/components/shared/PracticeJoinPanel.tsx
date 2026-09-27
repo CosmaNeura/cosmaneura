@@ -54,6 +54,53 @@ export function billingActionKind(
   return "checkout"
 }
 
+function formatMoney(minorUnits: number, currency: string) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: minorUnits % 100 === 0 ? 0 : 2,
+  }).format(minorUnits / 100)
+}
+
+function seats(count: number) {
+  return `${count} ${count === 1 ? "seat" : "seats"}`
+}
+
+function clinicians(count: number) {
+  return `${count} active ${count === 1 ? "clinician" : "clinicians"}`
+}
+
+function SeatSummary({ practice }: { practice: PracticeStatus }) {
+  const summary = practice.seat_summary
+  if (!summary || !practice.billing_subscription_manageable) return null
+  const { billed_seats: billed, active_clinicians: active } = summary
+  const trialing = practice.subscription_status === "trialing"
+
+  let line: string | null = null
+  if (billed !== null) {
+    const cost = `${formatMoney(billed * summary.unit_amount, summary.currency)}/${summary.interval}`
+    line =
+      summary.account_kind === "solo"
+        ? `Solo practice · ${seats(billed)} · ${cost}${trialing ? " after your trial" : ""}`
+        : trialing
+          ? `Your subscription covers ${seats(billed)} · ${cost} after your trial`
+          : `You are paying for ${seats(billed)} · ${cost}`
+  }
+
+  return (
+    <div className="mt-1 text-sm" data-testid="seat-summary">
+      {line ? <p>{line}</p> : null}
+      {summary.seat_sync_pending ? (
+        <p className="text-muted-foreground mt-1">
+          {billed !== null
+            ? `You have ${clinicians(active)}. Your billed seats are being updated to match.`
+            : `You have ${clinicians(active)}. Your billed seats are being updated to ${seats(active)}.`}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function BillingActions({
   practice,
   returnTo,
@@ -275,7 +322,10 @@ export function PracticeJoinPanel({
         </div>
       ) : null}
       {isOwner && showBillingActions ? (
-        <BillingActions practice={practice} returnTo={billingReturnTo} />
+        <>
+          <SeatSummary practice={practice} />
+          <BillingActions practice={practice} returnTo={billingReturnTo} />
+        </>
       ) : null}
       {isOwner && practice.join_code ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
