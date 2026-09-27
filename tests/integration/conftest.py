@@ -26,6 +26,7 @@ _DATABASE_ONLY_FILES = {
     (Path(__file__).resolve().parent / "stripe_billing_state_race_test.py").resolve(),
     (Path(__file__).resolve().parent / "practice_seat_lock_race_test.py").resolve(),
     (Path(__file__).resolve().parent / "practice_invitation_race_test.py").resolve(),
+    (Path(__file__).resolve().parent / "practice_member_access_race_test.py").resolve(),
 }
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _CLERK_REQUIRED_FILES = frozenset(
