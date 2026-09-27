@@ -18,6 +18,7 @@ from typeid import TypeID
 from app.routes.middleware import SESSION_SECRET_KEY
 from app.services.managed_organization_access import (
     managed_organization_discovery_domain,
+    uses_managed_organization_path,
 )
 from app.services.organization_access import (
     OrganizationAccessError,
@@ -111,6 +112,7 @@ InspectionState = Literal[
     "member_elsewhere",
     "already_member",
     "practice_not_ready",
+    "managed_account",
 ]
 
 
@@ -427,6 +429,16 @@ def _practice_ready(practice: Practice) -> bool:
     )
 
 
+def account_uses_managed_access(
+    session: Session, doctor: Doctor, verified_email: str
+) -> bool:
+    """Whether this account must enroll through its organization instead."""
+
+    return uses_managed_organization_path(
+        doctor, verified_primary_email=verified_email
+    ) or doctor_has_managed_roster_assignment(doctor, session=session)
+
+
 def inspect_invitation(
     session: Session,
     *,
@@ -436,6 +448,10 @@ def inspect_invitation(
     now: datetime,
 ) -> InvitationInspection:
     invitation = _invitation_by_token(session, token)
+    if account_uses_managed_access(session, doctor, verified_email):
+        return InvitationInspection(
+            state="managed_account", legal_name=None, baa_accepted=False
+        )
     if not hmac.compare_digest(
         invitation.invitee_email_digest, _email_digest(verified_email)
     ):
@@ -508,7 +524,7 @@ def accept_invitation(
         raise InvitationConflict(
             "The account email changed during enrollment. Please retry."
         )
-    if doctor_has_managed_roster_assignment(locked_doctor, session=session):
+    if account_uses_managed_access(session, locked_doctor, verified_email):
         raise InvitationConflict(
             "This account has organization-managed access. Use that enrollment path."
         )

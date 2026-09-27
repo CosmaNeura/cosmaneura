@@ -48,6 +48,7 @@ const SPENT_STATES = new Set<PracticeInvitationInspection["state"]>([
   "used",
   "member_elsewhere",
   "already_member",
+  "managed_account",
 ])
 
 export async function clientLoader(): Promise<InviteLoad> {
@@ -239,6 +240,17 @@ function InvitationState({
             link again.
           </p>
           <ContinueButton label="Not now" />
+        </Notice>
+      )
+    case "managed_account":
+      return (
+        <Notice title="This account uses organization-managed access">
+          <p>
+            Your organization enrolls you directly, so this invitation can’t be
+            used with this account. Contact your organization administrator or
+            Cosmaneura support.
+          </p>
+          <ContinueButton label="Continue" />
         </Notice>
       )
     case "expired":

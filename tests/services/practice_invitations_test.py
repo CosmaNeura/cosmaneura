@@ -493,6 +493,35 @@ def test_the_wrong_account_learns_nothing_and_takes_no_lock(
         _accept(issued.token, stranger)
 
 
+def test_a_managed_account_is_told_so_by_inspect_and_refused_by_accept(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, owner = _practice()
+    invitee = _doctor(label="rostered")
+    issued = _issue(owner, invitee.email)
+    monkeypatch.setattr(
+        invitations,
+        "doctor_has_managed_roster_assignment",
+        lambda doctor, **_kwargs: doctor.id == invitee.id,
+    )
+
+    with get_session() as session:
+        inspection = invitations.inspect_invitation(
+            session,
+            token=issued.token,
+            doctor=invitee,
+            verified_email=invitee.email.lower(),
+            now=_now(),
+        )
+    assert inspection == invitations.InvitationInspection(
+        state="managed_account", legal_name=None, baa_accepted=False
+    )
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+    assert "organization-managed access" in str(exc_info.value)
+    assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
 def test_accept_refuses_expired_revoked_and_unknown_tokens():
     _, owner = _practice()
     late = _doctor(label="late")

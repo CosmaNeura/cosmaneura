@@ -2178,14 +2178,18 @@ def resend_practice_invitation(
     )
 
 
-def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
-    """The invitee's live verified email, refusing any borrowed identity."""
-
+def _refuse_borrowed_identity(request: Request, doctor: Doctor) -> None:
     if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This invitation could not be verified.",
         )
+
+
+def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
+    """The invitee's live verified email, refusing any borrowed identity."""
+
+    _refuse_borrowed_identity(request, doctor)
     if uses_managed_organization_path(doctor):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2214,7 +2218,14 @@ def inspect_practice_invitation(
     request: Request, data: PracticeInvitationTokenBody
 ) -> PracticeInvitationInspection:
     doctor: Doctor = request.state.doctor
-    verified_email = _invitee_verified_email(request, doctor)
+    _refuse_borrowed_identity(request, doctor)
+    # Answered rather than refused, so the invite page can drop the link
+    # instead of sending this account back to it.
+    if uses_managed_organization_path(doctor):
+        return PracticeInvitationInspection(
+            state="managed_account", legal_name=None, baa_accepted=False
+        )
+    verified_email = _verified_legacy_enrollment_email(doctor)
     _consume_legacy_join_attempt(doctor)
     try:
         with get_session() as session:

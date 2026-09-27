@@ -534,6 +534,13 @@ def test_managed_addresses_can_neither_be_invited_nor_accept(
     refused = _accept(authenticated_client, "z" * 43)
     assert refused.status_code == status.HTTP_409_CONFLICT
     assert "organization-managed" in refused.json()["detail"]
+    inspected = _inspect(authenticated_client, "z" * 43)
+    assert inspected.status_code == status.HTTP_200_OK
+    assert inspected.json() == {
+        "state": "managed_account",
+        "legal_name": None,
+        "baa_accepted": False,
+    }
 
 
 def test_accept_refuses_a_borrowed_identity():

@@ -223,6 +223,27 @@ describe("invite link", () => {
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
   })
 
+  it("tells a managed-access account to use its organization and forgets the link", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "managed")
+    inspected({
+      state: "managed_account",
+      legal_name: null,
+      baa_accepted: false,
+    })
+    const router = openInvite()
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "This account uses organization-managed access",
+      }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
+    expect(await screen.findByText("Onboarding page")).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe("/onboarding")
+  })
+
   it("names no practice to the wrong account", async () => {
     window.sessionStorage.setItem(PENDING_INVITATION_KEY, "wrong")
     inspected({ state: "wrong_account", legal_name: null, baa_accepted: false })

@@ -1209,7 +1209,7 @@
           "private"
         ],
         "summary": "Practice Roster",
-        "description": "The practice's members, for its owner. Carries no contact details.",
+        "description": "The practice's members and pending invitations, for its owner.\n\nMembers carry no contact details; an invitation carries the address the\nowner typed, except under support view-as.",
         "operationId": "practice_roster",
         "responses": {
           "200": {
@@ -5247,7 +5247,8 @@
               "wrong_account",
               "member_elsewhere",
               "already_member",
-              "practice_not_ready"
+              "practice_not_ready",
+              "managed_account"
             ],
             "title": "State"
           },
