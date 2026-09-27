@@ -2,11 +2,30 @@
 // a Referer header, and survives the sign-in round trip in this tab only.
 export const PENDING_INVITATION_KEY = "cosmas.pendingInvitation"
 
-function storage(): Storage | null {
+// Where storage is unavailable the link still works for this page load.
+let memoryToken: string | null = null
+
+function read(key: string): string | null {
   try {
-    return window.sessionStorage
+    return window.sessionStorage.getItem(key)
   } catch {
     return null
+  }
+}
+
+function write(key: string, value: string) {
+  try {
+    window.sessionStorage.setItem(key, value)
+  } catch {
+    // Quota or privacy mode: the in-memory copy still serves this page load.
+  }
+}
+
+function remove(key: string) {
+  try {
+    window.sessionStorage.removeItem(key)
+  } catch {
+    // Nothing was stored, so there is nothing to remove.
   }
 }
 
@@ -14,7 +33,8 @@ function storage(): Storage | null {
 export function capturePendingInvitation(): string | null {
   const token = new URLSearchParams(window.location.hash.slice(1)).get("t")
   if (token) {
-    storage()?.setItem(PENDING_INVITATION_KEY, token)
+    memoryToken = token
+    write(PENDING_INVITATION_KEY, token)
     window.history.replaceState(
       window.history.state,
       "",
@@ -25,9 +45,10 @@ export function capturePendingInvitation(): string | null {
 }
 
 export function pendingInvitation(): string | null {
-  return storage()?.getItem(PENDING_INVITATION_KEY) ?? null
+  return read(PENDING_INVITATION_KEY) ?? memoryToken
 }
 
 export function clearPendingInvitation() {
-  storage()?.removeItem(PENDING_INVITATION_KEY)
+  memoryToken = null
+  remove(PENDING_INVITATION_KEY)
 }
