@@ -336,6 +336,17 @@ def test_resend_of_an_expired_invitation_replaces_it():
     assert len(_invitation_rows(practice)) == 2
 
 
+def test_resend_refuses_a_revoked_invitation_that_has_not_expired():
+    practice, owner = _practice()
+    issued = _issue(owner, "revoked-live@clinic-invite.example")
+    _revoke(owner, issued.invitation.id)
+
+    with pytest.raises(invitations.InvitationInactive):
+        _resend(owner, issued.invitation.id, "resend-revoked-1")
+
+    assert len(_invitation_rows(practice)) == 1
+
+
 def test_accept_adds_one_attested_seat_and_converts_a_solo_account():
     practice, owner = _practice(
         stripe_subscription_id=f"sub_invite_{secrets.token_hex(6)}",
