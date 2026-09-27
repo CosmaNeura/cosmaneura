@@ -1193,7 +1193,8 @@ def test_join_rejects_twenty_first_active_clinician_atomically(
 
     assert response.status_code == status.HTTP_409_CONFLICT
     assert response.json()["detail"] == (
-        "A practice may have at most 20 active clinicians."
+        "This practice can't add more clinicians right now. "
+        "Ask the practice owner to contact Cosmaneura."
     )
     assert PracticeMember.get(doctor_id=joining_doctor.id) is None
     with get_session() as session:

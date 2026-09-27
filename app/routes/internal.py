@@ -1116,6 +1116,13 @@ def zoom_revoked_ack(request: Request) -> None:
 
 _JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+# The seat cap is a soft limit Cosmaneura lifts per customer, so neither
+# audience is shown the number.
+SEAT_LIMIT_JOINING_CLINICIAN_DETAIL = (
+    "This practice can't add more clinicians right now. "
+    "Ask the practice owner to contact Cosmaneura."
+)
+
 
 def _current_baa_version() -> BaaVersion:
     version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
@@ -2151,10 +2158,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             )
         try:
             require_active_clinician_seat_capacity(session, locked_practice)
-        except ActiveClinicianSeatLimitReached as exc:
+        except ActiveClinicianSeatLimitReached:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
+                detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL,
             ) from None
         member = PracticeMember(
             practice_id=locked_practice.id,

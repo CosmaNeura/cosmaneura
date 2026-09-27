@@ -134,7 +134,7 @@ class StripeCoreBindingInvalid(Exception):
 
 
 class StripeSeatLimitExceeded(StripeStateInvalid):
-    """Core's authoritative active-clinician count is outside pilot bounds."""
+    """Core's authoritative active-clinician count is outside seat bounds."""
 
 
 class StripeSeatLedgerInvalid(StripeStateInvalid):
@@ -353,7 +353,7 @@ def _subscription_item(
         raise StripeStateInvalid("subscription item is missing id or quantity")
     if enforce_quantity_bounds and not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise StripeSeatLimitExceeded(
-            "subscription quantity is outside the 1-20 paid-pilot limit"
+            "subscription quantity is outside the 1-20 seat limit"
         )
     return item
 
@@ -1184,7 +1184,7 @@ def attested_member_count(practice: Practice) -> int:
 
 
 def _authorized_member_count(session: Session, practice: Practice) -> int:
-    """Consume Core's canonical active-seat policy and enforce pilot bounds."""
+    """Consume Core's canonical active-seat policy and enforce seat bounds."""
 
     try:
         count = active_clinician_seat_count(session, practice.id)
@@ -1194,7 +1194,7 @@ def _authorized_member_count(session: Session, practice: Practice) -> int:
         ) from exc
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise StripeSeatLimitExceeded(
-            "authoritative active-clinician count is outside the 1-20 pilot limit"
+            "authoritative active-clinician count is outside the 1-20 seat limit"
         )
     return count
 
@@ -1518,7 +1518,7 @@ def _validate_frozen_checkout_request(
     except ValueError as exc:
         raise StripeStateInvalid("stored Checkout quantity is invalid") from exc
     if str(quantity) != raw_quantity or not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
-        raise StripeStateInvalid("stored Checkout quantity is outside pilot bounds")
+        raise StripeStateInvalid("stored Checkout quantity is outside seat bounds")
 
     entitlement_contract = frozen_data.get("metadata[entitlement_contract]")
     if (
