@@ -474,6 +474,13 @@ def accept_invitation(
     """
 
     candidate = _invitation_by_token(session, token)
+    # The addressee digest is immutable, so it can be checked before any lock:
+    # another account learns only that the link is not theirs, as inspect says,
+    # and cannot hold this practice's seat lock.
+    if not hmac.compare_digest(
+        candidate.invitee_email_digest, _email_digest(verified_email)
+    ):
+        raise InvitationWrongAccount
     practice = lock_practice_for_active_seat_mutation(session, candidate.practice_id)
     lock_roster_enrollment_email(session, verified_email)
     invitation = _lock_practice_invitation(session, practice, candidate.id)

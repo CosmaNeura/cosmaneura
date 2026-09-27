@@ -444,6 +444,33 @@ def test_accept_refuses_the_wrong_account():
     assert PracticeMember.get(doctor_id=stranger.id) is None
 
 
+@pytest.mark.parametrize(
+    "practice_state",
+    [
+        {"baa_accepted_at": None, "baa_version": None},
+        {"baa_accepted_at": None, "baa_version": None, "negotiated_baa_required": True},
+    ],
+)
+def test_the_wrong_account_learns_nothing_and_takes_no_lock(
+    practice_state: dict, monkeypatch: pytest.MonkeyPatch
+):
+    _, owner = _practice(is_solo=False)
+    issued = _issue(owner, "addressee@clinic-invite.example")
+    practice = Practice.get(id=owner.practice_id)
+    assert practice
+    for field, value in practice_state.items():
+        setattr(practice, field, value)
+    practice.save()
+    stranger = _doctor(label="stranger")
+
+    def no_lock(*_args, **_kwargs):
+        raise AssertionError("a wrong account must not take the seat lock")
+
+    monkeypatch.setattr(invitations, "lock_practice_for_active_seat_mutation", no_lock)
+    with pytest.raises(invitations.InvitationWrongAccount):
+        _accept(issued.token, stranger)
+
+
 def test_accept_refuses_expired_revoked_and_unknown_tokens():
     _, owner = _practice()
     late = _doctor(label="late")

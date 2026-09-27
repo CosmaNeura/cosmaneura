@@ -496,6 +496,26 @@ def test_accept_refuses_a_practice_whose_baa_lapsed(
     )
 
 
+def test_a_wrong_account_is_not_told_the_practice_lost_its_baa(
+    authenticated_client: TestClient,
+):
+    practice = _owner_practice()
+    _, token = _invited(authenticated_client, _doctor().email or "")
+    practice.baa_version = "CN-BAA-CUST-CW v0.1"
+    practice.save()
+    _as(authenticated_client, _doctor())
+
+    refused = _accept(authenticated_client, token)
+
+    assert refused.status_code == status.HTTP_403_FORBIDDEN
+    assert refused.json() == {"detail": WRONG_ACCOUNT}
+    assert _inspect(authenticated_client, token).json() == {
+        "state": "wrong_account",
+        "legal_name": None,
+        "baa_accepted": False,
+    }
+
+
 def test_managed_addresses_can_neither_be_invited_nor_accept(
     authenticated_client: TestClient,
 ):
