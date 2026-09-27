@@ -13,6 +13,8 @@ from app.services import stripe_billing
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember, PracticeRole
 
+from tests.factories import save_practice_member
+
 
 def _practice_with_active_owner(**kwargs) -> Practice:
     practice = Practice(**kwargs).save()
@@ -21,12 +23,14 @@ def _practice_with_active_owner(**kwargs) -> Practice:
         email=f"stripe-race-{secrets.token_hex(5)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=PracticeRole.owner.value,
-        attested_at=datetime.now(timezone.utc),
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role=PracticeRole.owner.value,
+            attested_at=datetime.now(timezone.utc),
+        )
+    )
     return practice
 
 

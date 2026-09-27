@@ -37,6 +37,7 @@ from sqlalchemy import delete, update
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import SQLModel
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user
 
 
@@ -1063,11 +1064,13 @@ def test_join_rejects_twenty_first_active_clinician_atomically(
             email=f"member-{ordinal}-{secrets.token_hex(3)}@{domain}",
             biography="",
         ).save()
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=doctor.id,
-            role="workforce",
-        ).save()
+        save_practice_member(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=doctor.id,
+                role="workforce",
+            )
+        )
 
     response = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),

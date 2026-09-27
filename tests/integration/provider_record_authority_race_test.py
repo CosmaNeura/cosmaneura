@@ -21,7 +21,7 @@ from app.services.session_prep_note_sources import (
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import PracticeMember, lock_practice_seats
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
@@ -168,9 +168,7 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
             return "accepted"
 
     with ThreadPoolExecutor(max_workers=1) as workers, get_session() as session:
-        session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        assert lock_practice_seats(session, practice.id) is not None
         future = workers.submit(exchange)
         try:
             pid = pids.get(timeout=3)
