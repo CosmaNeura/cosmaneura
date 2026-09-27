@@ -419,17 +419,35 @@ describe("PracticeJoinPanel seat summary", () => {
     ).toBeInTheDocument()
   })
 
-  it("keeps showing what a past-due practice is billed for", () => {
+  it.each(["past_due", "unpaid", "paused", "incomplete"])(
+    "does not claim a %s practice is paying",
+    (subscription_status) => {
+      render(
+        <PracticeJoinPanel
+          practice={subscribed({}, { subscription_status })}
+          showBillingActions
+        />,
+      )
+
+      expect(
+        screen.getByText("Your subscription covers 4 seats · $356/month"),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/you are paying/i)).not.toBeInTheDocument()
+    },
+  )
+
+  it("renders nothing when there is neither a billed count nor a pending update", () => {
     render(
       <PracticeJoinPanel
-        practice={subscribed({}, { subscription_status: "past_due" })}
+        practice={subscribed(
+          { billed_seats: null },
+          { subscription_status: "invalid" },
+        )}
         showBillingActions
       />,
     )
 
-    expect(
-      screen.getByText("You are paying for 4 seats · $356/month"),
-    ).toBeInTheDocument()
+    expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
   })
 
   it("shows the cost of a subscription kept alongside pilot access", () => {

@@ -7,6 +7,7 @@ import pytest
 from fastapi import status
 from fastapi.exceptions import HTTPException
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 from app.configuration.redis import get_redis
 from app.routes import internal
@@ -14,6 +15,7 @@ from app.server import api_app
 from app.services import stripe_billing
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
+    ClinicianSeatPolicyError,
     active_clinician_seat_count,
 )
 from app.utils.email_domain import extract_email_domain
@@ -1465,6 +1467,33 @@ def test_exempt_practice_reports_seats_without_billing(
     assert summary["active_clinicians"] == 1
     assert summary["billed_seats"] is None
     assert summary["seat_sync_pending"] is False
+
+
+def test_invalid_seat_ledger_hides_summary_and_alerts_operators(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client, is_solo=False)
+    practice = _own_practice(doctor)
+    _bind_subscription(practice, subscription_status="active", quantity=1)
+
+    def invalid_ledger(*_args, **_kwargs):
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    monkeypatch.setattr(internal, "active_clinician_seat_count", invalid_ledger)
+
+    with capture_logs() as logs:
+        summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is None
+    assert [
+        entry
+        for entry in logs
+        if entry.get("event_code") == "billing_seat_summary_ledger_invalid"
+        and entry["log_level"] == "error"
+        and entry["practice_id"] == str(practice.id)
+    ]
 
 
 def test_workforce_member_does_not_receive_seat_summary(
