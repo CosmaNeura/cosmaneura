@@ -19,7 +19,11 @@ import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
-import { PracticeRoster } from "~/components/shared/PracticeRoster"
+import {
+  PracticeRoster,
+  type PracticeRosterLoad,
+  loadPracticeRoster,
+} from "~/components/shared/PracticeRoster"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -31,8 +35,6 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
-  type PracticeRosterMember,
-  practiceRoster,
   settingsData,
   updateSettingsData,
   zoomAuthUrl,
@@ -78,7 +80,7 @@ function PracticeSettings({
   billingReturnTo,
 }: {
   practice: PracticeStatus | null
-  roster: PracticeRosterMember[] | null
+  roster: PracticeRosterLoad
   acceptances: BaaAcceptanceRecord[]
   onPracticeChange: (practice: PracticeStatus) => void
   billingReturnTo: string
@@ -600,11 +602,7 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
     () => [] as BaaAcceptanceRecord[],
   )
   const practice_roster =
-    practice?.role === "owner"
-      ? await practiceRoster()
-          .then(({ data }) => data?.members ?? null)
-          .catch(() => null)
-      : null
+    practice?.role === "owner" ? await loadPracticeRoster() : null
   return { ...data, practice, baa_acceptances, practice_roster }
 }
 export const meta: MetaFunction = () => {

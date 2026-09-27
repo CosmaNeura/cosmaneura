@@ -1,5 +1,23 @@
-import type { PracticeRosterMember } from "~/configuration/client"
+import {
+  type PracticeRosterMember,
+  practiceRoster,
+} from "~/configuration/client"
 import type { PracticeStatus } from "~/lib/practice-api"
+
+/** null when there is nothing to show; "unavailable" when the load failed. */
+export type PracticeRosterLoad = PracticeRosterMember[] | "unavailable" | null
+
+export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
+  try {
+    const { data, response } = await practiceRoster()
+    if (data) return data.members
+    // a lapsed practice's roster is behind the entitlement gate; the billing
+    // panel already explains that state
+    return response?.status === 402 ? null : "unavailable"
+  } catch {
+    return "unavailable"
+  }
+}
 
 function accessLabel(member: PracticeRosterMember) {
   if (!member.seat_active) return "Inactive"
@@ -12,9 +30,19 @@ export function PracticeRoster({
   members,
 }: {
   practice: PracticeStatus
-  members: PracticeRosterMember[] | null
+  members: PracticeRosterLoad
 }) {
   if (practice.role !== "owner" || !members) return null
+  if (members === "unavailable") {
+    return (
+      <div className="not-prose rounded-lg border p-4 text-sm">
+        <p className="font-semibold">Practice members</p>
+        <p role="alert" className="text-muted-foreground mt-2">
+          Practice members could not be loaded. Refresh to try again.
+        </p>
+      </div>
+    )
+  }
   const onlyYou = members.every((member) => member.is_self)
 
   return (

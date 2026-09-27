@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { PracticeRosterMember } from "~/configuration/client"
 import type { PracticeStatus } from "~/lib/practice-api"
 
-import { PracticeRoster } from "./PracticeRoster"
+import { PracticeRoster, loadPracticeRoster } from "./PracticeRoster"
 import { render, screen } from "@testing-library/react"
+
+const { practiceRoster } = vi.hoisted(() => ({ practiceRoster: vi.fn() }))
+vi.mock("~/configuration/client", () => ({ practiceRoster }))
 
 function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
   return {
@@ -119,11 +122,59 @@ describe("PracticeRoster", () => {
     expect(container).toBeEmptyDOMElement()
   })
 
-  it("renders nothing when the roster could not be loaded", () => {
+  it("renders nothing when there is no roster to show", () => {
     const { container } = render(
       <PracticeRoster practice={practice()} members={null} />,
     )
 
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it("says so when the roster failed to load", () => {
+    render(<PracticeRoster practice={practice()} members="unavailable" />)
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Practice members could not be loaded. Refresh to try again.",
+    )
+    expect(screen.queryByRole("listitem")).not.toBeInTheDocument()
+  })
+})
+
+describe("loadPracticeRoster", () => {
+  beforeEach(() => {
+    practiceRoster.mockReset()
+  })
+
+  it("returns the members", async () => {
+    practiceRoster.mockResolvedValue({
+      data: { members: TEAM },
+      response: new Response(null, { status: 200 }),
+    })
+
+    await expect(loadPracticeRoster()).resolves.toEqual(TEAM)
+  })
+
+  it("shows nothing while the practice is lapsed", async () => {
+    practiceRoster.mockResolvedValue({
+      data: undefined,
+      response: new Response(null, { status: 402 }),
+    })
+
+    await expect(loadPracticeRoster()).resolves.toBeNull()
+  })
+
+  it("reports a server failure instead of hiding it", async () => {
+    practiceRoster.mockResolvedValue({
+      data: undefined,
+      response: new Response(null, { status: 500 }),
+    })
+
+    await expect(loadPracticeRoster()).resolves.toBe("unavailable")
+  })
+
+  it("reports a network failure instead of hiding it", async () => {
+    practiceRoster.mockRejectedValue(new TypeError("Failed to fetch"))
+
+    await expect(loadPracticeRoster()).resolves.toBe("unavailable")
   })
 })
