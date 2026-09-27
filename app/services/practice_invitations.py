@@ -515,6 +515,7 @@ def accept_invitation(
             # A replay returns current state; it never revives a seat the
             # owner has since changed.
             session.commit()
+            session.refresh(practice)
             session.refresh(member)
             return practice, member
         raise InvitationConflict("This account is already a member of the practice.")
