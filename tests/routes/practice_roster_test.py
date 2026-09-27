@@ -178,6 +178,19 @@ def test_roster_is_scoped_to_the_callers_practice(
     assert names == ["Test Owner", "Our Clinician"]
 
 
+def test_lapsed_practice_owner_gets_payment_required(
+    authenticated_client: TestClient,
+):
+    practice = _owned_group_practice()
+    practice.billing_exempt = False
+    practice.trial_ends_at = datetime.now(timezone.utc) - timedelta(days=1)
+    practice.save()
+
+    resp = authenticated_client.get(api_app.url_path_for("practice_roster"))
+
+    assert resp.status_code == status.HTTP_402_PAYMENT_REQUIRED
+
+
 def test_workforce_member_cannot_view_roster(
     bare_authenticated_client: TestClient,
 ):
