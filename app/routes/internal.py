@@ -23,6 +23,7 @@ import app.jobs.extract
 import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
+import app.jobs.practice_invitation_email as practice_invitation_email
 import app.jobs.start_zoom_capture as start_zoom_capture_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
@@ -2023,8 +2024,25 @@ def _invitation_web_origin(request: Request) -> str:
     )
 
 
+def _queue_invitation_email(invitation: PracticeInvitation) -> bool:
+    if not practice_invitation_email.email_enabled():
+        return False
+    try:
+        practice_invitation_email.queue(str(invitation.id))
+    except Exception:
+        # The invitation is committed and the owner still gets the link, so a
+        # broker outage must not turn this into a failed request.
+        log.warning(
+            "practice invitation email could not be queued",
+            event_code="practice_invitation_email_queue_failed",
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 def _issued_invitation_payload(
-    origin: str, issued: IssuedInvitation, now: datetime
+    origin: str, issued: IssuedInvitation, now: datetime, *, email_queued: bool
 ) -> PracticeInvitationIssued:
     return PracticeInvitationIssued(
         invitation=_roster_invitation(
@@ -2032,7 +2050,7 @@ def _issued_invitation_payload(
             expired=invitation_expired(issued.invitation, now),
         ),
         invite_url=f"{origin}/invite#t={issued.token}",
-        email_queued=False,
+        email_queued=email_queued,
     )
 
 
@@ -2069,7 +2087,9 @@ def create_practice_invitation(
         raise _invitation_http_error(
             exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
         ) from None
-    return _issued_invitation_payload(origin, issued, now)
+    # A replayed request already queued its email.
+    email_queued = issued.created and _queue_invitation_email(issued.invitation)
+    return _issued_invitation_payload(origin, issued, now, email_queued=email_queued)
 
 
 @internal_api_app.post(
@@ -2126,7 +2146,9 @@ def resend_practice_invitation(
         raise _invitation_http_error(
             exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
         ) from None
-    return _issued_invitation_payload(origin, issued, now)
+    return _issued_invitation_payload(
+        origin, issued, now, email_queued=_queue_invitation_email(issued.invitation)
+    )
 
 
 def _invitee_verified_email(request: Request, doctor: Doctor) -> str:

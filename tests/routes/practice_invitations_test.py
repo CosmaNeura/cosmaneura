@@ -10,6 +10,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.testclient import TestClient
 from typeid import TypeID
 
+import app.jobs.practice_invitation_email as practice_invitation_email
 from app.configuration.redis import get_redis
 from app.routes import internal
 from app.server import api_app
@@ -689,3 +690,45 @@ def test_invitation_rate_limit_allows_twenty_per_practice_hour():
         assert 0 < cast(int, redis.ttl(key)) <= 60 * 60
     finally:
         redis.delete(key)
+
+
+def test_email_is_queued_by_invitation_id_only_when_enabled(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _owner_practice()
+    queued: list[tuple] = []
+    monkeypatch.setattr(
+        practice_invitation_email.perform_celery,
+        "delay",
+        lambda *args, **kwargs: queued.append((args, kwargs)),
+    )
+
+    off, _ = _invited(authenticated_client, "quiet@gmail.com")
+    monkeypatch.setattr(practice_invitation_email, "email_enabled", lambda: True)
+    on, token = _invited(authenticated_client, "loud@gmail.com")
+    resent = _resend(authenticated_client, on["invitation"]["invitation_id"])
+
+    assert off["email_queued"] is False
+    assert on["email_queued"] is True
+    assert resent.json()["email_queued"] is True
+    assert queued == [((on["invitation"]["invitation_id"],), {})] * 2
+    assert token not in repr(queued)
+
+
+def test_a_broker_outage_still_returns_the_link(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _owner_practice()
+    monkeypatch.setattr(practice_invitation_email, "email_enabled", lambda: True)
+
+    def broker_down(*_args, **_kwargs):
+        raise ConnectionError("broker unavailable")
+
+    monkeypatch.setattr(practice_invitation_email.perform_celery, "delay", broker_down)
+
+    body, token = _invited(authenticated_client, "outage@gmail.com")
+
+    assert body["email_queued"] is False
+    assert token
