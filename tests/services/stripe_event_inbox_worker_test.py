@@ -127,6 +127,7 @@ def test_backoff_doubles_and_then_holds_at_an_hour(
         stripe_billing.process_stripe_event_inbox(inbox.id)
 
     stored = _reload(inbox)
+    assert stored.next_attempt_at is not None
     delay = stored.next_attempt_at - before
     assert timedelta(minutes=expected_minutes) - timedelta(seconds=30) <= delay
     assert delay <= timedelta(minutes=expected_minutes) + timedelta(seconds=30)
@@ -145,7 +146,9 @@ def test_a_long_error_is_truncated_to_the_column_width(monkeypatch):
     with pytest.raises(RuntimeError):
         stripe_billing.process_stripe_event_inbox(inbox.id)
 
-    assert len(_reload(inbox).last_error) == 512
+    last_error = _reload(inbox).last_error
+    assert last_error is not None
+    assert len(last_error) == 512
 
 
 def test_an_error_with_no_message_still_records_something_useful(monkeypatch):
