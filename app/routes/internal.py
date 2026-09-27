@@ -1829,6 +1829,8 @@ class PracticeRosterMember(BaseModel, extra="forbid"):
     is_self: bool
     seat_active: bool
     "Holds a clinician seat: active seat state and no access revocation."
+    revoked: bool
+    "Access was revoked, as distinct from a seat that is merely inactive."
     access_in_force: bool
     "Passes the same effective-access decision that gates protected routes."
     joined_at: datetime
@@ -1874,6 +1876,7 @@ def practice_roster(request: Request) -> PracticeRoster:
                     role=cast(Literal["owner", "workforce"], row.role),
                     is_self=row.doctor_id == doctor.id,
                     seat_active=seat_active,
+                    revoked=row.access_revoked_at is not None,
                     access_in_force=access_in_force,
                     joined_at=row.created_at,
                 )

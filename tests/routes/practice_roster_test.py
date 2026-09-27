@@ -20,6 +20,7 @@ ROSTER_FIELDS = {
     "role",
     "is_self",
     "seat_active",
+    "revoked",
     "access_in_force",
     "joined_at",
 }
@@ -111,15 +112,21 @@ def test_owner_sees_active_inactive_and_revoked_members(
         "Revoked Clinician",
     }
     states = {
-        name: (m["role"], m["is_self"], m["seat_active"], m["access_in_force"])
+        name: (
+            m["role"],
+            m["is_self"],
+            m["seat_active"],
+            m["revoked"],
+            m["access_in_force"],
+        )
         for name, m in by_name.items()
     }
     assert states == {
-        "Test Owner": ("owner", True, True, True),
-        "Active Clinician": ("workforce", False, True, True),
-        "Unattested Clinician": ("workforce", False, True, False),
-        "Paused Clinician": ("workforce", False, False, False),
-        "Revoked Clinician": ("workforce", False, False, False),
+        "Test Owner": ("owner", True, True, False, True),
+        "Active Clinician": ("workforce", False, True, False, True),
+        "Unattested Clinician": ("workforce", False, True, False, False),
+        "Paused Clinician": ("workforce", False, False, False, False),
+        "Revoked Clinician": ("workforce", False, False, True, False),
     }
     with get_session() as session:
         billed = active_clinician_seat_count(session, practice.id)

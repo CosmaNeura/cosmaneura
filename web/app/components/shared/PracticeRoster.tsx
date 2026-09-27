@@ -20,6 +20,7 @@ export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
 }
 
 function accessLabel(member: PracticeRosterMember) {
+  if (member.revoked) return "Revoked"
   if (!member.seat_active) return "Inactive"
   if (!member.access_in_force) return "No access"
   return "Active"

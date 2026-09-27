@@ -48,6 +48,7 @@ function member(
     role: "owner",
     is_self: true,
     seat_active: true,
+    revoked: false,
     access_in_force: true,
     joined_at: "2026-08-20T20:00:00Z",
     ...overrides,
@@ -71,6 +72,14 @@ const TEAM: PracticeRosterMember[] = [
     access_in_force: false,
   }),
   member({
+    display_name: "Rae Revoked",
+    role: "workforce",
+    is_self: false,
+    seat_active: false,
+    revoked: true,
+    access_in_force: false,
+  }),
+  member({
     display_name: null,
     role: "workforce",
     is_self: false,
@@ -82,7 +91,7 @@ describe("PracticeRoster", () => {
     render(<PracticeRoster practice={practice()} members={TEAM} />)
 
     const rows = screen.getAllByRole("listitem")
-    expect(rows).toHaveLength(5)
+    expect(rows).toHaveLength(6)
     expect(rows[0]).toHaveTextContent(
       /^Pat Owner \(you\) · Owner\s*Active · joined/,
     )
@@ -95,7 +104,10 @@ describe("PracticeRoster", () => {
     expect(rows[3]).toHaveTextContent(
       /^Ian Inactive · Clinician\s*Inactive · joined/,
     )
-    expect(rows[4]).toHaveTextContent(/^Name not recorded · Clinician\s*Active/)
+    expect(rows[4]).toHaveTextContent(
+      /^Rae Revoked · Clinician\s*Revoked · joined/,
+    )
+    expect(rows[5]).toHaveTextContent(/^Name not recorded · Clinician\s*Active/)
     expect(screen.queryByText(/only you so far/i)).not.toBeInTheDocument()
   })
 
