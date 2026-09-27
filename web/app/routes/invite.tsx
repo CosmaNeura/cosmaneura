@@ -28,6 +28,7 @@ export const ACCOUNT_IN_ANOTHER_PRACTICE =
 
 type InviteLoad =
   | { kind: "missing" }
+  | { kind: "signing_in" }
   | { kind: "unknown" }
   | { kind: "error"; detail: string }
   | {
@@ -60,7 +61,7 @@ export async function clientLoader(): Promise<InviteLoad> {
   const token = capturePendingInvitation()
   if (!token) return { kind: "missing" }
   // null while a signed-out visitor is being sent to sign-in
-  if (!(await getClient())) return { kind: "missing" }
+  if (!(await getClient())) return { kind: "signing_in" }
   const { data, error, response } = await inspectPracticeInvitation({
     body: { token },
   })
@@ -284,7 +285,8 @@ export default function InvitePage({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
-        {loaderData.kind === "inspected" ? (
+        {loaderData.kind === "signing_in" ? null : loaderData.kind ===
+          "inspected" ? (
           <InvitationState
             token={loaderData.token}
             inspection={loaderData.inspection}

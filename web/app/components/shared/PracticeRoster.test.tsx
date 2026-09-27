@@ -152,6 +152,10 @@ function issued(
 }
 
 describe("PracticeRoster", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it("lists each member's name, role, and access state for the owner", () => {
     render(<PracticeRoster practice={practice()} roster={roster(TEAM)} />)
 
@@ -224,11 +228,27 @@ describe("PracticeRoster", () => {
     ).toBeInTheDocument()
     const rows = screen.getAllByRole("listitem")
     expect(rows[1]).toHaveTextContent(/^riley@gmail.com · Invited · expires/)
-    expect(within(rows[1]).getByRole("button", { name: "Revoke" })).toBeTruthy()
-    expect(within(rows[1]).getByRole("button", { name: "Resend" })).toBeTruthy()
+    expect(
+      within(rows[1]).getByRole("button", {
+        name: "Revoke invitation to riley@gmail.com",
+      }),
+    ).toHaveTextContent("Revoke")
+    expect(
+      within(rows[1]).getByRole("button", {
+        name: "Resend invitation to riley@gmail.com",
+      }),
+    ).toHaveTextContent("Resend")
     expect(rows[2]).toHaveTextContent(/^stale@gmail.com · Expired/)
-    expect(within(rows[2]).getByRole("button", { name: "Remove" })).toBeTruthy()
-    expect(within(rows[2]).getByRole("button", { name: "Resend" })).toBeTruthy()
+    expect(
+      within(rows[2]).getByRole("button", {
+        name: "Remove invitation to stale@gmail.com",
+      }),
+    ).toHaveTextContent("Remove")
+    expect(
+      within(rows[2]).getByRole("button", {
+        name: "Resend invitation to stale@gmail.com",
+      }),
+    ).toHaveTextContent("Resend")
     expect(screen.queryByText(/of 20/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/only you so far/i)).not.toBeInTheDocument()
   })
@@ -244,6 +264,11 @@ describe("PracticeRoster", () => {
     )
 
     expect(screen.getByText("Invited clinician")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", {
+        name: "Revoke invitation to invited clinician",
+      }),
+    ).toBeInTheDocument()
   })
 
   it("revokes an invitation and reloads the roster", async () => {
@@ -259,7 +284,7 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
     await vi.waitFor(() =>
       expect(screen.queryByText("riley@gmail.com")).not.toBeInTheDocument(),
@@ -284,7 +309,7 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Resend" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Resend invitation/ }))
 
     expect(
       await screen.findByText("Send this link to riley@gmail.com."),
@@ -305,7 +330,7 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "An accepted invitation cannot be revoked.",
@@ -464,6 +489,46 @@ describe("InviteClinicianForm", () => {
       ([options]) => options.headers["Idempotency-Key"],
     )
     expect(new Set(keys).size).toBe(2)
+  })
+
+  function submitAgain(email: string) {
+    fireEvent.change(screen.getByLabelText("Invite a clinician"), {
+      target: { value: email },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }))
+  }
+
+  it("says it is sending while the request is in flight", async () => {
+    let finish: (value: unknown) => void = () => {}
+    client.createPracticeInvitation.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+
+    invite("slow@gmail.com")
+
+    expect(
+      await screen.findByRole("button", { name: "Sending…" }),
+    ).toBeDisabled()
+    finish({ data: issued() })
+    expect(
+      await screen.findByRole("button", { name: "Send invitation" }),
+    ).toBeInTheDocument()
+  })
+
+  it("announces the link through a live region that was already present", async () => {
+    client.createPracticeInvitation.mockResolvedValue({ data: issued() })
+    render(<PracticeRoster practice={practice()} roster={roster([member()])} />)
+    const status = screen.getByRole("status")
+    expect(status).toBeEmptyDOMElement()
+
+    submitAgain("new@gmail.com")
+
+    await vi.waitFor(() =>
+      expect(status).toHaveTextContent("Send this link to new@gmail.com."),
+    )
+    expect(screen.getByRole("status")).toBe(status)
   })
 
   it("passes on the contact-us wording at the seat cap", async () => {

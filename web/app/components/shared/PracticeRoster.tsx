@@ -56,17 +56,33 @@ function accessLabel(member: PracticeRosterMember) {
   return "Active"
 }
 
-function InvitationLink({ issued }: { issued: PracticeInvitationIssued }) {
-  const email = issued.invitation.invitee_email
+function InvitationLink({
+  issued,
+}: {
+  issued: PracticeInvitationIssued | null
+}) {
+  const email = issued?.invitation.invitee_email
+  // The live region stays mounted so screen readers announce each new link;
+  // one inserted together with its text is often not announced.
   return (
-    <div className="bg-muted/40 mt-3 rounded-md border p-3">
+    <div
+      className={issued ? "bg-muted/40 mt-3 rounded-md border p-3" : undefined}
+    >
       <p role="status">
-        {issued.email_queued
-          ? "Email sent. You can also share this link."
-          : `Send this link to ${email ?? "the clinician"}.`}
+        {issued
+          ? issued.email_queued
+            ? "Email sent. You can also share this link."
+            : `Send this link to ${email ?? "the clinician"}.`
+          : null}
       </p>
-      <p className="mt-2 font-mono text-xs break-all">{issued.invite_url}</p>
-      <CopyButton text={issued.invite_url} className="mt-2" />
+      {issued ? (
+        <>
+          <p className="mt-2 font-mono text-xs break-all">
+            {issued.invite_url}
+          </p>
+          <CopyButton text={issued.invite_url} className="mt-2" />
+        </>
+      ) : null}
     </div>
   )
 }
@@ -120,7 +136,7 @@ export function InviteClinicianForm({
           onChange={(e) => setEmail(e.target.value)}
         />
         <Button type="submit" size="sm" disabled={busy || !email.trim()}>
-          Send invitation
+          {busy ? "Sending…" : "Send invitation"}
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">
@@ -147,6 +163,7 @@ function InvitationRow({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const path = { invitation_id: invitation.invitation_id }
+  const invitee = invitation.invitee_email ?? "invited clinician"
 
   async function act(run: () => Promise<{ error?: unknown; data?: unknown }>) {
     setBusy(true)
@@ -195,6 +212,7 @@ function InvitationRow({
           variant="outline"
           size="sm"
           disabled={busy}
+          aria-label={`Resend invitation to ${invitee}`}
           onClick={() => void resend()}
         >
           Resend
@@ -203,6 +221,7 @@ function InvitationRow({
           variant="outline"
           size="sm"
           disabled={busy}
+          aria-label={`${invitation.expired ? "Remove" : "Revoke"} invitation to ${invitee}`}
           onClick={() => void act(() => revokePracticeInvitation({ path }))}
         >
           {invitation.expired ? "Remove" : "Revoke"}
@@ -314,7 +333,7 @@ export function PracticeRoster({
         <p className="text-muted-foreground mt-2 text-xs">Only you so far.</p>
       ) : null}
       <InviteClinicianForm onIssued={(next) => void onIssued(next)} />
-      {issued ? <InvitationLink issued={issued} /> : null}
+      <InvitationLink issued={issued} />
     </div>
   )
 }

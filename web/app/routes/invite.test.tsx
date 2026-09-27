@@ -146,11 +146,31 @@ describe("invite link", () => {
     window.history.replaceState(null, "", "/invite#t=before-sign-in")
     clerk.getClient.mockResolvedValue(undefined)
 
-    expect(await clientLoader()).toEqual({ kind: "missing" })
+    expect(await clientLoader()).toEqual({ kind: "signing_in" })
     expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
       "before-sign-in",
     )
     expect(client.inspectPracticeInvitation).not.toHaveBeenCalled()
+  })
+
+  it("shows nothing while a signed-out visitor is sent to sign in", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "stored")
+    clerk.getClient.mockResolvedValue(undefined)
+    openInvite()
+
+    await vi.waitFor(() =>
+      expect(screen.queryByText("Loading")).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByRole("heading")).not.toBeInTheDocument()
+  })
+
+  it("asks for the link when there is no token at all", async () => {
+    openInvite()
+
+    expect(
+      await screen.findByRole("heading", { name: "Open your invitation link" }),
+    ).toBeInTheDocument()
+    expect(clerk.getClient).not.toHaveBeenCalled()
   })
 
   it("forgets an unknown or spent token", async () => {
