@@ -411,6 +411,28 @@ def test_accept_replay_by_the_same_doctor_returns_current_state():
     assert practice.stripe_quantity_sync_version == version
 
 
+def test_accept_after_joining_by_code_is_refused_not_replayed():
+    practice, owner = _practice(is_solo=False)
+    invitee = _doctor(label="joined-by-code")
+    issued = _issue(owner, invitee.email)
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=invitee.id,
+            role="workforce",
+            attested_at=_now(),
+            attestation_name="Joined By Code",
+        )
+    )
+
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+
+    assert str(exc_info.value) == "This account is already a member of the practice."
+    invitation = PracticeInvitation.get(id=issued.invitation.id)
+    assert invitation and invitation.accepted_at is None
+
+
 def test_accept_refuses_the_wrong_account():
     practice, owner = _practice()
     issued = _issue(owner, "intended@clinic-invite.example")
