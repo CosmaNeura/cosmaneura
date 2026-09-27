@@ -60,7 +60,7 @@ import {
   exampleNoteUploadErrorCopy,
   submitExampleNote,
 } from "~/lib/example-note-upload"
-import { pendingInvitation } from "~/lib/pending-invitation"
+import { actionablePendingInvitation } from "~/lib/pending-invitation"
 import {
   type BaaDocument,
   type OrganizationAccessOpportunity,
@@ -121,7 +121,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getPractice(),
     getOrganizationAccessOpportunity(),
   ])
-  if (!practice && pendingInvitation()) {
+  if (!practice && actionablePendingInvitation()) {
     throw redirect(href("/invite"))
   }
 

@@ -16,6 +16,9 @@ import { COMPANY } from "~/lib/baa"
 import {
   capturePendingInvitation,
   clearPendingInvitation,
+  keepPendingInvitationThroughSignOut,
+  parkPendingInvitation,
+  unparkPendingInvitation,
 } from "~/lib/pending-invitation"
 
 import { useClerk } from "@clerk/clerk-react"
@@ -63,12 +66,15 @@ export async function clientLoader(): Promise<InviteLoad> {
   })
   if (data) {
     if (SPENT_STATES.has(data.state)) clearPendingInvitation()
+    else if (data.state === "ready") unparkPendingInvitation()
+    else parkPendingInvitation(token)
     return { kind: "inspected", token, inspection: data }
   }
   if (response?.status === 404) {
     clearPendingInvitation()
     return { kind: "unknown" }
   }
+  parkPendingInvitation(token)
   return {
     kind: "error",
     detail: errorDetail(error) ?? "This invitation could not be checked.",
@@ -203,15 +209,19 @@ function InvitationState({
             This invitation was sent to a different email address. Sign in with
             that address.
           </p>
-          <Button
-            onClick={() =>
-              void clerk.signOut({
-                redirectUrl: `/sign-in?redirect_url=${encodeURIComponent("/invite")}`,
-              })
-            }
-          >
-            Sign in with another account
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              onClick={() => {
+                keepPendingInvitationThroughSignOut()
+                void clerk.signOut({
+                  redirectUrl: `/sign-in?redirect_url=${encodeURIComponent("/invite")}`,
+                })
+              }}
+            >
+              Sign in with another account
+            </Button>
+            <ContinueButton label="Not now" />
+          </div>
         </Notice>
       )
     case "member_elsewhere":
@@ -293,6 +303,7 @@ export default function InvitePage({ loaderData }: Route.ComponentProps) {
         ) : (
           <Notice title="We couldn’t check this invitation">
             <p role="alert">{loaderData.detail}</p>
+            <ContinueButton label="Not now" />
           </Notice>
         )}
       </main>

@@ -2,7 +2,11 @@ import { RouterProvider, createMemoryRouter, useLoaderData } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { PracticeInvitationInspection } from "~/configuration/client"
-import { PENDING_INVITATION_KEY } from "~/lib/pending-invitation"
+import {
+  PENDING_INVITATION_KEY,
+  clearPendingInvitation,
+  forgetPendingInvitationOnSignOut,
+} from "~/lib/pending-invitation"
 
 import InvitePage, { clientLoader } from "./invite"
 import { clientLoader as onboardingLoader } from "./onboarding"
@@ -56,6 +60,22 @@ function inspected(overrides: Partial<PracticeInvitationInspection> = {}) {
   })
 }
 
+function fakeClerkSession() {
+  let listener: ((resources: { user?: unknown }) => void) | null = null
+  const stop = forgetPendingInvitationOnSignOut({
+    addListener: (callback) => {
+      listener = callback
+      return () => {
+        listener = null
+      }
+    },
+  })
+  return {
+    emit: (resources: { user?: unknown }) => listener?.(resources),
+    stop,
+  }
+}
+
 function LoadedInvite() {
   const props = { loaderData: useLoaderData() } as Parameters<
     typeof InvitePage
@@ -82,6 +102,7 @@ function openInvite() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearPendingInvitation()
   window.sessionStorage.clear()
   window.history.replaceState(null, "", "/")
   clerk.getClient.mockResolvedValue({ user: { id: "user_invitee" } })
@@ -259,6 +280,77 @@ describe("invite link", () => {
   })
 })
 
+describe("no dead end on the invite page", () => {
+  it("lets a doctor leave a check that failed and forgets the link", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "throttled")
+    client.inspectPracticeInvitation.mockResolvedValue({
+      data: undefined,
+      error: { detail: "Too many attempts. Try again later." },
+      response: new Response(null, { status: 429 }),
+    })
+    const router = openInvite()
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Too many attempts. Try again later.",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }))
+
+    expect(await screen.findByText("Onboarding page")).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe("/onboarding")
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+  })
+
+  it("lets the wrong account continue without the invitation", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "not-mine")
+    inspected({ state: "wrong_account", legal_name: null, baa_accepted: false })
+    const router = openInvite()
+
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }))
+
+    expect(await screen.findByText("Onboarding page")).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe("/onboarding")
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+  })
+
+  it("keeps the link when the wrong account signs out to switch", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "switching")
+    inspected({ state: "wrong_account", legal_name: null, baa_accepted: false })
+    const session = fakeClerkSession()
+    session.emit({ user: { id: "user_wrong" } })
+    openInvite()
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Sign in with another account",
+      }),
+    )
+    session.emit({ user: null })
+
+    expect(clerk.signOut).toHaveBeenCalledWith({
+      redirectUrl: "/sign-in?redirect_url=%2Finvite",
+    })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
+      "switching",
+    )
+    session.stop()
+  })
+
+  it("forgets the link whenever this tab otherwise signs out", () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "someone-else")
+    const session = fakeClerkSession()
+
+    session.emit({ user: null })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
+      "someone-else",
+    )
+    session.emit({ user: { id: "user_a" } })
+    session.emit({ user: null })
+
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+    session.stop()
+  })
+})
+
 describe("onboarding with a pending invitation", () => {
   beforeEach(() => {
     viewAs.checkViewAsStatus.mockResolvedValue({
@@ -289,6 +381,43 @@ describe("onboarding with a pending invitation", () => {
     const outcome = await load().catch((thrown: unknown) => thrown)
 
     expect(outcome).toBeInstanceOf(Response)
+    expect((outcome as Response).headers.get("Location")).toBe("/invite")
+  })
+
+  it("does not send the doctor back to an invitation that needs nothing from them", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "parked")
+    inspected({ state: "wrong_account", legal_name: null, baa_accepted: false })
+    await clientLoader()
+    practiceApi.getPractice.mockResolvedValue(null)
+
+    await expect(load()).resolves.toMatchObject({ practice: null })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe("parked")
+  })
+
+  it("does not loop back after the invitation could not be checked", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "unchecked")
+    client.inspectPracticeInvitation.mockResolvedValue({
+      data: undefined,
+      error: { detail: "This invitation could not be verified." },
+      response: new Response(null, { status: 403 }),
+    })
+    await clientLoader()
+    practiceApi.getPractice.mockResolvedValue(null)
+
+    await expect(load()).resolves.toMatchObject({ practice: null })
+  })
+
+  it("sends the doctor back again once the link is opened again", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "parked")
+    inspected({ state: "practice_not_ready" })
+    await clientLoader()
+    window.history.replaceState(null, "", "/invite#t=parked")
+    clerk.getClient.mockResolvedValue(undefined)
+    await clientLoader()
+    practiceApi.getPractice.mockResolvedValue(null)
+
+    const outcome = await load().catch((thrown: unknown) => thrown)
+
     expect((outcome as Response).headers.get("Location")).toBe("/invite")
   })
 
