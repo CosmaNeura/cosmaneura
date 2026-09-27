@@ -1234,6 +1234,14 @@ def _billing_seat_summary(practice: Practice) -> "BillingSeatSummary | None":
         with get_session() as session:
             active = active_clinician_seat_count(session, practice.id)
     except ClinicianSeatPolicyError:
+        # The status screen must still load, but a corrupt ledger is an
+        # invariant violation operators have to see, not a missing summary.
+        log.error(
+            "active seat ledger invalid while building billing status",
+            event_code="billing_seat_summary_ledger_invalid",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
         return None
     billed = stripe_billing.confirmed_billed_quantity(practice)
     return BillingSeatSummary(
