@@ -54,7 +54,11 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
-from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.doctor_access import (
+    DoctorAccessDecision,
+    practice_members_access_in_force,
+    resolve_doctor_access,
+)
 from app.services.managed_organization_access import (
     ManagedOrganizationAccessState,
     resolve_managed_organization_access,
@@ -1856,8 +1860,13 @@ def practice_roster(request: Request) -> PracticeRoster:
                 col(PracticeMember.id),
             )
         ).all()
+        practice = session.get(Practice, member.practice_id)
+        assert practice is not None
+        access = practice_members_access_in_force(
+            practice, [(row, subject) for row, subject, _ in rows]
+        )
         roster: list[PracticeRosterMember] = []
-        for row, subject, seat_active in rows:
+        for (row, _, seat_active), access_in_force in zip(rows, access, strict=True):
             assert row.created_at is not None
             roster.append(
                 PracticeRosterMember(
@@ -1865,7 +1874,7 @@ def practice_roster(request: Request) -> PracticeRoster:
                     role=cast(Literal["owner", "workforce"], row.role),
                     is_self=row.doctor_id == doctor.id,
                     seat_active=seat_active,
-                    access_in_force=resolve_doctor_access(subject).allowed,
+                    access_in_force=access_in_force,
                     joined_at=row.created_at,
                 )
             )
