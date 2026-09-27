@@ -16,6 +16,10 @@ from typing import Any, cast
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.services.pilot_access_lock import lock_pilot_access_lineage
+from app.services.public_entitlements import (
+    ClinicianSeatPolicyError,
+    record_active_clinician_seat_quantity,
+)
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     get_active_runtime_superadmin_capability_kinds,
@@ -882,6 +886,7 @@ def close_doctor_account(
             "confirmed_plan_sha256 must be a 64-character lowercase hex digest"
         )
 
+    seat_quantity_recorded = False
     try:
         lock_pilot_access_lineage(session)
         evaluated = _evaluate(
@@ -1002,6 +1007,14 @@ def close_doctor_account(
                 evidence_sha256=evaluated.plan.plan_sha256,
             )
             session.add(receipt)
+            if evaluated.plan.stripe_follow_up_required:
+                try:
+                    record_active_clinician_seat_quantity(session, evaluated.practice)
+                    seat_quantity_recorded = True
+                except ClinicianSeatPolicyError:
+                    # A bad ledger must never block closing an account; the
+                    # post-commit marking below reports it instead.
+                    pass
             session.commit()
             result = DoctorAccountClosureResult(
                 plan_sha256=evaluated.plan.plan_sha256,
@@ -1020,7 +1033,7 @@ def close_doctor_account(
             "account closure database operation failed; verify state before retrying"
         ) from None
 
-    if result.stripe_follow_up_required:
+    if result.stripe_follow_up_required and not seat_quantity_recorded:
         from app.services.stripe_billing import mark_quantity_sync_required
 
         try:

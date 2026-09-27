@@ -1200,3 +1200,74 @@ def test_offboarding_last_owner_requires_an_authorized_successor():
         now=now + timedelta(seconds=6),
     )
     assert revoked_member.access_revoked_at == now + timedelta(seconds=6)
+
+
+def _offboarding_with_subscription() -> tuple[Practice, Doctor, datetime]:
+    approved_at = datetime(2028, 2, 1, 9, 0, tzinfo=timezone.utc)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    practice, code = _configured_practice(domain, now=approved_at)
+    departing = _doctor(f"departing@{domain}")
+    for doctor in (departing, _doctor(f"staying@{domain}")):
+        _approve(practice, doctor.email or "", now=approved_at)
+        claim_roster_access(
+            doctor, supplied_code=code, now=approved_at + timedelta(minutes=1)
+        )
+    practice.refresh()
+    practice.stripe_subscription_id = f"sub_offboard_{secrets.token_hex(6)}"
+    practice.save()
+    return practice, departing, approved_at + timedelta(days=1)
+
+
+def test_offboarding_records_the_stripe_seat_target_in_its_transaction(monkeypatch):
+    from app.services import stripe_billing
+
+    practice, departing, revoked_at = _offboarding_with_subscription()
+
+    def refuse_post_commit_marking(_practice: Practice) -> None:
+        raise AssertionError("the seat target must be recorded before commit")
+
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", refuse_post_commit_marking
+    )
+    offboard_member(
+        practice,
+        departing,
+        operator_ref="ticket-OFFBOARD-8",
+        reason="Provider left the pilot organization",
+        now=revoked_at,
+    )
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 1
+
+
+def test_offboarding_still_revokes_when_the_seat_ledger_is_invalid(monkeypatch):
+    from app.services import organization_access, stripe_billing
+    from app.services.public_entitlements import ClinicianSeatPolicyError
+
+    practice, departing, revoked_at = _offboarding_with_subscription()
+
+    def invalid_ledger(*_args, **_kwargs) -> int:
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    marked: list[str] = []
+    monkeypatch.setattr(
+        organization_access, "record_active_clinician_seat_quantity", invalid_ledger
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "mark_quantity_sync_required",
+        lambda value: marked.append(str(value.id)),
+    )
+    revoked_member, _, _ = offboard_member(
+        practice,
+        departing,
+        operator_ref="ticket-OFFBOARD-9",
+        reason="Provider left the pilot organization",
+        now=revoked_at,
+    )
+
+    assert revoked_member.access_revoked_at == revoked_at
+    assert marked == [str(practice.id)]

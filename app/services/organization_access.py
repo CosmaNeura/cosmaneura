@@ -16,7 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from app.services.public_entitlements import lock_practice_for_active_seat_mutation
+from app.services.public_entitlements import (
+    ClinicianSeatPolicyError,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+)
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -1600,6 +1604,7 @@ def revoke_roster_access(
     email = normalize_email(approved_email)
     current = now or datetime.now(timezone.utc)
     retain_until = _seven_calendar_years_after(current)
+    seat_quantity_recorded = False
 
     with get_session() as session:
         locked_practice = lock_practice_for_active_seat_mutation(session, practice.id)
@@ -1774,6 +1779,14 @@ def revoke_roster_access(
                 document_reference=str(approval.id),
             )
             session.add(audit)
+            if locked_practice.stripe_subscription_id:
+                try:
+                    record_active_clinician_seat_quantity(session, locked_practice)
+                    seat_quantity_recorded = True
+                except ClinicianSeatPolicyError:
+                    # A bad ledger must never block an access revocation; the
+                    # post-commit marking below reports it instead.
+                    pass
             session.commit()
             session.refresh(approval)
             if member is not None:
@@ -1784,7 +1797,7 @@ def revoke_roster_access(
 
         session.refresh(locked_practice)
 
-    if locked_practice.stripe_subscription_id:
+    if locked_practice.stripe_subscription_id and not seat_quantity_recorded:
         from app.services import stripe_billing
 
         stripe_billing.mark_quantity_sync_required(locked_practice)
