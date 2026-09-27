@@ -1153,6 +1153,13 @@ def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
 
+def _owner_membership(doctor: Doctor, detail: str) -> PracticeMember:
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    return member
+
+
 def _practice_ready(
     doctor: Doctor,
     *,
@@ -1830,12 +1837,9 @@ class PracticeRoster(BaseModel, extra="forbid"):
 def practice_roster(request: Request) -> PracticeRoster:
     """The practice's members, for its owner. Carries no contact details."""
     doctor: Doctor = request.state.doctor
-    member = _membership_for(doctor)
-    if not member or member.role != PracticeRole.owner.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the practice owner can view the practice roster.",
-        )
+    member = _owner_membership(
+        doctor, "Only the practice owner can view the practice roster."
+    )
     with get_session() as session:
         rows = session.exec(
             select(
@@ -2173,12 +2177,7 @@ class BillingSessionUrl(BaseModel, extra="forbid"):
 
 
 def _owner_practice_for_billing(doctor: Doctor) -> Practice:
-    member = _membership_for(doctor)
-    if not member or member.role != PracticeRole.owner.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the practice owner can manage billing.",
-        )
+    member = _owner_membership(doctor, "Only the practice owner can manage billing.")
     practice = Practice.get(id=member.practice_id)
     assert practice
     return practice
