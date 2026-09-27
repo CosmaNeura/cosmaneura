@@ -9,6 +9,7 @@ export default [
   route("/sign-in/*", "routes/sign-in.tsx"),
   route("/sign-up/*", "routes/sign-up.tsx"),
   route("/onboarding", "routes/onboarding.tsx"),
+  route("/invite", "routes/invite.tsx"),
   layout("layouts/authenticated.tsx", [
     ...prefix("intake", [
       layout("layouts/intake.tsx", [

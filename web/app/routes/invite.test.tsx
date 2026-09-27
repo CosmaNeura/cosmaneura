@@ -1,0 +1,282 @@
+import { RouterProvider, createMemoryRouter, useLoaderData } from "react-router"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+import type { PracticeInvitationInspection } from "~/configuration/client"
+import { PENDING_INVITATION_KEY } from "~/lib/pending-invitation"
+
+import InvitePage, { clientLoader } from "./invite"
+import { clientLoader as onboardingLoader } from "./onboarding"
+import { fireEvent, render, screen } from "@testing-library/react"
+
+const client = vi.hoisted(() => ({
+  inspectPracticeInvitation: vi.fn(),
+  acceptPracticeInvitation: vi.fn(),
+  settingsData: vi.fn(),
+  completeOnboarding: vi.fn(),
+  updateSettingsData: vi.fn(),
+}))
+vi.mock("~/configuration/client", () => client)
+
+const clerk = vi.hoisted(() => ({
+  getClient: vi.fn(),
+  signOut: vi.fn(),
+}))
+vi.mock("~/configuration/clerk", () => ({ getClient: clerk.getClient }))
+vi.mock("@clerk/clerk-react", () => ({
+  useClerk: () => ({ signOut: clerk.signOut }),
+}))
+
+const practiceApi = vi.hoisted(() => ({
+  getPractice: vi.fn(),
+  getOrganizationAccessOpportunity: vi.fn(),
+}))
+vi.mock("~/lib/practice-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/practice-api")>()),
+  ...practiceApi,
+}))
+
+const viewAs = vi.hoisted(() => ({ checkViewAsStatus: vi.fn() }))
+vi.mock("~/lib/view-as-api", () => viewAs)
+
+function inspection(
+  overrides: Partial<PracticeInvitationInspection> = {},
+): PracticeInvitationInspection {
+  return {
+    state: "ready",
+    legal_name: "Harbor Family Medicine",
+    baa_accepted: true,
+    ...overrides,
+  }
+}
+
+function inspected(overrides: Partial<PracticeInvitationInspection> = {}) {
+  client.inspectPracticeInvitation.mockResolvedValue({
+    data: inspection(overrides),
+    response: new Response(null, { status: 200 }),
+  })
+}
+
+function LoadedInvite() {
+  const props = { loaderData: useLoaderData() } as Parameters<
+    typeof InvitePage
+  >[0]
+  return <InvitePage {...props} />
+}
+
+function openInvite() {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/invite",
+        loader: () => clientLoader(),
+        Component: LoadedInvite,
+        hydrateFallbackElement: <div>Loading</div>,
+      },
+      { path: "/onboarding", Component: () => <div>Onboarding page</div> },
+    ],
+    { initialEntries: ["/invite"] },
+  )
+  render(<RouterProvider router={router} />)
+  return router
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  window.sessionStorage.clear()
+  window.history.replaceState(null, "", "/")
+  clerk.getClient.mockResolvedValue({ user: { id: "user_invitee" } })
+})
+
+describe("invite link", () => {
+  it("moves the token out of the address bar into this tab's storage", async () => {
+    window.history.replaceState({ idx: 0 }, "", "/invite?x=1#t=secret-token")
+    inspected()
+
+    const result = await clientLoader()
+
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
+      "secret-token",
+    )
+    expect(window.location.hash).toBe("")
+    expect(window.location.search).toBe("?x=1")
+    expect(window.history.state).toEqual({ idx: 0 })
+    expect(client.inspectPracticeInvitation).toHaveBeenCalledWith({
+      body: { token: "secret-token" },
+    })
+    expect(result).toEqual({
+      kind: "inspected",
+      token: "secret-token",
+      inspection: inspection(),
+    })
+  })
+
+  it("keeps the stored token through the sign-in round trip", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "stored-token")
+    inspected()
+
+    await clientLoader()
+
+    expect(client.inspectPracticeInvitation).toHaveBeenCalledWith({
+      body: { token: "stored-token" },
+    })
+  })
+
+  it("stores the token before a signed-out visitor is sent to sign in", async () => {
+    window.history.replaceState(null, "", "/invite#t=before-sign-in")
+    clerk.getClient.mockResolvedValue(undefined)
+
+    expect(await clientLoader()).toEqual({ kind: "missing" })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
+      "before-sign-in",
+    )
+    expect(client.inspectPracticeInvitation).not.toHaveBeenCalled()
+  })
+
+  it("forgets an unknown or spent token", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "gone")
+    client.inspectPracticeInvitation.mockResolvedValue({
+      data: undefined,
+      error: { detail: "Invitation not found." },
+      response: new Response(null, { status: 404 }),
+    })
+    expect(await clientLoader()).toEqual({ kind: "unknown" })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "used")
+    inspected({ state: "used" })
+    await clientLoader()
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+  })
+
+  it("requires every acknowledgement and a typed name before joining", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "ready-token")
+    inspected()
+    client.acceptPracticeInvitation.mockResolvedValue({ data: {} })
+    const router = openInvite()
+
+    const join = await screen.findByRole("button", {
+      name: "Attest and join Harbor Family Medicine",
+    })
+    expect(screen.getByText("BAA on file")).toBeInTheDocument()
+    expect(join).toBeDisabled()
+    const boxes = screen.getAllByRole("checkbox")
+    expect(boxes).toHaveLength(4)
+    for (const box of boxes) fireEvent.click(box)
+    expect(join).toBeDisabled()
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "Riley Clinician" },
+    })
+    expect(join).toBeEnabled()
+    fireEvent.click(join)
+
+    expect(await screen.findByText("Onboarding page")).toBeInTheDocument()
+    expect(client.acceptPracticeInvitation).toHaveBeenCalledWith({
+      body: {
+        token: "ready-token",
+        attestation_name: "Riley Clinician",
+        checks: ["workforce", "not-party", "direction", "phi"],
+      },
+    })
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBeNull()
+    expect(router.state.location.pathname).toBe("/onboarding")
+  })
+
+  it("shows why acceptance was refused", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "ready-token")
+    inspected()
+    client.acceptPracticeInvitation.mockResolvedValue({
+      error: {
+        detail:
+          "This practice can't add more clinicians right now. Ask the practice owner to contact Cosmaneura.",
+      },
+    })
+    openInvite()
+
+    for (const box of await screen.findAllByRole("checkbox")) {
+      fireEvent.click(box)
+    }
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "Riley Clinician" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /Attest and join/ }))
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Ask the practice owner to contact Cosmaneura.",
+    )
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe(
+      "ready-token",
+    )
+  })
+
+  it("tells a member of another practice to sign up with a different email", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "elsewhere")
+    inspected({ state: "member_elsewhere" })
+    openInvite()
+
+    expect(
+      await screen.findByText(
+        "This account already belongs to another practice. Sign up with a different email to join a new one.",
+      ),
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }))
+    expect(clerk.signOut).toHaveBeenCalledWith({ redirectUrl: "/sign-up" })
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+  })
+
+  it("names no practice to the wrong account", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "wrong")
+    inspected({ state: "wrong_account", legal_name: null, baa_accepted: false })
+    openInvite()
+
+    expect(
+      await screen.findByText(
+        "This invitation was sent to a different email address. Sign in with that address.",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Harbor/)).not.toBeInTheDocument()
+    expect(window.sessionStorage.getItem(PENDING_INVITATION_KEY)).toBe("wrong")
+  })
+})
+
+describe("onboarding with a pending invitation", () => {
+  beforeEach(() => {
+    viewAs.checkViewAsStatus.mockResolvedValue({
+      state: "ready",
+      status: { active: false, diagnostic_code: null },
+    })
+    client.settingsData.mockResolvedValue({
+      data: {
+        onboarding_completed: false,
+        is_admin: false,
+        practice_ready: false,
+      },
+      response: new Response(null, { status: 200 }),
+    })
+    practiceApi.getOrganizationAccessOpportunity.mockResolvedValue(null)
+  })
+
+  function load() {
+    return onboardingLoader({
+      request: new Request("https://app.cosmaneura.com/onboarding"),
+    } as Parameters<typeof onboardingLoader>[0])
+  }
+
+  it("sends a doctor without a practice back to the invitation", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "pending")
+    practiceApi.getPractice.mockResolvedValue(null)
+
+    const outcome = await load().catch((thrown: unknown) => thrown)
+
+    expect(outcome).toBeInstanceOf(Response)
+    expect((outcome as Response).headers.get("Location")).toBe("/invite")
+  })
+
+  it("stays on onboarding once the doctor has a practice", async () => {
+    window.sessionStorage.setItem(PENDING_INVITATION_KEY, "pending")
+    practiceApi.getPractice.mockResolvedValue({ legal_name: "Harbor" })
+
+    await expect(load()).resolves.toMatchObject({
+      practice: { legal_name: "Harbor" },
+    })
+  })
+})

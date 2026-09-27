@@ -14,6 +14,12 @@ import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
+import {
+  CheckRow,
+  Field,
+  WorkforceAttestation,
+  type WorkforceAttestationSubmission,
+} from "~/components/shared/WorkforceAttestation"
 import { Button } from "~/components/ui/button"
 import {
   Form,
@@ -25,7 +31,6 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
-import { Label } from "~/components/ui/label"
 import { ScrollArea } from "~/components/ui/scroll-area"
 import { getClient } from "~/configuration/clerk"
 import {
@@ -40,7 +45,6 @@ import {
   BAA_PDF_URL,
   BAA_VERSION,
   COMPANY,
-  WORKFORCE_CHECKS,
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
@@ -56,6 +60,7 @@ import {
   exampleNoteUploadErrorCopy,
   submitExampleNote,
 } from "~/lib/example-note-upload"
+import { pendingInvitation } from "~/lib/pending-invitation"
 import {
   type BaaDocument,
   type OrganizationAccessOpportunity,
@@ -116,6 +121,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getPractice(),
     getOrganizationAccessOpportunity(),
   ])
+  if (!practice && pendingInvitation()) {
+    throw redirect(href("/invite"))
+  }
 
   // The server's effective access decision includes exact-account grants. Do
   // not recompute authorization from the factual practice payload here.
@@ -944,8 +952,6 @@ function WorkforceFlow({
 }) {
   const [code, setCode] = useState("")
   const [found, setFound] = useState<PracticeStatus | null>(null)
-  const [checks, setChecks] = useState<Record<string, boolean>>({})
-  const [name, setName] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -972,17 +978,14 @@ function WorkforceFlow({
     }
   }
 
-  async function onJoin() {
+  async function onJoin(attestation: WorkforceAttestationSubmission) {
     if (!found?.join_code) return
     setBusy(true)
     setError(null)
     try {
       const next = await joinPractice({
         join_code: found.join_code,
-        attestation_name: name,
-        checks: WORKFORCE_CHECKS.map((item) => item.id).filter(
-          (id) => checks[id],
-        ),
+        ...attestation,
       })
       onPractice(next)
     } catch (err) {
@@ -991,11 +994,6 @@ function WorkforceFlow({
       setBusy(false)
     }
   }
-
-  const ready =
-    Boolean(found?.baa_accepted) &&
-    WORKFORCE_CHECKS.every((item) => checks[item.id]) &&
-    name.trim().length >= 2
 
   return (
     <div className="max-w-xl">
@@ -1044,34 +1042,11 @@ function WorkforceFlow({
               locked.
             </p>
           ) : (
-            <div className="mt-5 grid gap-4">
-              {WORKFORCE_CHECKS.map((item) => (
-                <CheckRow
-                  key={item.id}
-                  checked={Boolean(checks[item.id])}
-                  onChange={(next) =>
-                    setChecks((prev) => ({ ...prev, [item.id]: next }))
-                  }
-                >
-                  {item.label}
-                </CheckRow>
-              ))}
-              <Field label="Typed name" htmlFor="attestation">
-                <Input
-                  id="attestation"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </Field>
-              <Button
-                type="button"
-                disabled={!ready || busy}
-                onClick={() => void onJoin()}
-                size="lg"
-              >
-                {busy ? "Joining…" : `Attest and join ${found.legal_name}`}
-              </Button>
-            </div>
+            <WorkforceAttestation
+              legalName={found.legal_name}
+              busy={busy}
+              onAttest={(attestation) => void onJoin(attestation)}
+            />
           )}
         </div>
       ) : null}
@@ -1519,45 +1494,6 @@ function DisplayTitle({ children }: { children: React.ReactNode }) {
     >
       {children}
     </h1>
-  )
-}
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string
-  htmlFor: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="grid gap-1.5 text-left">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-    </div>
-  )
-}
-
-function CheckRow({
-  checked,
-  onChange,
-  children,
-}: {
-  checked: boolean
-  onChange: (next: boolean) => void
-  children: React.ReactNode
-}) {
-  return (
-    <label className="flex gap-3 text-left text-sm leading-snug">
-      <input
-        type="checkbox"
-        className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span>{children}</span>
-    </label>
   )
 }
 
