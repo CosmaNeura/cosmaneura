@@ -17,9 +17,14 @@ EXPECTED_SCHEMA_BEFORE="${EXPECTED_SCHEMA_BEFORE:-}"
 EXPECTED_SCHEMA_AFTER="${EXPECTED_SCHEMA_AFTER:-}"
 EXPECTED_RECOVERY_DIGEST="${EXPECTED_RECOVERY_DIGEST:-}"
 EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256="${EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256:-}"
+STAGING_PRESERVE_EFFECTIVE_CONFIGURATION="${STAGING_PRESERVE_EFFECTIVE_CONFIGURATION:-false}"
+EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256="${EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256:-}"
 STAGING_DEPLOYMENT_IDENTITY_MODE="${STAGING_DEPLOYMENT_IDENTITY_MODE:-service-principal}"
 STAGING_APPROVAL_PR_NUMBER="${STAGING_APPROVAL_PR_NUMBER:-}"
 STAGING_BUILD_PLAN="${STAGING_BUILD_PLAN:-}"
+STAGING_PUBLICATION_RECEIPT="${STAGING_PUBLICATION_RECEIPT:-}"
+EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256="${EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256:-}"
+RELEASE_V2_JSON=""
 EXPECTED_STAGING_BUILD_PLAN_SHA256="${EXPECTED_STAGING_BUILD_PLAN_SHA256:-}"
 
 if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" && \
@@ -37,7 +42,7 @@ REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 # Define variables
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
-MIGRATION_JOB="cosmaneura-staging-migrate"
+MIGRATION_JOB=""
 BACKEND_CONTAINERS="cosmaneura-staging-worker cosmaneura-staging-scheduler"
 API_CONTAINER="cosmaneura-staging-app"
 CRITICAL_CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
@@ -86,6 +91,18 @@ if [[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]]; then
 	unset PYTHONHOME PYTHONPATH PYTHONSTARTUP
 fi
 
+initialize_migration_job() {
+	[[ -z "$MIGRATION_JOB" ]] || return 0
+	MIGRATION_JOB=$("$PYTHON_BIN" -I -S -B -c \
+		'import secrets;print("cn-stg-mig-"+secrets.token_hex(10))') || return 1
+	[[ "$MIGRATION_JOB" =~ ^cn-stg-mig-[0-9a-f]{20}$ ]] || return 1
+}
+
+# One invocation owns one unpredictable job name, including schema probes and
+# cleanup. A name collision is a refusal, never permission to replace a job.
+initialize_migration_job || exit 1
+readonly MIGRATION_JOB
+
 AZ_EXECUTABLE=$(command -v az) || {
 	echo "Azure CLI is unavailable."
 	exit 1
@@ -105,7 +122,8 @@ az() {
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			--resource https://containerregistry.azure.net \
 			--only-show-errors --output json) || return
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" \
+			--migration-job-name "$MIGRATION_JOB" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json") \
 			4< <(printf '%s' "$registry_token_json"); then
@@ -115,7 +133,8 @@ az() {
 		fi
 		unset registry_token_json
 	else
-		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" "$@" \
+		if "$AZURE_CLI_PYTHON" -I -B "$BOUND_AZURE_CLI" --candidate-sha "$FOUNDER_CANDIDATE_SHA" \
+			--migration-job-name "$MIGRATION_JOB" "$@" \
 			--subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
 			3< <(printf '%s' "$management_token_json"); then
 			status=0
@@ -152,10 +171,23 @@ verify_founder_release_source() {
 	[[ "$STAGING_DEPLOYMENT_IDENTITY_MODE" == "founder-user" ]] || return 0
 	local controller_sha canonical_root canonical_origin dirty_checkout source_result
 	local expected_identity_sha256 expected_source_archive_sha256
+	# Authenticate the exact public release inputs before deriving any runtime
+	# selectors. Source/merge/review verification below is still mandatory.
+	if [[ -n "$STAGING_PUBLICATION_RECEIPT" ]]; then
+		RELEASE_V2_JSON=$("$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+			--deployment-inputs "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" \
+			"$STAGING_PUBLICATION_RECEIPT" "$EXPECTED_STAGING_PUBLICATION_RECEIPT_SHA256") || return 1
+		FOUNDER_CANDIDATE_SHA=$(jq -er '.candidate_sha' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_APPROVAL_PR_NUMBER=$(jq -er '.candidate_pr' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_EXPECTED_SCHEMA_AFTER=$(jq -er '.schema_after' <<<"$RELEASE_V2_JSON") || return 1
+		FOUNDER_CANDIDATE_IMAGE_DIGEST=$(jq -er '.image_digest' <<<"$RELEASE_V2_JSON") || return 1
+		[[ "$EXPECTED_SCHEMA_BEFORE" == "$(jq -r '.schema_before' <<<"$RELEASE_V2_JSON")" && \
+			"$STAGING_IMAGE_DIGEST" == "$FOUNDER_CANDIDATE_IMAGE_DIGEST" ]] || return 1
+	fi
 	if [[ "$GIT_SHA" != "$FOUNDER_CANDIDATE_SHA" || \
 		"$STAGING_APPROVAL_PR_NUMBER" != "$FOUNDER_APPROVAL_PR_NUMBER" || \
 		"$EXPECTED_SCHEMA_AFTER" != "$FOUNDER_EXPECTED_SCHEMA_AFTER" ]]; then
-		echo "Founder-user staging deployment is restricted to the reviewed PR #385 candidate and schema."
+		echo "Founder-user staging deployment is restricted to the exact reviewed candidate and schema."
 		return 1
 	fi
 	if ! canonical_root=$(git -C "$REPOSITORY_ROOT" rev-parse --show-toplevel) || \
@@ -241,7 +273,7 @@ fi
 # drop them immediately on either success or failure. ENV_JSON is deliberately
 # not exported, so later child processes receive only explicitly scoped values.
 CONFIGURATION_STATUS=0
-ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend) || \
+ENV_JSON=$(cd "$REPOSITORY_ROOT" && just direnv_export .env.staging.backend 2>/dev/null) || \
 	CONFIGURATION_STATUS=$?
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
@@ -272,7 +304,7 @@ for schema_revision in "$EXPECTED_SCHEMA_BEFORE" "$EXPECTED_SCHEMA_AFTER"; do
 		exit 1
 	fi
 done
-if [[ ! "$EXPECTED_RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+if [[ -z "${RELEASE_V2_JSON:-}" && ! "$EXPECTED_RECOVERY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
 	echo "Expected recovery digest must be sha256 followed by 64 lowercase hex characters."
 	exit 1
 fi
@@ -280,6 +312,24 @@ if [[ ! "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" =~ ^sha256:[0-9a-f]{64}
 	echo "Expected staging identity fingerprint-set hash must use the canonical sha256 form."
 	exit 1
 fi
+case "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" in
+true)
+	if [[ ! "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+		echo "Configuration preservation requires the reviewed full runtime fingerprint."
+		exit 1
+	fi
+	;;
+false)
+	if [[ -n "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" ]]; then
+		echo "A full runtime fingerprint requires configuration preservation."
+		exit 1
+	fi
+	;;
+*)
+	echo "Invalid staging configuration preservation mode."
+	exit 1
+	;;
+esac
 if ! RESOLVED_GIT_SHA=$(git -C "$REPOSITORY_ROOT" rev-parse --quiet --verify "$GIT_SHA^{commit}"); then
 	echo "Error: staging source is not a valid commit in this repository."
 	exit 1
@@ -308,9 +358,12 @@ unset CANDIDATE_PROCFILE RESOLVED_GIT_SHA
 
 # Keep the provider-v7 runtime gates synchronized even when the inherited
 # control was omitted from direnv's delta.
+# Companion admission comes only from the reviewed release plan. Omitting its
+# optional group preserves historical behavior: no companion environment keys.
 if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 	--arg enabled "$ENABLE_PROVIDER_V7" \
-	'. + {
+	'del(.AGENT_API_COMPANION_CLIENT_ID, .COMPANION_ENCOUNTER_READ_ENABLED,
+		.COMPANION_RECORD_READ_ENABLED, .COMPANION_APPOINTMENT_SETUP_ENABLED) | . + {
 		AUTHORITY_KERNEL_ENABLED: $enabled,
 		AGENT_API_ENABLED: $enabled,
 		SCRIBE_HANDOFF_ENABLED: "false",
@@ -326,6 +379,9 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 	}'); then
 	echo "Failed to reconcile provider V7 staging configuration."
 	exit 1
+fi
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	ENV_JSON=$(jq -c --argjson release "$RELEASE_V2_JSON" '. + $release.runtime_public' <<<"$ENV_JSON") || exit 1
 fi
 if ! jq -e '
 	.SOVEREIGN_RECORD_GRANT_SECRET |
@@ -370,6 +426,10 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
 forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
+if sys.argv[2] == "v2":
+    forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
+    if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
+        fail()
 if any(v not in {"true", "false"} for v in flags.values()) or any(flags[k] != "false" for k in forced_false) or (flags["STRIPE_BILLING_ENABLED"] == "true" and flags["STRIPE_INTEGRATION_ENABLED"] != "true"):
     fail()
 try:
@@ -419,7 +479,7 @@ evidence = {
     "deployment_blockers": blockers,
 }
 print(json.dumps(evidence, separators=(",", ":"), sort_keys=True))
-' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" <<<"$ENV_JSON"
+' "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" "${RELEASE_V2_JSON:+v2}" <<<"$ENV_JSON"
 }
 
 if ! CONFIGURATION_EVIDENCE_JSON=$(build_configuration_evidence); then
@@ -468,6 +528,13 @@ PUBLIC_VARS=(
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
 	SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED
+	SCRIBE_CAPTURE_ENABLED SCRIBE_CAPTURE_NOTES_ENABLED SCRIBE_CAPTURE_LONG_VISITS_ENABLED
+	SCRIBE_CAPTURE_WORKING_TRANSCRIPTS_ENABLED SCRIBE_CAPTURE_RECOVERY_ENABLED SCRIBE_CAPTURE_SOURCE_ENABLED
+	SCRIBE_ENCOUNTER_PREP_ENABLED SCRIBE_SERVICE_BASE_URL SCRIBE_SERVICE_SCOPE SCRIBE_MANAGED_IDENTITY_CLIENT_ID
+	SCRIBE_SERVICE_TIMEOUT_SECONDS SCRIBE_CAPTURE_UPLOAD_ORIGINS AGENT_API_SCRIBE_RECEIVER_CLIENT_ID
+	SESSION_PREP_PROVIDER_ENABLED SESSION_PREP_PROVIDER_CLERK_SUBJECTS
+	AGENT_API_COMPANION_CLIENT_ID COMPANION_ENCOUNTER_READ_ENABLED
+	COMPANION_RECORD_READ_ENABLED COMPANION_APPOINTMENT_SETUP_ENABLED
 	AUTO_MIGRATE_ON_STARTUP
 	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
@@ -521,6 +588,44 @@ configure_workload_contract() {
 		fi
 	fi
 }
+
+runtime_contracts_json() {
+	local container secret_names public_names args
+	local container_secret_vars=() container_public_vars=()
+	local contracts=()
+	for container in $CRITICAL_CONTAINERS; do
+		configure_workload_contract "$container"
+		secret_names=$(printf '%s\n' "${container_secret_vars[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		public_names=$(printf '%s\n' "${container_public_vars[@]}" | jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
+		case "$container" in
+		"$API_CONTAINER") args=$STAGING_API_COMMAND ;;
+		"$WORKER_CONTAINER") args=$STAGING_WORKER_COMMAND ;;
+		"$SCHEDULER_CONTAINER") args=$SCHEDULER_COMMAND ;;
+		esac
+		contracts+=("$(jq -cn --arg name "$container" --arg args "$args" \
+			--argjson secrets "$secret_names" --argjson public "$public_names" \
+			'{name:$name,args:[$args],secret_names:$secrets,public_names:$public}')")
+	done
+	printf '%s\n' "${contracts[@]}" | jq -sc '.'
+}
+
+verify_effective_configuration_fingerprint() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
+	local observed
+	observed=$(printf '%s\n%s\n' "$ENV_JSON" "$RUNTIME_CONTRACTS_JSON" |
+		jq -sc '{configuration:.[0],contracts:.[1]}' |
+		"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_runtime_configuration.py" --fingerprint) || return 1
+	if [[ "$observed" != "$EXPECTED_STAGING_EFFECTIVE_CONFIGURATION_SHA256" ]]; then
+		echo "Resolved staging configuration differs from the reviewed full runtime fingerprint." >&2
+		return 1
+	fi
+}
+
+RUNTIME_CONTRACTS_JSON=""
+if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]]; then
+	RUNTIME_CONTRACTS_JSON=$(runtime_contracts_json) || exit 1
+	verify_effective_configuration_fingerprint || exit 1
+fi
 
 if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
 	exit 1
@@ -591,6 +696,14 @@ if [[ "$PUBLISHED_DIGEST" != "$STAGING_IMAGE_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output image_digest "$STAGING_IMAGE_DIGEST" || exit 1
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	while IFS= read -r recovery_image; do
+		recovery_name=${recovery_image#cosmaneurastagingregistry.azurecr.io/}
+		recovery_digest=${recovery_image#*@}
+		observed=$(az acr manifest show-metadata --registry "$ACR_NAME" --name "$recovery_name" --query digest -o tsv) || exit 1
+		[[ "$observed" == "$recovery_digest" ]] || exit 1
+	done < <(jq -r '.recovery[].image' <<<"$RELEASE_V2_JSON" | sort -u)
+else
 if ! RECOVERY_MANIFEST_DIGEST=$(az acr manifest show-metadata \
 	--registry "$ACR_NAME" --name "$STAGING_REPOSITORY@$EXPECTED_RECOVERY_DIGEST" \
 	--query digest -o tsv); then
@@ -600,6 +713,7 @@ fi
 if [[ "$RECOVERY_MANIFEST_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
 	echo "The staging recovery manifest does not match the reviewed digest."
 	exit 1
+fi
 fi
 if ! ACR_USERNAME=$(az acr credential show \
 	-n "$ACR_NAME" --query "username" -o tsv); then
@@ -779,6 +893,31 @@ verify_workload_state_ready() {
 	fi
 }
 
+verify_preserved_runtime() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" == "true" ]] || return 0
+	local selected=${1:-$CRITICAL_CONTAINERS}
+	local observed container state contract expected_revision secrets
+	verify_effective_configuration_fingerprint || return 1
+	observed=$(collect_workload_state safe) || return 1
+	verify_workload_state_ready "$observed" || return 1
+	for container in $selected; do
+		state=$(jq -ce --arg name "$container" '.[] | select(.name == $name)' <<<"$observed") || return 1
+		contract=$(jq -ce --arg name "$container" '.[] | select(.name == $name)' <<<"$RUNTIME_CONTRACTS_JSON") || return 1
+		expected_revision=$(jq -er --arg name "$container" '.[] | select(.name == $name) | .latestReadyRevision' <<<"$WORKLOADS_BEFORE_JSON") || return 1
+		secrets=$(az containerapp secret list -n "$container" -g "$RESOURCE_GROUP" --show-values -o json) || return 1
+		# Values are consumed over stdin only and never included in evidence.
+		if ! printf '%s\n%s\n%s\n%s\n' "$ENV_JSON" "$contract" "$state" "$secrets" |
+			jq -sc --arg revision "$expected_revision" \
+			'{configuration:.[0],contract:.[1],state:.[2],secrets:.[3],expected_revision:$revision}' |
+			"$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_runtime_configuration.py" --check-workload; then
+			unset secrets
+			echo "Staging runtime preservation failed for $container." >&2
+			return 1
+		fi
+		unset secrets
+	done
+}
+
 verify_candidate_workload_state() {
 	local state_json=$1
 	if ! jq -e \
@@ -857,6 +996,12 @@ if ! verify_workload_state_ready "$WORKLOADS_BEFORE_JSON"; then
 	echo "Pre-deployment staging workload state is not safe to mutate."
 	exit 1
 fi
+if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+	printf '%s' "$WORKLOADS_BEFORE_JSON" | "$PYTHON_BIN" -I -S -B "$REPOSITORY_ROOT/scripts/staging_release_contract.py" \
+		--verify-recovery "$STAGING_BUILD_PLAN" "$EXPECTED_STAGING_BUILD_PLAN_SHA256" || exit 1
+	RECOVERY_DIGEST=$(jq -c '.recovery' <<<"$RELEASE_V2_JSON")
+	emit_github_output recovery_digest "$RECOVERY_DIGEST" || exit 1
+else
 RECOVERY_DIGEST=""
 while IFS= read -r current_image; do
 	if ! current_digest=$(resolve_staging_digest "$current_image"); then
@@ -875,6 +1020,8 @@ if [[ "$RECOVERY_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output recovery_digest "$RECOVERY_DIGEST" || exit 1
+
+fi
 
 STRIPE_INTEGRATION_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_INTEGRATION_ENABLED // "false"')
 STRIPE_BILLING_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_BILLING_ENABLED // "false"')
@@ -953,6 +1100,12 @@ done
 verify_migration_job_template() {
 	# Query only the fields needed for the contract; never request env values.
 	local migration_template secret_env_names public_env_names
+	local compatibility_args=()
+	# Version-2 candidates already escape the URL in migrations/env.py.
+	# Keep the old bootstrap only for the historical pinned release.
+	if [[ -z "${RELEASE_V2_JSON:-}" ]]; then
+		compatibility_args+=(--staging-alembic-compatibility)
+	fi
 	if ! migration_template=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
 		--query '{containers:properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}},secretNames:properties.configuration.secrets[].name}' \
@@ -968,7 +1121,7 @@ verify_migration_job_template() {
 			--expected-image "$STAGING_IMAGE_REFERENCE" \
 			--database-secret-name "$ALEMBIC_COMPAT_DATABASE_SECRET_NAME" \
 			--raw-database-secret-name database-url \
-			--staging-alembic-compatibility \
+			"${compatibility_args[@]}" \
 			--secret-env-names "$secret_env_names" \
 			--public-env-names "$public_env_names"; then
 		echo "Migration job template is not approved for schema mutation."
@@ -1114,10 +1267,13 @@ run_migrations() {
 	fi
 
 	# Build secrets and env var args from the same source as the app containers.
-	local migration_command
+	local migration_command command_flag=--staging-alembic-command
+	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+		command_flag=--alembic-command
+	fi
 	migration_command=$("$PYTHON_BIN" -I -S -B \
 		"$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
-		--staging-alembic-command) || return 1
+		"$command_flag") || return 1
 	local secrets_args=()
 	local env_args=()
 
@@ -1147,21 +1303,13 @@ run_migrations() {
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
-	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Deleting existing migration job to recreate with fresh config..."
-		if ! az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes; then
-			echo "Failed to delete the existing migration job."
-			return 1
-		fi
-	fi
 	local remaining_jobs
 	remaining_jobs=$(az containerapp job list -g "$RESOURCE_GROUP" \
 		--query "[?name=='$MIGRATION_JOB'] | length(@)" -o tsv) || return 1
 	if [[ "$remaining_jobs" != "0" ]]; then
-		echo "Existing migration job deletion was not observed."
+		echo "Invocation migration job name is already present; refusing to replace it."
 		return 1
 	fi
-	MIGRATION_JOB_CLEANUP_REQUIRED="true"
 
 	echo "Creating migration job..."
 	if ! az containerapp job create \
@@ -1179,9 +1327,13 @@ run_migrations() {
 		--registry-server "$ACR_SERVER" \
 		--registry-username "$ACR_USERNAME" \
 		--registry-password "$ACR_PASSWORD"; then
-		echo "Failed to configure migration job."
+		# A failed create may have reached Azure. Do not claim or delete a job
+		# whose ownership was not confirmed by this invocation's successful create.
+		echo "Migration job creation was not confirmed; retaining any ambiguous job: $MIGRATION_JOB"
 		return 1
 	fi
+	MIGRATION_JOB_CLEANUP_REQUIRED="true"
+	echo "Created invocation migration job: $MIGRATION_JOB"
 	local migration_container_name
 	if ! migration_container_name=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
@@ -1257,6 +1409,7 @@ initiate_deployment() {
 	local container_name=$1
 	local git_sha=$2
 	local image="$STAGING_IMAGE_REFERENCE"
+	verify_preserved_runtime "$container_name" || return 1
 
 	# Build secrets and env var args — only include vars that have a value in 1Password.
 	# We skip missing vars so we never reference a secretref that doesn't exist.
@@ -1293,7 +1446,7 @@ initiate_deployment() {
 	echo "Initiating deployment for $container_name with image $image..."
 
 	# Secrets must be set separately; az containerapp update does not support --secrets.
-	if [[ ${#secrets_args[@]} -gt 0 ]]; then
+	if [[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" && ${#secrets_args[@]} -gt 0 ]]; then
 		if ! az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
 			--secrets "${secrets_args[@]}"; then
 			echo "Failed to configure secrets for $container_name."
@@ -1308,6 +1461,11 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	if [[ -n "${RELEASE_V2_JSON:-}" ]]; then
+		# Zero retention deletes the previous template when this revision becomes
+		# active, making the release's bound revision-copy recovery impossible.
+		update_args+=(--max-inactive-revisions 10)
+	fi
 	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		update_args+=(--args "$STAGING_API_COMMAND")
 	fi
@@ -1347,7 +1505,39 @@ initiate_deployment() {
 	return 0
 }
 
+verify_retained_recovery_revision() {
+	[[ -n "${RELEASE_V2_JSON:-}" ]] || return 0
+	local container_name=$1
+	case "$container_name" in
+	"$API_CONTAINER"|"$WORKER_CONTAINER"|"$SCHEDULER_CONTAINER") ;;
+	*) return 1 ;;
+	esac
+	local expected_revision expected_image retention retained
+	expected_revision=$(jq -er --arg name "$container_name" '.recovery[$name].revision' <<<"$RELEASE_V2_JSON") || return 1
+	expected_image=$(jq -er --arg name "$container_name" '.recovery[$name].image' <<<"$RELEASE_V2_JSON") || return 1
+	retention=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query 'properties.configuration.maxInactiveRevisions' -o tsv) || return 1
+	if [[ "$retention" != "10" ]]; then
+		echo "Inactive revision retention was not preserved for $container_name." >&2
+		return 1
+	fi
+	retained=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--revision "$expected_revision" \
+		--query '{image:properties.template.containers[0].image,provisioning:properties.provisioningState}' \
+		-o json) || {
+		echo "The bound recovery revision is unavailable for $container_name." >&2
+		return 1
+	}
+	if ! jq -e --arg image "$expected_image" \
+		'.image == $image and .provisioning == "Provisioned"' <<<"$retained" >/dev/null; then
+		echo "The retained recovery revision does not match $container_name's release plan." >&2
+		return 1
+	fi
+	echo "Verified the bound recovery revision remains available for $container_name."
+}
+
 remove_unowned_billing_secrets() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	local remove_names=()
 	if ! billing_integration_enabled_for "$container_name"; then
@@ -1369,6 +1559,7 @@ remove_unowned_billing_secrets() {
 }
 
 remove_disabled_record_grant_secret() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	if record_grants_enabled_for "$container_name"; then
 		return 0
@@ -1385,6 +1576,7 @@ remove_disabled_record_grant_secret() {
 }
 
 remove_disallowed_recall_secret() {
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
 	local container_name=$1
 	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		return 0
@@ -1561,6 +1753,7 @@ wait_for_incompatible_worker_replicas_to_drain() {
 # Run migrations before deploying new containers
 verify_founder_release_source || exit 1
 verify_azure_deployment_identity || exit 1
+verify_preserved_runtime || exit 1
 run_migrations
 if [[ $? -ne 0 ]]; then
 	echo "Migration failed. Aborting deployment."
@@ -1579,6 +1772,7 @@ for container in $BACKEND_CONTAINERS; do
 		echo "Deployment failed for $container. Exiting."
 		exit 1
 	fi
+	verify_retained_recovery_revision "$container" || exit 1
 	if [[ "$container" == "$WORKER_CONTAINER" ]]; then
 		wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
 	fi
@@ -1586,6 +1780,7 @@ done
 
 initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+verify_retained_recovery_revision "$API_CONTAINER" || exit 1
 
 for container in $CRITICAL_CONTAINERS; do
 	remove_unowned_billing_secrets "$container"

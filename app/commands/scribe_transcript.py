@@ -87,12 +87,16 @@ def _matching_receipt(
 
 
 def _replayed_result(
-    session: Session, receipt: ScribeTranscriptDelivery
+    session: Session,
+    receipt: ScribeTranscriptDelivery,
+    *,
+    dispatch_pipeline: bool = True,
 ) -> TranscriptImportResult:
     transcript = session.get(AIVisitTranscript, receipt.transcript_id)
     if transcript is None:
         raise TranscriptPersistenceError("Transcript receipt is incomplete.")
-    _dispatch_pipeline_if_needed(session, receipt, transcript)
+    if dispatch_pipeline:
+        _dispatch_pipeline_if_needed(session, receipt, transcript)
     return TranscriptImportResult(transcript=transcript, disposition="replayed")
 
 
@@ -123,7 +127,11 @@ def _perform(
     payload_sha256: str,
     duration: int,
     transcript_data: list[TranscriptEntry],
+    dispatch_pipeline: bool = True,
+    commit_import: bool = True,
 ) -> TranscriptImportResult:
+    if not commit_import and dispatch_pipeline:
+        raise ValueError("Deferred import cannot dispatch background work.")
     # Serializing deliveries for one encounter prevents two callers from
     # creating competing transcript rows before either receipt is visible.
     appointment = session.exec(
@@ -145,7 +153,7 @@ def _perform(
         payload_sha256=payload_sha256,
     )
     if receipt is not None:
-        return _replayed_result(session, receipt)
+        return _replayed_result(session, receipt, dispatch_pipeline=dispatch_pipeline)
 
     existing = session.exec(
         select(AIVisitTranscript).where(
@@ -183,6 +191,20 @@ def _perform(
     )
     session.add(delivery)
 
+    if not commit_import:
+        # The explicit capture receiver must atomically add its source/gap
+        # provenance before any background reader can observe this delivery.
+        # It owns the outer commit and rollback; legacy callers retain their
+        # existing committed import and dispatch behavior below.
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise TranscriptPersistenceError from exc
+        return TranscriptImportResult(
+            transcript=transcript,
+            disposition="created" if created else "replayed",
+        )
+
     try:
         session.commit()
         session.refresh(transcript)
@@ -198,9 +220,10 @@ def _perform(
         )
         if receipt is None:
             raise TranscriptPersistenceError from exc
-        return _replayed_result(session, receipt)
+        return _replayed_result(session, receipt, dispatch_pipeline=dispatch_pipeline)
 
-    _dispatch_pipeline_if_needed(session, delivery, transcript)
+    if dispatch_pipeline:
+        _dispatch_pipeline_if_needed(session, delivery, transcript)
 
     return TranscriptImportResult(
         transcript=transcript,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -28,12 +29,14 @@ SPEC.loader.exec_module(GUARD)
         ("synthetic-safe", "/etc/ssl/certs/ca.pem", "synthetic-safe"),
     ],
 )
+@pytest.mark.parametrize("release_v2", [False, True])
 def test_actual_job_preserves_startup_url_then_escapes_only_alembic_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     password: str,
     certificate: str,
     decoded_password: str,
+    release_v2: bool,
 ) -> None:
     raw = (
         f"postgresql+psycopg://synthetic:{password}@db.example.test/staging"
@@ -70,17 +73,19 @@ az() {
     esac
 }
 """
+    test_env = {
+        "PATH": os.environ["PATH"],
+        "PYTHON_BIN": sys.executable,
+        "SCRIPT_DIR": str(ROOT / "infra-staging"),
+        "ENV_JSON": json.dumps(
+            {"DATABASE_URL": raw, "AUTO_MIGRATE_ON_STARTUP": "false"}
+        ),
+        "CAPTURE": str(capture),
+        "RELEASE_V2_JSON": '{"version":2}' if release_v2 else "",
+    }
     result = subprocess.run(
         ["bash", "-c", script + function + "\nrun_migrations\n"],
-        env={
-            "PATH": os.environ["PATH"],
-            "PYTHON_BIN": sys.executable,
-            "SCRIPT_DIR": str(ROOT / "infra-staging"),
-            "ENV_JSON": json.dumps(
-                {"DATABASE_URL": raw, "AUTO_MIGRATE_ON_STARTUP": "false"}
-            ),
-            "CAPTURE": str(capture),
-        },
+        env=test_env,
         capture_output=True,
         text=True,
         check=False,
@@ -93,10 +98,54 @@ az() {
     assert "DATABASE_URL=secretref:database-url-alembic-compat" in arguments
     assert "AUTO_MIGRATE_ON_STARTUP=false" in arguments
     command = arguments[arguments.index("--args") + 1]
-    assert command == GUARD.STAGING_ALEMBIC_ARGS[0]
+    assert (
+        command == (GUARD.ALEMBIC_ARGS if release_v2 else GUARD.STAGING_ALEMBIC_ARGS)[0]
+    )
+    helper_start = deploy.index("verify_migration_job_template() {")
+    helper = deploy[helper_start : deploy.index("\n}", helper_start) + 2]
+    template = {
+        "containers": [
+            {
+                "name": "cosmaneura-staging-migrate",
+                "image": "registry.example/test@"
+                + "sha256:6fa75d4093590b83dc2f50962f1979481a8c3d3d9d1dd9f647b7f407de0690a5",
+                "command": None,
+                "args": [command],
+                "env": [
+                    {
+                        "name": "DATABASE_URL",
+                        "secretRef": "database-url-alembic-compat",
+                    },
+                    {"name": "AUTO_MIGRATE_ON_STARTUP", "secretRef": None},
+                ],
+            }
+        ],
+        "secretNames": ["database-url", "database-url-alembic-compat"],
+    }
+    provider = '\naz() { printf "%s" "$SYNTHETIC_TEMPLATE"; }\n'
+    for wrong_command in (False, True):
+        if wrong_command:
+            template["containers"][0]["args"] = [
+                (GUARD.STAGING_ALEMBIC_ARGS if release_v2 else GUARD.ALEMBIC_ARGS)[0]
+            ]
+        verified = subprocess.run(
+            [
+                "bash",
+                "-c",
+                script + provider + helper + "\nverify_migration_job_template\n",
+            ],
+            env={**test_env, "SYNTHETIC_TEMPLATE": json.dumps(template)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert (verified.returncode != 0) is wrong_command
     invocation = shlex.split(command)
-    assert invocation[:2] == ["/opt/venv/bin/python", "-c"]
-    assert len(invocation) == 3
+    if release_v2:
+        assert invocation == ["/opt/venv/bin/alembic", "upgrade", "head"]
+    else:
+        assert invocation[:2] == ["/opt/venv/bin/python", "-c"]
+        assert len(invocation) == 3
 
     # Model the real candidate's order with both real URL consumers: app
     # startup asks the driver for connection arguments before env.py sets URL.
@@ -113,7 +162,31 @@ az() {
         assert startup["sslrootcert"] == "/etc/ssl/certs/ca.pem"
 
         config = Config()
-        config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+        if release_v2:
+            # Execute the actual candidate's configuration expression, then
+            # inspect real driver arguments; no database credentials or I/O.
+            tree = ast.parse((ROOT / "migrations/env.py").read_text())
+            statements: list[ast.stmt] = [
+                node
+                for node in tree.body
+                if isinstance(node, ast.Expr)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Attribute)
+                and isinstance(node.value.func.value, ast.Name)
+                and node.value.func.value.id == "config"
+                and node.value.func.attr == "set_main_option"
+            ]
+            assert len(statements) == 1
+            exec(
+                compile(
+                    ast.Module(body=statements, type_ignores=[]),
+                    "candidate-migration-configuration",
+                    "exec",
+                ),
+                {"config": config, "database_url": lambda: raw},
+            )
+        else:
+            config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
         assert config.get_main_option("sqlalchemy.url") == raw
         section = config.get_section(config.config_ini_section)
         assert section is not None
@@ -131,16 +204,24 @@ az() {
         observed.append(True)
 
     monkeypatch.setattr(CommandLine, "main", migration_main)
-    exec(compile(invocation[2], "staging-alembic-bootstrap", "exec"), {})
+    if release_v2:
+        CommandLine().main(argv=invocation[1:])
+    else:
+        exec(compile(invocation[2], "staging-alembic-bootstrap", "exec"), {})
     assert observed == [True]
 
 
-def test_staging_command_cli_emits_the_exact_guarded_command() -> None:
+@pytest.mark.parametrize("release_v2", [False, True])
+def test_staging_command_cli_emits_the_exact_guarded_command(release_v2: bool) -> None:
+    flag = "--alembic-command" if release_v2 else "--staging-alembic-command"
     result = subprocess.run(
-        [sys.executable, "-I", "-S", "-B", str(SCRIPT), "--staging-alembic-command"],
+        [sys.executable, "-I", "-S", "-B", str(SCRIPT), flag],
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 0
-    assert result.stdout.strip() == GUARD.STAGING_ALEMBIC_ARGS[0]
+    assert (
+        result.stdout.strip()
+        == (GUARD.ALEMBIC_ARGS if release_v2 else GUARD.STAGING_ALEMBIC_ARGS)[0]
+    )

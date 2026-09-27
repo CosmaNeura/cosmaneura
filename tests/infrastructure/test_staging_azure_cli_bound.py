@@ -156,6 +156,9 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
     image = f"{m.STAGING_REGISTRY_HOST}/{m.STAGING_REPOSITORY}@sha256:{'a' * 64}"
     subscription = ["--subscription", m.SUBSCRIPTION]
     for prefix in m.ALLOWED_CONTAINERAPP_COMMANDS:
+        if prefix == ("containerapp", "secret", "list"):
+            m.validate_argv(_runtime_secret_list("cosmaneura-staging-app"))
+            continue
         if prefix == ("containerapp", "job", "list"):
             m.validate_argv(
                 [
@@ -185,10 +188,15 @@ def test_exact_staging_containerapp_commands_are_accepted() -> None:
             ("containerapp", "job", "start"),
         }:
             command.extend(["--image", image])
-        if prefix == ("containerapp", "job", "stop"):
+        if prefix in {
+            ("containerapp", "job", "stop"),
+            ("containerapp", "job", "execution", "show"),
+        }:
             command.extend(
                 ["--job-execution-name", "cosmaneura-staging-migrate-abc123"]
             )
+        if prefix == ("containerapp", "job", "logs", "show"):
+            command.extend(["--execution", "cosmaneura-staging-migrate-abc123"])
         m.validate_argv(command + subscription)
 
 
@@ -564,3 +572,106 @@ def test_scope_normalization_never_splits_a_string_into_characters() -> None:
     scope = "https://management.azure.com/.default"
     assert m.normalized_scopes(scope) == {scope}
     assert m.normalized_scopes((scope,)) == {scope}
+
+
+def test_new_candidate_tag_is_exact_and_split_staging_recovery_is_read_only():
+    candidate = "c" * 40
+    command = [
+        "acr",
+        "manifest",
+        "show-metadata",
+        "--registry",
+        m.STAGING_REGISTRY,
+        "--name",
+        m.STAGING_REPOSITORY + ":" + candidate,
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+    m.validate_argv(command, candidate)
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(command, "d" * 40)
+    command[command.index("--name") + 1] = "scribe-beta/core@sha256:" + "a" * 64
+    m.validate_argv(command, candidate)
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(
+            [
+                "containerapp",
+                "update",
+                "-n",
+                "cosmaneura-staging-app",
+                "-g",
+                m.STAGING_RESOURCE_GROUP,
+                "--image",
+                m.STAGING_REGISTRY_HOST + "/scribe-beta/core@sha256:" + "a" * 64,
+                "--subscription",
+                m.SUBSCRIPTION,
+            ],
+            candidate,
+        )
+
+
+def _runtime_secret_list(name: str) -> list[str]:
+    return [
+        "containerapp",
+        "secret",
+        "list",
+        "-n",
+        name,
+        "-g",
+        m.STAGING_RESOURCE_GROUP,
+        "--show-values",
+        "-o",
+        "json",
+        "--subscription",
+        m.SUBSCRIPTION,
+    ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "cosmaneura-staging-app",
+        "cosmaneura-staging-worker",
+        "cosmaneura-staging-scheduler",
+    ],
+)
+def test_runtime_preservation_reads_only_exact_core_secret_lists(name: str) -> None:
+    m.validate_argv(_runtime_secret_list(name))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "cosmaneura-staging-migrate",
+        "cosmaneura-staging-scribe-api",
+        "cosmaneura-staging-scribe-native",
+        "cosmaneuraprod-app",
+    ],
+)
+def test_runtime_secret_list_rejects_unrelated_targets(name: str) -> None:
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(_runtime_secret_list(name))
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [("-g", "other-group"), ("--subscription", "other-subscription"), ("-o", "tsv")],
+)
+def test_runtime_secret_list_rejects_changed_scope_or_output(
+    flag: str, value: str
+) -> None:
+    argv = _runtime_secret_list("cosmaneura-staging-app")
+    argv[argv.index(flag) + 1] = value
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(argv)
+
+
+def test_runtime_secret_list_rejects_queries_and_show_values_on_other_commands() -> (
+    None
+):
+    argv = _runtime_secret_list("cosmaneura-staging-app")
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(argv + ["--query", "[].value"])
+    argv[2] = "set"
+    with pytest.raises(m.BoundAzureRefused):
+        m.validate_argv(argv)

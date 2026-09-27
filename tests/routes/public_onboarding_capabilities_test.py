@@ -1,6 +1,6 @@
 import pytest
 from fastapi import FastAPI
-from starlette.routing import Route
+from fastapi.testclient import TestClient
 
 import app.server as server
 from app.configuration import public_onboarding as public_onboarding_configuration
@@ -18,10 +18,6 @@ def _app_with_latch(monkeypatch: pytest.MonkeyPatch, *, enabled: bool) -> FastAP
     app = FastAPI()
     server.register_public_onboarding_routes(app)
     return app
-
-
-def _paths(app: FastAPI) -> set[str]:
-    return {route.path for route in app.routes if isinstance(route, Route)}
 
 
 def test_latch_defaults_closed() -> None:
@@ -46,7 +42,7 @@ def test_route_is_absent_from_the_application_when_the_latch_is_false(
 ) -> None:
     app = _app_with_latch(monkeypatch, enabled=False)
 
-    assert not any("public-onboarding" in path for path in _paths(app))
+    assert TestClient(app).get("/public-onboarding/v1/capabilities").status_code == 404
 
 
 def test_route_is_absent_from_the_openapi_schema_when_the_latch_is_false(
@@ -65,7 +61,7 @@ def test_route_is_registered_when_the_latch_is_true(
 ) -> None:
     app = _app_with_latch(monkeypatch, enabled=True)
 
-    assert "/public-onboarding/v1/capabilities" in _paths(app)
+    assert TestClient(app).get("/public-onboarding/v1/capabilities").status_code == 401
 
 
 def _dependency_names() -> set[str]:

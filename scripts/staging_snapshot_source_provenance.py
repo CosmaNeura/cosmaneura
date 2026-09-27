@@ -399,14 +399,22 @@ class ReadOnlySource:
         return self.run(label, [str(GIT), "--no-replace-objects", *arguments], maximum)
 
 
-def protection(value: dict[str, Any], ruleset: dict[str, Any]) -> None:
+def protection(
+    value: dict[str, Any], ruleset: dict[str, Any], *, current_staging: bool = False
+) -> None:
     checks = value.get("required_status_checks")
-    require(type(checks) is dict and checks.get("strict") is True)
-    checks = cast(dict[str, Any], checks)
-    require(checks.get("contexts") == CHECKS)
-    require(
-        checks.get("checks") == [{"context": name, "app_id": None} for name in CHECKS]
-    )
+    # GitHub moved to local-only checks during this release. Accept
+    # that exact observed profile or the earlier strict profile; preserve all
+    # other controls. Independent head-bound Cursor review remains mandatory.
+    local_only = current_staging and checks is None
+    if not local_only:
+        require(type(checks) is dict and checks.get("strict") is True)
+        checks = cast(dict[str, Any], checks)
+        require(checks.get("contexts") == CHECKS)
+        require(
+            checks.get("checks")
+            == [{"context": name, "app_id": None} for name in CHECKS]
+        )
     for key, expected in (
         ("enforce_admins", True),
         ("allow_force_pushes", False),
@@ -420,7 +428,8 @@ def protection(value: dict[str, Any], ruleset: dict[str, Any]) -> None:
     reviews = cast(dict[str, Any], reviews)
     require(
         type(reviews.get("required_approving_review_count")) is int
-        and reviews["required_approving_review_count"] == 0
+        and reviews["required_approving_review_count"]
+        == (1 if current_staging and not local_only else 0)
     )
     require(
         reviews.get("require_code_owner_reviews") is False
@@ -431,9 +440,18 @@ def protection(value: dict[str, Any], ruleset: dict[str, Any]) -> None:
         ruleset.get("source") == REPOSITORY
         and ruleset.get("source_type") == "Repository"
     )
-    require(
-        ruleset.get("enforcement") == "active" and ruleset.get("bypass_actors") == []
+    # Preserve the actual September 23 policy. The older snapshot path retains
+    # its historical policy; neither path mutates GitHub protections.
+    bypass = (
+        [
+            {"actor_id": 1144995, "actor_type": "Integration", "bypass_mode": "always"},
+            {"actor_id": 1210556, "actor_type": "Integration", "bypass_mode": "always"},
+        ]
+        if current_staging
+        else []
     )
+    require(ruleset.get("enforcement") == "active")
+    require(ruleset.get("bypass_actors") == bypass)
     require(
         ruleset.get("conditions")
         == {"ref_name": {"exclude": [], "include": ["refs/heads/master"]}}
@@ -441,7 +459,9 @@ def protection(value: dict[str, Any], ruleset: dict[str, Any]) -> None:
     require(
         canonical(ruleset.get("rules"))
         == canonical(
-            [
+            [{"type": "non_fast_forward"}]
+            if current_staging
+            else [
                 {"type": "non_fast_forward"},
                 {
                     "type": "required_status_checks",

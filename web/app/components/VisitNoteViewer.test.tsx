@@ -23,7 +23,33 @@ describe("VisitNoteViewer", () => {
       },
     }
 
-    render(<VisitNoteViewer note={note} defaultOpen />)
+    render(
+      <VisitNoteViewer
+        note={note}
+        defaultOpen
+        transcript={{
+          id: "ai_visit_transcript_test",
+          doctor_id: "doctor_test",
+          patient_id: "patient_test",
+          appointment_id: "appointment_test",
+          duration: 1,
+          created_at: new Date().toISOString(),
+          transcript_data: [
+            {
+              speaker: "Synthetic speaker",
+              content: "Synthetic transcript excluded from note copy",
+              startTime: 0,
+              endTime: 1,
+            },
+          ],
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Visit Transcript" }))
+    expect(
+      screen.getByText("Synthetic transcript excluded from note copy"),
+    ).toBeVisible()
 
     fireEvent.click(screen.getByRole("button", { name: "Copy to Clipboard" }))
 
@@ -42,5 +68,8 @@ describe("VisitNoteViewer", () => {
     expect(plainText).toContain("Plan")
     expect(plainText).toContain("Follow-up plan")
     expect(plainText).not.toBe(note.note.content)
+    expect(plainText).not.toContain(
+      "Synthetic transcript excluded from note copy",
+    )
   })
 })

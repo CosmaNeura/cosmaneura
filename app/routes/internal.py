@@ -28,6 +28,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.reference_labs_gate as reference_labs_gate
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -143,6 +144,7 @@ from app.models.practice import (
     PracticeMember,
     PracticeRole,
 )
+from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
@@ -155,6 +157,13 @@ from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
+from .session_prep_review import (
+    PriorNoteOverview,
+    SessionPrepNoteReview,
+    note_review_statuses,
+    prior_notes_for_session_prep,
+    session_prep_review_api,
+)
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -168,6 +177,8 @@ CHECKOUT_RETIREMENT_PENDING_DETAIL = (
 
 internal_api_app = APIRouter(
     prefix="/internal/v1",
+    # Keep generated client method names stable for nested routers as well.
+    generate_unique_id_function=lambda route: route.name,
     # TODO unclear what the tags are used for...
     tags=["private"],
     # think of dependencies as middleware
@@ -190,6 +201,7 @@ internal_api_app = APIRouter(
 
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
+internal_api_app.include_router(session_prep_review_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -221,6 +233,9 @@ def intake_list(request: Request) -> IntakeList:
 
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = Field(
+        default_factory=dict
+    )
 
 
 @internal_api_app.get("/notes")
@@ -244,7 +259,35 @@ def note_list(request: Request) -> NotetakingData:
         .all()
     )
 
-    return NotetakingData(appointments=cast(list[Appointment], list(appointment_list)))
+    appointments = cast(list[Appointment], list(appointment_list))
+    appointment_ids = [appointment.id for appointment in appointments]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = {
+        str(appointment_id): "not-started" for appointment_id in appointment_ids
+    }
+    if appointment_ids:
+        # Match note_detail's current-note scope without loading note content.
+        # The owner join keeps bind count constant for this unpaginated list.
+        with get_session() as session:
+            completed_ids = session.exec(
+                select(cast(Any, AIVisitNote.appointment_id))
+                .join(
+                    Appointment,
+                    cast(Any, Appointment.id) == AIVisitNote.appointment_id,
+                )
+                .where(
+                    AIVisitNote.doctor_id == doctor.id,
+                    Appointment.doctor_id == doctor.id,
+                    cast(Any, AIVisitNote.superseded_at).is_(None),
+                )
+                .distinct()
+            ).all()
+        for appointment_id in completed_ids:
+            # A new appointment may appear after the list read. Never introduce
+            # a status key for a visit absent from this response's appointments.
+            if str(appointment_id) in note_statuses:
+                note_statuses[str(appointment_id)] = "completed"
+
+    return NotetakingData(appointments=appointments, note_statuses=note_statuses)
 
 
 # TODO what about doctors who have an insane patient list?
@@ -268,7 +311,11 @@ class NoteDetail(BaseModel, extra="forbid"):
     appointment: Appointment
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
+    note_transcripts: list[AIVisitTranscript] = Field(default_factory=list)
+    capture_workflow_required: bool = False
     engagement_role: EngagementRole | None = None
+    session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
+    session_prep_prior_notes: PriorNoteOverview | None = None
 
     @computed_field
     @property
@@ -279,37 +326,98 @@ class NoteDetail(BaseModel, extra="forbid"):
 @internal_api_app.get("/notes/{appointment_id}")
 def note_detail(
     request: Request,
+    response: Response,
     appointment_id: Annotated[TypeIDType, Path()],
 ) -> NoteDetail:
-    # TODO error handling for bad IDs
+    response.headers["Cache-Control"] = "no-store"
     doctor: Doctor = request.state.doctor
     appointment = cast(
-        Appointment,
+        Appointment | None,
         Appointment.where(
             Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-        ).one(),
+        ).first(),
     )
+    if appointment is None:
+        # A stale link and a visit owned by another doctor have the same result.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Visit unavailable",
+            headers={"Cache-Control": "no-store"},
+        )
 
     visit_notes = cast(
         list[AIVisitNote],
-        AIVisitNote.where(
-            AIVisitNote.appointment_id == appointment_id,
-            cast(Any, AIVisitNote.superseded_at).is_(None),
-        ).all(),
+        list(
+            AIVisitNote.where(
+                AIVisitNote.appointment_id == appointment_id,
+                AIVisitNote.doctor_id == doctor.id,
+                cast(Any, AIVisitNote.superseded_at).is_(None),
+            ).all()
+        ),
     )
 
-    # There should only ever be one transcript per appointment. If this
-    # invariant is violated, this endpoint will start to cause issues.
-    transcript = AIVisitTranscript.get(appointment_id=appointment_id)
+    # Retained/reviewed versions can leave several transcripts on an encounter.
+    # Follow each current note's actual source, including an admin-restored note;
+    # neither creation time nor the restore frontier identifies that source.
+    transcript_query = AIVisitTranscript.where(
+        AIVisitTranscript.appointment_id == appointment.id,
+        AIVisitTranscript.doctor_id == doctor.id,
+        AIVisitTranscript.patient_id == appointment.patient_id,
+    )
+    note_transcripts: list[AIVisitTranscript] = []
+    transcript: AIVisitTranscript | None = None
+    if visit_notes:
+        source_ids = {note.ai_transcript_id for note in visit_notes}
+        note_transcripts = cast(
+            list[AIVisitTranscript],
+            list(
+                transcript_query.where(
+                    cast(Any, AIVisitTranscript.id).in_(source_ids)
+                ).all()
+            ),
+        )
+        # Keep the legacy shared field only when it describes every visible note.
+        if len(source_ids) == 1 and len(note_transcripts) == 1:
+            transcript = note_transcripts[0]
+    else:
+        # Preserve the single-transcript, pre-note view. Do not choose arbitrarily
+        # between multiple unassociated versions or expose their history.
+        candidates = cast(
+            list[AIVisitTranscript], list(transcript_query.limit(2).all())
+        )
+        if len(candidates) == 1:
+            transcript = candidates[0]
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
+    # A retained capture owns note preparation even if admission was interrupted.
+    # Tell the provider why a later Recall/upload transcript has no queued note;
+    # background summarization must not replace an authorized capture source.
+    capture_workflow_required = (
+        ScribeCaptureBinding.where(
+            ScribeCaptureBinding.appointment_id == appointment.id,
+            ScribeCaptureBinding.doctor_id == doctor.id,
+        ).first()
+        is not None
+    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
+        note_transcripts=note_transcripts,
+        capture_workflow_required=capture_workflow_required,
         engagement_role=engagement_role,
+        session_prep_reviews=(
+            note_review_statuses(doctor, visit_notes)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
+        session_prep_prior_notes=(
+            prior_notes_for_session_prep(doctor, appointment.id)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
     )
 
     return note_detail
@@ -2762,6 +2870,14 @@ def medication_nutrient_depletions(
     )
 
 
+def _require_reference_labs(request: Request) -> None:
+    # Check the release latch before resolving any provider email or lab data.
+    if not reference_labs_gate.REFERENCE_LABS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if not reference_labs_gate.reference_labs_enabled_for(request.state.doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 class LabResultData(BaseModel, extra="forbid"):
     id: str
     biomarker: str
@@ -2800,7 +2916,11 @@ def _lab_panel_data(panel: LabPanel, results: list[LabResult]) -> LabPanelData:
     )
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-panels", name="lab_panel_list")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_list(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> list[LabPanelData]:
@@ -2841,7 +2961,11 @@ class CreateLabPanel(BaseModel, extra="forbid"):
     results: list[ManualLabResult] = Field(min_length=1)
 
 
-@internal_api_app.post("/patients/{patient_id}/lab-panels", name="lab_panel_create")
+@internal_api_app.post(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_create",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_create(
     request: Request, patient_id: Annotated[str, Path()], data: CreateLabPanel
 ) -> LabPanelData:
@@ -2884,7 +3008,9 @@ def lab_panel_create(
     return _lab_panel_data(panel, results)
 
 
-@internal_api_app.post("/lab-panels/get-signed-url")
+@internal_api_app.post(
+    "/lab-panels/get-signed-url", dependencies=[Depends(_require_reference_labs)]
+)
 def generate_signed_lab_upload_url(
     request: Request,
     data: ClinicalUploadGrantRequest,
@@ -2920,6 +3046,7 @@ class LabUploadComplete(BaseModel, extra="forbid"):
 @internal_api_app.post(
     "/patients/{patient_id}/lab-panels/upload-complete",
     name="lab_panel_upload_complete",
+    dependencies=[Depends(_require_reference_labs)],
 )
 def lab_panel_upload_complete(
     request: Request, patient_id: Annotated[str, Path()], data: LabUploadComplete
@@ -3011,6 +3138,7 @@ def lab_panel_upload_complete(
 @internal_api_app.delete(
     "/lab-panels/{lab_panel_id}",
     name="lab_panel_delete",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_panel_delete(request: Request, lab_panel_id: Annotated[str, Path()]) -> None:
@@ -3063,7 +3191,11 @@ class LabEvaluationPanel(BaseModel, extra="forbid"):
     entries: list[LabEvaluationEntry]
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-evaluations", name="lab_evaluations")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-evaluations",
+    name="lab_evaluations",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_evaluations(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> LabEvaluationPanel:
@@ -3152,7 +3284,11 @@ def _lab_range_data(biomarker: str, doctor_id) -> LabRangeData:
     )
 
 
-@internal_api_app.get("/lab-ranges", name="lab_range_list")
+@internal_api_app.get(
+    "/lab-ranges",
+    name="lab_range_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_list(request: Request) -> list[LabRangeData]:
     "effective ranges (defaults merged with this doctor's overrides) for all biomarkers"
     doctor: Doctor = request.state.doctor
@@ -3201,7 +3337,11 @@ class UpdateLabRange(BaseModel, extra="forbid"):
         return self
 
 
-@internal_api_app.put("/lab-ranges/{biomarker}", name="lab_range_upsert")
+@internal_api_app.put(
+    "/lab-ranges/{biomarker}",
+    name="lab_range_upsert",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_upsert(
     request: Request, biomarker: Annotated[str, Path()], data: UpdateLabRange
 ) -> LabRangeData:
@@ -3226,6 +3366,7 @@ def lab_range_upsert(
 @internal_api_app.delete(
     "/lab-ranges/{biomarker}",
     name="lab_range_reset",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_range_reset(request: Request, biomarker: Annotated[str, Path()]) -> None:

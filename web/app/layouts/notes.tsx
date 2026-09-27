@@ -1,30 +1,36 @@
-import { Outlet, href } from "react-router"
+import { Outlet, data, href, isRouteErrorResponse } from "react-router"
 
 import type { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { type Appointment, noteList } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
-import { appointmentsToSidebarEntries } from "~/lib/appointment"
+import {
+  type NoteStatuses,
+  appointmentsToSidebarEntries,
+} from "~/lib/appointment"
 import {
   type PracticeAgreementBlock,
   PracticeAgreementError,
   practiceAgreementBlockFromClientResult,
   practiceAgreementBlockFromRouteFailure,
 } from "~/lib/practice-gate-error"
+import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
 
 import { invariant } from "@epic-web/invariant"
 import { noteListOptions } from "client/@tanstack/react-query.gen"
 
 export type NotesLayoutData = {
   appointments: Appointment[]
+  noteStatuses: NoteStatuses
   blocked: PracticeAgreementBlock | null
 }
 
 function blockedNotesData(blocked: PracticeAgreementBlock): NotesLayoutData {
-  return { appointments: [], blocked }
+  return { appointments: [], noteStatuses: {}, blocked }
 }
 
 export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
@@ -42,7 +48,11 @@ export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
         return result.data
       },
     })
-    return { appointments: result.appointments, blocked: null }
+    return {
+      appointments: result.appointments,
+      noteStatuses: result.note_statuses ?? {},
+      blocked: null,
+    }
   } catch (error) {
     const blocked = practiceAgreementBlockFromRouteFailure(error)
     if (blocked) {
@@ -57,13 +67,39 @@ export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
 }
 
 // Successful lists retain the generated query's cache shape for notes consumers.
-export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  return loadNotesLayoutData()
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+  try {
+    return await withReadDeadline(() => loadNotesLayoutData(), {
+      signal: request.signal,
+      onTimeout: () => {
+        void queryClient.cancelQueries({
+          queryKey: noteListOptions().queryKey,
+          exact: true,
+        })
+      },
+    })
+  } catch (error) {
+    if (error instanceof ReadDeadlineError) {
+      throw data({ notesLoadFailure: "temporary" }, { status: 503 })
+    }
+    throw error
+  }
 }
 
 export function ErrorBoundary({ error }: { error: unknown }) {
   const blocked = practiceAgreementBlockFromRouteFailure(error)
   if (blocked) return <PracticeAgreementWall block={blocked} />
+  if (
+    isRouteErrorResponse(error) &&
+    error.status === 503 &&
+    error.data?.notesLoadFailure === "temporary"
+  ) {
+    return (
+      <SidebarProvider>
+        <NoteDetailRecovery kind="temporary" visits />
+      </SidebarProvider>
+    )
+  }
   throw error
 }
 
@@ -76,7 +112,7 @@ export default function NotesLayout({
     return <PracticeAgreementWall block={loaderData.blocked} />
   }
 
-  const { appointments } = loaderData
+  const { appointments, noteStatuses } = loaderData
 
   return (
     <SidebarProvider
@@ -89,8 +125,10 @@ export default function NotesLayout({
       <AppSidebar
         isLoading={!appointments}
         header={"Notes"}
-        entries={appointmentsToSidebarEntries(appointments, (id: string) =>
-          href("/notes/:id", { id }),
+        entries={appointmentsToSidebarEntries(
+          appointments,
+          (id: string) => href("/notes/:id", { id }),
+          noteStatuses,
         )}
       />
       <Outlet />

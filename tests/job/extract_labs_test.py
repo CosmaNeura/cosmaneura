@@ -3,6 +3,7 @@ from typing import cast
 import pytest
 
 import app.jobs.extract_labs as job
+import app.services.reference_labs_gate as lab_gate
 from app.jobs.extract_labs import perform, persist_results
 
 from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
@@ -13,6 +14,7 @@ from tests.factories import DoctorFactory, PatientFactory
 
 @pytest.fixture(autouse=True)
 def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(lab_gate, "REFERENCE_LABS_ENABLED", True)
     monkeypatch.setattr(job, "doctor_access_in_force", lambda _doctor: True)
 
 
@@ -134,3 +136,30 @@ def test_perform_idempotent_on_completed(monkeypatch):
 
     monkeypatch.setattr(job, "download_pages", fail)
     perform(panel.id)  # must not raise
+
+
+def test_disabled_labs_preserve_pending_upload_without_external_work(monkeypatch):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    panel = _pending_upload_panel(doctor, patient)
+    monkeypatch.setattr(lab_gate, "REFERENCE_LABS_ENABLED", False)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("disabled labs must not access blobs, models, or results")
+
+    monkeypatch.setattr(job, "download_pages", forbidden)
+    monkeypatch.setattr(job, "extract_lab_values", forbidden)
+    monkeypatch.setattr(job, "persist_results", forbidden)
+    perform(panel.id)
+    assert LabPanel.one(id=panel.id).status == LabPanelStatus.pending
+    assert LabResult.where(LabResult.lab_panel_id == panel.id).count() == 0
+
+
+def test_worker_rechecks_lab_cohort_before_downloading(monkeypatch):
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    panel = _pending_upload_panel(doctor, patient)
+    monkeypatch.setattr(lab_gate, "reference_toolkit_enabled_for", lambda _: False)
+    monkeypatch.setattr(job, "download_pages", lambda _: pytest.fail("cohort denied"))
+    perform(panel.id)
+    assert LabPanel.one(id=panel.id).status == LabPanelStatus.pending

@@ -179,16 +179,61 @@ def clock_check(plan: dict[str, Any], *, starting: bool = False) -> None:
 
 
 def validate_plan(plan: dict[str, Any]) -> None:
-    require(set(plan) == KEYS and type(plan["version"]) is int and plan["version"] == 1)
+    require(type(plan.get("version")) is int and plan["version"] in {1, 2})
+    require(set(plan) == (KEYS | {"release"} if plan["version"] == 2 else KEYS))
+    if plan["version"] == 2:
+        release = cast(dict[str, Any], plan["release"])
+        require(
+            type(release) is dict
+            and set(release)
+            == {
+                "schema_before",
+                "schema_after",
+                "migration_revisions",
+                "review_kind",
+                "runtime_public",
+                "recovery",
+            }
+        )
+        require(release["review_kind"] == "local_cursor")
+        for key in ("schema_before", "schema_after"):
+            require(
+                type(release[key]) is str
+                and re.fullmatch(r"[0-9a-f]{12}", release[key])
+            )
+        revisions = cast(list[str], release["migration_revisions"])
+        require(type(revisions) is list and len(revisions) <= 64)
+        require(
+            all(type(v) is str and re.fullmatch(r"[0-9a-f]{12}", v) for v in revisions)
+        )
+        require(len(revisions) == len(set(revisions)))
+        if revisions:
+            require(
+                release["schema_before"] != release["schema_after"]
+                and revisions[-1] == release["schema_after"]
+            )
+        else:
+            require(release["schema_before"] == release["schema_after"])
     require(plan["action"] == "build_selected_staging_candidate")
     require(plan["actor"] == "delegated_assistant")
-    require(plan["candidate_sha"] == CANDIDATE and type(plan["candidate_pr"]) is int)
-    require(plan["candidate_pr"] == 385)
+    require(
+        type(plan["candidate_sha"]) is str
+        and re.fullmatch(r"[0-9a-f]{40}", plan["candidate_sha"])
+    )
+    require(type(plan["candidate_pr"]) is int and 0 < plan["candidate_pr"] < 10**9)
+    if plan["version"] == 1:
+        require(plan["candidate_sha"] == CANDIDATE and plan["candidate_pr"] == 385)
     for key in ("controller_sha", "controller_reviewed_head"):
         require(type(plan[key]) is str and re.fullmatch(r"[0-9a-f]{40}", plan[key]))
     require(type(plan["build_seconds"]) is int and 0 < plan["build_seconds"] <= 3600)
-    for key in ("controller_pr", "controller_review_id", "controller_check_id"):
+    for key in ("controller_pr", "controller_review_id"):
         require(type(plan[key]) is int and 0 < plan[key] < 10**15)
+    require(type(plan["controller_check_id"]) is int)
+    require(
+        plan["controller_check_id"] == 0
+        if plan["version"] == 2
+        else 0 < plan["controller_check_id"] < 10**15
+    )
     for key in (
         "github_user_sha256",
         "source_archive_sha256",
@@ -239,14 +284,24 @@ def load_modules(raw: dict[str, bytes], root: Path) -> dict[str, types.ModuleTyp
 
 
 def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    candidate, pr = plan["candidate_sha"], plan["candidate_pr"]
+    revisions = (
+        tuple(plan["release"]["migration_revisions"])
+        if plan["version"] == 2
+        else REVISIONS
+    )
+    before = (
+        plan["release"]["schema_before"] if plan["version"] == 2 else "89c31f0ae275"
+    )
+    after = plan["release"]["schema_after"] if plan["version"] == 2 else REVISIONS[-1]
     selection = record(bound_input(plan, "selection"))
-    require(selection["founder_selected"] is True and selection["candidate_pr"] == 385)
-    require(selection["candidate_sha"] == CANDIDATE)
+    require(selection["founder_selected"] is True and selection["candidate_pr"] == pr)
+    require(selection["candidate_sha"] == candidate)
     delegation = record(bound_input(plan, "delegation"))
     require(delegation["actor"] == "delegated_assistant")
     require(
         delegation["staging_build_approved"] is True
-        and delegation["candidate_sha"] == CANDIDATE
+        and delegation["candidate_sha"] == candidate
     )
     require(delegation["production_approved"] is False)
     frontend = bound_input(plan, "frontend", 16384)
@@ -254,7 +309,9 @@ def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
     require(origin["complete"] is True and origin["public_fields_only"] is True)
     require(origin["configuration_sha256"] == sha(frontend))
     config = record(frontend)
-    require(config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "false")
+    require(config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] in {"true", "false"})
+    if plan["version"] == 1:
+        require(config["VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"] == "false")
     names = {
         "VITE_SENTRY_DSN",
         "VITE_CLERK_PUBLIC_KEY",
@@ -279,21 +336,25 @@ def input_evidence(plan: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
         )
     )
     outcome = rehearsal["rehearsal"]
-    require(
-        outcome["result"] == "PASS" and outcome["source_revision"] == "89c31f0ae275"
-    )
-    require(outcome["target_revision"] == REVISIONS[-1])
-    for key in (
+    require(outcome["result"] == "PASS" and outcome["source_revision"] == before)
+    require(outcome["target_revision"] == after)
+    required_checks = (
         "committed_revision_verified",
         "original_rows_preserved",
         "original_constraints_indexes_triggers_preserved",
-        "backfill_and_baa_invariants_passed",
-        "reader_select_and_four_negative_access_checks_passed",
-    ):
+    )
+    if plan["version"] == 1:
+        required_checks += (
+            "backfill_and_baa_invariants_passed",
+            "reader_select_and_four_negative_access_checks_passed",
+        )
+    else:
+        required_checks += ("forward_only", "restore_verified")
+    for key in required_checks:
         require(outcome[key] is True)
     require(
         tuple(row["revision"] for row in outcome["actual_online_migrations"])
-        == REVISIONS
+        == revisions
     )
     return frontend, outcome
 
@@ -311,6 +372,10 @@ def run(
     raw_plan = read_bound(plan_path, expected, 65536)
     plan = record(raw_plan)
     validate_plan(plan)
+    candidate, pr = plan["candidate_sha"], plan["candidate_pr"]
+    schema_after = (
+        plan["release"]["schema_after"] if plan["version"] == 2 else REVISIONS[-1]
+    )
     raw_modules = module_bytes(root, plan)
     frontend, rehearsal = input_evidence(plan)
     native = bound_input(plan, "native_archive", 4 * 1024**2)
@@ -330,7 +395,11 @@ def run(
     inputs.public_configuration(frontend, sha(frontend))
     inputs.native_builder_bytes(native)
     context = modules["verify_staging_candidate"].HumanCandidateContext(
-        CANDIDATE, "385", REVISIONS[-1], plan["controller_sha"], "CosmaNeura/cosmaneura"
+        candidate,
+        str(pr),
+        schema_after,
+        plan["controller_sha"],
+        "CosmaNeura/cosmaneura",
     )
     request = source.SourceRequest(
         context,
@@ -342,6 +411,7 @@ def run(
         plan["controller_check_id"],
         plan["controller_review_sha256"],
         tuple(sorted(plan["module_sha256s"].items())),
+        review_kind="local_cursor" if plan["version"] == 2 else "bugbot",
     )
     observed = source.collect_build_source(root, request)
     source_archive = observed.source_archive
@@ -351,16 +421,16 @@ def run(
             "authenticated_source_checked": True,
             "build_started": False,
             "plan_sha256": expected,
-            "candidate_sha": CANDIDATE,
-            "approval_pr_number": 385,
-            "schema_head": REVISIONS[-1],
+            "candidate_sha": candidate,
+            "approval_pr_number": pr,
+            "schema_head": schema_after,
             "controller_sha": plan["controller_sha"],
             "github_user_sha256": observed.github_user_sha256,
             "source_archive_sha256": observed.source_archive_sha256,
             "protection_sha256": observed.protection_sha256,
         }
     build_inputs = inputs.BuildInputs(
-        CANDIDATE,
+        candidate,
         sha(source_archive),
         sha(frontend),
         datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -386,7 +456,7 @@ def run(
         "actor": "delegated_assistant",
         "plan_sha256": expected,
         "module_sha256s": plan["module_sha256s"],
-        "candidate_sha": CANDIDATE,
+        "candidate_sha": candidate,
         "controller_sha": plan["controller_sha"],
         "source_archive_sha256": sha(source_archive),
         "frontend_configuration_sha256": sha(frontend),

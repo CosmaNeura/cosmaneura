@@ -378,6 +378,33 @@ class CollectionTests(unittest.TestCase):
 
 
 class PolicyTests(unittest.TestCase):
+    def test_current_staging_preserves_the_actual_classic_and_ruleset_policy(self):
+        current, rules = policy(), ruleset()
+        current["required_pull_request_reviews"]["required_approving_review_count"] = 1
+        rules["rules"] = [{"type": "non_fast_forward"}]
+        rules["bypass_actors"] = [
+            {"actor_id": 1144995, "actor_type": "Integration", "bypass_mode": "always"},
+            {"actor_id": 1210556, "actor_type": "Integration", "bypass_mode": "always"},
+        ]
+        m.protection(current, rules, current_staging=True)
+        for key in ("enforce_admins", "required_conversation_resolution"):
+            current[key]["enabled"] = False
+            with self.assertRaises(m.SourceProvenanceRefused):
+                m.protection(current, rules, current_staging=True)
+            current[key]["enabled"] = True
+        current["required_pull_request_reviews"]["required_approving_review_count"] = 0
+        with self.assertRaises(m.SourceProvenanceRefused):
+            m.protection(current, rules, current_staging=True)
+        current["required_status_checks"] = None
+        m.protection(current, rules, current_staging=True)
+        current["required_pull_request_reviews"]["required_approving_review_count"] = 1
+        with self.assertRaises(m.SourceProvenanceRefused):
+            m.protection(current, rules, current_staging=True)
+        current["required_pull_request_reviews"]["required_approving_review_count"] = 0
+        current["enforce_admins"]["enabled"] = False
+        with self.assertRaises(m.SourceProvenanceRefused):
+            m.protection(current, rules, current_staging=True)
+
     def test_current_policy_and_same_name_status_collision_rules(self):
         m.protection(policy(), ruleset())
         m.statuses(statuses(), {"total_count": 0, "check_runs": []}, HEAD)

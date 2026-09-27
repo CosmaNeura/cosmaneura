@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react"
+import { useLayoutEffect, useRef, useState } from "react"
 
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
@@ -32,6 +32,7 @@ type PanelMountOptions = {
   getAuthToken: (request?: AuthTokenRequest) => Promise<string>
   getContext: () => Promise<PanelContext>
   onHumanContact: (action: HumanContactAction) => void | Promise<void>
+  onAccessChange: (granted: boolean) => void
   shiftContent: boolean
   fabBottom?: string
 }
@@ -124,11 +125,70 @@ export function resolveSovereignProviderConfig(
   }
 }
 
-let panelLoad: Promise<PanelApi> | null = null
+type PendingPanelLoad = {
+  promise: Promise<PanelApi>
+  consumers: number
+  cancel: () => void
+}
+
+let panelLoad: PendingPanelLoad | null = null
 let verifiedPanel: PanelApi | null = null
 let verifiedMount: PanelApi["mount"] | null = null
 
-function loadPinnedPanel(): Promise<PanelApi> {
+function startPinnedPanelLoad(): PendingPanelLoad {
+  let resolveLoad!: (panel: PanelApi) => void
+  let rejectLoad!: (error: Error) => void
+  const load: PendingPanelLoad = {
+    promise: new Promise<PanelApi>((resolve, reject) => {
+      resolveLoad = resolve
+      rejectLoad = reject
+    }),
+    consumers: 0,
+    cancel: () => rejectAndRemove(new DOMException("Cancelled", "AbortError")),
+  }
+  const script = document.createElement("script")
+  const detach = () => {
+    script.onload = null
+    script.onerror = null
+  }
+  const rejectAndRemove = (error: Error) => {
+    if (panelLoad !== load) return
+    panelLoad = null
+    detach()
+    script.remove()
+    rejectLoad(error)
+  }
+
+  script.src = SOVEREIGN_PANEL_ASSET_PATH
+  script.integrity = SOVEREIGN_PANEL_INTEGRITY
+  script.crossOrigin = "anonymous"
+  script.referrerPolicy = "no-referrer"
+  script.async = true
+  script.dataset.cosmaneuraSovereignPanel = "v1"
+  script.onload = () => {
+    if (panelLoad !== load) return
+    const registered = window.CosmaNeuraPanel
+    if (!registered || typeof registered.mount !== "function") {
+      rejectAndRemove(new Error("Pinned panel did not register its API"))
+      return
+    }
+    verifiedPanel = registered
+    verifiedMount = registered.mount
+    panelLoad = null
+    detach()
+    resolveLoad(registered)
+  }
+  script.onerror = () =>
+    rejectAndRemove(new Error("Pinned panel failed to load"))
+  panelLoad = load
+  document.head.appendChild(script)
+  return load
+}
+
+function loadPinnedPanel(signal: AbortSignal): Promise<PanelApi> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException("Cancelled", "AbortError"))
+  }
   if (window.CosmaNeuraPanel) {
     if (
       window.CosmaNeuraPanel === verifiedPanel &&
@@ -141,44 +201,35 @@ function loadPinnedPanel(): Promise<PanelApi> {
   if (verifiedPanel) {
     return Promise.reject(new Error("The verified panel global was removed"))
   }
-  if (panelLoad) return panelLoad
-
-  panelLoad = new Promise<PanelApi>((resolve, reject) => {
-    const script = document.createElement("script")
-    const rejectAndRemove = (error: Error) => {
-      script.onload = null
-      script.onerror = null
-      script.remove()
-      reject(error)
+  const load = panelLoad ?? startPinnedPanelLoad()
+  load.consumers += 1
+  return new Promise<PanelApi>((resolve, reject) => {
+    let released = false
+    const release = () => {
+      if (released) return
+      released = true
+      signal.removeEventListener("abort", cancel)
+      load.consumers -= 1
+      // One departing host cannot cancel a load still needed by another.
+      if (load.consumers === 0) load.cancel()
     }
-
-    script.src = SOVEREIGN_PANEL_ASSET_PATH
-    script.integrity = SOVEREIGN_PANEL_INTEGRITY
-    script.crossOrigin = "anonymous"
-    script.referrerPolicy = "no-referrer"
-    script.async = true
-    script.dataset.cosmaneuraSovereignPanel = "v1"
-    script.onload = () => {
-      const registered = window.CosmaNeuraPanel
-      if (!registered || typeof registered.mount !== "function") {
-        rejectAndRemove(new Error("Pinned panel did not register its API"))
-        return
-      }
-      verifiedPanel = registered
-      verifiedMount = registered.mount
-      script.onload = null
-      script.onerror = null
-      resolve(registered)
+    const cancel = () => {
+      release()
+      reject(new DOMException("Cancelled", "AbortError"))
     }
-    script.onerror = () =>
-      rejectAndRemove(new Error("Pinned panel failed to load"))
-    document.head.appendChild(script)
-  }).catch((error: unknown) => {
-    panelLoad = null
-    throw error
+    load.promise.then(
+      (panel) => {
+        release()
+        resolve(panel)
+      },
+      (error: unknown) => {
+        release()
+        reject(error)
+      },
+    )
+    signal.addEventListener("abort", cancel, { once: true })
+    if (signal.aborted) cancel()
   })
-
-  return panelLoad
 }
 
 async function platformSessionToken(): Promise<string> {
@@ -394,21 +445,52 @@ export function SovereignPanelHost({
 }) {
   const config = resolveSovereignProviderConfig()
   const panelRef = useRef<PanelInstance | null>(null)
+  const [mountAttempt, setMountAttempt] = useState(0)
+  const [recovery, setRecovery] = useState<"unavailable" | "connecting" | null>(
+    null,
+  )
 
   useLayoutEffect(() => {
     if (!config) return
     let cancelled = false
+    let accessWasGranted = false
+    let accessLost = false
     let mounted: PanelInstance | null = null
+    const statusController = new AbortController()
     const mountTokenProvider =
       createProviderMountContextTokenProvider(appointmentId)
+    setRecovery(mountAttempt > 0 ? "connecting" : null)
+    const finishBootstrap = () => clearTimeout(bootstrapTimeout)
+    const discardMounted = () => {
+      cancelled = true
+      finishBootstrap()
+      statusController.abort()
+      mountTokenProvider.discard()
+      const previous = mounted
+      mounted = null
+      if (panelRef.current === previous) panelRef.current = null
+      if (previous) resetAndDestroy(previous)
+    }
+    // Bound the whole handshake, including script loading, authority exchange,
+    // and welcome. A timed-out generation can never complete a later retry.
+    const bootstrapTimeout = setTimeout(() => {
+      if (cancelled) return
+      discardMounted()
+      setRecovery("unavailable")
+    }, 30_000)
 
     // Fail closed before loading the platform context-token path. A Clerk
     // session token is accepted only by the same-origin exchange endpoint and
     // is never handed to the embedded panel as a delegation credential.
-    void getViewAsStatus()
+    void getViewAsStatus(statusController.signal)
       .then((viewAs) => {
-        if (cancelled || viewAs.active) return null
-        return loadPinnedPanel()
+        if (cancelled) return null
+        if (viewAs.active) {
+          finishBootstrap()
+          if (mountAttempt > 0) setRecovery("unavailable")
+          return null
+        }
+        return loadPinnedPanel(statusController.signal)
       })
       .then(async (panel) => {
         if (cancelled || panel === null) return
@@ -417,7 +499,7 @@ export function SovereignPanelHost({
           embedVersion: EMBED_VERSION,
           getAuthToken: (request) => mountTokenProvider.getToken(request),
           getContext: async () => {
-            if (cancelled) {
+            if (cancelled || accessLost) {
               throw new Error("Open record changed while context was resolving")
             }
             // The record-bound mount token is the only authority input. No raw
@@ -426,6 +508,20 @@ export function SovereignPanelHost({
             return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
+          onAccessChange: (granted) => {
+            if (cancelled || accessLost) return
+            if (granted) {
+              accessWasGranted = true
+            } else if (accessWasGranted) {
+              // The old generation stays terminal. Only the explicit host
+              // action below may create a new authenticated mount; no old
+              // request, turn ID, draft or preparation is replayed into it.
+              accessLost = true
+              finishBootstrap()
+              mountTokenProvider.discard()
+              setRecovery("unavailable")
+            }
+          },
           // loadHistory is deliberately omitted until the platform exposes the
           // governed HydratedHistory read operation.
           shiftContent: true,
@@ -440,30 +536,51 @@ export function SovereignPanelHost({
         // Cleanup owns destruction once the effect has been cancelled. Do not
         // dereference `mounted` here: cleanup deliberately nulls it while an
         // asynchronous initial bind may still be resolving.
-        if (cancelled) return
+        if (cancelled || accessLost) return
+        finishBootstrap()
         panelRef.current = candidate
+        setRecovery(null)
       })
       .catch(() => {
-        mountTokenProvider.discard()
-        const failed = mounted
-        mounted = null
-        if (panelRef.current === failed) panelRef.current = null
-        if (failed) resetAndDestroy(failed)
+        if (cancelled) return
+        discardMounted()
+        setRecovery("unavailable")
         // The Notes surface remains usable when the separately deployed panel
         // is unavailable. The panel itself renders network errors per turn.
       })
 
-    return () => {
-      cancelled = true
-      mountTokenProvider.discard()
-      panelRef.current = null
-      const previous = mounted
-      mounted = null
-      if (previous) resetAndDestroy(previous)
-    }
-  }, [appointmentId, config?.origin])
+    return discardMounted
+  }, [appointmentId, config?.origin, mountAttempt])
 
   return config ? (
-    <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
+    <>
+      <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
+      {recovery && (
+        <div
+          className="bg-background text-foreground fixed right-[18px] z-[100002] flex max-w-[calc(100vw-36px)] items-center gap-3 rounded-lg border p-3 shadow-lg"
+          style={{ bottom: PROVIDER_V7_FAB_BOTTOM }}
+        >
+          <p className="text-sm" role="status">
+            {recovery === "connecting"
+              ? "Checking assistant access…"
+              : "Assistant session unavailable."}
+          </p>
+          <button
+            type="button"
+            className="rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+            disabled={recovery === "connecting"}
+            onClick={() => {
+              if (recovery !== "unavailable") return
+              setRecovery("connecting")
+              setMountAttempt((attempt) => attempt + 1)
+            }}
+          >
+            {recovery === "connecting"
+              ? "Reconnecting assistant…"
+              : "Reconnect assistant"}
+          </button>
+        </div>
+      )}
+    </>
   ) : null
 }

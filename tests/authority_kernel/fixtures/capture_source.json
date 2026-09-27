@@ -1,0 +1,318 @@
+{
+  "provenance": "Actual Scribe producer projection; invented fixed fixture data.",
+  "base": {
+    "protocol_version": "1.0",
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "raw_transcript": {
+      "language_code": "en-US",
+      "stt_provider": "synthetic-fixture",
+      "segments": [
+        {
+          "content": "Invented visit statement \u2014 wording to review.",
+          "start_ms": 0,
+          "end_ms": 1000,
+          "speaker_id": "one",
+          "speaker_role": "clinician",
+          "confidence": null
+        },
+        {
+          "content": "Invented second statement.",
+          "start_ms": 1000,
+          "end_ms": 2000,
+          "speaker_id": "two",
+          "speaker_role": "patient",
+          "confidence": null
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000004",
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "created_at": "2026-09-17T10:00:00Z"
+    },
+    "working_transcript": {
+      "receipt_id": "0f66e70e-4efb-550a-8529-0cd43bb18738",
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "raw_transcript_id": "00000000-0000-4000-8000-000000000004",
+      "raw_transcript_sha256": "0f1db3b81326ec27cabff19afd090b652d55b27a9eead0647fcfa1b5f1778482",
+      "previous_working_sha256": null,
+      "working_sha256": "4183fe6db91fb515a2ddcbab728033a2a1e314ad16fccc3dcc1a864384be29db",
+      "working_source": {
+        "schema_version": "1.0",
+        "source_transcript_version": 1,
+        "language_mode": "en-US",
+        "transcription_adapter_id": "captured_raw_transcript_v1",
+        "transcription_model_profile_id": "persisted_capture",
+        "normalization_profile_id": "capture_corrections_v1",
+        "duration_ms": 2000,
+        "segments": [
+          {
+            "source_segment_id": "f5adb024-1b55-5164-894b-34521889cedb",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "af0e09c9-e11c-5f1b-8de7-4c5d4ced4f3e",
+            "speaker_role": "clinician",
+            "content": "Invented visit statement \u2014 wording to review.",
+            "start_ms": 0,
+            "end_ms": 1000,
+            "locale_confidence": null
+          },
+          {
+            "source_segment_id": "95f301c5-d91b-5d53-872f-4fe67148f149",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "51f8052c-4fdc-5895-94f0-d9ce5e5d0937",
+            "speaker_role": "patient",
+            "content": "Invented second statement.",
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "locale_confidence": null
+          }
+        ]
+      },
+      "working_transcript": {
+        "schema_version": "1.0",
+        "working_transcript_id": "ee3ae213-65c4-5921-949d-b056a68e3b60",
+        "working_transcript_version": 1,
+        "source_transcript_version": 1,
+        "segments": [
+          {
+            "source_segment_id": "f5adb024-1b55-5164-894b-34521889cedb",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "af0e09c9-e11c-5f1b-8de7-4c5d4ced4f3e",
+            "speaker_role": "clinician",
+            "start_ms": 0,
+            "end_ms": 1000,
+            "resolution": "english_source",
+            "content": "Invented visit statement \u2014 wording to review.",
+            "translation_id": null,
+            "translation_version": null,
+            "translation_review_id": null
+          },
+          {
+            "source_segment_id": "95f301c5-d91b-5d53-872f-4fe67148f149",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "51f8052c-4fdc-5895-94f0-d9ce5e5d0937",
+            "speaker_role": "patient",
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "resolution": "english_source",
+            "content": "Invented second statement.",
+            "translation_id": null,
+            "translation_version": null,
+            "translation_review_id": null
+          }
+        ],
+        "blockers": [],
+        "note_ready": true
+      },
+      "corrected_by_practitioner_id": null,
+      "created_at": "2026-09-17T10:00:00Z"
+    },
+    "recovery_history": {
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "recoveries": [
+        {
+          "receipt_id": "00000000-0000-0000-0000-00000000000f",
+          "session_id": "00000000-0000-4000-8000-000000000003",
+          "request": {
+            "protocol_version": "1.0",
+            "capture_lease_id": "00000000-0000-0000-0000-00000000000a",
+            "capture_lease_generation": 1,
+            "channel": "microphone",
+            "segment_id": "00000000-0000-0000-0000-00000000000b",
+            "segment_ordinal": 0,
+            "first_sequence_number": 0,
+            "next_sequence_number": 1,
+            "segment_started_at": "2026-09-17T00:00:00Z",
+            "gap_id": "00000000-0000-0000-0000-00000000000c",
+            "reason_code": "capture_backgrounded",
+            "observed_at": "2026-09-17T00:00:00Z",
+            "acknowledged_at": "2026-09-17T00:00:00Z",
+            "decision": "resume_capture"
+          },
+          "request_sha256": "861d0958396d064e6f5a8634d6aeda6437eeee63230118287d2912184d7691d0",
+          "acknowledged_by_practitioner_id": "doctor_00000000000000000000000001",
+          "following_segment_id": "00000000-0000-0000-0000-000000000010",
+          "lease": {
+            "protocol_version": "1.0",
+            "receipt_id": "00000000-0000-0000-0000-00000000000d",
+            "lease_id": "00000000-0000-0000-0000-00000000000a",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "generation": 2,
+            "issued_at": "2026-09-17T00:00:00Z",
+            "expires_at": "2026-09-17T00:15:00Z"
+          },
+          "review_state": "required"
+        }
+      ]
+    },
+    "recovery_sha256": "571d148b7492c248af90241ded20d3fb199e5ad68946f1b76dfb4233622e632c",
+    "source_sha256": "2420618ebef09d8e1b6b3c7d00ac33916a46f55e9690fbf7b3f4eb2728cf73c4",
+    "capture_incomplete": true
+  },
+  "correction": {
+    "raw_transcript_id": "00000000-0000-4000-8000-000000000004",
+    "raw_transcript_sha256": "0f1db3b81326ec27cabff19afd090b652d55b27a9eead0647fcfa1b5f1778482",
+    "expected_working_version": 1,
+    "expected_working_sha256": "4183fe6db91fb515a2ddcbab728033a2a1e314ad16fccc3dcc1a864384be29db",
+    "corrections": [
+      {
+        "source_segment_id": "f5adb024-1b55-5164-894b-34521889cedb",
+        "content": "Invented corrected visit wording.",
+        "speaker_role": "clinician"
+      }
+    ]
+  },
+  "second": {
+    "protocol_version": "1.0",
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "raw_transcript": {
+      "language_code": "en-US",
+      "stt_provider": "synthetic-fixture",
+      "segments": [
+        {
+          "content": "Invented visit statement \u2014 wording to review.",
+          "start_ms": 0,
+          "end_ms": 1000,
+          "speaker_id": "one",
+          "speaker_role": "clinician",
+          "confidence": null
+        },
+        {
+          "content": "Invented second statement.",
+          "start_ms": 1000,
+          "end_ms": 2000,
+          "speaker_id": "two",
+          "speaker_role": "patient",
+          "confidence": null
+        }
+      ],
+      "id": "00000000-0000-4000-8000-000000000004",
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "created_at": "2026-09-17T10:00:00Z"
+    },
+    "working_transcript": {
+      "receipt_id": "00000000-0000-4000-8000-000000000202",
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "raw_transcript_id": "00000000-0000-4000-8000-000000000004",
+      "raw_transcript_sha256": "0f1db3b81326ec27cabff19afd090b652d55b27a9eead0647fcfa1b5f1778482",
+      "previous_working_sha256": "4183fe6db91fb515a2ddcbab728033a2a1e314ad16fccc3dcc1a864384be29db",
+      "working_sha256": "9a1aabf1ddc48ec441dcb482153fbb822518b33cbb6ca7a2d6858cf6ed5debed",
+      "working_source": {
+        "schema_version": "1.0",
+        "source_transcript_version": 2,
+        "language_mode": "en-US",
+        "transcription_adapter_id": "captured_raw_transcript_v1",
+        "transcription_model_profile_id": "persisted_capture",
+        "normalization_profile_id": "capture_corrections_v1",
+        "duration_ms": 2000,
+        "segments": [
+          {
+            "source_segment_id": "f5adb024-1b55-5164-894b-34521889cedb",
+            "source_segment_version": 2,
+            "source_locale": "en-US",
+            "speaker_id": "af0e09c9-e11c-5f1b-8de7-4c5d4ced4f3e",
+            "speaker_role": "clinician",
+            "content": "Invented corrected visit wording.",
+            "start_ms": 0,
+            "end_ms": 1000,
+            "locale_confidence": null
+          },
+          {
+            "source_segment_id": "95f301c5-d91b-5d53-872f-4fe67148f149",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "51f8052c-4fdc-5895-94f0-d9ce5e5d0937",
+            "speaker_role": "patient",
+            "content": "Invented second statement.",
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "locale_confidence": null
+          }
+        ]
+      },
+      "working_transcript": {
+        "schema_version": "1.0",
+        "working_transcript_id": "ee3ae213-65c4-5921-949d-b056a68e3b60",
+        "working_transcript_version": 2,
+        "source_transcript_version": 2,
+        "segments": [
+          {
+            "source_segment_id": "f5adb024-1b55-5164-894b-34521889cedb",
+            "source_segment_version": 2,
+            "source_locale": "en-US",
+            "speaker_id": "af0e09c9-e11c-5f1b-8de7-4c5d4ced4f3e",
+            "speaker_role": "clinician",
+            "start_ms": 0,
+            "end_ms": 1000,
+            "resolution": "english_source",
+            "content": "Invented corrected visit wording.",
+            "translation_id": null,
+            "translation_version": null,
+            "translation_review_id": null
+          },
+          {
+            "source_segment_id": "95f301c5-d91b-5d53-872f-4fe67148f149",
+            "source_segment_version": 1,
+            "source_locale": "en-US",
+            "speaker_id": "51f8052c-4fdc-5895-94f0-d9ce5e5d0937",
+            "speaker_role": "patient",
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "resolution": "english_source",
+            "content": "Invented second statement.",
+            "translation_id": null,
+            "translation_version": null,
+            "translation_review_id": null
+          }
+        ],
+        "blockers": [],
+        "note_ready": true
+      },
+      "corrected_by_practitioner_id": "doctor_00000000000000000000000001",
+      "created_at": "2026-09-17T10:00:00Z"
+    },
+    "recovery_history": {
+      "session_id": "00000000-0000-4000-8000-000000000003",
+      "recoveries": [
+        {
+          "receipt_id": "00000000-0000-0000-0000-00000000000f",
+          "session_id": "00000000-0000-4000-8000-000000000003",
+          "request": {
+            "protocol_version": "1.0",
+            "capture_lease_id": "00000000-0000-0000-0000-00000000000a",
+            "capture_lease_generation": 1,
+            "channel": "microphone",
+            "segment_id": "00000000-0000-0000-0000-00000000000b",
+            "segment_ordinal": 0,
+            "first_sequence_number": 0,
+            "next_sequence_number": 1,
+            "segment_started_at": "2026-09-17T00:00:00Z",
+            "gap_id": "00000000-0000-0000-0000-00000000000c",
+            "reason_code": "capture_backgrounded",
+            "observed_at": "2026-09-17T00:00:00Z",
+            "acknowledged_at": "2026-09-17T00:00:00Z",
+            "decision": "resume_capture"
+          },
+          "request_sha256": "861d0958396d064e6f5a8634d6aeda6437eeee63230118287d2912184d7691d0",
+          "acknowledged_by_practitioner_id": "doctor_00000000000000000000000001",
+          "following_segment_id": "00000000-0000-0000-0000-000000000010",
+          "lease": {
+            "protocol_version": "1.0",
+            "receipt_id": "00000000-0000-0000-0000-00000000000d",
+            "lease_id": "00000000-0000-0000-0000-00000000000a",
+            "session_id": "00000000-0000-4000-8000-000000000003",
+            "generation": 2,
+            "issued_at": "2026-09-17T00:00:00Z",
+            "expires_at": "2026-09-17T00:15:00Z"
+          },
+          "review_state": "required"
+        }
+      ]
+    },
+    "recovery_sha256": "571d148b7492c248af90241ded20d3fb199e5ad68946f1b76dfb4233622e632c",
+    "source_sha256": "c958a509c098d8ec149ec7bbe3e386fb15ff27525cdc5d7dbe9daf4a2cb895d5",
+    "capture_incomplete": true
+  }
+}
