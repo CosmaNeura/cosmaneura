@@ -112,7 +112,12 @@ def _backends_waiting_on_locks(connection: psycopg.Connection) -> int:
 
 
 def _race(practice: Practice, calls: list[Callable[[], object]]) -> list[object]:
-    """Queue every call behind a held practice row lock, then release it."""
+    """Queue every call behind a held practice row lock, then release it.
+
+    Each call is queued before the next is submitted. PostgreSQL grants a
+    contended row lock to its waiters in arrival order, so the calls take the
+    practice lock in list order.
+    """
 
     database_url = _database_url()
     # The executor is entered first so that, if an assertion fails, closing
@@ -126,12 +131,14 @@ def _race(practice: Practice, calls: list[Callable[[], object]]) -> list[object]
             "SELECT id FROM practice WHERE id = %s FOR UPDATE",
             (practice.id.uuid,),
         )
-        futures = [executor.submit(call) for call in calls]
-        deadline = time.monotonic() + 10
-        while _backends_waiting_on_locks(observer) < len(calls):
-            assert time.monotonic() < deadline, "calls did not queue on the lock"
-            assert not any(future.done() for future in futures)
-            time.sleep(0.02)
+        futures = []
+        for queued, call in enumerate(calls, start=1):
+            futures.append(executor.submit(call))
+            deadline = time.monotonic() + 10
+            while _backends_waiting_on_locks(observer) < queued:
+                assert time.monotonic() < deadline, "calls did not queue on the lock"
+                assert not any(future.done() for future in futures)
+                time.sleep(0.02)
         blocker.rollback()
 
         outcomes: list[object] = []
@@ -185,7 +192,8 @@ def test_two_invitees_cannot_both_take_the_last_seat(live_emails):
     assert final.stripe_quantity_sync_version == 1
 
 
-def test_accept_and_revoke_leave_exactly_one_terminal_state(live_emails):
+@pytest.mark.parametrize("first", ["accept", "revoke"])
+def test_accept_and_revoke_leave_exactly_one_terminal_state(live_emails, first: str):
     _database_url()
     practice, owner = _practice(2)
     invitee = _doctor("contested")
@@ -196,30 +204,40 @@ def test_accept_and_revoke_leave_exactly_one_terminal_state(live_emails):
     assert invitation is not None
     owner_doctor = Doctor.get(id=owner.doctor_id)
     assert owner_doctor is not None
+    calls: dict[str, Callable[[], object]] = {
+        "accept": lambda: _accept(invitee, token),
+        "revoke": lambda: internal.revoke_practice_invitation(
+            _request(owner_doctor),  # type: ignore[arg-type]
+            invitation.id,
+        ),
+    }
+    order = [first, "revoke" if first == "accept" else "accept"]
 
-    outcomes = _race(
-        practice,
-        [
-            lambda: _accept(invitee, token),
-            lambda: internal.revoke_practice_invitation(
-                _request(owner_doctor),  # type: ignore[arg-type]
-                invitation.id,
-            ),
-        ],
-    )
+    outcomes = dict(zip(order, _race(practice, [calls[name] for name in order])))
 
-    accepted, revoked = outcomes
     final = PracticeInvitation.get(id=invitation.id)
     assert final is not None
     member = PracticeMember.get(doctor_id=invitee.id)
-    if final.accepted_at is not None:
+    accepted, revoked = outcomes["accept"], outcomes["revoke"]
+    if first == "accept":
+        assert isinstance(accepted, internal.PracticeStatus)
+        assert final.accepted_by_doctor_id == invitee.id
         assert final.revoked_at is None
         assert member is not None and member.practice_id == practice.id
-        assert isinstance(revoked, HTTPException) and revoked.status_code == 409
+        assert isinstance(revoked, HTTPException)
+        assert (revoked.status_code, revoked.detail) == (
+            409,
+            "An accepted invitation cannot be revoked.",
+        )
     else:
-        assert final.revoked_at is not None
+        assert revoked is None
+        assert final.revoked_at is not None and final.accepted_at is None
         assert member is None
-        assert isinstance(accepted, HTTPException) and accepted.status_code == 409
+        assert isinstance(accepted, HTTPException)
+        assert (accepted.status_code, accepted.detail) == (
+            409,
+            "This invitation is no longer active. Ask the practice owner for a new one.",
+        )
 
 
 def test_a_double_submitted_accept_seats_the_doctor_once(live_emails):
