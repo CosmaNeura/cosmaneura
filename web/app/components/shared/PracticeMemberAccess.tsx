@@ -135,13 +135,22 @@ export function MemberAccessActions({
           variant="outline"
           size="sm"
           disabled={busy}
-          aria-label={`Restore ${label}`}
+          aria-label={`${busy ? "Restoring" : "Restore"} ${label}`}
           onClick={() => void act(() => restorePracticeMember({ path }))}
         >
-          Restore
+          {busy ? "Restoring…" : "Restore"}
         </Button>
       ) : (
-        <Dialog open={dialogShown} onOpenChange={setConfirming}>
+        <Dialog
+          open={dialogShown}
+          onOpenChange={(open) => {
+            // Escape, the overlay and the close button must not hide a revoke
+            // still in flight; its outcome is shown in this dialog
+            if (busy) return
+            if (open) setError(null)
+            setConfirming(open)
+          }}
+        >
           <DialogTrigger asChild>
             <Button
               ref={action}
@@ -177,7 +186,7 @@ export function MemberAccessActions({
                 disabled={busy}
                 onClick={() => void act(() => revokePracticeMember({ path }))}
               >
-                Revoke access
+                {busy ? "Revoking…" : "Revoke access"}
               </Button>
             </DialogFooter>
           </DialogContent>

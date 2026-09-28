@@ -637,6 +637,82 @@ describe("revoking and restoring members", () => {
     }
   })
 
+  it("holds the confirmation open and disabled while a revoke is in flight", async () => {
+    client.revokePracticeMember.mockReturnValue(new Promise(() => {}))
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke access" }),
+    )
+
+    const pending = await within(dialog).findByRole("button", {
+      name: "Revoking…",
+    })
+    expect(pending).toBeDisabled()
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toBeDisabled()
+    fireEvent.keyDown(dialog, { key: "Escape" })
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
+  })
+
+  it("disables Restore while a restore is in flight", async () => {
+    client.restorePracticeMember.mockReturnValue(new Promise(() => {}))
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician({ access_ends_at: ENDS_AT })])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
+
+    const pending = await screen.findByRole("button", {
+      name: "Restoring Alex Active",
+    })
+    expect(pending).toBeDisabled()
+    expect(pending).toHaveTextContent("Restoring…")
+  })
+
+  it("clears an earlier refusal when the confirmation is opened again", async () => {
+    client.revokePracticeMember.mockResolvedValue({
+      error: { detail: "That did not work. Try again." },
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([member(), clinician()]),
+      response: new Response(null, { status: 200 }),
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    let dialog = await screen.findByRole("dialog")
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke access" }),
+    )
+    await within(dialog).findByRole("alert")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    dialog = await screen.findByRole("dialog")
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
   it("cancelling the confirmation revokes nothing", async () => {
     render(
       <PracticeRoster
@@ -767,14 +843,15 @@ describe("revoking and restoring members", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
 
+    const row = screen.getAllByRole("listitem")[1]
     await vi.waitFor(() =>
-      expect(
-        screen.queryByRole("button", { name: "Restore Alex Active" }),
-      ).not.toBeInTheDocument(),
+      expect(within(row).getByRole("alert")).toHaveTextContent(
+        "This clinician's access can't be restored.",
+      ),
     )
-    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent(
-      "This clinician's access can't be restored.",
-    )
+    await vi.waitFor(() => expect(row).toHaveTextContent(/Revoked · joined/))
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument()
+    expect(within(row).getByRole("alert")).toBeInTheDocument()
   })
 
   it("does not reopen an abandoned confirmation when the member turns active again", async () => {
