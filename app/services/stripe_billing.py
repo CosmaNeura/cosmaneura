@@ -2826,11 +2826,6 @@ def _quantity_update_steps(
 def _record_paid_seat_high_water(
     row: Practice, *, high_water: int, period_start: datetime
 ) -> None:
-    if (
-        row.stripe_paid_seat_period_start == period_start
-        and row.stripe_paid_seat_high_water is not None
-    ):
-        high_water = max(high_water, row.stripe_paid_seat_high_water)
     row.stripe_paid_seat_high_water = high_water
     row.stripe_paid_seat_period_start = period_start
 

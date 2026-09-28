@@ -4013,6 +4013,36 @@ def test_renewal_during_a_quantity_update_fails_the_sync(
     assert practice.stripe_paid_seat_period_start == PERIOD_END
 
 
+def test_confirmed_high_water_stands_when_membership_moves_mid_sync(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+
+    def join_while_in_flight(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        result = remote(method, path, data, idempotency_key=idempotency_key)
+        if path.startswith("/subscription_items/"):
+            stripe_billing.mark_quantity_sync_required(practice)
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", join_while_in_flight)
+
+    assert not _sync_seats(practice)
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_error is None
+    assert practice.stripe_paid_seat_high_water == 2
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
 def test_missing_item_billing_period_fails_closed_before_any_update(
     remote: FakeStripe,
 ):
