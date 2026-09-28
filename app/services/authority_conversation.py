@@ -150,7 +150,18 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if phase == "final_response":
         required = {"phase", "outcome", "response", "presentation"}
-        if not required <= set(payload) <= required | {"provider_context_ref"}:
+        if (
+            not required
+            <= set(payload)
+            <= required | {"provider_context_ref", "history_context_ref"}
+        ):
+            raise ConversationInvariantError
+        history_ref = payload.get("history_context_ref")
+        if history_ref is not None and (
+            not isinstance(history_ref, str)
+            or not 8 <= len(history_ref) <= 160
+            or re.fullmatch(r"[A-Za-z0-9._~-]+", history_ref) is None
+        ):
             raise ConversationInvariantError
         context_ref = payload.get("provider_context_ref")
         if context_ref is not None and (
@@ -189,6 +200,7 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
             **(
                 {"provider_context_ref": context_ref} if context_ref is not None else {}
             ),
+            **({"history_context_ref": history_ref} if history_ref is not None else {}),
             "outcome": outcome,
             "response": _canonical_message(payload.get("response")),
             "presentation": {
@@ -557,6 +569,11 @@ def write_conversation_turn(
         from app.services.provider_question_context import validate_final_context
 
         validate_final_context(
+            session, authorized=authorized, payload=canonical_payload, settings=settings
+        )
+        from app.services.authority_conversation_read import validate_final_history
+
+        validate_final_history(
             session, authorized=authorized, payload=canonical_payload, settings=settings
         )
     operation = _operation_for_phase(phase)
