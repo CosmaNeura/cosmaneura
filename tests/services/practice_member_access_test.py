@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,6 +18,7 @@ from app.services.public_entitlements import (
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
+from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import (
     MemberAccessState,
     Practice,
@@ -421,6 +423,38 @@ def test_a_permanently_revoked_or_closed_account_cannot_be_revoked_or_restored()
             _restore(owner, member)
         assert str(refused.value) == "This clinician's access can't be restored."
     assert _reload(PracticeMember, closed.id).seat_state == "inactive"
+    assert _audits(practice) == []
+
+
+def test_an_account_whose_pilot_grant_was_revoked_cannot_be_restored():
+    practice, owner = _owned_practice()
+    member = _workforce(practice, seat_state="inactive")
+    doctor = _reload(Doctor, member.doctor_id)
+    now = _now()
+    PilotAccessGrandfatherGrant(
+        clerk_id=doctor.clerk_id,
+        doctor_id_snapshot=doctor.id,
+        practice_id_snapshot=practice.id,
+        email_snapshot=(doctor.email or "").lower(),
+        email_sha256=hashlib.sha256((doctor.email or "").lower().encode()).hexdigest(),
+        source_ref="test:member-access",
+        source_sha256="a" * 64,
+        grant_plan_sha256="b" * 64,
+        granted_by_ref="test-suite",
+        grant_reason="Test exact-account access",
+        granted_at=now - timedelta(days=1),
+        revoked_at=now,
+        revoked_by_ref="test-suite",
+        revocation_reason="Test offboarding",
+        revocation_plan_sha256="c" * 64,
+        retain_until=now + timedelta(days=365 * 8),
+    ).save()
+
+    with pytest.raises(member_access.MemberAccessConflict) as refused:
+        _restore(owner, member)
+
+    assert str(refused.value) == "This clinician's access can't be restored."
+    assert _reload(PracticeMember, member.id).seat_state == "inactive"
     assert _audits(practice) == []
 
 

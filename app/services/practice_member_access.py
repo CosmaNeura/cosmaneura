@@ -13,6 +13,7 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.services.doctor_access import doctor_tombstone
 from app.services.public_entitlements import (
     lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
@@ -230,7 +231,12 @@ def restore_member_access(
     member = locked.member
     if member.role == PracticeRole.owner.value:
         raise MemberAccessConflict("The practice owner's access can't be restored.")
-    if member.access_revoked_at is not None or locked.doctor.deleted_at is not None:
+    # Refuse whatever doctor_access would deny outright, so a restore never
+    # takes a billed seat for an account that cannot use it.
+    if (
+        member.access_revoked_at is not None
+        or doctor_tombstone(locked.doctor) is not None
+    ):
         raise MemberAccessConflict("This clinician's access can't be restored.")
     state = member_access_state(member, at=now)
     if state is MemberAccessState.active:

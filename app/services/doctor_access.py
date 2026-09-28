@@ -88,7 +88,7 @@ def _has_valid_legacy_pilot_access(
     return doctor.onboarding_completed_at is not None and has_active_grant
 
 
-def _doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
+def doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
     if doctor.deleted_at is not None:
         return "doctor_disabled"
     if revoked_pilot_access_grant(doctor.clerk_id) is not None:
@@ -193,7 +193,7 @@ def resolve_doctor_access(
     through the normal practice/member authorization rules.
     """
 
-    tombstone = _doctor_tombstone(doctor)
+    tombstone = doctor_tombstone(doctor)
     if tombstone is not None:
         return _denied(tombstone)
 
@@ -228,7 +228,7 @@ def practice_members_access_in_force(
             raise ValueError("member does not belong to this practice and doctor")
         if (
             _membership_tombstone(member, current) is not None
-            or _doctor_tombstone(doctor) is not None
+            or doctor_tombstone(doctor) is not None
         ):
             results.append(False)
             continue
