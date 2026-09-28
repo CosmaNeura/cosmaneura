@@ -15,6 +15,7 @@ import {
   restorePracticeMember,
   revokePracticeMember,
 } from "~/configuration/client"
+import { errorDetail } from "~/lib/error-detail"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 /** Revoked by the owner, with access and the seat lasting until tonight. */
@@ -34,14 +35,6 @@ export function memberAccessLabel(member: PracticeRosterMember) {
   if (!member.seat_active) return "Inactive"
   if (!member.access_in_force) return "No access"
   return "Active"
-}
-
-function errorDetail(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "detail" in error) {
-    const { detail } = error as { detail: unknown }
-    if (typeof detail === "string") return detail
-  }
-  return fallback
 }
 
 export function MemberAccessActions({
@@ -67,7 +60,7 @@ export function MemberAccessActions({
     try {
       const { error: failure } = await run()
       if (failure) {
-        setError(errorDetail(failure, "That did not work. Try again."))
+        setError(errorDetail(failure) ?? "That did not work. Try again.")
         return
       }
       setConfirming(false)

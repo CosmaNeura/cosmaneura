@@ -17,6 +17,7 @@ import {
   resendPracticeInvitation,
   revokePracticeInvitation,
 } from "~/configuration/client"
+import { errorDetail } from "~/lib/error-detail"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 /**
@@ -39,14 +40,6 @@ export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
   } catch {
     return "unavailable"
   }
-}
-
-function errorDetail(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "detail" in error) {
-    const { detail } = error as { detail: unknown }
-    if (typeof detail === "string") return detail
-  }
-  return fallback
 }
 
 type Outcome = { data?: unknown; error?: unknown; response?: Response }
@@ -139,7 +132,7 @@ export function InviteClinicianForm({
         setEmail("")
         onIssued(data)
       } else {
-        setError(errorDetail(failure, "The invitation could not be sent."))
+        setError(errorDetail(failure) ?? "The invitation could not be sent.")
       }
     } catch {
       setError("The invitation could not be sent.")
@@ -201,7 +194,7 @@ function InvitationRow({
     try {
       const { error: failure } = await run()
       if (failure) {
-        setError(errorDetail(failure, "That did not work. Try again."))
+        setError(errorDetail(failure) ?? "That did not work. Try again.")
       }
     } catch {
       setError("That did not work. Try again.")
