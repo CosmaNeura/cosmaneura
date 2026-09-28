@@ -159,18 +159,19 @@ override_data {
       # Production must always declare live/test mode explicitly, even while
       # both default-off Stripe gates are disabled. Keep the PR plan inert
       # while exercising that fail-closed configuration invariant.
-      STRIPE_ACCOUNT_ID          = ""
-      STRIPE_API_VERSION         = "2025-09-30.clover"
-      STRIPE_BILLING_ENABLED     = "false"
-      STRIPE_INTEGRATION_ENABLED = "false"
-      STRIPE_LIVE_MODE           = "true"
-      STRIPE_PRICE_ID            = ""
-      ZOOM_CLIENT_ID             = "not-a-secret"
-      ZOOM_CLIENT_SECRET         = "not-a-secret"
-      ZOOM_REDIRECT_URI          = "https://example.invalid/callback"
-      ZOOM_SECRET_TOKEN          = "not-a-secret"
-      ZOOM_SUCCESS_REDIRECT      = "https://example.invalid/settings"
-      ZOOM_WATCHDOG_ENABLED      = "false"
+      STRIPE_ACCOUNT_ID              = ""
+      STRIPE_API_VERSION             = "2025-09-30.clover"
+      STRIPE_BILLING_ENABLED         = "false"
+      STRIPE_INTEGRATION_ENABLED     = "false"
+      STRIPE_LIVE_MODE               = "true"
+      STRIPE_PORTAL_CONFIGURATION_ID = ""
+      STRIPE_PRICE_ID                = ""
+      ZOOM_CLIENT_ID                 = "not-a-secret"
+      ZOOM_CLIENT_SECRET             = "not-a-secret"
+      ZOOM_REDIRECT_URI              = "https://example.invalid/callback"
+      ZOOM_SECRET_TOKEN              = "not-a-secret"
+      ZOOM_SUCCESS_REDIRECT          = "https://example.invalid/settings"
+      ZOOM_WATCHDOG_ENABLED          = "false"
     }
   }
 }

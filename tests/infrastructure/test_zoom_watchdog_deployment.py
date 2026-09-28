@@ -72,7 +72,10 @@ def test_watchdog_is_public_in_both_terraform_environments() -> None:
         assert "var.python_public_vars" in block
 
     secretless_plan = _read("infra/tests/secretless_plan.tftest.hcl")
-    assert secretless_plan.count(f'{FLAG}      = "false"') == 1
+    assert (
+        len(re.findall(rf'^\s*{FLAG}\s*=\s*"false"$', secretless_plan, re.MULTILINE))
+        == 1
+    )
 
 
 def test_staging_deploy_forces_evidences_and_reads_back_watchdog_false() -> None:
