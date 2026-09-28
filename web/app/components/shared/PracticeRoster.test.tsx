@@ -553,6 +553,90 @@ describe("revoking and restoring members", () => {
     )
   })
 
+  it("opens the confirmation from its trigger and returns focus to it", async () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    const trigger = screen.getByRole("button", { name: "Revoke Alex Active" })
+    expect(trigger).toHaveAttribute("aria-haspopup", "dialog")
+    expect(trigger).toHaveAttribute("aria-expanded", "false")
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole("dialog")
+    expect(trigger).toHaveAttribute("aria-expanded", "true")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await vi.waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it("moves focus to Restore once a revoke succeeds, and back after a restore", async () => {
+    client.revokePracticeMember.mockResolvedValue({ data: clinician() })
+    client.restorePracticeMember.mockResolvedValue({ data: clinician() })
+    const loaded = (overrides: Partial<PracticeRosterMember>) => ({
+      data: roster([member(), clinician(overrides)]),
+      response: new Response(null, { status: 200 }),
+    })
+    practiceRoster
+      .mockResolvedValueOnce(loaded({ access_ends_at: ENDS_AT }))
+      .mockResolvedValueOnce(loaded({}))
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Revoke access",
+      }),
+    )
+    const restore = await screen.findByRole("button", {
+      name: "Restore Alex Active",
+    })
+    await vi.waitFor(() => expect(restore).toHaveFocus())
+
+    fireEvent.click(restore)
+    const revoke = await screen.findByRole("button", {
+      name: "Revoke Alex Active",
+    })
+    await vi.waitFor(() => expect(revoke).toHaveFocus())
+  })
+
+  it("tells apart clinicians who never recorded a name", () => {
+    const joined = ["2026-08-20T20:00:00Z", "2026-09-02T20:00:00Z"]
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician({
+            member_id: "practice_member_a",
+            display_name: null,
+            joined_at: joined[0],
+          }),
+          clinician({
+            member_id: "practice_member_b",
+            display_name: null,
+            joined_at: joined[1],
+          }),
+        ])}
+      />,
+    )
+
+    for (const at of joined) {
+      expect(
+        screen.getByRole("button", {
+          name: `Revoke clinician joined ${new Date(at).toLocaleDateString()}`,
+        }),
+      ).toBeInTheDocument()
+    }
+  })
+
   it("cancelling the confirmation revokes nothing", async () => {
     render(
       <PracticeRoster

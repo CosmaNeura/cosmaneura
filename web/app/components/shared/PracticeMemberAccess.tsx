@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Button } from "~/components/ui/button"
 import {
@@ -9,6 +9,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "~/components/ui/dialog"
 import {
   type PracticeRosterMember,
@@ -65,7 +66,13 @@ export function MemberAccessActions({
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [refocus, setRefocus] = useState(false)
+  const action = useRef<HTMLButtonElement>(null)
   const name = member.display_name ?? "this clinician"
+  // tells apart the buttons of members who never recorded a name
+  const label =
+    member.display_name ??
+    `clinician joined ${new Date(member.joined_at).toLocaleDateString()}`
   const path = { member_id: member.member_id }
 
   const restorable = member.access_ends_at !== null
@@ -74,6 +81,13 @@ export function MemberAccessActions({
   useEffect(() => {
     if (restorable) setConfirming(false)
   }, [restorable])
+  // the button that was pressed is replaced by its opposite once the roster
+  // reloads; keep keyboard focus on the row instead of dropping it
+  useEffect(() => {
+    if (!refocus) return
+    action.current?.focus()
+    setRefocus(false)
+  }, [refocus])
   const rowError =
     error && !dialogShown ? (
       <p role="alert" className="text-destructive w-full">
@@ -93,11 +107,13 @@ export function MemberAccessActions({
   async function act(run: () => Promise<{ error?: unknown; data?: unknown }>) {
     setBusy(true)
     setError(null)
+    let succeeded = false
     try {
       const { error: failure } = await run()
       if (failure) {
         setError(errorDetail(failure) ?? "That did not work. Try again.")
       } else {
+        succeeded = true
         setConfirming(false)
       }
     } catch {
@@ -108,30 +124,34 @@ export function MemberAccessActions({
     // a refusal usually means the member changed elsewhere (revoked,
     // restored, or the last seat taken), so the list is refreshed either way
     await onChanged()
+    if (succeeded) setRefocus(true)
   }
 
   return (
     <>
       {restorable ? (
         <Button
+          ref={action}
           variant="outline"
           size="sm"
           disabled={busy}
-          aria-label={`Restore ${name}`}
+          aria-label={`Restore ${label}`}
           onClick={() => void act(() => restorePracticeMember({ path }))}
         >
           Restore
         </Button>
       ) : (
         <Dialog open={dialogShown} onOpenChange={setConfirming}>
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label={`Revoke ${name}`}
-            onClick={() => setConfirming(true)}
-          >
-            Revoke
-          </Button>
+          <DialogTrigger asChild>
+            <Button
+              ref={action}
+              variant="outline"
+              size="sm"
+              aria-label={`Revoke ${label}`}
+            >
+              Revoke
+            </Button>
+          </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Revoke {name}’s access?</DialogTitle>
