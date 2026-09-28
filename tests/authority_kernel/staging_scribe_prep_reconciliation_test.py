@@ -420,7 +420,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
         assert lock_practice_seats(session, f.practice.id) is not None
         f.practice_member.seat_state = "inactive"
     elif change == "ended_member":
-        lock_practice_seats(session, f.practice.id)
+        assert lock_practice_seats(session, f.practice.id) is not None
         f.practice_member.seat_state = "inactive"
         f.practice_member.access_ends_at = datetime.now(UTC) - timedelta(minutes=1)
         # Isolate the membership check from the access decision, which also
