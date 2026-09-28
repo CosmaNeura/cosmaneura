@@ -35,7 +35,7 @@ from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.scribe_capture_binding import (
     ScribeCaptureBinding,
     ScribeCaptureProviderLink,
@@ -124,6 +124,7 @@ def make_scope_case(session, *, existing_tenant=None, existing_practice=None):
         role="owner",
         attested_at=now,
     )
+    assert lock_practice_seats(session, practice.id) is not None
     session.add_all([identity, membership, person_binding, practice_member])
     session.flush()
     link = ScribeCaptureProviderLink(
