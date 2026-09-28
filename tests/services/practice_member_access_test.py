@@ -23,6 +23,7 @@ from app.models.practice import (
     PracticeMember,
     member_access_state,
     member_holds_seat_clause,
+    practice_seat_lock_held,
 )
 from app.models.practice_access_audit import PracticeAccessAudit
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -255,14 +256,20 @@ def _fill_seats(practice: Practice, total: int) -> None:
 def _revoke(owner: PracticeMember, member: PracticeMember, *, now=None):
     with get_session() as session:
         return member_access.revoke_member_access(
-            session, owner_member=owner, member_id=member.id, now=now or _now()
+            session,
+            owner_member=owner,
+            member_id=member.id,
+            clock=(lambda: now) if now else _now,
         )
 
 
 def _restore(owner: PracticeMember, member: PracticeMember, *, now=None):
     with get_session() as session:
         return member_access.restore_member_access(
-            session, owner_member=owner, member_id=member.id, now=now or _now()
+            session,
+            owner_member=owner,
+            member_id=member.id,
+            clock=(lambda: now) if now else _now,
         )
 
 
@@ -314,6 +321,30 @@ def test_revoke_schedules_the_cutoff_and_records_who_did_it():
     assert audit.created_at == now
     assert audit.effective_at == datetime(2026, 9, 28, 4, 0, tzinfo=UTC)
     assert audit.expires_at is None
+
+
+def test_revoke_and_restore_judge_the_member_at_an_instant_read_under_the_lock():
+    practice, owner = _owned_practice()
+    member = _workforce(practice)
+    reads: list[datetime] = []
+
+    def change(action):
+        with get_session() as session:
+
+            def clock() -> datetime:
+                assert practice_seat_lock_held(session, practice.id)
+                reads.append(_now())
+                return reads[-1]
+
+            return action(session, owner_member=owner, member_id=member.id, clock=clock)
+
+    revoked = change(member_access.revoke_member_access)
+    restored = change(member_access.restore_member_access)
+
+    assert revoked.decided_at == reads[0]
+    assert revoked.member.access_ends_at == access_cutoff_after(reads[0])
+    assert restored.decided_at == reads[1]
+    assert [audit.created_at for audit in _audits(practice)] == reads
 
 
 def test_a_repeated_revoke_keeps_the_first_cutoff_and_one_audit_row():
@@ -479,7 +510,7 @@ def test_a_failed_commit_leaves_neither_the_change_nor_its_audit_row():
         session.commit = fail_commit  # type: ignore[method-assign]
         with pytest.raises(SQLAlchemyError):
             member_access.revoke_member_access(
-                session, owner_member=owner, member_id=member.id, now=_now()
+                session, owner_member=owner, member_id=member.id
             )
         session.rollback()
 
@@ -503,7 +534,7 @@ def test_a_failed_audit_write_rolls_back_the_revocation(monkeypatch):
     with get_session() as session:
         with pytest.raises(SQLAlchemyError):
             member_access.revoke_member_access(
-                session, owner_member=owner, member_id=member.id, now=_now()
+                session, owner_member=owner, member_id=member.id
             )
         session.rollback()
 

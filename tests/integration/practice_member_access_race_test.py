@@ -149,11 +149,18 @@ def _backends_waiting_on_locks(connection: psycopg.Connection) -> int:
     return int(row[0])
 
 
-def _race(practice: Practice, calls: list[Callable[[], object]]) -> list[object]:
+def _race(
+    practice: Practice,
+    calls: list[Callable[[], object]],
+    *,
+    release_after: datetime | None = None,
+) -> list[object]:
     """Queue the calls, in order, behind a held practice row lock, then release it.
 
     Each call is submitted only once the previous one is waiting, so the lock
-    queue, and with it the commit order, follows the list order.
+    queue, and with it the commit order, follows the list order. With
+    ``release_after``, every call must have queued before that instant and the
+    lock is held until it has passed.
     """
 
     database_url = _database_url()
@@ -176,6 +183,10 @@ def _race(practice: Practice, calls: list[Callable[[], object]]) -> list[object]
                 assert time.monotonic() < deadline, "call did not queue on the lock"
                 assert not any(future.done() for future in futures)
                 time.sleep(0.02)
+        if release_after is not None:
+            assert datetime.now(timezone.utc) < release_after, "queued too late"
+            while datetime.now(timezone.utc) <= release_after:
+                time.sleep(0.05)
         blocker.rollback()
 
         outcomes: list[object] = []
@@ -196,13 +207,13 @@ def live_emails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(internal, "verified_primary_email", current_email)
 
 
-def _last_seat_contest():
+def _last_seat_contest(access_ends_in: timedelta = timedelta(minutes=-1)):
     practice, owner, owner_doctor = _practice(MAX_ACTIVE_CLINICIAN_SEATS - 1)
     returning = _member(
         practice,
         "returning",
         seat_state="inactive",
-        access_ends_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        access_ends_at=datetime.now(timezone.utc) + access_ends_in,
     )
     invitee = _doctor("invitee")
     token = _invite(owner, invitee.email or "")
@@ -274,6 +285,36 @@ def test_restore_and_acceptance_cannot_both_take_the_last_seat(
                 lambda: _restore(owner_doctor, returning),
                 lambda: _accept(invitee, token),
             ),
+        ),
+    )
+
+    _assert_first_of_restore_or_accept_won(
+        practice, returning, invitee, restored, accepted, restore_first=restore_first
+    )
+
+
+@ORDERS
+def test_a_restore_queued_across_the_cutoff_competes_for_the_last_seat(
+    live_emails, restore_first
+):
+    _database_url()
+    practice, owner_doctor, returning, invitee, token = _last_seat_contest(
+        access_ends_in=timedelta(seconds=2)
+    )
+    assert returning.access_ends_at is not None
+
+    # Both calls start while the returning member still holds a seat and run
+    # only after their cut-off: whichever runs first takes the freed seat.
+    restored, accepted = _outcomes(
+        restore_first,
+        _race(
+            practice,
+            _in_order(
+                restore_first,
+                lambda: _restore(owner_doctor, returning),
+                lambda: _accept(invitee, token),
+            ),
+            release_after=returning.access_ends_at,
         ),
     )
 

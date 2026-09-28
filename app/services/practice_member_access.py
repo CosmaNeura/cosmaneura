@@ -7,6 +7,7 @@ order as invitation acceptance, and writes its audit row in the same
 transaction as the change it records.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
@@ -67,6 +68,8 @@ class MemberAccessChange:
     doctor: Doctor
     changed: bool
     "False when the member was already in the requested state."
+    decided_at: datetime
+    "The instant, read under the seat lock, that the member's state was judged at."
 
 
 @dataclass(frozen=True)
@@ -144,8 +147,12 @@ def _audit(
     return audit
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _finish(
-    session: Session, locked: _LockedMember, *, changed: bool
+    session: Session, locked: _LockedMember, *, changed: bool, decided_at: datetime
 ) -> MemberAccessChange:
     session.commit()
     session.refresh(locked.practice)
@@ -156,6 +163,7 @@ def _finish(
         member=locked.member,
         doctor=locked.doctor,
         changed=changed,
+        decided_at=decided_at,
     )
 
 
@@ -164,7 +172,7 @@ def revoke_member_access(
     *,
     owner_member: PracticeMember,
     member_id: Any,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> MemberAccessChange:
     """Schedule a member's access to end at tonight's Eastern midnight.
 
@@ -174,13 +182,16 @@ def revoke_member_access(
     """
 
     locked = _lock_member(session, owner_member, member_id)
+    # Read only once the lock is held: a request queued behind another seat
+    # change may be released after tonight's cut-off.
+    now = clock()
     member = locked.member
     if member.role == PracticeRole.owner.value:
         raise MemberAccessConflict("The practice owner's access can't be revoked.")
     if member.access_revoked_at is not None:
         raise MemberAccessConflict("This clinician's access has already ended.")
     if member.seat_state != ClinicianSeatState.active.value:
-        return _finish(session, locked, changed=False)
+        return _finish(session, locked, changed=False, decided_at=now)
 
     cutoff = access_cutoff_after(now)
     member.seat_state = ClinicianSeatState.inactive.value
@@ -195,7 +206,7 @@ def revoke_member_access(
             effective_at=cutoff,
         )
     )
-    return _finish(session, locked, changed=True)
+    return _finish(session, locked, changed=True, decided_at=now)
 
 
 def restore_member_access(
@@ -203,7 +214,7 @@ def restore_member_access(
     *,
     owner_member: PracticeMember,
     member_id: Any,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> MemberAccessChange:
     """Undo an owner revocation.
 
@@ -213,6 +224,9 @@ def restore_member_access(
     """
 
     locked = _lock_member(session, owner_member, member_id)
+    # Read only once the lock is held: a restore queued behind another seat
+    # change may be released after the cut-off, when it needs a seat again.
+    now = clock()
     member = locked.member
     if member.role == PracticeRole.owner.value:
         raise MemberAccessConflict("The practice owner's access can't be restored.")
@@ -220,10 +234,10 @@ def restore_member_access(
         raise MemberAccessConflict("This clinician's access can't be restored.")
     state = member_access_state(member, at=now)
     if state is MemberAccessState.active:
-        return _finish(session, locked, changed=False)
+        return _finish(session, locked, changed=False, decided_at=now)
 
     if state is MemberAccessState.revoked:
-        require_active_clinician_seat_capacity(session, locked.practice)
+        require_active_clinician_seat_capacity(session, locked.practice, at=now)
     member.seat_state = ClinicianSeatState.active.value
     member.access_ends_at = None
     session.add(member)
@@ -238,4 +252,4 @@ def restore_member_access(
             effective_at=now,
         )
     )
-    return _finish(session, locked, changed=True)
+    return _finish(session, locked, changed=True, decided_at=now)

@@ -1988,10 +1988,9 @@ def _change_member_access(
 ) -> PracticeRosterMember:
     doctor: Doctor = request.state.doctor
     owner = _owner_membership(doctor, _MEMBER_ACCESS_OWNER_ONLY)
-    now = datetime.now(timezone.utc)
     try:
         with get_session() as session:
-            result = change(session, owner_member=owner, member_id=member_id, now=now)
+            result = change(session, owner_member=owner, member_id=member_id)
     except ActiveClinicianSeatLimitReached:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=SEAT_LIMIT_OWNER_DETAIL
@@ -2006,12 +2005,12 @@ def _change_member_access(
             detail=str(exc),
         ) from None
     [access_in_force] = practice_members_access_in_force(
-        result.practice, [(result.member, result.doctor)], at=now
+        result.practice, [(result.member, result.doctor)], at=result.decided_at
     )
     return _roster_member(
         result.member,
         is_self=result.member.doctor_id == doctor.id,
-        seat_active=member_access_state(result.member, at=now)
+        seat_active=member_access_state(result.member, at=result.decided_at)
         in SEAT_HOLDING_ACCESS_STATES,
         access_in_force=access_in_force,
     )
