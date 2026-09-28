@@ -85,6 +85,16 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             "acquisition_source <> 'public_self_service' OR npi IS NULL",
             name="ck_practice_public_self_service_no_npi",
         ),
+        sa.CheckConstraint(
+            "stripe_paid_seat_high_water IS NULL "
+            "OR stripe_paid_seat_high_water BETWEEN 1 AND 20",
+            name="ck_practice_stripe_paid_seat_high_water_bounds",
+        ),
+        sa.CheckConstraint(
+            "(stripe_paid_seat_high_water IS NULL) "
+            "= (stripe_paid_seat_period_start IS NULL)",
+            name="ck_practice_stripe_paid_seat_period_pairing",
+        ),
         sa.Index("practice_organization_id_idx", "organization_id"),
     )
 
@@ -214,6 +224,17 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_paid_seat_high_water: int | None = None
+    """Highest seat count Stripe held in the period below; re-adding up to it is free.
+
+    A seat removal gives no credit, so a swap within one period must not be
+    charged again. Only written after Stripe confirms the quantity.
+    """
+    stripe_paid_seat_period_start: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Stripe subscription item current_period_start the high-water belongs to."
 
     negotiated_baa_on_file: bool = False
     "Enterprise fallback: a countersigned CN-BAA-CUST is on file instead of clickwrap."

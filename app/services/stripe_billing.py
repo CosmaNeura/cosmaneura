@@ -11,6 +11,8 @@ import hmac
 import json
 import math
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -39,7 +41,7 @@ from app.models.practice import (
 )
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -2768,6 +2770,71 @@ def mark_quantity_sync_required(practice: Practice) -> None:
     _quantity_sync_snapshot(practice.id, force_new_version=True)
 
 
+def _subscription_item_period_start(item: dict[str, Any]) -> datetime:
+    # API 2025-09-30.clover carries the billing period on the item, not on
+    # the subscription; during a trial it is the trial period.
+    start = item.get("current_period_start")
+    end = item.get("current_period_end")
+    if (
+        not isinstance(start, int)
+        or isinstance(start, bool)
+        or not isinstance(end, int)
+        or isinstance(end, bool)
+        or end <= start
+    ):
+        raise StripeStateInvalid(
+            "subscription item billing period is missing or invalid"
+        )
+    return _stripe_timestamp(start, source="subscription item billing period")
+
+
+def _paid_seat_high_water(
+    practice: Practice, *, quantity: int, period_start: datetime, repairing: bool
+) -> int | None:
+    """Return the highest seat count already paid in Stripe's current period.
+
+    A new period starts from the quantity Stripe billed at renewal. Folding in
+    the current quantity also covers a sync whose confirmation was lost after
+    Stripe applied a billable raise. An out-of-range quantity under repair was
+    never a paid seat count.
+    """
+
+    recorded = (
+        practice.stripe_paid_seat_high_water
+        if practice.stripe_paid_seat_period_start == period_start
+        else None
+    )
+    observed = None if repairing else quantity
+    return max((v for v in (recorded, observed) if v is not None), default=None)
+
+
+def _quantity_update_steps(
+    *, current: int, target: int, high_water: int | None, billable: bool
+) -> list[tuple[int, str]]:
+    """Plan absolute quantity updates so only seats above the high-water prorate."""
+
+    paid = high_water or 0
+    if target < current or not billable or target <= paid:
+        return [(target, "none")]
+    if current < paid:
+        # Stripe prorates the whole current-to-target difference in one call,
+        # so restore the already-paid seats first without proration.
+        return [(paid, "none"), (target, "create_prorations")]
+    return [(target, "create_prorations")]
+
+
+def _record_paid_seat_high_water(
+    row: Practice, *, high_water: int, period_start: datetime
+) -> None:
+    if (
+        row.stripe_paid_seat_period_start == period_start
+        and row.stripe_paid_seat_high_water is not None
+    ):
+        high_water = max(high_water, row.stripe_paid_seat_high_water)
+    row.stripe_paid_seat_high_water = high_water
+    row.stripe_paid_seat_period_start = period_start
+
+
 def _finish_quantity_sync(
     practice_id: Any,
     *,
@@ -2775,6 +2842,7 @@ def _finish_quantity_sync(
     version: int,
     target: int,
     error: Exception | None = None,
+    paid_seats: tuple[int, datetime] | None = None,
 ) -> bool:
     """Finish only the exact obligation that initiated the remote request."""
 
@@ -2794,6 +2862,12 @@ def _finish_quantity_sync(
             session.add(row)
             session.commit()
             return False
+        if paid_seats is not None:
+            # Stripe confirmed this quantity whether or not Core's target has
+            # moved on since, so the paid high-water stands either way.
+            _record_paid_seat_high_water(
+                row, high_water=paid_seats[0], period_start=paid_seats[1]
+            )
         if row.stripe_quantity_sync_version != version:
             # A join/leave landed while Stripe was in flight. Never let this
             # older response clear the newer target; the next sweep repairs it.
@@ -2814,11 +2888,54 @@ def _finish_quantity_sync(
         return True
 
 
+@contextmanager
+def _quantity_sync_lease(practice_id: Any) -> Iterator[bool]:
+    """Serialize one practice's Stripe quantity mutations across processes.
+
+    Stripe has no compare-and-set on quantity, so an overlapping sync could
+    lower Stripe back to the high-water after another sync's billable raise
+    and then prorate the same seats again. A session-level advisory lock on
+    its own autocommit connection spans the HTTP calls without holding a
+    transaction or row lock, and PostgreSQL releases it if the process dies.
+    """
+
+    key = int.from_bytes(
+        hashlib.sha256(f"stripe-quantity-sync:{practice_id}".encode()).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    with SessionManager.get_instance().get_engine().connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        acquired = bool(
+            connection.execute(select(func.pg_try_advisory_lock(key))).scalar_one()
+        )
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                connection.execute(select(func.pg_advisory_unlock(key)))
+
+
 def sync_subscription_quantity(
     practice: Practice, *, raise_on_error: bool = False
 ) -> bool:
     """Reconcile the paid quantity, leaving durable retry state on failure."""
 
+    with _quantity_sync_lease(practice.id) as leased:
+        if not leased:
+            # The in-flight sync re-reads Core's target when it finishes, and
+            # any newer obligation stays durably required for the next sweep.
+            if raise_on_error:
+                raise StripeStateConflict("a quantity sync is already in flight")
+            return False
+        return _sync_subscription_quantity_leased(
+            practice, raise_on_error=raise_on_error
+        )
+
+
+def _sync_subscription_quantity_leased(
+    practice: Practice, *, raise_on_error: bool
+) -> bool:
     snapshot = _quantity_sync_snapshot(practice.id, force_new_version=False)
     if snapshot is None:
         return True
@@ -2861,7 +2978,15 @@ def sync_subscription_quantity(
                 subscription,
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
+            paid_seats: tuple[int, datetime] | None = None
             if item["quantity"] != target:
+                period_start = _subscription_item_period_start(item)
+                high_water = _paid_seat_high_water(
+                    practice,
+                    quantity=item["quantity"],
+                    period_start=period_start,
+                    repairing=repairing_remote_quantity,
+                )
                 # The part-month is queued on the next invoice, never charged
                 # now, so a declined card cannot make an active practice
                 # past_due mid-cycle. The mirrored status treats a portal
@@ -2869,29 +2994,34 @@ def sync_subscription_quantity(
                 # "active"). A trial, a paused subscription and an incomplete
                 # first payment have nothing to prorate, and a drift repair
                 # realigns Stripe to Core rather than adding a seat.
-                status = _mirrored_subscription_status(subscription)
-                if target < item["quantity"] or repairing_remote_quantity:
-                    proration_behavior = "none"
-                elif status in {"active", "past_due", "unpaid"}:
-                    proration_behavior = "create_prorations"
-                else:
-                    proration_behavior = "none"
-                key_source = (
-                    f"quantity:{subscription['id']}:{target}:version:{version}"
-                    f":proration:{proration_behavior}"
+                billable = (
+                    not repairing_remote_quantity
+                    and _mirrored_subscription_status(subscription)
+                    in {"active", "past_due", "unpaid"}
                 )
-                _request(
-                    "POST",
-                    f"/subscription_items/{item['id']}",
-                    {
-                        "quantity": str(target),
-                        "proration_behavior": proration_behavior,
-                    },
-                    idempotency_key=(
-                        "cosmas-quantity-"
-                        + hashlib.sha256(key_source.encode()).hexdigest()
-                    ),
+                steps = _quantity_update_steps(
+                    current=item["quantity"],
+                    target=target,
+                    high_water=high_water,
+                    billable=billable,
                 )
+                for step, (quantity, proration_behavior) in enumerate(steps):
+                    key_source = (
+                        f"quantity:{subscription['id']}:{target}:version:{version}"
+                        f":step:{step}:{quantity}:proration:{proration_behavior}"
+                    )
+                    _request(
+                        "POST",
+                        f"/subscription_items/{item['id']}",
+                        {
+                            "quantity": str(quantity),
+                            "proration_behavior": proration_behavior,
+                        },
+                        idempotency_key=(
+                            "cosmas-quantity-"
+                            + hashlib.sha256(key_source.encode()).hexdigest()
+                        ),
+                    )
                 # Do not trust a successful HTTP status alone. Retrieve the
                 # authoritative subscription and confirm the exact quantity.
                 subscription = _retrieve_subscription(practice.stripe_subscription_id)
@@ -2900,6 +3030,21 @@ def sync_subscription_quantity(
                     raise StripeStateInvalid(
                         "Stripe did not confirm the requested subscription quantity"
                     )
+                paid_seats = (max(high_water or 0, target), period_start)
+            else:
+                try:
+                    period_start = _subscription_item_period_start(item)
+                except StripeStateInvalid:
+                    period_start = None
+                if period_start is not None:
+                    high_water = _paid_seat_high_water(
+                        practice,
+                        quantity=item["quantity"],
+                        period_start=period_start,
+                        repairing=repairing_remote_quantity,
+                    )
+                    if high_water is not None:
+                        paid_seats = (high_water, period_start)
             if repairing_remote_quantity:
                 # The first refresh intentionally revoked entitlement before
                 # repair. Only a second fully validated in-range read may
@@ -2914,6 +3059,7 @@ def sync_subscription_quantity(
                 subscription_id=subscription_id,
                 version=version,
                 target=target,
+                paid_seats=paid_seats,
             )
     except Exception as exc:
         _finish_quantity_sync(
