@@ -8,6 +8,7 @@ import type {
 } from "~/configuration/client"
 import type { BillingSeatSummary, PracticeStatus } from "~/lib/practice-api"
 
+import { localAccessEnd } from "./PracticeMemberAccess"
 import { PracticeRoster, loadPracticeRoster } from "./PracticeRoster"
 import { fireEvent, render, screen, within } from "@testing-library/react"
 
@@ -582,7 +583,10 @@ describe("revoking and restoring members", () => {
       screen.getByText("2 seats in use · 1 seat frees at midnight ET"),
     ).toBeInTheDocument()
     const row = screen.getAllByRole("listitem")[1]
-    expect(row).toHaveTextContent(/Access ends tonight at midnight ET · joined/)
+    expect(row).toHaveTextContent(
+      "Access ends tonight at midnight ET " +
+        `(${localAccessEnd(ENDS_AT)} your time) · joined`,
+    )
     expect(
       within(row).getByRole("button", { name: "Restore Alex Active" }),
     ).toBeInTheDocument()

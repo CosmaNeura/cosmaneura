@@ -19,7 +19,9 @@ import { errorDetail } from "~/lib/error-detail"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 /** Revoked by the owner, with access and the seat lasting until tonight. */
-export function accessEnding(member: PracticeRosterMember) {
+export function accessEnding(
+  member: PracticeRosterMember,
+): member is PracticeRosterMember & { access_ends_at: string } {
   return member.access_ends_at !== null && member.seat_active
 }
 
@@ -28,9 +30,25 @@ function accessEnded(member: PracticeRosterMember) {
   return member.access_ends_at !== null && !member.seat_active
 }
 
+/**
+ * The server's cut-off in the viewer's own clock, so "midnight ET" is not
+ * misread west of Eastern time or across the viewer's midnight.
+ */
+export function localAccessEnd(accessEndsAt: string, timeZone?: string) {
+  return new Date(accessEndsAt).toLocaleString(undefined, {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+    timeZone,
+  })
+}
+
 export function memberAccessLabel(member: PracticeRosterMember) {
   if (member.revoked) return "Revoked"
-  if (accessEnding(member)) return "Access ends tonight at midnight ET"
+  if (accessEnding(member)) {
+    return `Access ends tonight at midnight ET (${localAccessEnd(member.access_ends_at)} your time)`
+  }
   if (accessEnded(member)) return "Access revoked"
   if (!member.seat_active) return "Inactive"
   if (!member.access_in_force) return "No access"
@@ -154,9 +172,9 @@ export function PracticeAccessEndingNotice({
         Your practice owner ended your access to Cosmas.
       </p>
       <p className="text-muted-foreground mt-1">
-        {ended
+        {ended || !practice.access_ends_at
           ? "Ask your practice owner if you need it restored."
-          : "You keep access until midnight Eastern tonight."}
+          : `You keep access until midnight Eastern tonight (${localAccessEnd(practice.access_ends_at)} your time).`}
       </p>
     </div>
   )
