@@ -43,6 +43,20 @@ describe("PracticeAccessEndingNotice", () => {
     )
   })
 
+  it("says nothing of the owner once support permanently revoked access", () => {
+    const { container } = render(
+      <PracticeAccessEndingNotice
+        practice={status({
+          access_ends_at: "2026-09-28T04:00:00Z",
+          access_ended: true,
+          access_revoked: true,
+        })}
+      />,
+    )
+
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it("renders nothing without a scheduled end", () => {
     const { container } = render(
       <PracticeAccessEndingNotice practice={status({})} />,

@@ -141,7 +141,10 @@ export function PracticeAccessEndingNotice({
   practice: PracticeStatus
 }) {
   const ended = practice.access_ended
-  if (!practice.access_ends_at && !ended) return null
+  // a permanent revocation comes from support, not from the practice owner
+  if (practice.access_revoked || (!practice.access_ends_at && !ended)) {
+    return null
+  }
   return (
     <div
       role="status"
