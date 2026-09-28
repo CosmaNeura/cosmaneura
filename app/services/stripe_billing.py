@@ -2855,6 +2855,13 @@ def _finish_quantity_sync(
             # in flight. Never clear or poison the new subscription's repair.
             session.commit()
             return False
+        if paid_seats is not None:
+            # The high-water stands whether or not Core's target has moved on
+            # or the update failed: a failed sync may already have charged the
+            # seats Stripe held when it planned.
+            _record_paid_seat_high_water(
+                row, high_water=paid_seats[0], period_start=paid_seats[1]
+            )
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
@@ -2862,12 +2869,6 @@ def _finish_quantity_sync(
             session.add(row)
             session.commit()
             return False
-        if paid_seats is not None:
-            # Stripe confirmed this quantity whether or not Core's target has
-            # moved on since, so the paid high-water stands either way.
-            _record_paid_seat_high_water(
-                row, high_water=paid_seats[0], period_start=paid_seats[1]
-            )
         if row.stripe_quantity_sync_version != version:
             # A join/leave landed while Stripe was in flight. Never let this
             # older response clear the newer target; the next sweep repairs it.
@@ -2940,6 +2941,7 @@ def _sync_subscription_quantity_leased(
     if snapshot is None:
         return True
     target, version, subscription_id = snapshot
+    paid_seats: tuple[int, datetime] | None = None
     try:
         practice.refresh()
         assert practice.stripe_subscription_id
@@ -2978,7 +2980,6 @@ def _sync_subscription_quantity_leased(
                 subscription,
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
-            paid_seats: tuple[int, datetime] | None = None
             if item["quantity"] != target:
                 period_start = _subscription_item_period_start(item)
                 high_water = _paid_seat_high_water(
@@ -2987,6 +2988,8 @@ def _sync_subscription_quantity_leased(
                     period_start=period_start,
                     repairing=repairing_remote_quantity,
                 )
+                if high_water is not None:
+                    paid_seats = (high_water, period_start)
                 # The part-month is queued on the next invoice, never charged
                 # now, so a declined card cannot make an active practice
                 # past_due mid-cycle. The mirrored status treats a portal
@@ -3068,6 +3071,7 @@ def _sync_subscription_quantity_leased(
             version=version,
             target=target,
             error=exc,
+            paid_seats=paid_seats,
         )
         log.warning(
             "failed to sync stripe subscription quantity",

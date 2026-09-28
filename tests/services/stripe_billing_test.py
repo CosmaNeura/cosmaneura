@@ -7,7 +7,7 @@ import secrets
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import pytest
@@ -3833,7 +3833,7 @@ def test_lost_confirmation_after_a_billable_raise_is_not_charged_again(
     monkeypatch.setattr(stripe_billing, "_retrieve_subscription", lose_confirmation)
     assert not _sync_seats(practice)
     practice.refresh()
-    assert practice.stripe_paid_seat_high_water is None
+    assert practice.stripe_paid_seat_high_water == 1
 
     assert stripe_billing.sync_subscription_quantity(practice)
     practice.refresh()
@@ -3847,7 +3847,7 @@ def test_lost_confirmation_after_a_billable_raise_is_not_charged_again(
     assert _posted(remote)[-1] == ("2", "none")
 
 
-def test_high_water_is_not_recorded_until_stripe_confirms_the_quantity(
+def test_unconfirmed_target_is_never_recorded_as_paid(
     remote: FakeStripe,
 ):
     practice = _quantity_sync_practice(
@@ -3859,8 +3859,58 @@ def test_high_water_is_not_recorded_until_stripe_confirms_the_quantity(
 
     practice.refresh()
     assert practice.stripe_quantity_sync_error
-    assert practice.stripe_paid_seat_high_water is None
-    assert practice.stripe_paid_seat_period_start is None
+    assert practice.stripe_paid_seat_high_water == 1
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
+def _lose_next_confirmation(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[], None]:
+    retrieve = stripe_billing._retrieve_subscription
+    armed: dict[str, int | None] = {"after": None}
+
+    def lose_confirmation(subscription_id: str, **kwargs: Any) -> dict:
+        after = armed["after"]
+        if after is not None and remote.quantity_update_count > after:
+            armed["after"] = None
+            raise httpx.ConnectError("confirmation lost")
+        return retrieve(subscription_id, **kwargs)
+
+    monkeypatch.setattr(stripe_billing, "_retrieve_subscription", lose_confirmation)
+
+    def arm() -> None:
+        armed["after"] = remote.quantity_update_count
+
+    return arm
+
+
+def test_two_lost_confirmations_never_charge_a_seat_twice(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    lose_next_confirmation = _lose_next_confirmation(remote, monkeypatch)
+
+    _add_attested_clinician(practice)
+    lose_next_confirmation()
+    assert not _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    lose_next_confirmation()
+    assert not _sync_seats(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [
+        ("3", "create_prorations"),
+        ("2", "none"),
+        ("3", "none"),
+    ]
+    assert remote.prorated_seats == [1]
 
 
 def test_missing_item_billing_period_fails_closed_before_any_update(
