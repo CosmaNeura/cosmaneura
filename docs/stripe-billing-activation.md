@@ -15,29 +15,40 @@ hosted sessions remain usable until they complete or expire.
 
 ## Customer portal configuration
 
-Every customer portal session names a pinned portal configuration,
-`STRIPE_PORTAL_CONFIGURATION_ID` (`bpc_...`, the `portal-configuration-id`
-field of the Stripe 1Password item). Stripe's account-default portal is never
-used: a Dashboard edit to it could let customers change their seat quantity or
-plan, bypassing Core's seat billing, where an added seat is charged part-month
+Every customer portal session Core creates names a pinned portal
+configuration, `STRIPE_PORTAL_CONFIGURATION_ID` (`bpc_...`, the
+`portal-configuration-id` field of the Stripe 1Password item). The pin covers
+only Core-created sessions. Stripe still applies the account-default
+configuration to portal entry points Core does not control: the no-code
+customer portal login link and portal links in Stripe's customer emails. A
+Dashboard edit that let customers change their seat quantity or plan there
+would bypass Core's seat billing, where an added seat is charged part-month
 immediately and a removed seat earns no credit.
 
 Before each portal session, the backend retrieves the configuration and
-refuses to open the portal unless it has:
+refuses to open the portal unless:
 
-- the configured `id` and the deployment's `livemode`;
-- `active: true`;
-- `features.subscription_update.enabled: false`, so quantity and plan changes
-  happen only through Core; and
-- when `features.subscription_cancel.enabled` is `true`,
-  `features.subscription_cancel.mode: at_period_end`.
+- it has the configured `id` and the deployment's `livemode`;
+- `active` is `true`;
+- `login_page.enabled` is `false`, so the pinned configuration is never a
+  standing no-code entry point;
+- `features` names only `customer_update`, `invoice_history`,
+  `payment_method_update`, `subscription_cancel`, and `subscription_update`,
+  each as an object. A feature Stripe adds later is refused until it has been
+  reviewed and added to the allowlist in `app/services/stripe_billing.py`;
+- `features.subscription_update` is present with `enabled: false`, so quantity
+  and plan changes happen only through Core;
+- `features.subscription_cancel` is present with either `enabled: false` or
+  `mode: at_period_end`; and
+- `features.customer_update` is present with `enabled: false`.
 
 The reviewed configuration also keeps `payment_method_update` and
-`invoice_history` enabled, `customer_update` disabled, and cancellation with
-`proration_behavior: none`. A refused configuration returns the same
-"Billing is not configured in this environment." response as a missing
-integration, and the practice status reports `billing_management_enabled:
-false` while the setting is absent or malformed.
+`invoice_history` enabled and cancellation with `proration_behavior: none`.
+A refused configuration, including a configuration id Stripe does not find
+(deleted, mistyped, or from another account), returns the same "Billing is not
+configured in this environment." response as a missing integration and logs
+an error. The practice status reports `billing_management_enabled: false`
+while the setting is absent or malformed.
 
 Acquisition readiness requires the setting: `STRIPE_BILLING_ENABLED=true` has
 no effect until `STRIPE_PORTAL_CONFIGURATION_ID` is a `bpc_` value. Webhook
@@ -46,8 +57,24 @@ integration-on, acquisition-off state keeps mirroring existing subscriptions
 even when the portal is unavailable. Deployment configuration requires the
 value whenever `STRIPE_INTEGRATION_ENABLED=true`.
 
+If `STRIPE_SECRET_KEY` is a restricted key (`rk_...`), it needs Customer
+portal: Read for the configuration check and Customer portal: Write to create
+sessions, in addition to the permissions Core's other Stripe calls need
+(account, prices, Checkout Sessions, customers, and subscriptions).
+
+Operator steps, in this order:
+
+1. Create the reviewed configuration in Stripe and record its `bpc_` id in the
+   `portal-configuration-id` field of the environment's Stripe 1Password item.
+   Do this before setting `STRIPE_INTEGRATION_ENABLED=true` in any
+   environment; deployment checks refuse the integration without it.
+2. Keep the account-default portal configuration in the same safe shape as the
+   pinned one, or never save an account default at all.
+3. Keep the no-code customer portal login link disabled.
+4. Turn off customer portal links in Stripe's customer emails.
+
 Edit the pinned configuration in Stripe rather than the account default. After
-any change, confirm the four properties above before relying on the portal.
+any change, confirm the properties above before relying on the portal.
 
 ## Dark deploy and drain
 
