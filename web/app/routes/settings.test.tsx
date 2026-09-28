@@ -162,6 +162,20 @@ describe("settings practice roster", () => {
     expect(client.practiceRoster).not.toHaveBeenCalled()
   })
 
+  it("tells a revoked clinician when their access ends", async () => {
+    practiceApi.getPractice.mockResolvedValue(
+      practice({ role: "workforce", access_ends_at: "2026-09-28T04:00:00Z" }),
+    )
+
+    openSettings()
+
+    expect(
+      await screen.findByText(
+        "Your practice owner ended your access to Cosmas.",
+      ),
+    ).toBeInTheDocument()
+  })
+
   it("loads settings and the practice without waiting on each other", async () => {
     practiceApi.getPractice.mockResolvedValue(practice())
     client.settingsData.mockReturnValue(new Promise(() => {}))

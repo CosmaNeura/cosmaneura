@@ -523,6 +523,75 @@ describe("revoking and restoring members", () => {
     expect(within(rows[2]).queryByRole("button")).not.toBeInTheDocument()
   })
 
+  it("never offers the owner's own row or a co-owner an action", () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician({
+            member_id: "practice_member_co_owner",
+            display_name: "Casey CoOwner",
+            role: "owner",
+          }),
+        ])}
+      />,
+    )
+
+    const rows = screen.getAllByRole("listitem")
+    expect(rows[1]).toHaveTextContent("Casey CoOwner")
+    expect(within(rows[1]).queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("never offers a clinician an action on their own row", () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member({ is_self: false }),
+          clinician({ is_self: true }),
+        ])}
+      />,
+    )
+
+    const rows = screen.getAllByRole("listitem")
+    expect(rows[1]).toHaveTextContent("Alex Active (you)")
+    expect(within(rows[1]).queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("offers nothing for an inactive member the owner never revoked", () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([
+          member(),
+          clinician({ seat_active: false, access_in_force: false }),
+        ])}
+      />,
+    )
+
+    const row = screen.getAllByRole("listitem")[1]
+    expect(row).toHaveTextContent(/Inactive · joined/)
+    expect(within(row).queryByRole("button")).not.toBeInTheDocument()
+  })
+
+  it("names the clinician in the confirmation", async () => {
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Revoke Alex Active’s access?",
+      }),
+    ).toBeInTheDocument()
+  })
+
   it("explains the midnight cut-off before revoking, then reloads", async () => {
     client.revokePracticeMember.mockResolvedValue({ data: clinician() })
     render(
