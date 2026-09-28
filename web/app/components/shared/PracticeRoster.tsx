@@ -68,6 +68,10 @@ function useRetryKey() {
   }
 }
 
+const CUTOFF_RELOAD_SLACK_MS = 1_000
+const MAX_TIMER_MS = 2 ** 31 - 1
+const SKEWED_CLOCK_RETRY_MS = 30_000
+
 function count(n: number, singular: string, plural: string) {
   return `${n} ${n === 1 ? singular : plural}`
 }
@@ -292,6 +296,30 @@ export function PracticeRoster({
       )
     }
   }
+
+  // a member's cut-off passes without any request from this page; reload then
+  // so the row and the seat count stop saying "tonight"
+  const endsAt =
+    roster && typeof roster === "object"
+      ? Math.min(
+          ...roster.members
+            .filter(accessEnding)
+            .map((member) => Date.parse(member.access_ends_at)),
+        )
+      : Infinity
+  useEffect(() => {
+    if (endsAt === Infinity) return
+    const wait = endsAt - Date.now()
+    // the server decides; a browser clock running ahead gets "not yet" back,
+    // so it waits a while instead of asking again at once
+    const delay =
+      wait > 0
+        ? Math.min(wait + CUTOFF_RELOAD_SLACK_MS, MAX_TIMER_MS)
+        : SKEWED_CLOCK_RETRY_MS
+    const timer = setTimeout(() => void reload(), delay)
+    return () => clearTimeout(timer)
+    // every reload yields a new roster, which re-arms the wait
+  }, [endsAt, roster])
 
   async function onIssued(next: PracticeInvitationIssued) {
     setIssued(next)

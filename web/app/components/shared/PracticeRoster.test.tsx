@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type {
   PracticeInvitationIssued,
@@ -949,6 +949,82 @@ describe("revoking and restoring members", () => {
     expect(within(row).getByRole("alert")).toHaveTextContent(
       "This clinician's access has already ended.",
     )
+  })
+})
+
+describe("a cut-off passing while the roster is open", () => {
+  const ENDS_AT = "2026-09-28T04:00:00Z"
+  const ending = () =>
+    roster([
+      member(),
+      member({
+        member_id: "practice_member_alex",
+        display_name: "Alex Active",
+        role: "workforce",
+        is_self: false,
+        access_ends_at: ENDS_AT,
+      }),
+    ])
+  const ended = () =>
+    roster(
+      [
+        member(),
+        member({
+          member_id: "practice_member_alex",
+          display_name: "Alex Active",
+          role: "workforce",
+          is_self: false,
+          access_ends_at: ENDS_AT,
+          seat_active: false,
+          access_in_force: false,
+        }),
+      ],
+      { occupied_seats: 1 },
+    )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("reloads once the earliest cut-off has passed", async () => {
+    vi.setSystemTime(new Date("2026-09-28T03:59:00Z"))
+    practiceRoster.mockResolvedValue({
+      data: ended(),
+      response: new Response(null, { status: 200 }),
+    })
+    render(<PracticeRoster practice={practice()} roster={ending()} />)
+
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(practiceRoster).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2_000)
+
+    expect(practiceRoster).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() =>
+      expect(screen.getAllByRole("listitem")[1]).toHaveTextContent(
+        /Access revoked · joined/,
+      ),
+    )
+    expect(screen.getByText("1 seat in use")).toBeInTheDocument()
+  })
+
+  it("does not hammer the server when this clock runs ahead of it", async () => {
+    vi.setSystemTime(new Date("2026-09-28T04:05:00Z"))
+    practiceRoster.mockResolvedValue({
+      data: ending(),
+      response: new Response(null, { status: 200 }),
+    })
+    render(<PracticeRoster practice={practice()} roster={ending()} />)
+
+    await vi.advanceTimersByTimeAsync(29_000)
+    expect(practiceRoster).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(practiceRoster).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(29_000)
+    expect(practiceRoster).toHaveBeenCalledTimes(1)
   })
 })
 
