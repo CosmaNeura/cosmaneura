@@ -3417,6 +3417,105 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
 
 
+def _bind_checkout_trial(practice: Practice, trial_length: timedelta) -> dict:
+    subscription = _subscription(practice, status="trialing")
+    subscription["metadata"]["trial_clock"] = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    subscription["metadata"]["trial_days"] = "14"
+    subscription["trial_start"] = int(NOW.timestamp())
+    subscription["trial_end"] = int((NOW + trial_length).timestamp())
+    _bind_verified_public_subscription(
+        practice, subscription, status="pending_verification"
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.save()
+    return subscription
+
+
+def test_quantity_sweep_keeps_the_recorded_invalid_contract_cause(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _bind_checkout_trial(practice, timedelta(days=13))
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.refresh_subscription_state(practice)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    cause = "subscription trial is not the fixed 14 days"
+    assert practice.stripe_quantity_sync_error == cause
+
+    assert stripe_billing.reconcile_pending_quantity_syncs() == (0, 1)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == cause
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_attempts == 1
+    assert _quantity_updates(remote) == []
+
+    remote.subscriptions[subscription["id"]]["trial_end"] = int(
+        (NOW + stripe_billing.TRIAL_LENGTH).timestamp()
+    )
+    assert stripe_billing.reconcile_pending_quantity_syncs() == (1, 0)
+
+    practice.refresh()
+    assert practice.subscription_status == "trialing"
+    assert practice.stripe_quantity_sync_error is None
+    assert not practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_synced_at is not None
+
+
+def test_quantity_sync_refusal_without_a_recorded_cause_records_the_refusal(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="invalid")
+    # A projection marked invalid before its cause was persisted: the refresh
+    # leaves the row as it is and records nothing.
+    monkeypatch.setattr(
+        stripe_billing,
+        "refresh_subscription_state",
+        lambda _practice: deepcopy(subscription),
+    )
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == (
+        "Stripe subscription identity or contract is not safe for quantity sync"
+    )
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_attempts == 1
+    assert _quantity_updates(remote) == []
+
+
+def test_failed_remote_quantity_repair_records_the_update_failure(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice, quantity=21)
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+
+    def failing_update(method, path, data=None, *, idempotency_key=None):
+        if path.startswith("/subscription_items/"):
+            raise stripe_billing.StripeStateConflict("quantity update failed")
+        return remote(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", failing_update)
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == "quantity update failed"
+    assert practice.stripe_quantity_sync_attempts == 1
+
+
 @pytest.mark.parametrize("remote_quantity", [0, 21])
 def test_quantity_sync_repairs_remote_quantity_outside_pilot_bounds(
     remote: FakeStripe,
