@@ -36,6 +36,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     authorization_basis: "workforce_attestation",
     access_revoked: false,
     access_ends_at: null,
+    access_ended: false,
     pilot_access_grant_active: false,
     trial_ends_at: null,
     billing_exempt: false,

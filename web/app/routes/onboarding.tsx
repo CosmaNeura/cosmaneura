@@ -13,10 +13,7 @@ import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
-import {
-  PracticeAccessEndingNotice,
-  practiceAccessEnded,
-} from "~/components/shared/PracticeMemberAccess"
+import { PracticeAccessEndingNotice } from "~/components/shared/PracticeMemberAccess"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   CheckRow,
@@ -197,7 +194,7 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           />
         ) : practice?.access_revoked ? (
           <OrganizationAccessRevoked practice={practice} />
-        ) : practice && practiceAccessEnded(practice) ? (
+        ) : practice?.access_ended ? (
           <PracticeAccessEndingNotice practice={practice} />
         ) : practiceReady(practice) ? (
           <OptionalSetup

@@ -171,6 +171,7 @@ from app.models.patient_medication import (
 from app.models.practice import (
     SEAT_HOLDING_ACCESS_STATES,
     TRIAL_LENGTH,
+    MemberAccessState,
     OriginChannel,
     Practice,
     PracticeAcquisitionSource,
@@ -1251,6 +1252,8 @@ def _practice_payload(
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
         access_ends_at=member.access_ends_at,
+        access_ended=member_access_state(member, at=datetime.now(timezone.utc))
+        is MemberAccessState.revoked,
         pilot_access_grant_active=pilot_access_grant_active,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
@@ -1335,6 +1338,8 @@ class PracticeStatus(BaseModel, extra="forbid"):
     access_revoked: bool
     access_ends_at: datetime | None
     "Set once the practice owner revoked this member; access stops at this instant."
+    access_ended: bool
+    "An owner revocation has taken effect, judged by the server's clock."
     pilot_access_grant_active: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
@@ -2446,6 +2451,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             authorization_basis=None,
             access_revoked=False,
             access_ends_at=None,
+            access_ended=False,
             pilot_access_grant_active=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,

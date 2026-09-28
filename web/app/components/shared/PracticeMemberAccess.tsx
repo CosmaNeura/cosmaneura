@@ -137,13 +137,11 @@ export function MemberAccessActions({
 /** Tells a clinician their practice owner revoked them. */
 export function PracticeAccessEndingNotice({
   practice,
-  now = new Date(),
 }: {
   practice: PracticeStatus
-  now?: Date
 }) {
-  if (!practice.access_ends_at) return null
-  const ended = new Date(practice.access_ends_at) <= now
+  const ended = practice.access_ended
+  if (!practice.access_ends_at && !ended) return null
   return (
     <div
       role="status"
@@ -158,14 +156,5 @@ export function PracticeAccessEndingNotice({
           : "You keep access until midnight Eastern tonight."}
       </p>
     </div>
-  )
-}
-
-export function practiceAccessEnded(
-  practice: PracticeStatus | null | undefined,
-  now = new Date(),
-) {
-  return Boolean(
-    practice?.access_ends_at && new Date(practice.access_ends_at) <= now,
   )
 }

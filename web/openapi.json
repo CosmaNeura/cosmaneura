@@ -5653,6 +5653,10 @@
             ],
             "title": "Access Ends At"
           },
+          "access_ended": {
+            "type": "boolean",
+            "title": "Access Ended"
+          },
           "pilot_access_grant_active": {
             "type": "boolean",
             "title": "Pilot Access Grant Active"
@@ -5762,6 +5766,7 @@
           "authorization_basis",
           "access_revoked",
           "access_ends_at",
+          "access_ended",
           "pilot_access_grant_active",
           "trial_ends_at",
           "billing_exempt",

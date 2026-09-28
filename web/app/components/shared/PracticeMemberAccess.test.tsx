@@ -2,24 +2,23 @@ import { describe, expect, it } from "vitest"
 
 import type { PracticeStatus } from "~/lib/practice-api"
 
-import {
-  PracticeAccessEndingNotice,
-  practiceAccessEnded,
-} from "./PracticeMemberAccess"
+import { PracticeAccessEndingNotice } from "./PracticeMemberAccess"
 import { render, screen } from "@testing-library/react"
 
-const NOW = new Date("2026-09-27T22:00:00Z")
-
-function status(access_ends_at: string | null) {
-  return { access_ends_at } as PracticeStatus
+function status(fields: Partial<PracticeStatus>) {
+  return {
+    access_ends_at: null,
+    access_ended: false,
+    access_revoked: false,
+    ...fields,
+  } as PracticeStatus
 }
 
 describe("PracticeAccessEndingNotice", () => {
   it("tells a revoked clinician they keep access until tonight", () => {
     render(
       <PracticeAccessEndingNotice
-        practice={status("2026-09-28T04:00:00Z")}
-        now={NOW}
+        practice={status({ access_ends_at: "2026-09-28T04:00:00Z" })}
       />,
     )
 
@@ -29,11 +28,13 @@ describe("PracticeAccessEndingNotice", () => {
     )
   })
 
-  it("says the access has ended once the cut-off passed", () => {
+  it("says the access has ended once the server says so", () => {
     render(
       <PracticeAccessEndingNotice
-        practice={status("2026-09-27T04:00:00Z")}
-        now={NOW}
+        practice={status({
+          access_ends_at: "2026-09-28T04:00:00Z",
+          access_ended: true,
+        })}
       />,
     )
 
@@ -44,18 +45,9 @@ describe("PracticeAccessEndingNotice", () => {
 
   it("renders nothing without a scheduled end", () => {
     const { container } = render(
-      <PracticeAccessEndingNotice practice={status(null)} now={NOW} />,
+      <PracticeAccessEndingNotice practice={status({})} />,
     )
 
     expect(container).toBeEmptyDOMElement()
-  })
-})
-
-describe("practiceAccessEnded", () => {
-  it("is true only at or after the scheduled end", () => {
-    expect(practiceAccessEnded(status(null), NOW)).toBe(false)
-    expect(practiceAccessEnded(status("2026-09-28T04:00:00Z"), NOW)).toBe(false)
-    expect(practiceAccessEnded(status("2026-09-27T22:00:00Z"), NOW)).toBe(true)
-    expect(practiceAccessEnded(null, NOW)).toBe(false)
   })
 })

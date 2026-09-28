@@ -192,9 +192,13 @@ def test_a_revoked_clinician_keeps_access_until_the_cutoff_then_sees_why(
 
     assert during.status_code == status.HTTP_200_OK, during.text
     assert status_during.json()["access_ends_at"] is not None
+    assert status_during.json()["access_ended"] is False
 
     _end_grace_period(me)
     after = authenticated_client.get(api_app.url_path_for("note_list"))
+    status_after = authenticated_client.get(api_app.url_path_for("practice_status"))
 
     assert after.status_code == status.HTTP_403_FORBIDDEN
     assert after.json()["detail"] == "Your practice owner ended your access to Cosmas."
+    assert status_after.status_code == status.HTTP_200_OK, status_after.text
+    assert status_after.json()["access_ended"] is True
