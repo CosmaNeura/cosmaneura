@@ -4,8 +4,9 @@ import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Event
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -32,7 +33,7 @@ from app.models.doctor import Doctor
 from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import PracticeMember
+from app.models.practice import PracticeMember, lock_practice_seats
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
@@ -198,6 +199,16 @@ def test_existing_exact_pair_is_preserved_while_membership_is_added(case):
         ]
         == "already_applied"
     )
+
+
+def test_a_member_whose_revocation_has_not_taken_effect_can_be_reconciled(case):
+    session, f = case
+    lock_practice_seats(session, f.practice.id)
+    f.practice_member.seat_state = "inactive"
+    f.practice_member.access_ends_at = datetime.now(UTC) + timedelta(hours=1)
+    session.flush()
+
+    assert repair.reconcile(session, **f.kwargs)["status"] == "planned"
 
 
 @pytest.mark.parametrize("drift", ["new_pair", "context_snapshot"])
@@ -375,6 +386,7 @@ def test_apply_and_idempotent_retry_preserve_scope_and_provenance(case):
         "cohort",
         "disabled",
         "inactive_member",
+        "ended_member",
         "link_revoked",
         "identity_revoked",
         "binding_revoked",
@@ -405,7 +417,21 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
     elif change == "disabled":
         f.additional.deleted_at = datetime.now(UTC)
     elif change == "inactive_member":
+        lock_practice_seats(session, f.practice.id)
         f.practice_member.seat_state = "inactive"
+    elif change == "ended_member":
+        lock_practice_seats(session, f.practice.id)
+        f.practice_member.seat_state = "inactive"
+        f.practice_member.access_ends_at = datetime.now(UTC) - timedelta(minutes=1)
+        # Isolate the membership check from the access decision, which also
+        # refuses an ended member.
+        monkeypatch.setattr(
+            repair,
+            "resolve_doctor_access",
+            lambda _doctor: SimpleNamespace(
+                allowed=True, authorization_basis="pilot_grant"
+            ),
+        )
     elif change == "link_revoked":
         f.link.revoked_at = datetime.now(UTC)
     elif change == "identity_revoked":
