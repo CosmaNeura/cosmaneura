@@ -35,7 +35,7 @@ from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.scribe_capture_binding import (
     ScribeCaptureBinding,
     ScribeCaptureProviderLink,
@@ -124,6 +124,7 @@ def make_scope_case(session, *, existing_tenant=None, existing_practice=None):
         role="owner",
         attested_at=now,
     )
+    assert lock_practice_seats(session, practice.id) is not None
     session.add_all([identity, membership, person_binding, practice_member])
     session.flush()
     link = ScribeCaptureProviderLink(
@@ -295,6 +296,8 @@ def test_current_authority_is_checked_again_on_reopen(
     elif value == "expired":
         value = datetime.now(UTC) - timedelta(seconds=1)
     row = getattr(case, target)
+    if target == "practice_member":
+        assert lock_practice_seats(session, row.practice_id) is not None
     setattr(row, field, value)
     if target == "practice_member" and field == "access_revoked_at":
         row.access_revoked_by_ref = "synthetic_reviewer"
