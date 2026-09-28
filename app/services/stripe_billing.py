@@ -3009,8 +3009,23 @@ def _sync_subscription_quantity_leased(
                     billable=billable,
                 )
                 for step, (quantity, proration_behavior) in enumerate(steps):
+                    if step:
+                        # An out-of-band edit, or a step replayed after a crash
+                        # (Stripe returns the cached response without reapplying
+                        # it), would widen this proration; only a fresh read
+                        # shows where it starts.
+                        applied = _subscription_item(
+                            _retrieve_subscription(subscription_id)
+                        )
+                        if applied["quantity"] != steps[step - 1][0]:
+                            raise StripeStateInvalid(
+                                "Stripe quantity changed between seat updates"
+                            )
+                    # The attempt makes a retry after a failure re-send every
+                    # step, since Stripe may have moved in between.
                     key_source = (
                         f"quantity:{subscription['id']}:{target}:version:{version}"
+                        f":attempt:{practice.stripe_quantity_sync_attempts}"
                         f":step:{step}:{quantity}:proration:{proration_behavior}"
                     )
                     _request(

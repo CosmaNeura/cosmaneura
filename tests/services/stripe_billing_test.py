@@ -3913,6 +3913,69 @@ def test_two_lost_confirmations_never_charge_a_seat_twice(
     assert remote.prorated_seats == [1]
 
 
+def _two_step_seat_raise(remote: FakeStripe) -> Practice:
+    """Leave Stripe at 1 below a paid high-water of 2 with 3 seats in Core."""
+
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    _add_attested_clinician(practice)
+    stripe_billing.mark_quantity_sync_required(practice)
+    return practice
+
+
+def test_retry_after_an_out_of_band_edit_prorates_only_the_new_seat(
+    remote: FakeStripe,
+):
+    practice = _two_step_seat_raise(remote)
+    remote.dropped_quantity_update_steps = {remote.quantity_update_count + 1}
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    assert _remote_item(remote, practice)["quantity"] == 2
+
+    # Someone lowers the quantity in the Stripe Dashboard before the next
+    # sweep retries the same obligation version.
+    _remote_item(remote, practice)["quantity"] = 1
+    assert stripe_billing.sync_subscription_quantity(practice)
+
+    assert remote.prorated_seats == [1]
+    assert _remote_item(remote, practice)["quantity"] == 3
+
+
+def test_billable_step_requires_the_previous_step_in_stripe(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _two_step_seat_raise(remote)
+    edits = {"pending": True}
+
+    def edit_after_restoring_paid_seats(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        result = remote(method, path, data, idempotency_key=idempotency_key)
+        if path.startswith("/subscription_items/") and edits["pending"]:
+            edits["pending"] = False
+            _remote_item(remote, practice)["quantity"] = 1
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", edit_after_restoring_paid_seats)
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    assert _posted(remote)[-1] == ("2", "none")
+    assert remote.prorated_seats == []
+    practice.refresh()
+    assert "between seat updates" in (practice.stripe_quantity_sync_error or "")
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    assert remote.prorated_seats == [1]
+
+
 def test_missing_item_billing_period_fails_closed_before_any_update(
     remote: FakeStripe,
 ):
