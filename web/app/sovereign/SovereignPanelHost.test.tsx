@@ -233,7 +233,7 @@ describe("SovereignPanelHost", () => {
       ".cnp-root > .cnp-tip { z-index: 100002 !important; }",
     )
     expect(options).not.toHaveProperty("requireClientTurnId")
-    expect(options).not.toHaveProperty("loadHistory")
+    expect(options.loadHistory).toBeTypeOf("function")
     await expect(
       Promise.all([options.getAuthToken(), options.getAuthToken()]),
     ).resolves.toEqual([mountContext, mountContext])

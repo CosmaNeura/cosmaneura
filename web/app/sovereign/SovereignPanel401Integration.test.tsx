@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { emptyHistory } from "./SovereignHistory.fixture"
 import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { render, waitFor } from "@testing-library/react"
@@ -87,6 +88,7 @@ describe("Sovereign panel terminal authorization integration", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
+        if (url.endsWith("/embed/history")) return json(emptyHistory())
         if (url === "/embed/v1/context-tokens/exchange") {
           exchanges += 1
           return json(contextTokenResponse(firstToken), 201)
