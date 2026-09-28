@@ -82,7 +82,7 @@ def configured_engine():
         patch.setattr(
             database,
             "database_url",
-            lambda: url.render_as_string(hide_password=False).replace("%", "%%"),
+            lambda: url.render_as_string(hide_password=False),
         )
         command.upgrade(Config("alembic.ini"), "head")
     engine = create_engine(url, json_serializer=_serialize_pydantic_model)
@@ -408,7 +408,7 @@ def test_fresh_and_incremental_migration_match(configured_engine):
             patch.setattr(
                 database,
                 "database_url",
-                lambda: url.render_as_string(hide_password=False).replace("%", "%%"),
+                lambda: url.render_as_string(hide_password=False),
             )
             command.upgrade(Config("alembic.ini"), "9172abd84a3d")
             assert "configured_capture" not in {
