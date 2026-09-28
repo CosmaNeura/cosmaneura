@@ -1271,3 +1271,55 @@ def test_offboarding_still_revokes_when_the_seat_ledger_is_invalid(monkeypatch):
 
     assert revoked_member.access_revoked_at == revoked_at
     assert marked == [str(practice.id)]
+
+
+def test_claim_and_offboarding_read_the_clock_once_the_seat_lock_is_held(
+    monkeypatch,
+):
+    from app.services import organization_access
+
+    approved_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    practice, code = _configured_practice(domain, now=approved_at)
+    departing = _doctor(f"departing@{domain}")
+    _approve(practice, departing.email or "", now=approved_at)
+
+    locked = False
+    queued_from = datetime.now(timezone.utc)
+    queued_until = queued_from + timedelta(minutes=1)
+    lock = organization_access.lock_practice_for_active_seat_mutation
+
+    def record_lock(*args, **kwargs):
+        nonlocal locked
+        practice = lock(*args, **kwargs)
+        locked = True
+        return practice
+
+    class QueuedClock(datetime):
+        """Stands in for time passing while a call waits on the seat lock."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return queued_until if locked else queued_from
+
+    monkeypatch.setattr(
+        organization_access, "lock_practice_for_active_seat_mutation", record_lock
+    )
+    monkeypatch.setattr(organization_access, "datetime", QueuedClock)
+
+    _, member = claim_roster_access(departing, supplied_code=code)
+    assert member.organization_authorized_at == queued_until
+
+    locked = False
+    queued_from, queued_until = (
+        queued_until + timedelta(minutes=1),
+        queued_until + timedelta(minutes=2),
+    )
+    result = revoke_roster_access(
+        practice,
+        departing.email or "",
+        operator_ref="ticket-QUEUED-OFFBOARD",
+        reason="Provider left the pilot organization",
+    )
+    assert result.approval.revoked_at == queued_until
+    assert result.audit.effective_at == queued_until

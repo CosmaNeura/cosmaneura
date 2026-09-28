@@ -1440,7 +1440,6 @@ def claim_roster_access(
         raise OrganizationAccessError("organization access is not available")
     if not organization_code_matches(opportunity.organization, supplied_code):
         raise OrganizationAccessError("organization access is not available")
-    current = now or datetime.now(timezone.utc)
 
     with get_session() as session:
         # All organization-access mutations take the practice lock first. This
@@ -1475,6 +1474,9 @@ def claim_roster_access(
                 .with_for_update()
             ).all()
         )
+        # Read once the locks are held, so a claim queued behind another seat
+        # change judges the approval, BAA and entitlement when it runs.
+        current = now or datetime.now(timezone.utc)
         active_approvals = [
             item for item in approval_history if approval_is_active(item, at=current)
         ]
@@ -1602,8 +1604,6 @@ def revoke_roster_access(
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
     email = normalize_email(approved_email)
-    current = now or datetime.now(timezone.utc)
-    retain_until = _seven_calendar_years_after(current)
     seat_quantity_recorded = False
 
     with get_session() as session:
@@ -1675,6 +1675,11 @@ def revoke_roster_access(
                 raise OrganizationAccessError(
                     "claimed roster approval has no matching practice member"
                 )
+
+        # Read once the locks are held, so an offboarding queued behind another
+        # seat change judges the other owners' approvals when it runs.
+        current = now or datetime.now(timezone.utc)
+        retain_until = _seven_calendar_years_after(current)
 
         if (
             approval.revoked_at is None
