@@ -5,6 +5,7 @@ import pytest
 
 from app.routes.public_onboarding import _pending_invitation_count
 from app.services import practice_invitations as invitations
+from app.services.organization_access import configure_provider_organization
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
     ActiveClinicianSeatLimitReached,
@@ -250,6 +251,30 @@ def test_issue_at_the_seat_cap_is_refused():
     assert _invitation_rows(practice) == []
 
 
+def test_every_owner_action_rechecks_the_owner_role_in_the_database():
+    practice, owner = _practice(is_solo=False)
+    live = _issue(owner, "owner-only@clinic-invite.example")
+    workforce = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=_doctor(label="workforce").id,
+            role="workforce",
+        )
+    )
+    # A caller holding a stale "owner" copy of what is now a workforce row.
+    stale_owner = workforce.model_copy(update={"role": "owner"})
+
+    with pytest.raises(invitations.InvitationNotFound):
+        _issue(stale_owner, "not-by-workforce@clinic-invite.example")
+    with pytest.raises(invitations.InvitationNotFound):
+        _revoke(stale_owner, live.invitation.id)
+    with pytest.raises(invitations.InvitationNotFound):
+        _resend(stale_owner, live.invitation.id, "workforce-resend-1")
+
+    rows = _invitation_rows(practice)
+    assert [(row.id, row.revoked_at) for row in rows] == [(live.invitation.id, None)]
+
+
 def _revoke(owner: PracticeMember, invitation_id) -> PracticeInvitation:
     with get_session() as session:
         return invitations.revoke_invitation(
@@ -335,6 +360,39 @@ def test_resend_of_an_expired_invitation_replaces_it():
     assert len(_invitation_rows(practice)) == 2
 
 
+def test_resending_an_expired_replacement_with_its_own_key_replaces_it_again():
+    practice, owner = _practice()
+    original = _issue(
+        owner, "cycle@clinic-invite.example", now=_now() - timedelta(days=16)
+    )
+    first = _resend(
+        owner, original.invitation.id, "cycle-key-1", now=_now() - timedelta(days=8)
+    )
+    retried = _resend(
+        owner, original.invitation.id, "cycle-key-1", now=_now() - timedelta(days=8)
+    )
+
+    second = _resend(owner, first.invitation.id, "cycle-key-1")
+
+    assert (first.created, first.replayed) == (True, False)
+    assert (retried.created, retried.replayed) == (False, True)
+    assert retried.invitation.id == first.invitation.id
+    assert (second.created, second.replayed) == (True, False)
+    assert second.invitation.id not in {original.invitation.id, first.invitation.id}
+    assert len(_invitation_rows(practice)) == 3
+
+
+def test_resend_refuses_a_revoked_invitation_that_has_not_expired():
+    practice, owner = _practice()
+    issued = _issue(owner, "revoked-live@clinic-invite.example")
+    _revoke(owner, issued.invitation.id)
+
+    with pytest.raises(invitations.InvitationInactive):
+        _resend(owner, issued.invitation.id, "resend-revoked-1")
+
+    assert len(_invitation_rows(practice)) == 1
+
+
 def test_accept_adds_one_attested_seat_and_converts_a_solo_account():
     practice, owner = _practice(
         stripe_subscription_id=f"sub_invite_{secrets.token_hex(6)}",
@@ -375,6 +433,28 @@ def test_accept_replay_by_the_same_doctor_returns_current_state():
     assert practice.stripe_quantity_sync_version == version
 
 
+def test_accept_after_joining_by_code_is_refused_not_replayed():
+    practice, owner = _practice(is_solo=False)
+    invitee = _doctor(label="joined-by-code")
+    issued = _issue(owner, invitee.email)
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=invitee.id,
+            role="workforce",
+            attested_at=_now(),
+            attestation_name="Joined By Code",
+        )
+    )
+
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+
+    assert str(exc_info.value) == "This account is already a member of the practice."
+    invitation = PracticeInvitation.get(id=issued.invitation.id)
+    assert invitation and invitation.accepted_at is None
+
+
 def test_accept_refuses_the_wrong_account():
     practice, owner = _practice()
     issued = _issue(owner, "intended@clinic-invite.example")
@@ -384,6 +464,62 @@ def test_accept_refuses_the_wrong_account():
         _accept(issued.token, stranger)
 
     assert PracticeMember.get(doctor_id=stranger.id) is None
+
+
+@pytest.mark.parametrize(
+    "practice_state",
+    [
+        {"baa_accepted_at": None, "baa_version": None},
+        {"baa_accepted_at": None, "baa_version": None, "negotiated_baa_required": True},
+    ],
+)
+def test_the_wrong_account_learns_nothing_and_takes_no_lock(
+    practice_state: dict, monkeypatch: pytest.MonkeyPatch
+):
+    _, owner = _practice(is_solo=False)
+    issued = _issue(owner, "addressee@clinic-invite.example")
+    practice = Practice.get(id=owner.practice_id)
+    assert practice
+    for field, value in practice_state.items():
+        setattr(practice, field, value)
+    practice.save()
+    stranger = _doctor(label="stranger")
+
+    def no_lock(*_args, **_kwargs):
+        raise AssertionError("a wrong account must not take the seat lock")
+
+    monkeypatch.setattr(invitations, "lock_practice_for_active_seat_mutation", no_lock)
+    with pytest.raises(invitations.InvitationWrongAccount):
+        _accept(issued.token, stranger)
+
+
+def test_a_managed_account_is_told_so_by_inspect_and_refused_by_accept(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, owner = _practice()
+    invitee = _doctor(label="rostered")
+    issued = _issue(owner, invitee.email)
+    monkeypatch.setattr(
+        invitations,
+        "doctor_has_managed_roster_assignment",
+        lambda doctor, **_kwargs: doctor.id == invitee.id,
+    )
+
+    with get_session() as session:
+        inspection = invitations.inspect_invitation(
+            session,
+            token=issued.token,
+            doctor=invitee,
+            verified_email=invitee.email.lower(),
+            now=_now(),
+        )
+    assert inspection == invitations.InvitationInspection(
+        state="managed_account", legal_name=None, baa_accepted=False
+    )
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+    assert "organization-managed access" in str(exc_info.value)
+    assert PracticeMember.get(doctor_id=invitee.id) is None
 
 
 def test_accept_refuses_expired_revoked_and_unknown_tokens():
@@ -426,6 +562,42 @@ def test_accept_refuses_a_practice_without_a_baa():
     with pytest.raises(invitations.InvitationConflict):
         _accept(issued.token, invitee)
 
+    assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+@pytest.mark.parametrize("conversion", ["negotiated_baa_required", "organization"])
+def test_accept_refuses_a_practice_converted_to_managed_after_issue(conversion: str):
+    domain = f"converted-{secrets.token_hex(4)}.example"
+    practice, owner = _practice(
+        is_solo=False,
+        email_domain=domain,
+        baa_accepted_at=None,
+        baa_version=None,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=_now() - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+    )
+    invitee = _doctor(domain="gmail.com", label="converted")
+    issued = _issue(owner, invitee.email)
+    if conversion == "organization":
+        configure_provider_organization(
+            practice,
+            legal_name=f"{domain} Provider Organization",
+            slug=f"converted-{secrets.token_hex(5)}",
+            email_domain=domain,
+            operator_ref="test-operator",
+            reason="Convert after an invitation was issued",
+        )
+    else:
+        practice.negotiated_baa_required = True
+        practice.save()
+    practice.refresh()
+    assert practice.baa_in_force()
+
+    with pytest.raises(invitations.InvitationConflict) as exc_info:
+        _accept(issued.token, invitee)
+
+    assert "organization-managed enrollment" in str(exc_info.value)
     assert PracticeMember.get(doctor_id=invitee.id) is None
 
 

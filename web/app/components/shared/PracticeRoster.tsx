@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { CopyButton } from "~/components/shared/CopyButton"
 import {
@@ -49,21 +49,63 @@ function errorDetail(error: unknown, fallback: string) {
   return fallback
 }
 
+type Outcome = { data?: unknown; error?: unknown; response?: Response }
+
+// A request that may have reached the server: retrying it must reuse its
+// Idempotency-Key so the server replays it instead of acting twice.
+function ambiguous(outcome: Outcome | null) {
+  return !outcome?.response || outcome.response.status >= 500
+}
+
+/** Reuse a key only to retry an ambiguous failure of the same request. */
+function useRetryKey() {
+  const pending = useRef<{ scope: string; key: string } | null>(null)
+  return {
+    keyFor(scope: string) {
+      if (pending.current?.scope !== scope) {
+        pending.current = { scope, key: crypto.randomUUID() }
+      }
+      return pending.current.key
+    },
+    settle(outcome: Outcome | null) {
+      if (outcome?.data !== undefined || !ambiguous(outcome)) {
+        pending.current = null
+      }
+    },
+  }
+}
+
 function count(n: number, singular: string, plural: string) {
   return `${n} ${n === 1 ? singular : plural}`
 }
 
-function InvitationLink({ issued }: { issued: PracticeInvitationIssued }) {
-  const email = issued.invitation.invitee_email
+function InvitationLink({
+  issued,
+}: {
+  issued: PracticeInvitationIssued | null
+}) {
+  const email = issued?.invitation.invitee_email
+  // The live region stays mounted so screen readers announce each new link;
+  // one inserted together with its text is often not announced.
   return (
-    <div className="bg-muted/40 mt-3 rounded-md border p-3">
+    <div
+      className={issued ? "bg-muted/40 mt-3 rounded-md border p-3" : undefined}
+    >
       <p role="status">
-        {issued.email_queued
-          ? "Email sent. You can also share this link."
-          : `Send this link to ${email ?? "the clinician"}.`}
+        {issued
+          ? issued.email_queued
+            ? "Email sent. You can also share this link."
+            : `Send this link to ${email ?? "the clinician"}.`
+          : null}
       </p>
-      <p className="mt-2 font-mono text-xs break-all">{issued.invite_url}</p>
-      <CopyButton text={issued.invite_url} className="mt-2" />
+      {issued ? (
+        <>
+          <p className="mt-2 font-mono text-xs break-all">
+            {issued.invite_url}
+          </p>
+          <CopyButton text={issued.invite_url} className="mt-2" />
+        </>
+      ) : null}
     </div>
   )
 }
@@ -76,18 +118,23 @@ export function InviteClinicianForm({
   const [email, setEmail] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const retryKey = useRetryKey()
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError(null)
+    // the server refuses a key reused for a different address, so the key
+    // survives only a retry of the same address
+    const key = retryKey.keyFor(email.trim().toLowerCase())
+    let outcome: Outcome | null = null
     try {
-      const { data, error: failure } = await createPracticeInvitation({
+      const result = await createPracticeInvitation({
         body: { email },
-        // a fresh key per submit: the server replays a retried request and
-        // refuses the same key for a different address
-        headers: { "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Idempotency-Key": key },
       })
+      outcome = result
+      const { data, error: failure } = result
       if (data) {
         setEmail("")
         onIssued(data)
@@ -97,6 +144,7 @@ export function InviteClinicianForm({
     } catch {
       setError("The invitation could not be sent.")
     } finally {
+      retryKey.settle(outcome)
       setBusy(false)
     }
   }
@@ -117,7 +165,7 @@ export function InviteClinicianForm({
           onChange={(e) => setEmail(e.target.value)}
         />
         <Button type="submit" size="sm" disabled={busy || !email.trim()}>
-          Send invitation
+          {busy ? "Sending…" : "Send invitation"}
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">
@@ -143,33 +191,42 @@ function InvitationRow({
 }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const retryKey = useRetryKey()
   const path = { invitation_id: invitation.invitation_id }
+  const invitee = invitation.invitee_email ?? "invited clinician"
 
-  async function act(run: () => Promise<{ error?: unknown; data?: unknown }>) {
+  async function act(run: () => Promise<Outcome>) {
     setBusy(true)
     setError(null)
     try {
       const { error: failure } = await run()
       if (failure) {
         setError(errorDetail(failure, "That did not work. Try again."))
-        return
       }
-      await onChanged()
     } catch {
       setError("That did not work. Try again.")
     } finally {
       setBusy(false)
     }
+    // a refusal usually means the row changed elsewhere (accepted, revoked,
+    // replaced), so the list is refreshed either way
+    await onChanged()
   }
 
   async function resend() {
     await act(async () => {
-      const result = await resendPracticeInvitation({
-        path,
-        headers: { "Idempotency-Key": crypto.randomUUID() },
-      })
-      if (result.data) onIssued(result.data)
-      return result
+      let outcome: Outcome | null = null
+      try {
+        const result = await resendPracticeInvitation({
+          path,
+          headers: { "Idempotency-Key": retryKey.keyFor("resend") },
+        })
+        outcome = result
+        if (result.data) onIssued(result.data)
+        return result
+      } finally {
+        retryKey.settle(outcome)
+      }
     })
   }
 
@@ -192,6 +249,7 @@ function InvitationRow({
           variant="outline"
           size="sm"
           disabled={busy}
+          aria-label={`Resend invitation to ${invitee}`}
           onClick={() => void resend()}
         >
           Resend
@@ -200,6 +258,7 @@ function InvitationRow({
           variant="outline"
           size="sm"
           disabled={busy}
+          aria-label={`${invitation.expired ? "Remove" : "Revoke"} invitation to ${invitee}`}
           onClick={() => void act(() => revokePracticeInvitation({ path }))}
         >
           {invitation.expired ? "Remove" : "Revoke"}
@@ -226,7 +285,19 @@ export function PracticeRoster({
   useEffect(() => setRoster(loaded), [loaded])
 
   async function reload() {
-    setRoster(await loadPracticeRoster())
+    const next = await loadPracticeRoster()
+    setRoster(next)
+    // a revoked, replaced or accepted invitation's link no longer works
+    if (next && typeof next === "object") {
+      setIssued((shown) =>
+        shown &&
+        next.invitations.some(
+          (row) => row.invitation_id === shown.invitation.invitation_id,
+        )
+          ? shown
+          : null,
+      )
+    }
   }
 
   async function onIssued(next: PracticeInvitationIssued) {
@@ -316,7 +387,7 @@ export function PracticeRoster({
         <p className="text-muted-foreground mt-2 text-xs">Only you so far.</p>
       ) : null}
       <InviteClinicianForm onIssued={(next) => void onIssued(next)} />
-      {issued ? <InvitationLink issued={issued} /> : null}
+      <InvitationLink issued={issued} />
     </div>
   )
 }

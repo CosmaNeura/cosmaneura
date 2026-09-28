@@ -1925,7 +1925,11 @@ def _roster_invitation(
 
 @internal_api_app.get("/practice/members", name="practice_roster")
 def practice_roster(request: Request) -> PracticeRoster:
-    """The practice's members, for its owner. Carries no contact details."""
+    """The practice's members and pending invitations, for its owner.
+
+    Members carry no contact details; an invitation carries the address the
+    owner typed, except under support view-as.
+    """
     doctor: Doctor = request.state.doctor
     member = _owner_membership(
         doctor, "Only the practice owner can view the practice roster."
@@ -2101,6 +2105,23 @@ def _consume_practice_invitation_attempt(practice_id: Any) -> None:
         )
 
 
+def _first_resend_with_key(invitation_id: Any, idempotency_key: str) -> bool:
+    """Whether this key has not already re-sent this unchanged invitation.
+
+    Re-sending a live invitation writes no row, so the key is remembered here
+    to keep a retried request from emailing the invitee twice.
+    """
+
+    key_id = hashlib.sha256(
+        f"{invitation_id}:{idempotency_key}".encode("utf-8")
+    ).hexdigest()
+    return bool(
+        get_redis().set(
+            f"practice-invitation-resend:{key_id}", "1", nx=True, ex=24 * 60 * 60
+        )
+    )
+
+
 def _invitation_web_origin(request: Request) -> str:
     return _validated_web_origin(
         request, detail="Invitations require a recognized web origin."
@@ -2229,19 +2250,29 @@ def resend_practice_invitation(
         raise _invitation_http_error(
             exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
         ) from None
+    email_due = issued.created or (
+        not issued.replayed and _first_resend_with_key(invitation_id, idempotency_key)
+    )
     return _issued_invitation_payload(
-        origin, issued, now, email_queued=_queue_invitation_email(issued.invitation)
+        origin,
+        issued,
+        now,
+        email_queued=email_due and _queue_invitation_email(issued.invitation),
     )
 
 
-def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
-    """The invitee's live verified email, refusing any borrowed identity."""
-
+def _refuse_borrowed_identity(request: Request, doctor: Doctor) -> None:
     if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This invitation could not be verified.",
         )
+
+
+def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
+    """The invitee's live verified email, refusing any borrowed identity."""
+
+    _refuse_borrowed_identity(request, doctor)
     if uses_managed_organization_path(doctor):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2270,7 +2301,14 @@ def inspect_practice_invitation(
     request: Request, data: PracticeInvitationTokenBody
 ) -> PracticeInvitationInspection:
     doctor: Doctor = request.state.doctor
-    verified_email = _invitee_verified_email(request, doctor)
+    _refuse_borrowed_identity(request, doctor)
+    # Answered rather than refused, so the invite page can drop the link
+    # instead of sending this account back to it.
+    if uses_managed_organization_path(doctor):
+        return PracticeInvitationInspection(
+            state="managed_account", legal_name=None, baa_accepted=False
+        )
+    verified_email = _verified_legacy_enrollment_email(doctor)
     _consume_legacy_join_attempt(doctor)
     try:
         with get_session() as session:

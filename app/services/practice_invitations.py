@@ -18,6 +18,7 @@ from typeid import TypeID
 from app.routes.middleware import SESSION_SECRET_KEY
 from app.services.managed_organization_access import (
     managed_organization_discovery_domain,
+    uses_managed_organization_path,
 )
 from app.services.organization_access import (
     OrganizationAccessError,
@@ -106,6 +107,8 @@ class IssuedInvitation:
     "Bearer material; returned to the owner and never persisted."
     created: bool
     "False when an existing invitation was replayed or resent unchanged."
+    replayed: bool = False
+    "An earlier request with the same idempotency key already produced this."
 
 
 InspectionState = Literal[
@@ -117,6 +120,7 @@ InspectionState = Literal[
     "member_elsewhere",
     "already_member",
     "practice_not_ready",
+    "managed_account",
 ]
 
 
@@ -153,6 +157,16 @@ def _email_digest(email: str) -> str:
 def _idempotency_digest(idempotency_key: str) -> str:
     return hashlib.sha256(
         f"practice-invitation-idempotency-v1:{idempotency_key}".encode("utf-8")
+    ).hexdigest()
+
+
+def _replacement_idempotency_digest(replaced_id: Any, idempotency_key: str) -> str:
+    # Bound to the row being replaced, so resending the replacement with the
+    # same key later cannot find itself and replay its own revoked row.
+    return hashlib.sha256(
+        f"practice-invitation-replacement-v1:{replaced_id}:{idempotency_key}".encode(
+            "utf-8"
+        )
     ).hexdigest()
 
 
@@ -211,7 +225,7 @@ def _issue_locked(
     practice: Practice,
     owner_member: PracticeMember,
     email: str,
-    idempotency_key: str,
+    key_digest: str,
     now: datetime,
 ) -> IssuedInvitation:
     if managed_organization_discovery_domain(email) is not None:
@@ -242,7 +256,6 @@ def _issue_locked(
         raise InvitationConflict("This clinician is already a member of the practice.")
 
     email_digest = _email_digest(email)
-    key_digest = _idempotency_digest(idempotency_key)
     replayed = session.exec(
         select(PracticeInvitation).where(
             PracticeInvitation.practice_id == practice.id,
@@ -257,7 +270,9 @@ def _issue_locked(
         token = _token_for(replayed)
         if not _is_pending(replayed) or token is None:
             raise InvitationInactive
-        return IssuedInvitation(invitation=replayed, token=token, created=False)
+        return IssuedInvitation(
+            invitation=replayed, token=token, created=False, replayed=True
+        )
 
     pending = session.exec(
         select(col(PracticeInvitation.id)).where(
@@ -325,7 +340,7 @@ def issue_invitation(
             practice=practice,
             owner_member=owner_member,
             email=normalized,
-            idempotency_key=idempotency_key,
+            key_digest=_idempotency_digest(idempotency_key),
             now=now,
         ),
     )
@@ -362,14 +377,14 @@ def resend_invitation(
 ) -> IssuedInvitation:
     practice = _lock_owner_practice(session, owner_member)
     invitation = _lock_practice_invitation(session, practice, invitation_id)
+    key_digest = _replacement_idempotency_digest(invitation.id, idempotency_key)
     replacement = session.exec(
-        select(PracticeInvitation).where(
+        select(col(PracticeInvitation.id)).where(
             PracticeInvitation.practice_id == practice.id,
-            PracticeInvitation.idempotency_key_digest
-            == _idempotency_digest(idempotency_key),
+            PracticeInvitation.idempotency_key_digest == key_digest,
         )
     ).one_or_none()
-    if replacement is not None and replacement.id != invitation.id:
+    if replacement is not None:
         # A retried resend whose first attempt already replaced this row.
         return _commit(
             session,
@@ -378,7 +393,7 @@ def resend_invitation(
                 practice=practice,
                 owner_member=owner_member,
                 email=invitation.invitee_email,
-                idempotency_key=idempotency_key,
+                key_digest=key_digest,
                 now=now,
             ),
         )
@@ -405,7 +420,7 @@ def resend_invitation(
             practice=practice,
             owner_member=owner_member,
             email=invitation.invitee_email,
-            idempotency_key=idempotency_key,
+            key_digest=key_digest,
             now=now,
         ),
     )
@@ -430,6 +445,16 @@ def _practice_ready(practice: Practice) -> bool:
     )
 
 
+def account_uses_managed_access(
+    session: Session, doctor: Doctor, verified_email: str
+) -> bool:
+    """Whether this account must enroll through its organization instead."""
+
+    return uses_managed_organization_path(
+        doctor, verified_primary_email=verified_email
+    ) or doctor_has_managed_roster_assignment(doctor, session=session)
+
+
 def inspect_invitation(
     session: Session,
     *,
@@ -439,6 +464,10 @@ def inspect_invitation(
     now: datetime,
 ) -> InvitationInspection:
     invitation = _invitation_by_token(session, token)
+    if account_uses_managed_access(session, doctor, verified_email):
+        return InvitationInspection(
+            state="managed_account", legal_name=None, baa_accepted=False
+        )
     if not hmac.compare_digest(
         invitation.invitee_email_digest, _email_digest(verified_email)
     ):
@@ -490,6 +519,13 @@ def accept_invitation(
     """
 
     candidate = _invitation_by_token(session, token)
+    # The addressee digest is immutable, so it can be checked before any lock:
+    # another account learns only that the link is not theirs, as inspect says,
+    # and cannot hold this practice's seat lock.
+    if not hmac.compare_digest(
+        candidate.invitee_email_digest, _email_digest(verified_email)
+    ):
+        raise InvitationWrongAccount
     practice = lock_practice_for_active_seat_mutation(session, candidate.practice_id)
     lock_roster_enrollment_email(session, verified_email)
     invitation = _lock_practice_invitation(session, practice, candidate.id)
@@ -504,7 +540,7 @@ def accept_invitation(
         raise InvitationConflict(
             "The account email changed during enrollment. Please retry."
         )
-    if doctor_has_managed_roster_assignment(locked_doctor, session=session):
+    if account_uses_managed_access(session, locked_doctor, verified_email):
         raise InvitationConflict(
             "This account has organization-managed access. Use that enrollment path."
         )

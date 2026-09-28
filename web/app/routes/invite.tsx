@@ -16,6 +16,9 @@ import { COMPANY } from "~/lib/baa"
 import {
   capturePendingInvitation,
   clearPendingInvitation,
+  keepPendingInvitationThroughSignOut,
+  parkPendingInvitation,
+  unparkPendingInvitation,
 } from "~/lib/pending-invitation"
 
 import { useClerk } from "@clerk/clerk-react"
@@ -25,6 +28,7 @@ export const ACCOUNT_IN_ANOTHER_PRACTICE =
 
 type InviteLoad =
   | { kind: "missing" }
+  | { kind: "signing_in" }
   | { kind: "unknown" }
   | { kind: "error"; detail: string }
   | {
@@ -48,6 +52,7 @@ const SPENT_STATES = new Set<PracticeInvitationInspection["state"]>([
   "used",
   "member_elsewhere",
   "already_member",
+  "managed_account",
 ])
 
 export async function clientLoader(): Promise<InviteLoad> {
@@ -56,18 +61,21 @@ export async function clientLoader(): Promise<InviteLoad> {
   const token = capturePendingInvitation()
   if (!token) return { kind: "missing" }
   // null while a signed-out visitor is being sent to sign-in
-  if (!(await getClient())) return { kind: "missing" }
+  if (!(await getClient())) return { kind: "signing_in" }
   const { data, error, response } = await inspectPracticeInvitation({
     body: { token },
   })
   if (data) {
     if (SPENT_STATES.has(data.state)) clearPendingInvitation()
+    else if (data.state === "ready") unparkPendingInvitation()
+    else parkPendingInvitation(token)
     return { kind: "inspected", token, inspection: data }
   }
   if (response?.status === 404) {
     clearPendingInvitation()
     return { kind: "unknown" }
   }
+  parkPendingInvitation(token)
   return {
     kind: "error",
     detail: errorDetail(error) ?? "This invitation could not be checked.",
@@ -202,15 +210,19 @@ function InvitationState({
             This invitation was sent to a different email address. Sign in with
             that address.
           </p>
-          <Button
-            onClick={() =>
-              void clerk.signOut({
-                redirectUrl: `/sign-in?redirect_url=${encodeURIComponent("/invite")}`,
-              })
-            }
-          >
-            Sign in with another account
-          </Button>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              onClick={() => {
+                keepPendingInvitationThroughSignOut()
+                void clerk.signOut({
+                  redirectUrl: `/sign-in?redirect_url=${encodeURIComponent("/invite")}`,
+                })
+              }}
+            >
+              Sign in with another account
+            </Button>
+            <ContinueButton label="Not now" />
+          </div>
         </Notice>
       )
     case "member_elsewhere":
@@ -241,6 +253,17 @@ function InvitationState({
           <ContinueButton label="Not now" />
         </Notice>
       )
+    case "managed_account":
+      return (
+        <Notice title="This account uses organization-managed access">
+          <p>
+            Your organization enrolls you directly, so this invitation can’t be
+            used with this account. Contact your organization administrator or
+            Cosmaneura support.
+          </p>
+          <ContinueButton label="Continue" />
+        </Notice>
+      )
     case "expired":
     case "revoked":
     case "used":
@@ -262,7 +285,8 @@ export default function InvitePage({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
-        {loaderData.kind === "inspected" ? (
+        {loaderData.kind === "signing_in" ? null : loaderData.kind ===
+          "inspected" ? (
           <InvitationState
             token={loaderData.token}
             inspection={loaderData.inspection}
@@ -281,6 +305,7 @@ export default function InvitePage({ loaderData }: Route.ComponentProps) {
         ) : (
           <Notice title="We couldn’t check this invitation">
             <p role="alert">{loaderData.detail}</p>
+            <ContinueButton label="Not now" />
           </Notice>
         )}
       </main>

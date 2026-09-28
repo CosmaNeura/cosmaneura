@@ -156,6 +156,10 @@ function issued(
 }
 
 describe("PracticeRoster", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it("lists each member's name, role, and access state for the owner", () => {
     render(<PracticeRoster practice={practice()} roster={roster(TEAM)} />)
 
@@ -228,11 +232,27 @@ describe("PracticeRoster", () => {
     ).toBeInTheDocument()
     const rows = screen.getAllByRole("listitem")
     expect(rows[1]).toHaveTextContent(/^riley@gmail.com · Invited · expires/)
-    expect(within(rows[1]).getByRole("button", { name: "Revoke" })).toBeTruthy()
-    expect(within(rows[1]).getByRole("button", { name: "Resend" })).toBeTruthy()
+    expect(
+      within(rows[1]).getByRole("button", {
+        name: "Revoke invitation to riley@gmail.com",
+      }),
+    ).toHaveTextContent("Revoke")
+    expect(
+      within(rows[1]).getByRole("button", {
+        name: "Resend invitation to riley@gmail.com",
+      }),
+    ).toHaveTextContent("Resend")
     expect(rows[2]).toHaveTextContent(/^stale@gmail.com · Expired/)
-    expect(within(rows[2]).getByRole("button", { name: "Remove" })).toBeTruthy()
-    expect(within(rows[2]).getByRole("button", { name: "Resend" })).toBeTruthy()
+    expect(
+      within(rows[2]).getByRole("button", {
+        name: "Remove invitation to stale@gmail.com",
+      }),
+    ).toHaveTextContent("Remove")
+    expect(
+      within(rows[2]).getByRole("button", {
+        name: "Resend invitation to stale@gmail.com",
+      }),
+    ).toHaveTextContent("Resend")
     expect(screen.queryByText(/of 20/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/only you so far/i)).not.toBeInTheDocument()
   })
@@ -248,6 +268,11 @@ describe("PracticeRoster", () => {
     )
 
     expect(screen.getByText("Invited clinician")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", {
+        name: "Revoke invitation to invited clinician",
+      }),
+    ).toBeInTheDocument()
   })
 
   it("revokes an invitation and reloads the roster", async () => {
@@ -263,7 +288,7 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
     await vi.waitFor(() =>
       expect(screen.queryByText("riley@gmail.com")).not.toBeInTheDocument(),
@@ -288,7 +313,7 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Resend" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Resend invitation/ }))
 
     expect(
       await screen.findByText("Send this link to riley@gmail.com."),
@@ -298,9 +323,14 @@ describe("PracticeRoster", () => {
     expect(options.headers["Idempotency-Key"]).toMatch(/.{8,}/)
   })
 
-  it("shows the reason a revoke was refused", async () => {
+  it("shows the reason a revoke was refused and reloads the roster", async () => {
     client.revokePracticeInvitation.mockResolvedValue({
       error: { detail: "An accepted invitation cannot be revoked." },
+      response: new Response(null, { status: 409 }),
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([member()], { invitations: [invitation()] }),
+      response: new Response(null, { status: 200 }),
     })
     render(
       <PracticeRoster
@@ -309,11 +339,97 @@ describe("PracticeRoster", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }))
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "An accepted invitation cannot be revoked.",
     )
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalledTimes(1))
+  })
+
+  it("drops the copyable link once its invitation is revoked", async () => {
+    client.resendPracticeInvitation.mockResolvedValue({
+      data: issued({ invitation: invitation() }),
+    })
+    client.revokePracticeInvitation.mockResolvedValue({ data: undefined })
+    practiceRoster
+      .mockResolvedValueOnce({
+        data: roster([member()], { invitations: [invitation()] }),
+        response: new Response(null, { status: 200 }),
+      })
+      .mockResolvedValueOnce({
+        data: roster([member()]),
+        response: new Response(null, { status: 200 }),
+      })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member()], { invitations: [invitation()] })}
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: /^Resend invitation/ }))
+    expect(
+      await screen.findByText(
+        "https://app.cosmaneura.com/invite#t=secret-token",
+      ),
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
+
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByText("https://app.cosmaneura.com/invite#t=secret-token"),
+      ).not.toBeInTheDocument(),
+    )
+    expect(screen.getByRole("status")).toBeEmptyDOMElement()
+  })
+
+  it("uses a new resend key per click, and the same key to retry a lost one", async () => {
+    client.resendPracticeInvitation
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue({ data: issued({ invitation: invitation() }) })
+    practiceRoster.mockResolvedValue({
+      data: roster([member()], { invitations: [invitation()] }),
+      response: new Response(null, { status: 200 }),
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member()], { invitations: [invitation()] })}
+      />,
+    )
+    const resend = () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      )
+
+    resend()
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "That did not work. Try again.",
+    )
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      ).toBeEnabled(),
+    )
+    resend()
+    await screen.findByText("Send this link to riley@gmail.com.")
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^Resend invitation/ }),
+      ).toBeEnabled(),
+    )
+    resend()
+    await vi.waitFor(() =>
+      expect(client.resendPracticeInvitation).toHaveBeenCalledTimes(3),
+    )
+
+    const [lost, retried, again] =
+      client.resendPracticeInvitation.mock.calls.map(
+        ([options]) => options.headers["Idempotency-Key"],
+      )
+    expect(retried).toBe(lost)
+    expect(again).not.toBe(retried)
   })
 
   it("renders nothing for a workforce member", () => {
@@ -644,6 +760,97 @@ describe("InviteClinicianForm", () => {
       ([options]) => options.headers["Idempotency-Key"],
     )
     expect(new Set(keys).size).toBe(2)
+  })
+
+  function keys() {
+    return client.createPracticeInvitation.mock.calls.map(
+      ([options]) => options.headers["Idempotency-Key"],
+    )
+  }
+
+  function submitAgain(email: string) {
+    fireEvent.change(screen.getByLabelText("Invite a clinician"), {
+      target: { value: email },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Send invitation" }))
+  }
+
+  it("retries an ambiguous failure with the same key", async () => {
+    client.createPracticeInvitation
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce({
+        error: { detail: "Internal Server Error" },
+        response: new Response(null, { status: 502 }),
+      })
+      .mockResolvedValue({ data: issued() })
+
+    invite("retry@gmail.com")
+    await screen.findByText("The invitation could not be sent.")
+    submitAgain(" Retry@Gmail.com")
+    await screen.findByText("Internal Server Error")
+    submitAgain("retry@gmail.com")
+    await screen.findByText("Send this link to new@gmail.com.")
+
+    const [lost, failed, succeeded] = keys()
+    expect(failed).toBe(lost)
+    expect(succeeded).toBe(lost)
+  })
+
+  it("uses a new key after a success, a refusal, or a changed address", async () => {
+    client.createPracticeInvitation
+      .mockResolvedValueOnce({ data: issued() })
+      .mockResolvedValueOnce({
+        error: { detail: "An invitation to this address is already pending." },
+        response: new Response(null, { status: 409 }),
+      })
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValue({ data: issued() })
+
+    invite("same@gmail.com")
+    await screen.findByText("Send this link to new@gmail.com.")
+    submitAgain("same@gmail.com")
+    await screen.findByText(/already pending/)
+    submitAgain("same@gmail.com")
+    await screen.findByText("The invitation could not be sent.")
+    submitAgain("other@gmail.com")
+    await vi.waitFor(() =>
+      expect(client.createPracticeInvitation).toHaveBeenCalledTimes(4),
+    )
+
+    expect(new Set(keys()).size).toBe(4)
+  })
+
+  it("says it is sending while the request is in flight", async () => {
+    let finish: (value: unknown) => void = () => {}
+    client.createPracticeInvitation.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+
+    invite("slow@gmail.com")
+
+    expect(
+      await screen.findByRole("button", { name: "Sending…" }),
+    ).toBeDisabled()
+    finish({ data: issued() })
+    expect(
+      await screen.findByRole("button", { name: "Send invitation" }),
+    ).toBeInTheDocument()
+  })
+
+  it("announces the link through a live region that was already present", async () => {
+    client.createPracticeInvitation.mockResolvedValue({ data: issued() })
+    render(<PracticeRoster practice={practice()} roster={roster([member()])} />)
+    const status = screen.getByRole("status")
+    expect(status).toBeEmptyDOMElement()
+
+    submitAgain("new@gmail.com")
+
+    await vi.waitFor(() =>
+      expect(status).toHaveTextContent("Send this link to new@gmail.com."),
+    )
+    expect(screen.getByRole("status")).toBe(status)
   })
 
   it("passes on the contact-us wording at the seat cap", async () => {
