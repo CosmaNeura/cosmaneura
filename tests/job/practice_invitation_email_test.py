@@ -46,7 +46,7 @@ def _issue(*, now: datetime | None = None) -> practice_invitations.IssuedInvitat
             owner_member=owner,
             email="riley@gmail.com",
             idempotency_key=secrets.token_hex(8),
-            now=now or datetime.now(timezone.utc),
+            clock=(lambda: now) if now else (lambda: datetime.now(timezone.utc)),
         )
 
 

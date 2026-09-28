@@ -10,7 +10,7 @@ import hashlib
 import hmac
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from typeid import TypeID
@@ -174,6 +174,10 @@ def invitation_expired(invitation: PracticeInvitation, now: datetime) -> bool:
     return invitation.expires_at <= now
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _is_pending(invitation: PracticeInvitation) -> bool:
     return invitation.accepted_at is None and invitation.revoked_at is None
 
@@ -326,9 +330,10 @@ def issue_invitation(
     owner_member: PracticeMember,
     email: str,
     idempotency_key: str,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> IssuedInvitation:
     practice = _lock_owner_practice(session, owner_member)
+    now = clock()
     try:
         normalized = normalize_email(email)
     except OrganizationAccessError:
@@ -351,10 +356,11 @@ def revoke_invitation(
     *,
     owner_member: PracticeMember,
     invitation_id: Any,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> PracticeInvitation:
     practice = _lock_owner_practice(session, owner_member, issuing=False)
     invitation = _lock_practice_invitation(session, practice, invitation_id)
+    now = clock()
     if invitation.accepted_at is not None:
         raise InvitationConflict("An accepted invitation cannot be revoked.")
     if invitation.revoked_at is None:
@@ -373,10 +379,11 @@ def resend_invitation(
     owner_member: PracticeMember,
     invitation_id: Any,
     idempotency_key: str,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> IssuedInvitation:
     practice = _lock_owner_practice(session, owner_member)
     invitation = _lock_practice_invitation(session, practice, invitation_id)
+    now = clock()
     key_digest = _replacement_idempotency_digest(invitation.id, idempotency_key)
     replacement = session.exec(
         select(col(PracticeInvitation.id)).where(
@@ -510,7 +517,7 @@ def accept_invitation(
     verified_email: str,
     attestation_name: str,
     reverify_email: Callable[[Doctor], str],
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> tuple[Practice, PracticeMember]:
     """Admit the invited clinician under their own workforce attestation.
 
@@ -571,9 +578,12 @@ def accept_invitation(
             session.refresh(member)
             return practice, member
         raise InvitationConflict("This account is already a member of the practice.")
+    # Read under the seat lock: acceptance queued behind another seat change
+    # must judge expiry and the seat count at the moment it is released.
+    now = clock()
     if not _is_pending(invitation) or invitation_expired(invitation, now):
         raise InvitationInactive
-    require_active_clinician_seat_capacity(session, practice)
+    require_active_clinician_seat_capacity(session, practice, at=now)
 
     member = PracticeMember(
         practice_id=practice.id,

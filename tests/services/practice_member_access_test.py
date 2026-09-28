@@ -561,7 +561,6 @@ def test_a_seat_ending_tonight_admits_an_invitation_but_not_its_acceptance():
             owner_member=owner,
             email=email,
             idempotency_key=secrets.token_hex(8),
-            now=_now(),
         )
 
     def accept():
@@ -573,7 +572,6 @@ def test_a_seat_ending_tonight_admits_an_invitation_but_not_its_acceptance():
                 verified_email=email,
                 attestation_name="Replacement Clinician",
                 reverify_email=lambda _doctor: email,
-                now=_now(),
             )
 
     with pytest.raises(ActiveClinicianSeatLimitReached):
@@ -601,7 +599,6 @@ def test_inviting_a_revoked_member_points_the_owner_at_restore():
             owner_member=owner,
             email=doctor.email or "",
             idempotency_key=secrets.token_hex(8),
-            now=_now(),
         )
 
     assert str(refused.value) == (

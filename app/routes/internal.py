@@ -2176,7 +2176,6 @@ def create_practice_invitation(
     owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
     origin = _invitation_web_origin(request)
     _consume_practice_invitation_attempt(owner.practice_id)
-    now = datetime.now(timezone.utc)
     try:
         with get_session() as session:
             issued = issue_invitation(
@@ -2184,7 +2183,6 @@ def create_practice_invitation(
                 owner_member=owner,
                 email=data.email,
                 idempotency_key=idempotency_key,
-                now=now,
             )
     except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
         raise _invitation_http_error(
@@ -2192,7 +2190,9 @@ def create_practice_invitation(
         ) from None
     # A replayed request already queued its email.
     email_queued = issued.created and _queue_invitation_email(issued.invitation)
-    return _issued_invitation_payload(origin, issued, now, email_queued=email_queued)
+    return _issued_invitation_payload(
+        origin, issued, datetime.now(timezone.utc), email_queued=email_queued
+    )
 
 
 @internal_api_app.post(
@@ -2212,7 +2212,6 @@ def revoke_practice_invitation(
                 session,
                 owner_member=owner,
                 invitation_id=invitation_id,
-                now=datetime.now(timezone.utc),
             )
     except PracticeInvitationError as exc:
         raise _invitation_http_error(
@@ -2235,7 +2234,6 @@ def resend_practice_invitation(
     owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
     origin = _invitation_web_origin(request)
     _consume_practice_invitation_attempt(owner.practice_id)
-    now = datetime.now(timezone.utc)
     try:
         with get_session() as session:
             issued = resend_invitation(
@@ -2243,7 +2241,6 @@ def resend_practice_invitation(
                 owner_member=owner,
                 invitation_id=invitation_id,
                 idempotency_key=idempotency_key,
-                now=now,
             )
     except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
         raise _invitation_http_error(
@@ -2255,7 +2252,7 @@ def resend_practice_invitation(
     return _issued_invitation_payload(
         origin,
         issued,
-        now,
+        datetime.now(timezone.utc),
         email_queued=email_due and _queue_invitation_email(issued.invitation),
     )
 
@@ -2353,7 +2350,6 @@ def accept_practice_invitation(
                 verified_email=verified_email,
                 attestation_name=data.attestation_name,
                 reverify_email=_verified_legacy_enrollment_email,
-                now=datetime.now(timezone.utc),
             )
     except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
         raise _invitation_http_error(
