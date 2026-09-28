@@ -296,6 +296,8 @@ def test_current_authority_is_checked_again_on_reopen(
     elif value == "expired":
         value = datetime.now(UTC) - timedelta(seconds=1)
     row = getattr(case, target)
+    if target == "practice_member":
+        assert lock_practice_seats(session, row.practice_id) is not None
     setattr(row, field, value)
     if target == "practice_member" and field == "access_revoked_at":
         row.access_revoked_by_ref = "synthetic_reviewer"

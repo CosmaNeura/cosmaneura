@@ -417,7 +417,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
     elif change == "disabled":
         f.additional.deleted_at = datetime.now(UTC)
     elif change == "inactive_member":
-        lock_practice_seats(session, f.practice.id)
+        assert lock_practice_seats(session, f.practice.id) is not None
         f.practice_member.seat_state = "inactive"
     elif change == "ended_member":
         lock_practice_seats(session, f.practice.id)
@@ -545,6 +545,7 @@ def test_failed_postcondition_rolls_back_all_new_rows(case, monkeypatch):
 
 def test_seat_limit_refuses_addition(case):
     session, f = case
+    assert lock_practice_seats(session, f.practice.id) is not None
     for _ in range(19):
         doctor = Doctor(clerk_id=f"user_seat_{uuid4().hex}", biography=None)
         session.add(doctor)
