@@ -149,9 +149,14 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
             "message": _canonical_message(payload.get("message")),
         }
     if phase == "final_response":
-        if not _has_exact_keys(
-            payload,
-            {"phase", "outcome", "response", "presentation"},
+        required = {"phase", "outcome", "response", "presentation"}
+        if not required <= set(payload) <= required | {"provider_context_ref"}:
+            raise ConversationInvariantError
+        context_ref = payload.get("provider_context_ref")
+        if context_ref is not None and (
+            not isinstance(context_ref, str)
+            or not 8 <= len(context_ref) <= 160
+            or re.fullmatch(r"[A-Za-z0-9._~-]+", context_ref) is None
         ):
             raise ConversationInvariantError
         outcome = payload.get("outcome")
@@ -181,6 +186,9 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
             raise ConversationInvariantError
         return {
             "phase": phase,
+            **(
+                {"provider_context_ref": context_ref} if context_ref is not None else {}
+            ),
             "outcome": outcome,
             "response": _canonical_message(payload.get("response")),
             "presentation": {
@@ -545,6 +553,12 @@ def write_conversation_turn(
         raise ConversationInvariantError
     canonical_payload = _canonical_payload(payload)
     phase = cast(str, canonical_payload["phase"])
+    if phase == "final_response":
+        from app.services.provider_question_context import validate_final_context
+
+        validate_final_context(
+            session, authorized=authorized, payload=canonical_payload, settings=settings
+        )
     operation = _operation_for_phase(phase)
     request_digest = _request_digest(canonical_payload)
     key_record, logical_record = _idempotency_records(
