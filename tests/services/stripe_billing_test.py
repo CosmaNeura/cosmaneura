@@ -1019,11 +1019,23 @@ def _set_portal_path(configuration: dict[str, Any], path: str, value: Any) -> No
         ("id", "bpc_test_other", "wrong portal configuration"),
         ("livemode", True, "livemode"),
         ("active", False, "not active"),
+        ("active", None, "not active"),
+        (
+            "login_page",
+            {"enabled": True, "url": "https://billing.stripe.com/p/login/test"},
+            "login page",
+        ),
+        ("login_page", None, "login page"),
         ("features", None, "features are missing"),
         ("features.subscription_update.enabled", True, "subscription updates"),
         ("features.subscription_update", {}, "subscription updates"),
+        ("features.subscription_update", True, "subscription_update is malformed"),
         ("features.subscription_cancel.mode", "immediately", "before the period"),
         ("features.subscription_cancel.enabled", None, "before the period"),
+        ("features.subscription_cancel", "x", "subscription_cancel is malformed"),
+        ("features.customer_update.enabled", True, "customer updates"),
+        ("features.invoice_history", [], "invoice_history is malformed"),
+        ("features.future_feature", {"enabled": False}, "unreviewed feature"),
     ],
 )
 def test_portal_refuses_configuration_that_could_bypass_seat_billing(
@@ -1037,6 +1049,77 @@ def test_portal_refuses_configuration_that_could_bypass_seat_billing(
         )
 
     assert not any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
+@pytest.mark.parametrize(
+    "feature", ["subscription_update", "subscription_cancel", "customer_update"]
+)
+def test_portal_refuses_configuration_without_seat_billing_feature(
+    remote: FakeStripe, feature: str
+):
+    del remote.portal_configuration["features"][feature]
+
+    with pytest.raises(
+        stripe_billing.StripePortalConfigurationInvalid, match=f"{feature} is missing"
+    ):
+        stripe_billing.create_portal_session(
+            _portal_practice(), return_url="https://cosma.localhost/settings"
+        )
+
+    assert not any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
+def test_portal_accepts_configuration_with_login_page_disabled(remote: FakeStripe):
+    remote.portal_configuration["login_page"] = {"enabled": False, "url": None}
+
+    stripe_billing.create_portal_session(
+        _portal_practice(), return_url="https://cosma.localhost/settings"
+    )
+
+    assert any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
+def _failing_portal_configuration(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch, status_code: int
+) -> None:
+    def request(method, path, data=None, *, idempotency_key=None):
+        if path.startswith("/billing_portal/configurations/"):
+            remote.calls.append((method, path, data, idempotency_key))
+            http_request = httpx.Request("GET", f"https://api.stripe.com/v1{path}")
+            raise httpx.HTTPStatusError(
+                "portal configuration request failed",
+                request=http_request,
+                response=httpx.Response(status_code, request=http_request),
+            )
+        return remote(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", request)
+
+
+def test_missing_pinned_portal_configuration_is_invalid_not_transient(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    _failing_portal_configuration(remote, monkeypatch, 404)
+
+    with pytest.raises(
+        stripe_billing.StripePortalConfigurationInvalid, match="not found"
+    ):
+        stripe_billing.create_portal_session(
+            _portal_practice(), return_url="https://cosma.localhost/settings"
+        )
+
+    assert not any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
+def test_portal_configuration_server_error_stays_transient(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    _failing_portal_configuration(remote, monkeypatch, 500)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        stripe_billing.create_portal_session(
+            _portal_practice(), return_url="https://cosma.localhost/settings"
+        )
 
 
 def test_checkout_is_idempotent_and_carries_exact_long_trial(remote: FakeStripe):

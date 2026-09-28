@@ -8,9 +8,11 @@ import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 import app.configuration.stripe as stripe_config
 import app.jobs.stripe_events
@@ -60,6 +62,9 @@ class RouteStripe:
             "active": True,
             "livemode": False,
             "features": {
+                "customer_update": {"enabled": False},
+                "invoice_history": {"enabled": True},
+                "payment_method_update": {"enabled": True},
                 "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
                 "subscription_update": {"enabled": False},
             },
@@ -753,6 +758,43 @@ def test_portal_with_unsafe_pinned_configuration_is_unavailable(
 
     assert portal.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert portal.json()["detail"] == "Billing is not configured in this environment."
+    assert not any(call[1] == "/billing_portal/sessions" for call in route_stripe.calls)
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_with_missing_pinned_configuration_is_unavailable_not_transient(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _past_due_customer(route_stripe)
+
+    def request(method, path, data=None, *, idempotency_key=None):
+        if path.startswith("/billing_portal/configurations/"):
+            http_request = httpx.Request("GET", f"https://api.stripe.com/v1{path}")
+            raise httpx.HTTPStatusError(
+                "No such billing portal configuration",
+                request=http_request,
+                response=httpx.Response(404, request=http_request),
+            )
+        return route_stripe(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", request)
+
+    with capture_logs() as logs:
+        portal = authenticated_client.post(
+            api_app.url_path_for("create_billing_portal"),
+            json={},
+            headers={"origin": VALID_ORIGIN},
+        )
+
+    assert portal.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert portal.json()["detail"] == "Billing is not configured in this environment."
+    assert any(
+        entry["event"] == "stripe portal configuration validation failed"
+        and entry["log_level"] == "error"
+        for entry in logs
+    )
     assert not any(call[1] == "/billing_portal/sessions" for call in route_stripe.calls)
 
 
