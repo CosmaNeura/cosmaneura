@@ -2747,10 +2747,15 @@ def _validated_portal_configuration() -> str:
             "GET", f"/billing_portal/configurations/{configuration_id}"
         )
     except httpx.HTTPStatusError as exc:
-        # A deleted, mistyped, or other-account id will not heal on retry.
+        # A deleted, mistyped, or other-account id, or a restricted key without
+        # Customer portal access, will not heal on retry.
         if exc.response.status_code == 404:
             raise StripePortalConfigurationInvalid(
                 "Stripe portal configuration was not found"
+            ) from exc
+        if exc.response.status_code in (401, 403):
+            raise StripePortalConfigurationInvalid(
+                "Stripe key cannot read the portal configuration"
             ) from exc
         raise
     if configuration.get("id") != configuration_id:

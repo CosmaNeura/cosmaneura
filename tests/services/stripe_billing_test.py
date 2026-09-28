@@ -1096,14 +1096,19 @@ def _failing_portal_configuration(
     monkeypatch.setattr(stripe_billing, "_request", request)
 
 
+@pytest.mark.parametrize(
+    ("status_code", "reason"),
+    [(404, "not found"), (401, "cannot read"), (403, "cannot read")],
+)
 def test_missing_pinned_portal_configuration_is_invalid_not_transient(
-    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    reason: str,
 ):
-    _failing_portal_configuration(remote, monkeypatch, 404)
+    _failing_portal_configuration(remote, monkeypatch, status_code)
 
-    with pytest.raises(
-        stripe_billing.StripePortalConfigurationInvalid, match="not found"
-    ):
+    with pytest.raises(stripe_billing.StripePortalConfigurationInvalid, match=reason):
         stripe_billing.create_portal_session(
             _portal_practice(), return_url="https://cosma.localhost/settings"
         )
