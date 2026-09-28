@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 
 import { Button } from "~/components/ui/button"
 import {
@@ -68,9 +68,27 @@ export function MemberAccessActions({
   const name = member.display_name ?? "this clinician"
   const path = { member_id: member.member_id }
 
-  if (member.revoked || member.role === "owner" || member.is_self) return null
   const restorable = member.access_ends_at !== null
-  if (!restorable && !member.seat_active) return null
+  // the confirmation belongs to the Revoke button, which a reload can replace
+  const dialogShown = confirming && !restorable
+  useEffect(() => {
+    if (restorable) setConfirming(false)
+  }, [restorable])
+  const rowError =
+    error && !dialogShown ? (
+      <p role="alert" className="text-destructive w-full">
+        {error}
+      </p>
+    ) : null
+
+  if (
+    member.revoked ||
+    member.role === "owner" ||
+    member.is_self ||
+    (!restorable && !member.seat_active)
+  ) {
+    return rowError
+  }
 
   async function act(run: () => Promise<{ error?: unknown; data?: unknown }>) {
     setBusy(true)
@@ -79,15 +97,17 @@ export function MemberAccessActions({
       const { error: failure } = await run()
       if (failure) {
         setError(errorDetail(failure) ?? "That did not work. Try again.")
-        return
+      } else {
+        setConfirming(false)
       }
-      setConfirming(false)
-      await onChanged()
     } catch {
       setError("That did not work. Try again.")
     } finally {
       setBusy(false)
     }
+    // a refusal usually means the member changed elsewhere (revoked,
+    // restored, or the last seat taken), so the list is refreshed either way
+    await onChanged()
   }
 
   return (
@@ -103,7 +123,7 @@ export function MemberAccessActions({
           Restore
         </Button>
       ) : (
-        <Dialog open={confirming} onOpenChange={setConfirming}>
+        <Dialog open={dialogShown} onOpenChange={setConfirming}>
           <Button
             variant="outline"
             size="sm"
@@ -143,11 +163,7 @@ export function MemberAccessActions({
           </DialogContent>
         </Dialog>
       )}
-      {error && !confirming ? (
-        <p role="alert" className="text-destructive w-full">
-          {error}
-        </p>
-      ) : null}
+      {rowError}
     </>
   )
 }

@@ -629,6 +629,44 @@ describe("revoking and restoring members", () => {
         detail: "To add more clinicians, contact us at info@cosmaneura.com.",
       },
     })
+    const ended = roster([
+      member(),
+      clinician({
+        access_ends_at: ENDS_AT,
+        seat_active: false,
+        access_in_force: false,
+      }),
+    ])
+    practiceRoster.mockResolvedValue({
+      data: ended,
+      response: new Response(null, { status: 200 }),
+    })
+    render(<PracticeRoster practice={practice()} roster={ended} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
+
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "To add more clinicians, contact us at info@cosmaneura.com.",
+    )
+  })
+
+  it("keeps a refused restore's reason on a row that no longer has actions", async () => {
+    client.restorePracticeMember.mockResolvedValue({
+      error: { detail: "This clinician's access can't be restored." },
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([
+        member(),
+        clinician({
+          access_ends_at: ENDS_AT,
+          seat_active: false,
+          revoked: true,
+          access_in_force: false,
+        }),
+      ]),
+      response: new Response(null, { status: 200 }),
+    })
     render(
       <PracticeRoster
         practice={practice()}
@@ -645,10 +683,111 @@ describe("revoking and restoring members", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "To add more clinicians, contact us at info@cosmaneura.com.",
+    await vi.waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "Restore Alex Active" }),
+      ).not.toBeInTheDocument(),
     )
-    expect(practiceRoster).not.toHaveBeenCalled()
+    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent(
+      "This clinician's access can't be restored.",
+    )
+  })
+
+  it("does not reopen an abandoned confirmation when the member turns active again", async () => {
+    const refusal = {
+      error: { detail: "Someone else changed this clinician." },
+    }
+    client.revokePracticeMember.mockResolvedValue(refusal)
+    client.restorePracticeMember.mockResolvedValue(refusal)
+    const loaded = (overrides: Partial<PracticeRosterMember>) => ({
+      data: roster([member(), clinician(overrides)]),
+      response: new Response(null, { status: 200 }),
+    })
+    practiceRoster
+      .mockResolvedValueOnce(loaded({ access_ends_at: ENDS_AT }))
+      .mockResolvedValueOnce(loaded({}))
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Revoke access",
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Restore Alex Active" }),
+    )
+
+    expect(
+      await screen.findByRole("button", { name: "Revoke Alex Active" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  })
+
+  it("keeps a refused revoke's reason in view while the roster reloads", async () => {
+    client.revokePracticeMember.mockResolvedValue({
+      error: { detail: "This clinician's access has already ended." },
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([member(), clinician()]),
+      response: new Response(null, { status: 200 }),
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    const dialog = await screen.findByRole("dialog")
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Revoke access" }),
+    )
+
+    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    expect(within(dialog).getByRole("alert")).toHaveTextContent(
+      "This clinician's access has already ended.",
+    )
+  })
+
+  it("moves a refused revoke's reason to the row when the reload replaces its button", async () => {
+    client.revokePracticeMember.mockResolvedValue({
+      error: { detail: "This clinician's access has already ended." },
+    })
+    practiceRoster.mockResolvedValue({
+      data: roster([member(), clinician({ access_ends_at: ENDS_AT })]),
+      response: new Response(null, { status: 200 }),
+    })
+    render(
+      <PracticeRoster
+        practice={practice()}
+        roster={roster([member(), clinician()])}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Alex Active" }))
+    fireEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", {
+        name: "Revoke access",
+      }),
+    )
+
+    await vi.waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Restore Alex Active" }),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    const row = screen.getAllByRole("listitem")[1]
+    expect(within(row).getByRole("alert")).toHaveTextContent(
+      "This clinician's access has already ended.",
+    )
   })
 })
 
