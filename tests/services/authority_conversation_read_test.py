@@ -525,3 +525,26 @@ def test_identical_text_cannot_replace_revoked_snapshot_membership(scope):
         response.status_code == 409
         and response.json()["code"] == "CONVERSATION_CONTEXT_CHANGED"
     )
+
+
+@pytest.mark.parametrize(
+    "supplied", ["trace_fictional_history_20260928", "short", None]
+)
+def test_successful_history_read_echoes_one_normalized_request_trace(scope, supplied):
+    headers = {"X-Cosmaneura-Mount-Context": scope[3]}
+    if supplied is not None:
+        headers["X-Trace-ID"] = supplied
+    response = _client().post(
+        "/service/v1/agent/conversation-turns/read",
+        headers=headers,
+        json={"schema_version": "1.0.0", "mode": "recent", "client_turn_id": None},
+    )
+    assert response.status_code == 200
+    traces = response.headers.get_list("x-trace-id")
+    assert len(traces) == 1
+    if supplied is not None and len(supplied) >= 16:
+        assert traces == [supplied]
+    else:
+        assert traces[0].startswith("trace_") and len(traces[0]) == 38
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"

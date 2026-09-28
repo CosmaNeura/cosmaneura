@@ -1654,13 +1654,15 @@ async def read_conversation_turns(
     settings: Annotated[AuthorityKernelSettings, Depends(get_agent_authority_settings)],
     trace_id: Annotated[str | None, Header(alias="X-Trace-ID")] = None,
 ):
+    resolved_trace_id = normalize_trace_id(trace_id)
+
     def problem(code: str, status_code: int):
         return agent_problem_response(
             status_code=status_code,
             code=code,
             title="Conversation read unavailable",
             detail="The current context could not read the requested conversation.",
-            trace_id=normalize_trace_id(trace_id),
+            trace_id=resolved_trace_id,
         )
 
     if (
@@ -1718,4 +1720,6 @@ async def read_conversation_turns(
         SQLAlchemyError,
     ):
         return problem("PLATFORM_UNAVAILABLE", 503)
-    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        result, headers={"Cache-Control": "no-store", "X-Trace-ID": resolved_trace_id}
+    )
