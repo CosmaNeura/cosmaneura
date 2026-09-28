@@ -135,6 +135,42 @@ def test_owner_sees_active_inactive_and_revoked_members(
     assert sum(m["seat_active"] for m in members) == billed
 
 
+def test_a_member_in_the_grace_period_still_holds_a_seat_on_the_roster(
+    authenticated_client: TestClient,
+):
+    practice = _owned_group_practice()
+    now = datetime.now(timezone.utc)
+    _add_member(practice, "Active Clinician")
+    _add_member(
+        practice,
+        "Ending Clinician",
+        seat_state="inactive",
+        access_ends_at=now + timedelta(hours=12),
+    )
+    _add_member(
+        practice,
+        "Ended Clinician",
+        seat_state="inactive",
+        access_ends_at=now - timedelta(minutes=1),
+    )
+
+    resp = authenticated_client.get(api_app.url_path_for("practice_roster"))
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    roster = resp.json()
+    by_name = {m["display_name"]: m for m in roster["members"]}
+
+    assert {
+        name: (m["seat_active"], m["access_in_force"]) for name, m in by_name.items()
+    } == {
+        "Test Owner": (True, True),
+        "Active Clinician": (True, True),
+        "Ending Clinician": (True, True),
+        "Ended Clinician": (False, False),
+    }
+    assert by_name["Ending Clinician"]["access_ends_at"] is not None
+    assert roster["occupied_seats"] == 3
+
+
 def test_roster_lists_owner_first_then_by_join_date(
     authenticated_client: TestClient,
 ):
