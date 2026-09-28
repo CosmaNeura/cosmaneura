@@ -3976,6 +3976,43 @@ def test_billable_step_requires_the_previous_step_in_stripe(
     assert remote.prorated_seats == [1]
 
 
+def test_renewal_during_a_quantity_update_fails_the_sync(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=3, seats=3
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    renewals = {"pending": True}
+
+    def renew_before_the_update(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        if path.startswith("/subscription_items/") and renewals["pending"]:
+            renewals["pending"] = False
+            _start_period(remote, practice, PERIOD_END)
+        return remote(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", renew_before_the_update)
+
+    assert not _sync_seats(practice)
+    practice.refresh()
+    assert "billing period" in (practice.stripe_quantity_sync_error or "")
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+    assert practice.stripe_paid_seat_period_start == PERIOD_END
+
+
 def test_missing_item_billing_period_fails_closed_before_any_update(
     remote: FakeStripe,
 ):

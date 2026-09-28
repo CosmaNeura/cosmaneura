@@ -3048,6 +3048,14 @@ def _sync_subscription_quantity_leased(
                     raise StripeStateInvalid(
                         "Stripe did not confirm the requested subscription quantity"
                     )
+                if _subscription_item_period_start(confirmed) != period_start:
+                    # Stripe renewed at the old quantity before this update, so
+                    # the plan used the old period's high-water. The next sweep
+                    # plans against the new period, but cannot charge a raise
+                    # Stripe already applied here without proration.
+                    raise StripeStateInvalid(
+                        "Stripe renewed the billing period during the quantity sync"
+                    )
                 paid_seats = (max(high_water or 0, target), period_start)
             else:
                 try:
