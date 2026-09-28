@@ -13,6 +13,42 @@ Do not describe `STRIPE_BILLING_ENABLED=false` as a hard stop. The integration
 and webhook must remain enabled for subscription maintenance, and existing
 hosted sessions remain usable until they complete or expire.
 
+## Customer portal configuration
+
+Every customer portal session names a pinned portal configuration,
+`STRIPE_PORTAL_CONFIGURATION_ID` (`bpc_...`, the `portal-configuration-id`
+field of the Stripe 1Password item). Stripe's account-default portal is never
+used: a Dashboard edit to it could let customers change their seat quantity or
+plan, bypassing Core's seat billing, where an added seat is charged part-month
+immediately and a removed seat earns no credit.
+
+Before each portal session, the backend retrieves the configuration and
+refuses to open the portal unless it has:
+
+- the configured `id` and the deployment's `livemode`;
+- `active: true`;
+- `features.subscription_update.enabled: false`, so quantity and plan changes
+  happen only through Core; and
+- when `features.subscription_cancel.enabled` is `true`,
+  `features.subscription_cancel.mode: at_period_end`.
+
+The reviewed configuration also keeps `payment_method_update` and
+`invoice_history` enabled, `customer_update` disabled, and cancellation with
+`proration_behavior: none`. A refused configuration returns the same
+"Billing is not configured in this environment." response as a missing
+integration, and the practice status reports `billing_management_enabled:
+false` while the setting is absent or malformed.
+
+Acquisition readiness requires the setting: `STRIPE_BILLING_ENABLED=true` has
+no effect until `STRIPE_PORTAL_CONFIGURATION_ID` is a `bpc_` value. Webhook
+ingest and quantity reconciliation do not depend on it, so the dormant
+integration-on, acquisition-off state keeps mirroring existing subscriptions
+even when the portal is unavailable. Deployment configuration requires the
+value whenever `STRIPE_INTEGRATION_ENABLED=true`.
+
+Edit the pinned configuration in Stripe rather than the account default. After
+any change, confirm the four properties above before relying on the portal.
+
 ## Dark deploy and drain
 
 1. Deploy the card-required release with `STRIPE_INTEGRATION_ENABLED=true` and
