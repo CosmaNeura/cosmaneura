@@ -123,7 +123,6 @@ class FakeStripe:
                 if item["id"] == item_id:
                     assert data
                     assert data.get("proration_behavior") in {
-                        "always_invoice",
                         "create_prorations",
                         "none",
                     }
@@ -3538,7 +3537,7 @@ def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
 @pytest.mark.parametrize(
     ("status", "remote_quantity", "seats", "expected"),
     [
-        ("active", 1, 2, "always_invoice"),
+        ("active", 1, 2, "create_prorations"),
         ("past_due", 1, 2, "create_prorations"),
         ("unpaid", 1, 2, "create_prorations"),
         ("paused", 1, 2, "none"),
@@ -3610,7 +3609,7 @@ def test_quantity_idempotency_key_binds_the_proration_behavior(remote: FakeStrip
     assert practice.stripe_quantity_sync_version == version
     [_, (charged, charged_key)] = _quantity_updates(remote)
     assert charged["quantity"] == uncharged["quantity"] == "2"
-    assert charged["proration_behavior"] == "always_invoice"
+    assert charged["proration_behavior"] == "create_prorations"
     assert uncharged_key and charged_key and uncharged_key != charged_key
 
 

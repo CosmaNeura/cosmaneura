@@ -2862,19 +2862,17 @@ def sync_subscription_quantity(
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
             if item["quantity"] != target:
-                # The mirrored status treats a portal pause_collection as paused;
-                # Stripe's raw status stays "active" there. While payment is
-                # failing the part-month waits for the next invoice rather than
-                # stacking on one that is already failing. A trial, a paused
-                # subscription (which restarts its cycle on resume) and an
-                # incomplete first payment have nothing to prorate, and a drift
-                # repair realigns Stripe to Core rather than adding a seat.
+                # The part-month is queued on the next invoice, never charged
+                # now, so a declined card cannot make an active practice
+                # past_due mid-cycle. The mirrored status treats a portal
+                # pause_collection as paused (Stripe's raw status stays
+                # "active"). A trial, a paused subscription and an incomplete
+                # first payment have nothing to prorate, and a drift repair
+                # realigns Stripe to Core rather than adding a seat.
                 status = _mirrored_subscription_status(subscription)
                 if target < item["quantity"] or repairing_remote_quantity:
                     proration_behavior = "none"
-                elif status == "active":
-                    proration_behavior = "always_invoice"
-                elif status in {"past_due", "unpaid"}:
+                elif status in {"active", "past_due", "unpaid"}:
                     proration_behavior = "create_prorations"
                 else:
                     proration_behavior = "none"
