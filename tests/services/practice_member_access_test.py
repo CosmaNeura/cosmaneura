@@ -23,6 +23,7 @@ from app.models.practice import (
     MemberAccessState,
     Practice,
     PracticeMember,
+    lock_practice_seats,
     member_access_state,
     member_holds_seat_clause,
     practice_seat_lock_held,
@@ -273,6 +274,51 @@ def _restore(owner: PracticeMember, member: PracticeMember, *, now=None):
             member_id=member.id,
             clock=(lambda: now) if now else _now,
         )
+
+
+@pytest.mark.parametrize("operation", ["revoke", "restore"])
+@pytest.mark.parametrize(
+    "change", ["disabled", "inactive", "permanently_revoked", "role", "attestation"]
+)
+def test_member_change_rechecks_stale_acting_owner(operation, change):
+    practice, owner = _owned_practice()
+    member = _workforce(
+        practice, seat_state="active" if operation == "revoke" else "inactive"
+    )
+    with get_session() as session:
+        cached_owner = session.get(PracticeMember, owner.id)
+        cached_doctor = session.get(Doctor, owner.doctor_id)
+        assert cached_owner is not None and cached_doctor is not None
+        with get_session() as writer:
+            assert lock_practice_seats(writer, practice.id) is not None
+            current = writer.get(PracticeMember, owner.id)
+            doctor = writer.get(Doctor, owner.doctor_id)
+            assert current is not None and doctor is not None
+            if change == "disabled":
+                doctor.deleted_at = _now()
+            elif change == "inactive":
+                current.seat_state = "inactive"
+            elif change == "permanently_revoked":
+                for field, value in _tombstone(_now()).items():
+                    setattr(current, field, value)
+            elif change == "role":
+                current.role = "workforce"
+            else:
+                current.attested_at = None
+            writer.add_all([current, doctor])
+            writer.commit()
+        assert cached_owner.role == "owner" and cached_doctor.deleted_at is None
+        action = (
+            member_access.revoke_member_access
+            if operation == "revoke"
+            else member_access.restore_member_access
+        )
+        with pytest.raises(member_access.MemberNotFound):
+            action(session, owner_member=cached_owner, member_id=member.id)
+    member.refresh()
+    assert member.seat_state == ("active" if operation == "revoke" else "inactive")
+    assert member.access_ends_at is None
+    assert not _audits(practice)
 
 
 def _audits(practice: Practice) -> list[PracticeAccessAudit]:

@@ -14,6 +14,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.services.doctor_access import doctor_tombstone
+from app.services.practice_owner_access import (
+    PracticeOwnerUnavailable,
+    lock_authorized_practice_owner,
+)
 from app.services.public_entitlements import (
     lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
@@ -85,22 +89,27 @@ def _lock_member(
     session: Session, owner_member: PracticeMember, member_id: Any
 ) -> _LockedMember:
     practice = lock_practice_for_active_seat_mutation(session, owner_member.practice_id)
-    owner = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.id == owner_member.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if (
-        owner is None
-        or owner.practice_id != practice.id
-        or owner.role != PracticeRole.owner.value
-    ):
-        raise MemberNotFound
+    if practice.organization_id is not None or practice.negotiated_baa_required:
+        raise MemberAccessConflict(
+            "This practice uses organization-managed access. "
+            "Contact Cosmaneura support to change a clinician's access."
+        )
     candidate = session.exec(
-        select(PracticeMember).where(PracticeMember.id == member_id)
+        select(PracticeMember)
+        .where(PracticeMember.id == member_id)
+        .execution_options(populate_existing=True)
     ).one_or_none()
     if candidate is None or candidate.practice_id != practice.id:
         raise MemberNotFound
+    try:
+        owner = lock_authorized_practice_owner(
+            session,
+            practice,
+            owner_member,
+            additional_doctor_ids=(candidate.doctor_id,),
+        )
+    except PracticeOwnerUnavailable:
+        raise MemberNotFound from None
     doctor = session.exec(
         select(Doctor)
         .where(Doctor.id == candidate.doctor_id)
@@ -119,11 +128,6 @@ def _lock_member(
         or member.doctor_id != doctor.id
     ):
         raise MemberNotFound
-    if practice.organization_id is not None or practice.negotiated_baa_required:
-        raise MemberAccessConflict(
-            "This practice uses organization-managed access. "
-            "Contact Cosmaneura support to change a clinician's access."
-        )
     return _LockedMember(practice=practice, owner=owner, member=member, doctor=doctor)
 
 
