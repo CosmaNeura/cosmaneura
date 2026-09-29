@@ -21,14 +21,26 @@ from pydantic import (
     model_validator,
 )
 
+from app.services.scribe_capture_limits import (
+    LEGACY_CAPTURE_PLAINTEXT_BYTES,
+    MAX_CAPTURE_CHUNKS,
+    MAX_CAPTURE_PLAINTEXT_BYTES,
+)
 from app.services.scribe_capture_recovery_contract import CaptureRecoveryRequest
 from app.services.scribe_capture_working_contract import TranscriptCorrection
-from app.services.scribe_creator_review_contract import CreatorTranslationDecision
-from app.services.scribe_source_start_contract import NativeSourceStart
+from app.services.scribe_creator_review_contract import (
+    CreatorReviewView,
+    CreatorTranslationDecision,
+)
+from app.services.scribe_source_extension_contract import NativeSourceExtension
+from app.services.scribe_source_start_contract import (
+    NativeSourceStart,
+    NativeSourceStartSequence,
+)
 
 Channel = Literal["microphone", "system_audio", "mixed"]
 Generation = Annotated[int, Field(strict=True, ge=1)]
-Sequence = Annotated[int, Field(strict=True, ge=0, lt=1000)]
+Sequence = Annotated[int, Field(strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS)]
 KeyVersion = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")]
 WrappedKey = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{512}$", repr=False)]
 AssociatedData = Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,1024}$", repr=False)]
@@ -66,7 +78,7 @@ class ReservePayload(ProtocolPayload):
 
     @model_validator(mode="after")
     def within_limit(self) -> ReservePayload:
-        if self.first_sequence_number + self.count > 1000:
+        if self.first_sequence_number + self.count > MAX_CAPTURE_CHUNKS:
             raise ValueError("Capture limit exceeded")
         return self
 
@@ -150,7 +162,10 @@ class ReadOperation(ProtectedContract):
         "capture_recovery_state",
         "capture_source",
         "capture_profile",
+        "capture_lease_state",
         "creator_review",
+        "native_recording_context",
+        "provider_encounter",
     ]
     profile_receipt_id: UUID | None = None
 
@@ -239,6 +254,8 @@ CaptureOperation = Annotated[
     | RecoverCapture
     | DecideTranslation
     | NativeSourceStart
+    | NativeSourceStartSequence
+    | NativeSourceExtension
     | SelectCaptureProfile,
     Field(discriminator="kind"),
 ]
@@ -258,6 +275,30 @@ class EncryptionKey(ProtectedContract):
     key_version: KeyVersion
     algorithm: Literal["RSA-OAEP-256"]
     public_jwk: PublicJwk
+
+
+class NativeRecordingContext(ProtectedContract):
+    """Core-admitted key namespace; never permission to open a microphone."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    workspace_id: UUID
+    tenant_id: UUID
+    session_id: UUID
+    status: Literal["created", "capturing"]
+
+
+class ProviderEncounter(ProtectedContract):
+    """Discover existing configured work without creating another admission."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    status: Literal["not_prepared", "available"]
+    review: CreatorReviewView | None
+
+    @model_validator(mode="after")
+    def consistent_review(self) -> ProviderEncounter:
+        if (self.status == "available") != (self.review is not None):
+            raise ValueError("Invalid provider encounter")
+        return self
 
 
 class KeyReceipt(ProtectedContract):
@@ -284,8 +325,20 @@ class BaseCapabilities(ProtocolPayload):
 
 
 class Capabilities(BaseCapabilities):
-    max_chunks: Literal[1000]
-    remaining_aggregate_plaintext_bytes: int = Field(strict=True, ge=0, le=67108864)
+    max_chunks: Literal[1000, 2048]
+    remaining_aggregate_plaintext_bytes: int = Field(
+        strict=True, ge=0, le=MAX_CAPTURE_PLAINTEXT_BYTES
+    )
+
+    @model_validator(mode="after")
+    def capability_budget(self) -> Capabilities:
+        if (
+            self.max_chunks == 1000
+            and self.remaining_aggregate_plaintext_bytes
+            > LEGACY_CAPTURE_PLAINTEXT_BYTES
+        ):
+            raise ValueError("Invalid legacy capture budget")
+        return self
 
 
 class LongVisitCapabilities(BaseCapabilities):
@@ -300,6 +353,36 @@ class LeaseReceipt(ProtocolPayload):
     generation: Generation
     issued_at: AwareDatetime
     expires_at: AwareDatetime
+
+
+class LeaseState(ProtectedContract):
+    session_id: UUID
+    current_lease: LeaseReceipt | None
+    lease_closed: bool = Field(strict=True)
+    session_status: Literal[
+        "created",
+        "capturing",
+        "uploaded",
+        "processing",
+        "transcript_ready",
+        "handed_off",
+        "failed",
+    ]
+
+    @model_validator(mode="after")
+    def scoped_lease(self):
+        lease = self.current_lease
+        if (
+            lease is None
+            and self.lease_closed
+            or lease is not None
+            and (
+                lease.session_id != self.session_id
+                or lease.expires_at <= lease.issued_at
+            )
+        ):
+            raise ValueError("Capture lease state invalid")
+        return self
 
 
 class Reservation(ProtocolPayload):

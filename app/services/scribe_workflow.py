@@ -80,7 +80,7 @@ class ConsentCreate(BaseModel):
     practitioner_id: str = Field(min_length=1, max_length=128)
     patient_id: str = Field(min_length=1, max_length=128)
     modality: Literal["in_person", "virtual", "phone"]
-    participant_regions: set[str] = Field(min_length=1)
+    participant_regions: set[str]
     method: Literal["pre_visit_form", "verbal_attestation", "phone_ivr"]
     all_parties_consented: bool
     granted_at: datetime
@@ -547,7 +547,7 @@ class HttpScribeWorkflowClient:
             session_id,
             "transcript",
             CaptureTranscript,
-            max_bytes=4_194_304,
+            max_bytes=MAX_CAPTURE_SOURCE_BYTES,
         )
 
     async def _get_capture(
@@ -679,6 +679,26 @@ class HttpScribeWorkflowClient:
             raise ScribeWorkflowRejectedError("scribe_invalid_operation") from None
         prefix = f"/v1/sessions/{session_id}"
         response_type: type[BaseModel]
+        if operation.kind == "source_extend":
+            from app.services.scribe_source_extension_contract import (
+                NativeExtensionDecision,
+            )
+
+            if creator_actor_id is None or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
+            ):
+                raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+            if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
+                raise ScribeWorkflowRejectedError("scribe_invalid_extension_key")
+            return await self._post(
+                f"/v1/captured-sessions/{session_id}/source-extension",
+                tenant_id,
+                operation.payload,
+                idempotency_key,
+                NativeExtensionDecision,
+                max_bytes=8192,
+                creator_actor_id=creator_actor_id,
+            )
         if operation.kind == "source_start":
             from app.services.scribe_source_start_contract import (
                 NativeStartDecision,
@@ -809,6 +829,11 @@ class HttpScribeWorkflowClient:
                 path, response_type = (
                     "/v1/audio-encryption-key",
                     capture_protocol.EncryptionKey,
+                )
+            elif operation.kind == "capture_lease_state":
+                path, response_type = (
+                    prefix + "/capture-lease-state",
+                    capture_protocol.LeaseState,
                 )
             elif operation.kind == "capture_profile":
                 path, response_type = (

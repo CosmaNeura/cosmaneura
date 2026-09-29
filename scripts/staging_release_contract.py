@@ -13,8 +13,9 @@ import os
 import re
 import stat
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 REGISTRY = "cosmaneurastagingregistry.azurecr.io"
 IMAGE = REGISTRY + "/cosmaneura/cosmaneura"
@@ -43,6 +44,12 @@ FIELDS = FLAGS | {
     "AGENT_API_SCRIBE_RECEIVER_CLIENT_ID",
     "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
 }
+COMPANION_FLAGS = {
+    "COMPANION_ENCOUNTER_READ_ENABLED",
+    "COMPANION_RECORD_READ_ENABLED",
+    "COMPANION_APPOINTMENT_SETUP_ENABLED",
+}
+COMPANION_FIELDS = COMPANION_FLAGS | {"AGENT_API_COMPANION_CLIENT_ID"}
 
 
 def require(value: object) -> None:
@@ -94,9 +101,20 @@ def bound_json(filename: str, digest: str):
 
 
 def validate_runtime(runtime: dict[str, str]) -> None:
-    require(type(runtime) is dict and set(runtime) == FIELDS)
+    # Historical Scribe-only plans remain valid. Companion admission is an
+    # explicit, complete group, including an empty caller for full withdrawal.
+    require(type(runtime) is dict and set(runtime) in (FIELDS, FIELDS | COMPANION_FIELDS))
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
     require(all(runtime[key] in {"true", "false"} for key in FLAGS))
+    if COMPANION_FIELDS <= runtime.keys():
+        require(all(runtime[key] in {"true", "false"} for key in COMPANION_FLAGS))
+        caller = runtime["AGENT_API_COMPANION_CLIENT_ID"]
+        if caller:
+            require(re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", caller))
+            require(caller != "00000000-0000-0000-0000-000000000000")
+            require(caller != runtime["AGENT_API_SCRIBE_RECEIVER_CLIENT_ID"])
+        else:
+            require(all(runtime[key] == "false" for key in COMPANION_FLAGS))
     require(
         all(
             runtime[key] == "true"
@@ -155,10 +173,71 @@ def validate_recovery(recovery: dict[str, dict[str, str]]) -> None:
         )
 
 
+def resolve_publication(
+    plan: dict[str, Any], plan_digest: str, publication: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve an explicit reuse binding without rewriting publication history.
+
+    Source authentication and the fresh plan clock remain the deployer's gates.
+    Recovery can still consume retained bindings after their clocks expire.
+    """
+    if publication.get("schema_version") != 2:
+        return publication
+    require(
+        set(publication)
+        == {
+            "schema_version",
+            "action",
+            "plan_sha256",
+            "original_plan",
+            "original_publication",
+        }
+    )
+    require(type(publication["schema_version"]) is int)
+    require(publication["action"] == "reuse_published_staging_image")
+    require(publication["plan_sha256"] == plan_digest)
+    values = []
+    for name in ("original_plan", "original_publication"):
+        spec = publication[name]
+        require(type(spec) is dict and set(spec) == {"path", "sha256"})
+        require(type(spec["path"]) is str and type(spec["sha256"]) is str)
+        values.append(bound_json(cast(str, spec["path"]), cast(str, spec["sha256"])))
+    original, published = values
+    # No transitive receipt chains or implicit changes to the release cohort,
+    # recovery baseline, schema, frontend, source archive, or build materials.
+    require(published.get("schema_version") == 1)
+    deployment_inputs(original, publication["original_plan"]["sha256"], published)
+    for key in (
+        "version",
+        "candidate_sha",
+        "candidate_pr",
+        "source_archive_sha256",
+        "github_user_sha256",
+        "engine",
+        "release",
+    ):
+        require(plan[key] == original[key])
+    for key in ("frontend", "frontend_origin", "rehearsal", "native_archive"):
+        require(plan[key]["sha256"] == original[key]["sha256"])
+    created = datetime.fromisoformat(original["created_at"])
+    expires = datetime.fromisoformat(original["expires_at"])
+    recorded = datetime.fromisoformat(published["recorded_at"].replace("Z", "+00:00"))
+    require(
+        all(value.utcoffset() is not None for value in (created, expires, recorded))
+    )
+    require(
+        created <= recorded < expires
+        and 0 < (expires - created).total_seconds() <= 7200
+    )
+    return published
+
+
 def deployment_inputs(
     plan: dict[str, Any], plan_digest: str, publication: dict[str, Any]
 ) -> dict[str, Any]:
     require(plan["version"] == 2)
+    reused = publication.get("schema_version") == 2
+    publication = resolve_publication(plan, plan_digest, publication)
     release = plan["release"]
     validate_runtime(release["runtime_public"])
     validate_recovery(release["recovery"])
@@ -169,8 +248,9 @@ def deployment_inputs(
         and publication["production_operation"] is False
     )
     require(publication["candidate_sha"] == plan["candidate_sha"])
-    require(publication["controller_sha"] == plan["controller_sha"])
-    require(publication["build_plan_sha256"] == plan_digest)
+    if not reused:
+        require(publication["controller_sha"] == plan["controller_sha"])
+        require(publication["build_plan_sha256"] == plan_digest)
     digest = publication["image_digest"]
     require(type(digest) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", digest))
     require(publication["image_reference"] == IMAGE + "@" + digest)
@@ -195,9 +275,20 @@ def verify_recovery(
 
 
 def main(argv):
-    require(len(argv) in {3, 5})
+    require(len(argv) in {3, 5, 7})
     plan = bound_json(argv[1], argv[2])
-    if argv[0] == "--deployment-inputs":
+    if argv[0] == "--reuse-publication":
+        require(len(argv) == 7)
+        publication = {
+            "schema_version": 2,
+            "action": "reuse_published_staging_image",
+            "plan_sha256": argv[2],
+            "original_plan": {"path": argv[3], "sha256": argv[4]},
+            "original_publication": {"path": argv[5], "sha256": argv[6]},
+        }
+        deployment_inputs(plan, argv[2], publication)
+        print(json.dumps(publication, sort_keys=True))
+    elif argv[0] == "--deployment-inputs":
         require(len(argv) == 5)
         print(
             json.dumps(deployment_inputs(plan, argv[2], bound_json(argv[3], argv[4])))

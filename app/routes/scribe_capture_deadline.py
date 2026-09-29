@@ -22,9 +22,9 @@ from app.services.scribe_capture_deadline import (
 
 CAPTURE_REQUEST_SECONDS = 90.0
 ERROR_SEND_SECONDS = 0.25
-# Largest existing source envelope (24 MiB), plus the facade's closed metadata.
+# Largest creator-review envelope (32 MiB), plus the facade's closed metadata.
 # This outer cap does not replace any smaller operation/model/request validator.
-MAX_CAPTURE_RESPONSE_BYTES = 24 * 1024 * 1024 + 8192
+MAX_CAPTURE_RESPONSE_BYTES = 32 * 1024 * 1024 + 8192
 _workers = BoundedSemaphore(4)
 _error_workers = BoundedSemaphore(4)
 

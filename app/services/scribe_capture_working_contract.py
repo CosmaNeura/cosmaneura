@@ -26,9 +26,11 @@ if TYPE_CHECKING:
 Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 Version = Annotated[int, Field(strict=True, ge=1)]
 Content = Annotated[str, Field(min_length=1, max_length=100_000, repr=False)]
+# Aggregate visit text is separate from the unchanged per-segment bound.
+MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS = 500_000
 Role = Literal["clinician", "patient", "other", "unknown"]
 Locale = Literal["en-US", "es-US", "unknown"]
-MAX_WORKING_BYTES = 16_777_216
+MAX_WORKING_BYTES = 24 * 1024 * 1024
 
 
 class ProtectedContract(BaseModel):
@@ -101,7 +103,8 @@ class TranscriptCorrection(ProtectedContract):
         if (
             len({edit.source_segment_id for edit in self.corrections})
             != len(self.corrections)
-            or sum(len(edit.content) for edit in self.corrections) > 100_000
+            or sum(len(edit.content) for edit in self.corrections)
+            > MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS
         ):
             raise ValueError("invalid_correction_set")
         return self
@@ -186,7 +189,8 @@ class CaptureWorkingTranscript(ProtectedContract):
             or len(source.segments) != len(working.segments)
             or len({s.source_segment_id for s in source.segments})
             != len(source.segments)
-            or sum(len(s.content) for s in source.segments) > 100_000
+            or sum(len(s.content) for s in source.segments)
+            > MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS
             or max(s.end_ms for s in source.segments) != source.duration_ms
             or tuple(
                 sorted(

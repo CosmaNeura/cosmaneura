@@ -82,7 +82,7 @@ def configured_engine():
         patch.setattr(
             database,
             "database_url",
-            lambda: url.render_as_string(hide_password=False).replace("%", "%%"),
+            lambda: url.render_as_string(hide_password=False),
         )
         command.upgrade(Config("alembic.ini"), "head")
     engine = create_engine(url, json_serializer=_serialize_pydantic_model)
@@ -232,7 +232,7 @@ async def test_new_reviewed_version_preserves_old_source_and_requires_new_note(
     assert second.reviewed_source is not None
     assert second.reviewed_source.working_version == 2
     assert len(rows(f, AIVisitTranscript)) == len(rows(f, AIVisitNote)) == 2
-    assert len(f.model.calls) == 4
+    assert len(f.model.calls) == 2
 
 
 def reviewed_document(session_id):
@@ -312,7 +312,7 @@ async def test_reviewed_english_import_note_edit_and_lost_reply_recovery(
     assert first == await notes.capture_note(**kwargs)
     assert first.reviewed_source is not None
     assert first.review_required and first.reviewed_source.kind == "reviewed_english"
-    assert len(f.model.calls) == 2
+    assert len(f.model.calls) == 1
     assert all("No tengo fiebre" not in prompt for prompt, _ in f.model.calls)
     assert all("I do not have a fever." in prompt for prompt, _ in f.model.calls)
     transcript = rows(f, AIVisitTranscript)[0]
@@ -345,7 +345,7 @@ async def test_reviewed_english_import_note_edit_and_lost_reply_recovery(
     saved = await edits.save_capture_note(**request, edit=edit)
     assert saved == await edits.save_capture_note(**request, edit=edit)
     assert saved == await notes.capture_note(**request, prepare=False)
-    assert saved.review_required and len(f.model.calls) == 2
+    assert saved.review_required and len(f.model.calls) == 1
     assert len(rows(f, AIVisitTranscript)) == 1 and len(rows(f, AIVisitNote)) == 2
 
 
@@ -408,7 +408,7 @@ def test_fresh_and_incremental_migration_match(configured_engine):
             patch.setattr(
                 database,
                 "database_url",
-                lambda: url.render_as_string(hide_password=False).replace("%", "%%"),
+                lambda: url.render_as_string(hide_password=False),
             )
             command.upgrade(Config("alembic.ini"), "9172abd84a3d")
             assert "configured_capture" not in {

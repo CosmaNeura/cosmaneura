@@ -1776,6 +1776,69 @@ def bootstrap_provider_practice_command(
         ) from None
 
 
+@app.command("provision-companion-provider")
+def provision_companion_provider_command(
+    doctor_id: str = typer.Option(...),
+    practice_id: str = typer.Option(...),
+    authority_tenant_id: str = typer.Option(...),
+    scribe_tenant_id: str = typer.Option(...),
+    review_ref: str = typer.Option(..., help="Opaque reference to reviewed practice correspondence."),
+    operator_ref: str = typer.Option(..., help="Opaque accountable operator reference."),
+    create_missing_authority: bool = typer.Option(False, "--create-missing-authority"),
+    confirm_plan_sha256: str | None = typer.Option(None, "--confirm-plan-sha256"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Prepare or apply one reviewed companion connection; dry-run by default."""
+    from dataclasses import asdict
+    from uuid import UUID
+
+    from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+    from app.services.clerk_identity import verified_primary_email
+    from app.services.companion_provider_provisioning import (
+        CompanionProvisioningError,
+        provision_companion_provider,
+    )
+
+    from activemodel.session_manager import get_session
+    from sqlalchemy.exc import SQLAlchemyError
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256 from the reviewed plan")
+    doctor_ref = _typeid(doctor_id, "doctor")
+    practice_ref = _typeid(practice_id, "practice")
+    tenant_ref = _typeid(authority_tenant_id, "authority_tenant")
+    try:
+        scribe_ref = UUID(scribe_tenant_id)
+    except ValueError:
+        raise typer.BadParameter("Scribe practice must be a UUID") from None
+    email = typer.prompt("Exact provider account email", hide_input=True)
+    try:
+        with global_session():
+            doctor = _doctor_by_id(doctor_id)
+            verified_subject = doctor.clerk_id
+            verified = verified_primary_email(verified_subject)
+            with get_session() as session:
+                result = provision_companion_provider(
+                    session, doctor_id=doctor_ref, practice_id=practice_ref,
+                    tenant_id=tenant_ref, scribe_tenant_id=scribe_ref,
+                    verified_primary_email=verified, verified_clerk_subject=verified_subject,
+                    email_confirmation=email,
+                    review_ref=review_ref, operator_ref=operator_ref,
+                    settings=AUTHORITY_KERNEL_SETTINGS,
+                    create_missing_authority=create_missing_authority,
+                    apply=apply, confirm_plan_sha256=confirm_plan_sha256,
+                )
+                if not apply:
+                    session.rollback()
+                typer.echo(json.dumps(asdict(result), sort_keys=True))
+    except CompanionProvisioningError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SQLAlchemyError:
+        raise typer.BadParameter(
+            "Companion provisioning could not be confirmed; inspect a new dry-run before retrying"
+        ) from None
+
+
 @app.command("grant-pilot-access")
 def grant_pilot_access_command(
     source_ref: str = typer.Option(

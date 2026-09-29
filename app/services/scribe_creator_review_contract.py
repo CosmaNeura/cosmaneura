@@ -17,6 +17,7 @@ from pydantic import (
 
 from app.services.scribe_capture_continuity import CaptureContinuity
 from app.services.scribe_capture_working_contract import (
+    MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS,
     Content,
     ProtectedContract,
     Role,
@@ -24,7 +25,7 @@ from app.services.scribe_capture_working_contract import (
     Version,
 )
 
-MAX_CREATOR_REVIEW_BYTES = 8 * 1024 * 1024
+MAX_CREATOR_REVIEW_BYTES = 32 * 1024 * 1024
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")]
 BlockerCode = Literal[
     "source_locale_unknown",
@@ -85,7 +86,8 @@ class CreatorSource(ProtectedContract):
                 )
             )
             != self.segments
-            or sum(len(s.content) for s in self.segments) > 100_000
+            or sum(len(s.content) for s in self.segments)
+            > MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS
             or any(
                 not s.content.strip() or s.end_ms > self.duration_ms
                 for s in self.segments

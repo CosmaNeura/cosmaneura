@@ -374,6 +374,82 @@ class ControllerProofTests(unittest.TestCase):
             2 * len(m.MODULES),
         )
 
+    def test_squash_merge_requires_identical_complete_reviewed_tree(self):
+        for failure in (None, "tree", "object", "parent_count", "bugbot", "drift"):
+            obj, values, blobs = self.fixture()
+            reviewed = (
+                "tree " + "6" * 40 + "\nparent " + "4" * 40 + "\n\nreview\n"
+            ).encode()
+            head = hashlib.sha1(
+                b"commit " + str(len(reviewed)).encode() + b"\0" + reviewed
+            ).hexdigest()
+            tree = "5" * 40 if failure == "tree" else "6" * 40
+            parents = ("parent " + "4" * 40 + "\n") * (
+                3 if failure == "parent_count" else 1
+            )
+            merged = ("tree " + tree + "\n" + parents + "\nsquash\n").encode()
+            merged_id = hashlib.sha1(
+                b"commit " + str(len(merged)).encode() + b"\0" + merged
+            ).hexdigest()
+            pull = values["pulls/419"]
+            pull["head"]["sha"], pull["merge_commit_sha"] = head, merged_id
+            report = "Implementer review; synthetic fixture only.\n"
+            metadata = dict(
+                reviewer="Codex",
+                reviewed_head=head,
+                result="accepted",
+                after_final_substantive_push=True,
+                report_sha256=m.sha(report.encode()),
+            )
+            body = (
+                "<!-- COSMANEURA_LOCAL_AGENT_REVIEW "
+                + json.dumps(metadata)
+                + " -->\n"
+                + report
+            )
+            values["issues/comments/101"] = dict(
+                id=101,
+                user=USER,
+                issue_url="https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                body=body,
+            )
+            obj.request = replace(
+                obj.request,
+                controller_reviewed_head=head,
+                review_kind="bugbot" if failure == "bugbot" else "local_cursor",
+                controller_check_id=0,
+                controller_review_sha256=m.sha(body.encode()),
+            )
+
+            def git(*args):
+                if args[:2] == ("cat-file", "commit"):
+                    if args[2] == head:
+                        return reviewed + (b"tampered" if failure == "object" else b"")
+                    return merged
+                if args[0] == "diff":
+                    return b"app/changed.py\n" if failure == "drift" else b""
+                if args[0] == "merge-base":
+                    return b""
+                return blobs[args[-1].partition(":scripts/")[2]]
+
+            obj.git_bytes = Mock(side_effect=git)
+            with (
+                self.subTest(failure=failure),
+                patch.object(
+                    Path,
+                    "read_bytes",
+                    autospec=True,
+                    side_effect=lambda path: blobs[path.name],
+                ),
+                patch.object(m.source, "statuses") as statuses,
+            ):
+                if failure:
+                    with self.assertRaises(m.BuildSourceRefused):
+                        obj.controller()
+                else:
+                    obj.controller()
+                statuses.assert_not_called()
+
     def test_wrong_review_scope_pending_check_or_unmerged_controller_refuses(self):
         cases = [
             ("pulls/419", "merged", False),

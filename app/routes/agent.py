@@ -25,7 +25,9 @@ import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
+import app.services.authority_conversation_read as history
 import app.services.authority_usage
+import app.services.provider_question_context as provider_question
 import app.services.session_prep
 from app import log
 from app.configuration.authority import (
@@ -206,12 +208,17 @@ CanonicalPresentation = Annotated[
 
 
 class FinalResponseTurnWrite(BaseModel):
+    history_context_ref: app.services.session_prep.OpaqueRef | None = None
+
     model_config = ConfigDict(extra="forbid")
 
     phase: Literal["final_response"]
     outcome: Literal["completed", "refused", "unavailable"]
     response: CanonicalConversationMessage
     presentation: CanonicalPresentation
+    provider_context_ref: str | None = Field(
+        default=None, min_length=8, max_length=160, pattern=r"^[A-Za-z0-9._~-]{8,160}$"
+    )
 
 
 ConversationTurnWriteRequest = Annotated[
@@ -568,14 +575,20 @@ def get_session_prep_synthetic_settings() -> SessionPrepSyntheticSettings:
 
 @agent_api_app.post(
     "/tools/invoke",
-    response_model=app.services.session_prep.SessionPrepToolResponse,
+    response_model=app.services.session_prep.SessionPrepToolResponse
+    | provider_question.ProviderQuestionResponse
+    | history.HistoryResponse,
     status_code=status.HTTP_200_OK,
     openapi_extra={
         "requestBody": {
             "required": True,
             "content": {
                 "application/json": {
-                    "schema": SessionPrepContextReadInvocation.model_json_schema(),
+                    "schema": TypeAdapter(
+                        SessionPrepContextReadInvocation
+                        | provider_question.ProviderQuestionInvocation
+                        | history.HistoryInvocation
+                    ).json_schema(),
                 }
             },
         }
@@ -630,7 +643,12 @@ async def invoke_tool(
         str | None,
         Header(alias="X-Trace-ID"),
     ] = None,
-) -> app.services.session_prep.SessionPrepToolResponse | JSONResponse:
+) -> (
+    app.services.session_prep.SessionPrepToolResponse
+    | provider_question.ProviderQuestionResponse
+    | history.HistoryResponse
+    | JSONResponse
+):
     """Read a current provider brief or the isolated synthetic compatibility path."""
 
     resolved_trace_id = normalize_trace_id(trace_id)
@@ -655,7 +673,12 @@ async def invoke_tool(
     data = await _validated_tool_body(request, trace_id=resolved_trace_id)
     if isinstance(data, JSONResponse):
         return data
-    if (data.tool_name, data.tool_version) != _SESSION_PREP_TOOL_KEY:
+    tool_key = (data.tool_name, data.tool_version)
+    if tool_key not in {
+        _SESSION_PREP_TOOL_KEY,
+        provider_question.TOOL_KEY,
+        history.TOOL_KEY,
+    }:
         return agent_problem_response(
             status_code=status.HTTP_404_NOT_FOUND,
             code="RESOURCE_NOT_FOUND",
@@ -664,8 +687,18 @@ async def invoke_tool(
             trace_id=resolved_trace_id,
         )
     try:
-        SessionPrepContextReadInvocation.model_validate(
-            data.model_dump(mode="json", exclude_unset=True)
+        invocation = (
+            history.HistoryInvocation.model_validate(
+                data.model_dump(mode="json", exclude_unset=True)
+            )
+            if tool_key == history.TOOL_KEY
+            else provider_question.ProviderQuestionInvocation.model_validate(
+                data.model_dump(mode="json", exclude_unset=True)
+            )
+            if tool_key == provider_question.TOOL_KEY
+            else SessionPrepContextReadInvocation.model_validate(
+                data.model_dump(mode="json", exclude_unset=True)
+            )
         )
     except (ValidationError, ValueError, RecursionError):
         return agent_problem_response(
@@ -688,16 +721,38 @@ async def invoke_tool(
             trace_id=resolved_trace_id,
         )
 
-    invocation = SessionPrepContextReadInvocation.model_validate(
-        data.model_dump(mode="json", exclude_unset=True)
-    )
-
-    def invoke_in_session() -> app.services.session_prep.SessionPrepInvocation:
+    def invoke_in_session() -> (
+        app.services.session_prep.SessionPrepInvocation
+        | provider_question.ProviderQuestionRead
+        | history.HistoryRead
+    ):
         # Keep authorization, row locks, and commit in one sequential worker
         # call. The threadpool carries aglobal_session's ContextVar, and the
         # await boundary drains this worker before request session teardown.
         with get_session() as managed:
             session = cast(Session, managed)
+            if isinstance(invocation, history.HistoryInvocation):
+                return history.read_history_context(
+                    session=session,
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    interaction_ref=interaction_ref,
+                    client_turn_id=client_turn_id,
+                    idempotency_key=idempotency_key,
+                    invocation=invocation,
+                    settings=authority_settings,
+                )
+            if isinstance(invocation, provider_question.ProviderQuestionInvocation):
+                return provider_question.read_provider_question_context(
+                    session=session,
+                    workload_client_id=principal.client_id,
+                    mount_context_token=mount_context_token,
+                    interaction_ref=interaction_ref,
+                    client_turn_id=client_turn_id,
+                    idempotency_key=idempotency_key,
+                    invocation=invocation,
+                    settings=authority_settings,
+                )
             authorized = app.services.session_prep.authorize_session_prep_read(
                 workload_client_id=principal.client_id,
                 mount_context_token=mount_context_token,
@@ -745,6 +800,14 @@ async def invoke_tool(
 
     try:
         result = await _run_agent_database(invoke_in_session)
+    except history.ConversationContextChanged:
+        return agent_problem_response(
+            status_code=409,
+            code="CONVERSATION_CONTEXT_CHANGED",
+            title="Conversation context changed",
+            detail="The recent conversation no longer authorizes this response.",
+            trace_id=resolved_trace_id,
+        )
     except app.services.authority.AuthorityKernelDisabledError:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1154,6 +1217,30 @@ async def write_conversation_turn(
             payload=data.model_dump(mode="json"),
             settings=settings,
         )
+    except history.ConversationContextChanged:
+        return agent_problem_response(
+            status_code=409,
+            code="CONVERSATION_CONTEXT_CHANGED",
+            title="Conversation context changed",
+            detail="The recent conversation no longer authorizes this response.",
+            trace_id=resolved_trace_id,
+        )
+    except provider_question.ProviderContextChanged:
+        return agent_problem_response(
+            status_code=status.HTTP_409_CONFLICT,
+            code="PROVIDER_CONTEXT_CHANGED",
+            title="Provider context changed",
+            detail="The preparation context no longer authorizes this response.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.session_prep.SessionPrepScopeDenied:
+        return agent_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SCOPE_DENIED",
+            title="Scope denied",
+            detail="The current mount context is not authorized.",
+            trace_id=resolved_trace_id,
+        )
     except app.services.authority.AuthorityKernelDisabledError:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1550,4 +1637,89 @@ async def report_model_usage_event(
     return WriteReceipt(
         record_ref=result.record_ref,
         recorded_at=result.recorded_at,
+    )
+
+
+@agent_api_app.post(
+    "/conversation-turns/read", response_model=history.ConversationReadResponse
+)
+async def read_conversation_turns(
+    request: Request,
+    principal: Annotated[
+        EntraServicePrincipal, Depends(authenticate_agent_api_request)
+    ],
+    mount_context_token: Annotated[
+        str, Header(alias="X-Cosmaneura-Mount-Context", min_length=16, max_length=8192)
+    ],
+    settings: Annotated[AuthorityKernelSettings, Depends(get_agent_authority_settings)],
+    trace_id: Annotated[str | None, Header(alias="X-Trace-ID")] = None,
+):
+    resolved_trace_id = normalize_trace_id(trace_id)
+
+    def problem(code: str, status_code: int):
+        return agent_problem_response(
+            status_code=status_code,
+            code=code,
+            title="Conversation read unavailable",
+            detail="The current context could not read the requested conversation.",
+            trace_id=resolved_trace_id,
+        )
+
+    if (
+        len(request.headers.getlist("x-cosmaneura-mount-context")) != 1
+        or len(request.headers.getlist("x-trace-id")) > 1
+        or len(request.headers.getlist("content-type")) != 1
+        or len(request.headers.getlist("content-length")) > 1
+        or request.query_params
+        or request.headers.get("content-encoding", "identity").lower()
+        not in {"", "identity"}
+        or request.headers.get("content-type", "").partition(";")[0].strip().lower()
+        != "application/json"
+    ):
+        return problem("VALIDATION_FAILED", 422)
+    try:
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) > 8192 - len(raw):
+                return problem("VALIDATION_FAILED", 422)
+            raw.extend(chunk)
+        body = history.ConversationReadRequest.model_validate(
+            json.loads(raw, object_pairs_hook=_closed_json_object)
+        )
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        return problem("VALIDATION_FAILED", 422)
+
+    def read_in_session():
+        with get_session() as managed:
+            return history.read_conversation(
+                session=cast(Session, managed),
+                workload_client_id=principal.client_id,
+                mount_context_token=mount_context_token,
+                request=body,
+                settings=settings,
+            )
+
+    try:
+        result = await _run_agent_database(read_in_session)
+    except history.ConversationNotFound:
+        return problem("RESOURCE_NOT_FOUND", 404)
+    except history.ConversationContextChanged:
+        return problem("CONVERSATION_CONTEXT_CHANGED", 409)
+    except app.services.authority.ContextTokenExpiredError:
+        return problem("CONTEXT_EXPIRED", 401)
+    except app.services.authority.ContextTokenInvalidError:
+        return problem("CONTEXT_INVALID", 401)
+    except (
+        app.services.authority.AuthorityRequestDeniedError,
+        app.services.session_prep.SessionPrepScopeDenied,
+    ):
+        return problem("SCOPE_DENIED", 403)
+    except (
+        app.services.authority.AuthorityKernelDisabledError,
+        app.services.session_prep.SessionPrepInvariantError,
+        SQLAlchemyError,
+    ):
+        return problem("PLATFORM_UNAVAILABLE", 503)
+    return JSONResponse(
+        result, headers={"Cache-Control": "no-store", "X-Trace-ID": resolved_trace_id}
     )

@@ -92,7 +92,9 @@ class ConsentAttestation(BaseModel):
     modality: Literal["in_person", "virtual", "phone"]
     participant_regions: frozenset[
         Annotated[str, Field(pattern=r"^[A-Z]{2}(?:-[A-Z0-9]{1,3})?$")]
-    ] = Field(min_length=1, max_length=16)
+    ] = Field(max_length=16)
+    # Optional location metadata; all-party consent is required in every region.
+    # An empty set means not collected, never an inferred or fabricated location.
     method: Literal["verbal_attestation"]
     all_parties_consented: StrictBool
     granted_at: AwareDatetime
@@ -142,6 +144,7 @@ class AdmissionSnapshot:
     consent_record_id: UUID
     session_id: UUID
     status: Literal["admitted"] = "admitted"
+    configured_capture: ConfiguredCaptureSelection | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -337,6 +340,27 @@ def _session_request(operation: ScribeCaptureAdmission, consent: ConsentRecord):
     )
 
 
+def validate_resume_request(
+    expected_session_id: UUID | None,
+    resume_current: bool,
+    attestation: ConsentAttestation | None,
+    configured_capture: ConfiguredCaptureSelection | None,
+) -> None:
+    if (
+        type(resume_current) is not bool
+        or (
+            expected_session_id is not None
+            and not isinstance(expected_session_id, UUID)
+        )
+        or (expected_session_id is not None and resume_current)
+        or (
+            (expected_session_id is not None or resume_current)
+            and (attestation is not None or configured_capture is not None)
+        )
+    ):
+        raise ValueError("invalid_capture_resume_selection")
+
+
 def _prepare(
     caller: CaptureCaller,
     binding_ref: str,
@@ -344,7 +368,16 @@ def _prepare(
     client_request_key: str,
     attestation: ConsentAttestation | None,
     configured_capture: ConfiguredCaptureSelection | None = None,
+    *,
+    expected_session_id: UUID | None = None,
+    resume_current: bool = False,
 ) -> str:
+    try:
+        validate_resume_request(
+            expected_session_id, resume_current, attestation, configured_capture
+        )
+    except ValueError:
+        raise AdmissionConflict from None
     if not re.fullmatch(r"[!-~]{8,255}", client_request_key):
         raise AdmissionConflict
     if configured_capture is not None:
@@ -370,6 +403,8 @@ def _prepare(
             .execution_options(populate_existing=True)
         ).one_or_none()
         if operation is None:
+            if expected_session_id is not None:
+                raise AdmissionConflict
             if attestation is None:
                 raise AdmissionConsentRequired
             now = datetime.now(UTC)
@@ -403,6 +438,24 @@ def _prepare(
             session.flush()
         else:
             _validate_operation(operation, binding)
+            if (
+                expected_session_id is not None
+                and operation.session_id != expected_session_id
+            ):
+                raise AdmissionConflict
+            if expected_session_id is not None or resume_current:
+                # Resume the immutable saved family; never create or select a
+                # replacement recording from caller-supplied preferences.
+                configured_capture = (
+                    ConfiguredCaptureSelection.model_validate(
+                        {
+                            key: operation.configured_capture[key]
+                            for key in ConfiguredCaptureSelection.model_fields
+                        }
+                    )
+                    if operation.configured_capture is not None
+                    else None
+                )
             # The caller must select the same admission family on every resume.
             if (configured_capture is None) != (operation.configured_capture is None):
                 raise AdmissionConflict
@@ -610,6 +663,16 @@ def _finish(
             appointment_ref=str(binding.appointment_id),
             consent_record_id=operation.consent_id,
             session_id=operation.session_id,
+            configured_capture=(
+                ConfiguredCaptureSelection.model_validate(
+                    {
+                        key: operation.configured_capture[key]
+                        for key in ConfiguredCaptureSelection.model_fields
+                    }
+                )
+                if operation.configured_capture is not None
+                else None
+            ),
         )
         session.commit()
         return result
@@ -624,6 +687,8 @@ async def admit_capture(
     attestation: ConsentAttestation | None,
     client: ScribeWorkflowClient,
     configured_capture: ConfiguredCaptureSelection | None = None,
+    expected_session_id: UUID | None = None,
+    resume_current: bool = False,
 ) -> AdmissionSnapshot:
     """Explicitly admit/resume one capture; never start a microphone.
 
@@ -637,6 +702,8 @@ async def admit_capture(
         client_request_key,
         attestation,
         configured_capture,
+        expected_session_id=expected_session_id,
+        resume_current=resume_current,
     )
     for _ in range(2):
         claim = _claim(caller, binding_ref, workspace_id, operation_ref)

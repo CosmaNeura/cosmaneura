@@ -11,7 +11,10 @@ from pydantic import (
     RootModel,
     SerializerFunctionWrapHandler,
     model_serializer,
+    model_validator,
 )
+
+from app.services.scribe_capture_limits import MAX_CAPTURE_CHUNKS
 
 
 class NativeStartContract(BaseModel):
@@ -40,13 +43,23 @@ class NativeStartPayload(NativeStartContract):
     lease_receipt_id: UUID
     lease_generation: int = Field(strict=True, ge=1)
     capture_authorized_until: AwareDatetime
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
 
 
 class NativeSourceStart(NativeStartContract):
     kind: Literal["source_start"]
     action: Literal["prepare", "authorize", "cancel", "stop"]
     payload: NativeStartPayload
+
+
+class NativeSourceStartSequence(NativeStartContract):
+    kind: Literal["source_start_sequence"]
+    payload: NativeStartPayload
+    authorize_idempotency_key: str = Field(
+        pattern=r"^[A-Za-z0-9._:-]{8,255}$", repr=False
+    )
 
 
 class NativeStartReceipt(NativeStartContract):
@@ -66,12 +79,32 @@ class NativeStartReceipt(NativeStartContract):
     issued_at: AwareDatetime | None
     expires_at: AwareDatetime | None
     capability_id: UUID
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
 
 
 class NativeStartDecision(NativeStartContract):
     receipt: NativeStartReceipt
     secret: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
+
+
+class NativeStartSequenceResult(NativeStartContract):
+    preparation: NativeStartReceipt
+    authorization: NativeStartDecision
+
+    @model_validator(mode="after")
+    def same_source(self):
+        if (
+            self.preparation.state != "prepared"
+            or self.authorization.receipt.state != "issued"
+            or self.preparation.model_dump(exclude={"state", "issued_at", "expires_at"})
+            != self.authorization.receipt.model_dump(
+                exclude={"state", "issued_at", "expires_at"}
+            )
+        ):
+            raise ValueError("source_start_sequence_mismatch")
+        return self
 
 
 class NativeUnstartedRetirement(NativeStartContract):
@@ -88,7 +121,9 @@ class NativeUnstartedRetirement(NativeStartContract):
     lease_receipt_id: UUID
     lease_generation: int = Field(strict=True, ge=1)
     capture_authorized_until: AwareDatetime
-    first_sequence_number: int = Field(default=0, strict=True, ge=0, le=999)
+    first_sequence_number: int = Field(
+        default=0, strict=True, ge=0, lt=MAX_CAPTURE_CHUNKS
+    )
     retired_at: AwareDatetime
 
 

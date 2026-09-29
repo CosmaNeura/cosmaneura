@@ -93,7 +93,7 @@ async def test_resolve_saved_edit_after_later_version_without_restoring_it(
     assert result == await edits.resolve_capture_note_save(**request)
     assert len(rows(f, AIVisitNote)) == 3 and not journal(f, ScribeCaptureNoteSaveFence)
     current = next(n for n in rows(f, AIVisitNote) if n.superseded_at is None)
-    assert str(current.id) == second.note_ref and len(f.model.calls) == 2
+    assert str(current.id) == second.note_ref and len(f.model.calls) == 1
 
 
 @pytest.mark.asyncio
