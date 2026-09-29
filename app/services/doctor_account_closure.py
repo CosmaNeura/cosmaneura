@@ -35,7 +35,12 @@ from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    Practice,
+    PracticeMember,
+    PracticeRole,
+    lock_practice_seats,
+)
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
 from sqlalchemy import or_
 from sqlalchemy.exc import SQLAlchemyError
@@ -612,12 +617,12 @@ def _evaluate(
     # Existing join and organization-access mutations lock the Practice first.
     # Preserve that order here so a concurrent enrollment cannot deadlock the
     # closure or slip a new member past the owner check.
-    practice_statement = select(Practice).where(
-        Practice.id == member_snapshot.practice_id
-    )
     if lock:
-        practice_statement = practice_statement.with_for_update()
-    practice = cast(Practice | None, session.exec(practice_statement).one_or_none())
+        practice = lock_practice_seats(session, member_snapshot.practice_id)
+    else:
+        practice = session.exec(
+            select(Practice).where(Practice.id == member_snapshot.practice_id)
+        ).one_or_none()
     if practice is None:
         raise DoctorAccountClosureError("provider practice does not exist")
 

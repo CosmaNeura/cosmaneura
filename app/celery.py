@@ -454,6 +454,12 @@ def worker_process_init_setup_logging(**kwargs):
         instance._engine.dispose()
         instance._engine = None
 
+    # Same hazard, different pool: an inherited httpx connection would be shared
+    # between sibling workers.
+    from app.services.stripe_billing import reset_http_client
+
+    reset_http_client()
+
 
 # tag all jobs with the job name (module path) and uuid for the task
 @signals.task_prerun.connect

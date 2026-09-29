@@ -20,6 +20,11 @@ import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
+import {
+  PracticeRoster,
+  type PracticeRosterLoad,
+  loadPracticeRoster,
+} from "~/components/shared/PracticeRoster"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -70,11 +75,13 @@ type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
 function PracticeSettings({
   practice,
+  roster,
   acceptances,
   onPracticeChange,
   billingReturnTo,
 }: {
   practice: PracticeStatus | null
+  roster: PracticeRosterLoad
   acceptances: BaaAcceptanceRecord[]
   onPracticeChange: (practice: PracticeStatus) => void
   billingReturnTo: string
@@ -92,6 +99,7 @@ function PracticeSettings({
         showBillingActions
         billingReturnTo={billingReturnTo}
       />
+      <PracticeRoster practice={practice} members={roster} />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>
@@ -587,7 +595,20 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 }
 
 export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
-  const { data, error, response } = await settingsData()
+  const practiceLoad = getPractice().catch(() => null)
+  const [
+    { data, error, response },
+    practice,
+    baa_acceptances,
+    practice_roster,
+  ] = await Promise.all([
+    settingsData(),
+    practiceLoad,
+    getBaaAcceptances().catch(() => [] as BaaAcceptanceRecord[]),
+    practiceLoad.then((practice) =>
+      practice?.role === "owner" ? loadPracticeRoster() : null,
+    ),
+  ])
 
   if (!data) {
     throw new Error(
@@ -595,11 +616,7 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
     )
   }
 
-  const practice = await getPractice().catch(() => null)
-  const baa_acceptances = await getBaaAcceptances().catch(
-    () => [] as BaaAcceptanceRecord[],
-  )
-  return { ...data, practice, baa_acceptances }
+  return { ...data, practice, baa_acceptances, practice_roster }
 }
 export const meta: MetaFunction = () => {
   return [
@@ -696,6 +713,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <PracticeSettings
             practice={practice}
+            roster={loaderData.practice_roster}
             acceptances={loaderData.baa_acceptances}
             onPracticeChange={handlePracticeChange}
             billingReturnTo={billingReturnTo}

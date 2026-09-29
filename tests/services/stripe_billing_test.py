@@ -7,7 +7,7 @@ import secrets
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone, tzinfo
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 import pytest
@@ -23,10 +23,12 @@ from app.services.organization_access import (
     import_roster_approvals,
     revoke_roster_access,
 )
+from app.services.public_entitlements import lock_practice_seats
 
-from activemodel.session_manager import global_session
+from activemodel.session_manager import get_session, global_session
 from app.models.doctor import Doctor
 from app.models.practice import (
+    ClinicianSeatState,
     Practice,
     PracticeAcquisitionSource,
     PracticeMember,
@@ -35,9 +37,15 @@ from app.models.practice import (
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
+
+from tests.factories import save_practice_member
 
 WEBHOOK_SECRET = "whsec_test_secret"
 NOW = datetime(2026, 8, 20, 20, 0, tzinfo=timezone.utc)
+PERIOD_START = NOW - timedelta(days=10)
+PERIOD_END = PERIOD_START + timedelta(days=31)
 
 
 class FakeStripe:
@@ -62,6 +70,11 @@ class FakeStripe:
         self.sessions: dict[str, dict] = {}
         self.calls: list[tuple[str, str, dict | None, str | None]] = []
         self.fail_subscription_reads = False
+        self.drop_quantity_updates = False
+        self.dropped_quantity_update_steps: set[int] = set()
+        self.quantity_update_count = 0
+        self.idempotent_replays: dict[str, dict] = {}
+        self.prorated_seats: list[int] = []
 
     def __call__(
         self,
@@ -121,7 +134,23 @@ class FakeStripe:
                 item = subscription["items"]["data"][0]
                 if item["id"] == item_id:
                     assert data
-                    item["quantity"] = int(data["quantity"])
+                    behavior = data.get("proration_behavior")
+                    assert behavior in {"create_prorations", "none"}
+                    if idempotency_key in self.idempotent_replays:
+                        return deepcopy(self.idempotent_replays[idempotency_key])
+                    step = self.quantity_update_count
+                    self.quantity_update_count += 1
+                    if (
+                        self.drop_quantity_updates
+                        or step in self.dropped_quantity_update_steps
+                    ):
+                        return deepcopy(item)
+                    quantity = int(data["quantity"])
+                    if behavior == "create_prorations" and quantity > item["quantity"]:
+                        self.prorated_seats.append(quantity - item["quantity"])
+                    item["quantity"] = quantity
+                    if idempotency_key:
+                        self.idempotent_replays[idempotency_key] = deepcopy(item)
                     return deepcopy(item)
         raise AssertionError(f"unexpected Stripe request: {method} {path}")
 
@@ -175,12 +204,14 @@ def _practice() -> Practice:
         email=f"owner-{secrets.token_hex(4)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=owner.id,
-        role=PracticeRole.owner.value,
-        attested_at=NOW,
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=owner.id,
+            role=PracticeRole.owner.value,
+            attested_at=NOW,
+        )
+    )
     return practice
 
 
@@ -259,6 +290,8 @@ def _subscription(
                     "id": f"si_{subscription_id.removeprefix('sub_')}",
                     "quantity": quantity,
                     "price": {"id": price_id},
+                    "current_period_start": int(PERIOD_START.timestamp()),
+                    "current_period_end": int(PERIOD_END.timestamp()),
                 }
             ]
         },
@@ -3390,6 +3423,105 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
 
 
+def _bind_checkout_trial(practice: Practice, trial_length: timedelta) -> dict:
+    subscription = _subscription(practice, status="trialing")
+    subscription["metadata"]["trial_clock"] = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    subscription["metadata"]["trial_days"] = "14"
+    subscription["trial_start"] = int(NOW.timestamp())
+    subscription["trial_end"] = int((NOW + trial_length).timestamp())
+    _bind_verified_public_subscription(
+        practice, subscription, status="pending_verification"
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.save()
+    return subscription
+
+
+def test_quantity_sweep_keeps_the_recorded_invalid_contract_cause(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _bind_checkout_trial(practice, timedelta(days=13))
+    remote.subscriptions[subscription["id"]] = subscription
+    stripe_billing.refresh_subscription_state(practice)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    cause = "subscription trial is not the fixed 14 days"
+    assert practice.stripe_quantity_sync_error == cause
+
+    assert stripe_billing.reconcile_pending_quantity_syncs() == (0, 1)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == cause
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_attempts == 1
+    assert _quantity_updates(remote) == []
+
+    remote.subscriptions[subscription["id"]]["trial_end"] = int(
+        (NOW + stripe_billing.TRIAL_LENGTH).timestamp()
+    )
+    assert stripe_billing.reconcile_pending_quantity_syncs() == (1, 0)
+
+    practice.refresh()
+    assert practice.subscription_status == "trialing"
+    assert practice.stripe_quantity_sync_error is None
+    assert not practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_synced_at is not None
+
+
+def test_quantity_sync_refusal_without_a_recorded_cause_records_the_refusal(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="invalid")
+    # A projection marked invalid before its cause was persisted: the refresh
+    # leaves the row as it is and records nothing.
+    monkeypatch.setattr(
+        stripe_billing,
+        "refresh_subscription_state",
+        lambda _practice: deepcopy(subscription),
+    )
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == (
+        "Stripe subscription identity or contract is not safe for quantity sync"
+    )
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_attempts == 1
+    assert _quantity_updates(remote) == []
+
+
+def test_failed_remote_quantity_repair_records_the_update_failure(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice, quantity=21)
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+
+    def failing_update(method, path, data=None, *, idempotency_key=None):
+        if path.startswith("/subscription_items/"):
+            raise stripe_billing.StripeStateConflict("quantity update failed")
+        return remote(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", failing_update)
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == "quantity update failed"
+    assert practice.stripe_quantity_sync_attempts == 1
+
+
 @pytest.mark.parametrize("remote_quantity", [0, 21])
 def test_quantity_sync_repairs_remote_quantity_outside_pilot_bounds(
     remote: FakeStripe,
@@ -3416,10 +3548,9 @@ def test_quantity_sync_repairs_remote_quantity_outside_pilot_bounds(
     assert practice.stripe_quantity_sync_target == 1
     assert practice.stripe_quantity_sync_error is None
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
-    quantity_updates = [
-        call for call in remote.calls if call[1].startswith("/subscription_items/")
-    ]
+    quantity_updates = _quantity_updates(remote)
     assert len(quantity_updates) == 1
+    assert quantity_updates[0][0]["proration_behavior"] == "none"
 
 
 def test_quantity_sync_never_mutates_a_bound_subscription_with_identity_drift(
@@ -3480,6 +3611,634 @@ def test_repeated_quantity_target_uses_a_new_idempotency_key_per_obligation(
     assert first_key and second_key and first_key != second_key
 
 
+def _add_attested_clinician(practice: Practice) -> None:
+    clinician = Doctor(
+        clerk_id=f"user_stripe_clinician_{secrets.token_hex(8)}",
+        email=f"clinician-{secrets.token_hex(4)}@example.com",
+        biography="",
+    ).save()
+    with get_session() as session:
+        lock_practice_seats(session, practice.id)
+        session.add(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=clinician.id,
+                role=PracticeRole.workforce.value,
+                attested_at=NOW,
+            )
+        )
+        session.commit()
+
+
+def _quantity_sync_practice(
+    remote: FakeStripe, *, status: str, remote_quantity: int, seats: int
+) -> Practice:
+    practice = _practice()
+    for _ in range(seats - 1):
+        _add_attested_clinician(practice)
+    subscription = _subscription(
+        practice,
+        subscription_id=f"sub_proration_{secrets.token_hex(4)}",
+        customer_id=f"cus_proration_{secrets.token_hex(4)}",
+        status=status,
+        quantity=remote_quantity,
+    )
+    trial_end = None
+    if status == "trialing":
+        trial_end = NOW + timedelta(days=7)
+        subscription["trial_start"] = int(NOW.timestamp())
+        subscription["trial_end"] = int(trial_end.timestamp())
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice, subscription, status=status, trial_ends_at=trial_end
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    return practice
+
+
+def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
+    return [
+        (data or {}, key)
+        for _method, path, data, key in remote.calls
+        if path.startswith("/subscription_items/")
+    ]
+
+
+def _deactivate_one_clinician(practice: Practice) -> None:
+    with get_session() as session:
+        lock_practice_seats(session, practice.id)
+        member = session.exec(
+            select(PracticeMember).where(
+                PracticeMember.practice_id == practice.id,
+                PracticeMember.role == PracticeRole.workforce.value,
+                PracticeMember.seat_state == ClinicianSeatState.active.value,
+            )
+        ).first()
+        assert isinstance(member, PracticeMember)
+        member.seat_state = ClinicianSeatState.inactive.value
+        session.add(member)
+        session.commit()
+
+
+def _sync_seats(practice: Practice) -> bool:
+    stripe_billing.mark_quantity_sync_required(practice)
+    return stripe_billing.sync_subscription_quantity(practice)
+
+
+def _remote_item(remote: FakeStripe, practice: Practice) -> dict:
+    assert practice.stripe_subscription_id
+    return remote.subscriptions[practice.stripe_subscription_id]["items"]["data"][0]
+
+
+def _start_period(remote: FakeStripe, practice: Practice, start: datetime) -> None:
+    item = _remote_item(remote, practice)
+    item["current_period_start"] = int(start.timestamp())
+    item["current_period_end"] = int((start + timedelta(days=31)).timestamp())
+
+
+def _posted(remote: FakeStripe) -> list[tuple[str, str]]:
+    return [
+        (data["quantity"], data["proration_behavior"])
+        for data, _key in _quantity_updates(remote)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("status", "remote_quantity", "seats", "expected"),
+    [
+        ("active", 1, 2, "create_prorations"),
+        ("past_due", 1, 2, "create_prorations"),
+        ("unpaid", 1, 2, "create_prorations"),
+        ("paused", 1, 2, "none"),
+        ("incomplete", 1, 2, "none"),
+        ("active", 2, 1, "none"),
+        ("past_due", 2, 1, "none"),
+        ("paused", 2, 1, "none"),
+        ("trialing", 1, 2, "none"),
+        ("trialing", 2, 1, "none"),
+    ],
+)
+def test_quantity_sync_charges_only_mid_cycle_seat_additions(
+    remote: FakeStripe,
+    status: str,
+    remote_quantity: int,
+    seats: int,
+    expected: str,
+):
+    practice = _quantity_sync_practice(
+        remote, status=status, remote_quantity=remote_quantity, seats=seats
+    )
+
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [(str(seats), expected)]
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == max(seats, remote_quantity)
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
+def test_portal_paused_collection_never_charges_a_seat_addition(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    assert practice.stripe_subscription_id
+    # A customer-portal pause keeps Stripe's top-level status "active".
+    remote.subscriptions[practice.stripe_subscription_id]["pause_collection"] = {
+        "behavior": "void"
+    }
+
+    stripe_billing.mark_quantity_sync_required(practice)
+    stripe_billing.sync_subscription_quantity(practice)
+
+    updates = _quantity_updates(remote)
+    assert updates
+    assert {data["proration_behavior"] for data, _key in updates} == {"none"}
+
+
+def test_seat_swap_across_sweeps_is_not_charged_twice(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 2
+
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [("1", "none"), ("2", "none")]
+    assert remote.prorated_seats == []
+
+
+def test_seat_addition_prorates_only_above_the_period_high_water(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [
+        ("2", "create_prorations"),
+        ("1", "none"),
+        ("2", "none"),
+    ]
+    assert remote.prorated_seats == [1]
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 2
+
+
+def test_readding_past_the_high_water_splits_paid_and_new_seats(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [("1", "none"), ("2", "none"), ("3", "create_prorations")]
+    assert remote.prorated_seats == [1]
+    keys = [key for _data, key in _quantity_updates(remote)]
+    assert all(keys) and len(set(keys)) == len(keys)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+
+
+def test_new_billing_period_resets_the_high_water_to_the_renewed_quantity(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+
+    renewal = PERIOD_END
+    _start_period(remote, practice, renewal)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [("1", "none"), ("2", "create_prorations")]
+    assert remote.prorated_seats == [1]
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 2
+    assert practice.stripe_paid_seat_period_start == renewal
+
+
+def test_trial_seats_are_never_prorated_and_trial_end_starts_a_paid_period(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="trialing", remote_quantity=1, seats=3
+    )
+    assert practice.stripe_subscription_id
+    subscription = remote.subscriptions[practice.stripe_subscription_id]
+    trial_start = datetime.fromtimestamp(subscription["trial_start"], tz=timezone.utc)
+    trial_end = datetime.fromtimestamp(subscription["trial_end"], tz=timezone.utc)
+    item = _remote_item(remote, practice)
+    item["current_period_start"] = int(trial_start.timestamp())
+    item["current_period_end"] = int(trial_end.timestamp())
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+
+    # Stripe bills the quantity it holds at trial end for the first paid period.
+    subscription["status"] = "active"
+    _start_period(remote, practice, trial_end)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [
+        ("3", "none"),
+        ("2", "none"),
+        ("3", "create_prorations"),
+    ]
+    assert remote.prorated_seats == [1]
+
+
+def test_quantity_repair_is_never_prorated_but_counts_toward_the_high_water(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_quantity_repair_high_water",
+        customer_id="cus_quantity_repair_high_water",
+        quantity=0,
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [("1", "none")]
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 1
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
+def test_retry_after_a_dropped_second_step_charges_the_new_seat_once(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    _add_attested_clinician(practice)
+    remote.dropped_quantity_update_steps = {remote.quantity_update_count + 1}
+
+    stripe_billing.mark_quantity_sync_required(practice)
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_paid_seat_high_water == 2
+    assert _remote_item(remote, practice)["quantity"] == 2
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+
+    assert _posted(remote) == [
+        ("1", "none"),
+        ("2", "none"),
+        ("3", "create_prorations"),
+        ("3", "create_prorations"),
+    ]
+    first_try_key = _quantity_updates(remote)[2][1]
+    retry_key = _quantity_updates(remote)[3][1]
+    assert first_try_key != retry_key
+    assert remote.prorated_seats == [1]
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+
+
+def test_lost_confirmation_after_a_billable_raise_is_not_charged_again(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    retrieve = stripe_billing._retrieve_subscription
+    reads = {"count": 0}
+
+    def lose_confirmation(subscription_id: str, **kwargs: Any) -> dict:
+        reads["count"] += 1
+        if remote.quantity_update_count and reads["count"] == 2:
+            raise httpx.ConnectError("confirmation lost")
+        return retrieve(subscription_id, **kwargs)
+
+    monkeypatch.setattr(stripe_billing, "_retrieve_subscription", lose_confirmation)
+    assert not _sync_seats(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 1
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 2
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert remote.prorated_seats == [1]
+    assert _posted(remote)[-1] == ("2", "none")
+
+
+def test_unconfirmed_target_is_never_recorded_as_paid(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    remote.drop_quantity_updates = True
+
+    assert not _sync_seats(practice)
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_error
+    assert practice.stripe_paid_seat_high_water == 1
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
+def _lose_next_confirmation(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[], None]:
+    retrieve = stripe_billing._retrieve_subscription
+    armed: dict[str, int | None] = {"after": None}
+
+    def lose_confirmation(subscription_id: str, **kwargs: Any) -> dict:
+        after = armed["after"]
+        if after is not None and remote.quantity_update_count > after:
+            armed["after"] = None
+            raise httpx.ConnectError("confirmation lost")
+        return retrieve(subscription_id, **kwargs)
+
+    monkeypatch.setattr(stripe_billing, "_retrieve_subscription", lose_confirmation)
+
+    def arm() -> None:
+        armed["after"] = remote.quantity_update_count
+
+    return arm
+
+
+def test_two_lost_confirmations_never_charge_a_seat_twice(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    lose_next_confirmation = _lose_next_confirmation(remote, monkeypatch)
+
+    _add_attested_clinician(practice)
+    lose_next_confirmation()
+    assert not _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    lose_next_confirmation()
+    assert not _sync_seats(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+
+    _add_attested_clinician(practice)
+    assert _sync_seats(practice)
+
+    assert _posted(remote) == [
+        ("3", "create_prorations"),
+        ("2", "none"),
+        ("3", "none"),
+    ]
+    assert remote.prorated_seats == [1]
+
+
+def _two_step_seat_raise(remote: FakeStripe) -> Practice:
+    """Leave Stripe at 1 below a paid high-water of 2 with 3 seats in Core."""
+
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=2, seats=2
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    _add_attested_clinician(practice)
+    stripe_billing.mark_quantity_sync_required(practice)
+    return practice
+
+
+def test_retry_after_an_out_of_band_edit_prorates_only_the_new_seat(
+    remote: FakeStripe,
+):
+    practice = _two_step_seat_raise(remote)
+    remote.dropped_quantity_update_steps = {remote.quantity_update_count + 1}
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    assert _remote_item(remote, practice)["quantity"] == 2
+
+    # Someone lowers the quantity in the Stripe Dashboard before the next
+    # sweep retries the same obligation version.
+    _remote_item(remote, practice)["quantity"] = 1
+    assert stripe_billing.sync_subscription_quantity(practice)
+
+    assert remote.prorated_seats == [1]
+    assert _remote_item(remote, practice)["quantity"] == 3
+
+
+def test_billable_step_requires_the_previous_step_in_stripe(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _two_step_seat_raise(remote)
+    edits = {"pending": True}
+
+    def edit_after_restoring_paid_seats(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        result = remote(method, path, data, idempotency_key=idempotency_key)
+        if path.startswith("/subscription_items/") and edits["pending"]:
+            edits["pending"] = False
+            _remote_item(remote, practice)["quantity"] = 1
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", edit_after_restoring_paid_seats)
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    assert _posted(remote)[-1] == ("2", "none")
+    assert remote.prorated_seats == []
+    practice.refresh()
+    assert "between seat updates" in (practice.stripe_quantity_sync_error or "")
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    assert remote.prorated_seats == [1]
+
+
+def test_renewal_during_a_quantity_update_fails_the_sync(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=3, seats=3
+    )
+    assert _sync_seats(practice)
+    _deactivate_one_clinician(practice)
+    assert _sync_seats(practice)
+    _add_attested_clinician(practice)
+    renewals = {"pending": True}
+
+    def renew_before_the_update(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        if path.startswith("/subscription_items/") and renewals["pending"]:
+            renewals["pending"] = False
+            _start_period(remote, practice, PERIOD_END)
+        return remote(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", renew_before_the_update)
+
+    assert not _sync_seats(practice)
+    practice.refresh()
+    assert "billing period" in (practice.stripe_quantity_sync_error or "")
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_paid_seat_high_water == 3
+    assert practice.stripe_paid_seat_period_start == PERIOD_END
+
+
+def test_confirmed_high_water_stands_when_membership_moves_mid_sync(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+
+    def join_while_in_flight(
+        method: str,
+        path: str,
+        data: dict | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict:
+        result = remote(method, path, data, idempotency_key=idempotency_key)
+        if path.startswith("/subscription_items/"):
+            stripe_billing.mark_quantity_sync_required(practice)
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", join_while_in_flight)
+
+    assert not _sync_seats(practice)
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_error is None
+    assert practice.stripe_paid_seat_high_water == 2
+    assert practice.stripe_paid_seat_period_start == PERIOD_START
+
+
+def test_missing_item_billing_period_fails_closed_before_any_update(
+    remote: FakeStripe,
+):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+    del _remote_item(remote, practice)["current_period_start"]
+
+    assert not _sync_seats(practice)
+
+    assert _quantity_updates(remote) == []
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required
+    assert "billing period" in (practice.stripe_quantity_sync_error or "")
+    assert practice.stripe_paid_seat_high_water is None
+
+
+def test_quantity_sync_in_flight_blocks_an_overlapping_sync(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="active", remote_quantity=1, seats=2
+    )
+
+    with stripe_billing._quantity_sync_lease(practice.id) as leased:
+        assert leased
+        assert not _sync_seats(practice)
+        with pytest.raises(stripe_billing.StripeStateConflict):
+            stripe_billing.sync_subscription_quantity(practice, raise_on_error=True)
+    assert _quantity_updates(remote) == []
+    assert not any(
+        path.startswith("/subscriptions/") for _m, path, _d, _k in remote.calls
+    )
+
+    assert stripe_billing.sync_subscription_quantity(practice)
+    assert _posted(remote) == [("2", "create_prorations")]
+
+
+@pytest.mark.parametrize(
+    ("high_water", "period_start"),
+    [(0, PERIOD_START), (21, PERIOD_START), (1, None), (None, PERIOD_START)],
+)
+def test_paid_seat_high_water_is_bounded_and_paired_with_its_period(
+    high_water: int | None, period_start: datetime | None
+):
+    practice = _practice()
+    with get_session() as session:
+        row = session.get(Practice, practice.id)
+        assert row
+        row.stripe_paid_seat_high_water = high_water
+        row.stripe_paid_seat_period_start = period_start
+        session.add(row)
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+
+def test_quantity_idempotency_key_binds_the_proration_behavior(remote: FakeStripe):
+    practice = _quantity_sync_practice(
+        remote, status="trialing", remote_quantity=1, seats=2
+    )
+    stripe_billing.mark_quantity_sync_required(practice)
+    practice.refresh()
+    version = practice.stripe_quantity_sync_version
+    remote.drop_quantity_updates = True
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    [(uncharged, uncharged_key)] = _quantity_updates(remote)
+    assert uncharged["proration_behavior"] == "none"
+
+    # The trial ends before the retry of the same obligation. Stripe rejects a
+    # reused idempotency key with different parameters, so the key must change.
+    assert practice.stripe_subscription_id
+    remote.subscriptions[practice.stripe_subscription_id]["status"] = "active"
+    remote.drop_quantity_updates = False
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_version == version
+    [_, (charged, charged_key)] = _quantity_updates(remote)
+    assert charged["quantity"] == uncharged["quantity"] == "2"
+    assert charged["proration_behavior"] == "create_prorations"
+    assert uncharged_key and charged_key and uncharged_key != charged_key
+
+
 def test_unsupported_event_type_is_ignored_without_remote_call(remote: FakeStripe):
     assert not stripe_billing.apply_stripe_event(
         {
@@ -3498,3 +4257,315 @@ def test_signature_rejects_malformed_headers():
     assert not stripe_billing.verify_webhook_signature(payload, None)
     assert not stripe_billing.verify_webhook_signature(payload, "v1=abc")
     assert not stripe_billing.verify_webhook_signature(payload, "t=notanumber,v1=abc")
+
+
+def test_a_broken_seat_ledger_invalidates_the_subscription_rather_than_leaving_it_active(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Billing fails closed when seat accounting cannot be trusted.
+
+    Membership mutation owns prevention, but if drift or an older path violates
+    the seat invariant the mirror must not keep reporting an active entitlement
+    off a count it could not compute.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLedgerInvalid("ledger is invalid")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_ledger",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert (
+        practice.stripe_quantity_sync_error
+        == stripe_billing.LOCAL_SEAT_LEDGER_INVALID_ERROR
+    )
+
+
+def test_a_seat_count_outside_the_pilot_limit_also_invalidates(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """Distinguished from a broken ledger, because the operator response differs."""
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded("outside the 1-20 pilot limit")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_limit",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert (
+        practice.stripe_quantity_sync_error
+        == stripe_billing.LOCAL_SEAT_COUNT_OUT_OF_RANGE_ERROR
+    )
+
+
+def test_an_existing_sync_error_is_not_overwritten_by_the_seat_failure(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    """The first failure is the one worth keeping; later ones add no information."""
+
+    practice = _practice()
+    subscription = _subscription(practice, quantity=1)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.stripe_quantity_sync_error = "an earlier, more specific failure"
+    practice.save()
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_authorized_member_count",
+        lambda _session, _practice: (_ for _ in ()).throw(
+            stripe_billing.StripeSeatLimitExceeded("outside the limit")
+        ),
+    )
+
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_seat_keep_error",
+            created=int(NOW.timestamp()) + 60,
+        )
+    )
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_error == "an earlier, more specific failure"
+
+
+def test_an_event_older_than_the_last_applied_one_is_receipted_but_not_applied(
+    remote: FakeStripe,
+):
+    """Stripe does not guarantee webhook ordering.
+
+    Called directly rather than through `apply_stripe_event`, because that has
+    its own ordering guard and would filter the stale event before this one is
+    reached. This is the inner check, inside the row lock: defence in depth
+    against the row advancing between the outer comparison and the transaction.
+
+    A late delivery must not overwrite newer state, and must still be receipted
+    so a redelivery is recognised rather than reprocessed.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, status="active")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+
+    newer = int(NOW.timestamp()) + 600
+    stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_ordering_new",
+            created=newer,
+        )
+    )
+    practice.refresh()
+    applied_status = practice.subscription_status
+    applied_version = practice.stripe_state_version
+
+    stale = _subscription(practice, status="past_due")
+    remote.subscriptions[stale["id"]] = stale
+    result, changed = stripe_billing._apply_authoritative_subscription(
+        practice,
+        stale["id"],
+        event_created_at=datetime.fromtimestamp(newer - 300, tz=timezone.utc),
+        event_id="evt_ordering_stale",
+        event_type="customer.subscription.updated",
+    )
+
+    assert result is None
+    assert changed is False
+    practice.refresh()
+    assert practice.subscription_status == applied_status
+    assert practice.stripe_state_version == applied_version
+    # Receipted, so a redelivery of the stale event is a no-op rather than a reapply.
+    assert StripeEventReceipt.get(event_id="evt_ordering_stale") is not None
+
+
+def test_a_bound_subscription_that_lost_its_practice_metadata_is_invalidated(
+    remote: FakeStripe,
+):
+    """Flagged rather than refused: the binding already exists, the data drifted."""
+
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"].pop("practice_id")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+
+
+def test_an_unbound_subscription_is_refused_before_metadata_is_even_considered(
+    remote: FakeStripe,
+):
+    """Binding is gated on Checkout completion, not on metadata.
+
+    The missing-metadata branch is defence in depth behind this: subscription
+    metadata is mutable and therefore only a routing hint, so an initial binding
+    needs the immutable Checkout Session id Core persisted before Stripe created
+    the subscription, or a paid invoice whose customer was already bound.
+    """
+
+    practice = _practice()
+    subscription = _subscription(practice, subscription_id="sub_unclaimed")
+    subscription["metadata"].pop("practice_id")
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = "sub_test_123"
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeStateConflict) as raised:
+        stripe_billing._apply_authoritative_subscription(
+            practice,
+            subscription["id"],
+            require_practice_metadata=True,
+        )
+
+    assert "Checkout completion" in str(raised.value)
+
+
+def test_an_event_for_a_subscription_this_practice_no_longer_holds_is_receipted_only(
+    remote: FakeStripe,
+):
+    """A superseded subscription must not touch the binding that replaced it.
+
+    Stripe keeps delivering events for an old subscription after a practice has
+    moved to a new one. Those arrive with valid signatures and a real payload,
+    so the guard is the binding, not the envelope: the event is receipted so a
+    redelivery is recognised, and nothing is applied.
+    """
+
+    practice = _practice()
+    current = _subscription(practice, subscription_id="sub_current")
+    superseded = _subscription(practice, subscription_id="sub_superseded")
+    remote.subscriptions[current["id"]] = current
+    remote.subscriptions[superseded["id"]] = superseded
+
+    practice.stripe_customer_id = current["customer"]
+    practice.stripe_subscription_id = current["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.save()
+    version_before = practice.stripe_state_version
+
+    result, changed = stripe_billing._apply_authoritative_subscription(
+        practice,
+        superseded["id"],
+        event_created_at=datetime.fromtimestamp(
+            int(NOW.timestamp()) + 900, tz=timezone.utc
+        ),
+        event_id="evt_superseded",
+        event_type="customer.subscription.updated",
+    )
+
+    assert result is None
+    assert changed is False
+    practice.refresh()
+    assert practice.stripe_subscription_id == current["id"]
+    assert practice.stripe_state_version == version_before
+    assert StripeEventReceipt.get(event_id="evt_superseded") is not None
+
+
+def test_a_superseded_subscription_event_without_receipt_metadata_is_refused(
+    remote: FakeStripe,
+):
+    """The receipt is the whole point of that branch; it cannot be skipped."""
+
+    practice = _practice()
+    current = _subscription(practice, subscription_id="sub_current_2")
+    superseded = _subscription(practice, subscription_id="sub_superseded_2")
+    remote.subscriptions[current["id"]] = current
+    remote.subscriptions[superseded["id"]] = superseded
+
+    practice.stripe_customer_id = current["customer"]
+    practice.stripe_subscription_id = current["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeStateInvalid) as raised:
+        stripe_billing._apply_authoritative_subscription(
+            practice,
+            superseded["id"],
+            event_id="evt_superseded_no_meta",
+            event_type=None,
+        )
+
+    assert "receipt metadata is incomplete" in str(raised.value)
