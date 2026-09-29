@@ -24,6 +24,7 @@ from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_notes as notes
 from app.services.scribe_workflow import HttpScribeWorkflowClient
 
+from activemodel.session_manager import _session_context, aglobal_session
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -104,7 +105,11 @@ async def test_configured_admission_review_and_existing_soap_routes(
             posts = []
             lost = True
             async with httpx.AsyncClient(
-                base_url=origin, trust_env=False, timeout=10
+                base_url=origin,
+                trust_env=False,
+                timeout=10,
+                # Each capture route owns a private worker event loop.
+                limits=httpx.Limits(max_keepalive_connections=0),
             ) as loopback:
 
                 class LocalWire(httpx.AsyncBaseTransport):
@@ -151,6 +156,17 @@ async def test_configured_admission_review_and_existing_soap_routes(
 
                     app = client().app
                     assert isinstance(app, FastAPI)
+
+                    async def request_session():
+                        # The request worker intentionally inherits no ambient session.
+                        with Session(f.engine, expire_on_commit=False) as session:
+                            token = _session_context.set(session)
+                            try:
+                                yield session
+                            finally:
+                                _session_context.reset(token)
+
+                    app.dependency_overrides[aglobal_session] = request_session
                     app.dependency_overrides[get_admission_client_factory] = (
                         lambda: remote
                     )
@@ -194,6 +210,7 @@ async def test_configured_admission_review_and_existing_soap_routes(
                             ADMISSION_PATH, json=body, headers=headers
                         )
                         assert first.status_code == 503, first.text
+                        assert not lost, "Admission did not reach the injected lost reply"
                         path.with_suffix(".restart").touch()
                         await wait_for_file(path.with_suffix(".restarted"), process)
                         saved = await browser.post(
