@@ -192,6 +192,7 @@ _AGENT_SOVEREIGN_IDS = _client_id_allowlist(
 )
 _AGENT_PROVIDER_IDS = _AGENT_SOVEREIGN_IDS
 _AGENT_CAPTURE_IDS: frozenset[str] = frozenset()
+_AGENT_COMPANION_IDS: frozenset[str] = frozenset()
 _AGENT_REQUIRED_CLIENT_COUNT = 1
 if _AGENT_SCRIBE_RECEIVER:
     try:
@@ -219,10 +220,11 @@ if _AGENT_COMPANION_RECEIVER:
         or str(_companion_id) in _AGENT_SOVEREIGN_IDS
     ):
         raise ValueError("agent_api_companion_configuration_invalid")
-    # The companion shares capture and context protocols only. It must never
-    # enter the Sovereign tool caller set or impersonate the Scribe receiver.
+    # The companion shares capture/context protocols and may separately opt
+    # into its brief receiver. Never grant it the generic Sovereign tools.
     _AGENT_SOVEREIGN_IDS = _AGENT_SOVEREIGN_IDS | {str(_companion_id)}
     _AGENT_CAPTURE_IDS = _AGENT_CAPTURE_IDS | {str(_companion_id)}
+    _AGENT_COMPANION_IDS = frozenset({str(_companion_id)})
     _AGENT_REQUIRED_CLIENT_COUNT += 1
 
 AGENT_API_AUTH_SETTINGS = EntraAgentAuthSettings(
@@ -244,4 +246,15 @@ SCRIBE_CAPTURE_AUTH_SETTINGS = replace(
     AGENT_API_AUTH_SETTINGS,
     sovereign_client_ids=_AGENT_CAPTURE_IDS,
     required_client_count=max(1, len(_AGENT_CAPTURE_IDS)),
+)
+
+# Reuse the explicitly configured companion identity, but require an additional
+# deployment permission for the brief-only receiver. Missing identity fails
+# closed; neither Sovereign nor Scribe is a fallback caller.
+COMPANION_SESSION_PREP_AUTH_SETTINGS = replace(
+    AGENT_API_AUTH_SETTINGS,
+    enabled=AGENT_API_AUTH_SETTINGS.enabled
+    and config("COMPANION_SESSION_PREP_ENABLED", default=False, cast=bool),
+    sovereign_client_ids=_AGENT_COMPANION_IDS,
+    required_client_count=1,
 )

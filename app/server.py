@@ -41,6 +41,8 @@ from .routes.companion_appointment_setup import (
 )
 from .routes.companion_encounters import install as install_companion_encounters
 from .routes.companion_records import install as install_companion_records
+from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
+from .routes.companion_session_prep import router as companion_session_prep_router
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
@@ -89,6 +91,7 @@ api_app.include_router(service_api_app, include_in_schema=False)
 # Agent and context-token contracts are workload/host APIs and intentionally stay
 # out of the browser-generated client schema.
 api_app.include_router(agent_api_app, include_in_schema=False)
+api_app.include_router(companion_session_prep_router, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
@@ -166,7 +169,10 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
             retryable=exc.status_code >= 500,
         )
 
-    if request.url.path.startswith("/service/v1/agent/"):
+    if (
+        request.url.path.startswith("/service/v1/agent/")
+        or request.url.path == COMPANION_SESSION_PREP_PATH
+    ):
         trace_id = _bootstrap_error_trace_id(request)
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             return agent_problem_response(
@@ -207,7 +213,10 @@ async def safe_request_validation_handler(
             title="Invalid request",
             detail="The context-token request is invalid.",
         )
-    if request.url.path.startswith("/service/v1/agent/"):
+    if (
+        request.url.path.startswith("/service/v1/agent/")
+        or request.url.path == COMPANION_SESSION_PREP_PATH
+    ):
         errors = exc.errors()
         missing_fields = {
             str(error["loc"][-1])
