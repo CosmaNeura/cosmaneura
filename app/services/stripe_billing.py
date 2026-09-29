@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import math
+import random
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -44,6 +45,41 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 STRIPE_API = "https://api.stripe.com/v1"
+
+# Explicit timeouts, split the way `recall.py` and `zoom_auth.py` do it: a hang
+# inside a Celery prefork slot looks alive while processing nothing, so a stuck
+# socket has to surface as an exception rather than a silently wedged worker.
+_HTTPX_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
+# One client for the process. Rebuilding it per call paid a fresh TCP and TLS
+# handshake on every billing operation.
+#
+# Reset after a Celery fork by `reset_http_client`, for the reason
+# `worker_process_init` already disposes the SQLAlchemy engine: a child that
+# inherits a parent's pooled sockets shares them with its siblings.
+_HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
+
+def reset_http_client() -> None:
+    """Drop any connection pooled before a fork and start a fresh one."""
+
+    global _HTTP_CLIENT
+    try:
+        _HTTP_CLIENT.close()
+    except Exception:  # noqa: BLE001 - a half-inherited pool must not stop startup
+        pass
+    _HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
+
+# Retry only what Stripe says is safe to retry, and only for requests this
+# integration can prove are idempotent. Stripe caches an idempotent result for
+# 24 hours, so replaying a keyed POST returns the original outcome rather than
+# repeating the operation.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_MAX_REQUEST_ATTEMPTS = 3
+_RETRY_BASE_DELAY_SECONDS = 0.5
+_RETRY_MAX_DELAY_SECONDS = 4.0
+
 SIGNATURE_TOLERANCE_SECONDS = 5 * 60
 MINIMUM_CHECKOUT_TRIAL_LEAD = timedelta(hours=48)
 # Stripe validates the minimum lead against its own request-processing time.
@@ -68,13 +104,27 @@ CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
 # explicit policy generation in the key so a successful old request whose local
 # cache write was interrupted cannot block the card-required rollout.
 PAID_PILOT_CHECKOUT_POLICY_VERSION = "paid-pilot-v3"
+# Retire when: no Checkout Session created under `card-required-v1` is still
+# recoverable. Stripe expires an idempotency key after 24 hours, so this is
+# removable once no frozen checkout request on any Practice row names this
+# generation. Only read at one site, when deciding whether a stored request may
+# be replayed.
 LEGACY_CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "card-required-v1"
 # The active writer and its idempotency key share one immutable generation.
 # This prevents a retry from reusing a legacy key with a different request.
 CHECKOUT_IDEMPOTENCY_POLICY_VERSION = PAID_PILOT_CHECKOUT_POLICY_VERSION
 CHECKOUT_TRIAL_CLOCK_POLICY = "checkout-fixed-14-day-v2"
+# Retire when: no live subscription carries a trial that began under the
+# BAA-carryover rule ADR 0024 replaced. Those trials are finite, so this expires
+# on its own once the last one ends; until then a subscription bound under it
+# must keep resolving to its original trial end rather than the fixed 14 days.
 LEGACY_TRIAL_CLOCK_POLICY = "legacy-baa-carryover-v1"
 CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION = PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+# Retire when: no subscription in Stripe still carries entitlement metadata
+# written before the contract was versioned. Unlike the two above this does not
+# expire by itself — it needs a backfill that stamps the current contract
+# version onto those subscriptions, after which this and its entry in
+# SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS both go.
 LEGACY_UNVERSIONED_STRIPE_CONTRACT = "stripe-legacy-unversioned.v0"
 SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS = frozenset(
     {CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION}
@@ -154,17 +204,6 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
         super().__init__(str(reason))
 
 
-class StripeTrialCarryoverDeferred(Exception):
-    """Legacy API compatibility for callers that handled the former dead zone."""
-
-    def __init__(self, available_at: datetime):
-        self.available_at = available_at
-        super().__init__(
-            "Checkout is deferred until the platform trial ends so no remaining "
-            "trial time is shortened."
-        )
-
-
 class StripeTrialClockReconciliationRequired(Exception):
     """A prior paid-pilot trial cannot be replaced by a fresh trial."""
 
@@ -225,6 +264,77 @@ def _isolated_state_session() -> Session:
     return Session(manager.get_engine())
 
 
+def _stripe_error_detail(response: httpx.Response) -> str:
+    """Stripe's structured error, flattened for a log line and an exception.
+
+    Only Stripe's enumerated fields. `message` and `param` are free text that
+    echoes what was submitted — an invalid-email failure quotes the address
+    back — and this string does not stay in the process: it becomes the
+    exception message, and `process_stripe_event_inbox` writes that into
+    `stripe_event_inbox.last_error`, where it persists. `customer_email` is a
+    real doctor's address.
+
+    `request_id` is the handle for the rest. Anyone debugging can retrieve the
+    full error from Stripe with it, which is where that text belongs.
+    """
+
+    request_id = response.headers.get("request-id", "")
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        error = {}
+    fields = {
+        "type": error.get("type"),
+        "code": error.get("code"),
+        "decline_code": error.get("decline_code"),
+        "request_id": request_id or None,
+    }
+    rendered = " ".join(f"{k}={v}" for k, v in fields.items() if v)
+    return rendered or f"no error body (request-id={request_id or 'unknown'})"
+
+
+def _request_is_replayable(method: str, idempotency_key: str | None) -> bool:
+    """Whether retrying could not duplicate the operation.
+
+    Stripe guarantees GET and DELETE are idempotent. A POST is replayable only
+    when it carries an idempotency key; `create_portal_session` does not, so it
+    is deliberately excluded rather than retried on a guess.
+    """
+
+    return method in ("GET", "DELETE") or bool(idempotency_key)
+
+
+def _should_retry(response: httpx.Response) -> bool:
+    """`Stripe-Should-Retry` wins; the status code is the fallback it documents."""
+
+    advice = response.headers.get("stripe-should-retry")
+    if advice == "true":
+        return True
+    if advice == "false":
+        return False
+    return response.status_code in _RETRYABLE_STATUS
+
+
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Exponential backoff with jitter, unless Stripe named a delay itself."""
+
+    if response is not None:
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+                if math.isfinite(delay) and delay >= 0:
+                    return min(delay, _RETRY_MAX_DELAY_SECONDS)
+            except ValueError:
+                pass
+    backoff = min(_RETRY_BASE_DELAY_SECONDS * (2**attempt), _RETRY_MAX_DELAY_SECONDS)
+    # Jitter so concurrent workers retrying the same outage do not resynchronise.
+    return backoff * (0.5 + random.random() / 2)
+
+
 def _request(
     method: str,
     path: str,
@@ -237,17 +347,66 @@ def _request(
     headers = {"Stripe-Version": stripe_config.STRIPE_API_VERSION}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
-    response = httpx.request(
-        method,
-        f"{STRIPE_API}{path}",
-        auth=(stripe_config.STRIPE_SECRET_KEY, ""),
-        data=data if method != "GET" else None,
-        params=data if method == "GET" else None,
-        headers=headers,
-        timeout=20,
-    )
-    response.raise_for_status()
-    return cast(dict[str, Any], response.json())
+
+    replayable = _request_is_replayable(method, idempotency_key)
+
+    attempt = 0
+    while True:
+        final_attempt = attempt == _MAX_REQUEST_ATTEMPTS - 1
+        try:
+            response = _HTTP_CLIENT.request(
+                method,
+                f"{STRIPE_API}{path}",
+                auth=(stripe_config.STRIPE_SECRET_KEY, ""),
+                data=data if method != "GET" else None,
+                params=data if method == "GET" else None,
+                headers=headers,
+            )
+        except httpx.RequestError as exc:
+            # No response means the request's fate is unknown. Replaying it with
+            # the same key is the only way to find out what happened.
+            if not replayable or final_attempt:
+                raise
+            log.warning(
+                "stripe request transport error, retrying",
+                stripe_path=path,
+                attempt=attempt + 1,
+                error=type(exc).__name__,
+            )
+            time.sleep(_retry_delay(None, attempt))
+            attempt += 1
+            continue
+
+        if response.is_success:
+            return cast(dict[str, Any], response.json())
+
+        if replayable and not final_attempt and _should_retry(response):
+            log.warning(
+                "stripe request failed, retrying",
+                stripe_path=path,
+                attempt=attempt + 1,
+                status=response.status_code,
+                detail=_stripe_error_detail(response),
+            )
+            time.sleep(_retry_delay(response, attempt))
+            attempt += 1
+            continue
+
+        detail = _stripe_error_detail(response)
+        log.error(
+            "stripe request failed",
+            stripe_path=path,
+            status=response.status_code,
+            detail=detail,
+            retried=attempt > 0,
+        )
+        # Still an `httpx.HTTPStatusError`, because callers branch on
+        # `exc.response.status_code`; the message now names the cause.
+        raise httpx.HTTPStatusError(
+            f"Stripe {method} {path} failed with {response.status_code}: {detail}",
+            request=response.request,
+            response=response,
+        )
 
 
 def _validate_runtime_account() -> None:
@@ -3083,7 +3242,7 @@ def validate_stripe_event_envelope(
     event_id = event.get("id")
     if not isinstance(event_id, str) or not event_id.startswith("evt_"):
         raise StripeStateInvalid("Stripe event id is invalid")
-    if event.get("api_version") != stripe_config.SUPPORTED_STRIPE_API_VERSION:
+    if event.get("api_version") not in stripe_config.ACCEPTED_EVENT_API_VERSIONS:
         raise StripeStateInvalid(
             "Stripe event API version does not match the pinned contract"
         )

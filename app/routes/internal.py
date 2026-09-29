@@ -2316,14 +2316,6 @@ def create_billing_checkout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
         ) from exc
-    except stripe_billing.StripeTrialCarryoverDeferred as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Checkout opens when the current trial ends at "
-                f"{exc.available_at.isoformat()}; no trial time will be shortened."
-            ),
-        ) from exc
     except stripe_billing.StripeCheckoutAlreadyCompleted as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
