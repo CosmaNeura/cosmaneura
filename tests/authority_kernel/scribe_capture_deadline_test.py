@@ -260,7 +260,9 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
         payload=payload,
         key="retained-consent-key",
     )
-    monkeypatch.setattr(admission, "_prepare", lambda *args: "retained-admission")
+    monkeypatch.setattr(
+        admission, "_prepare", lambda *args, **kwargs: "retained-admission"
+    )
     monkeypatch.setattr(admission, "_claim", lambda *args: claim)
     monkeypatch.setattr(
         admission, "_accept_receipt", lambda *args: calls.append("published receipt")
@@ -767,24 +769,37 @@ async def test_saturated_error_senders_remain_bounded_until_actual_settlement(
             all_settled.set()
 
     scope = {
-        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": "POST", "scheme": "http", "path": PREFIX + "capture-admissions",
-        "raw_path": (PREFIX + "capture-admissions").encode(), "root_path": "",
-        "query_string": b"", "headers": [], "client": ("127.0.0.1", 1),
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": PREFIX + "capture-admissions",
+        "raw_path": (PREFIX + "capture-admissions").encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 1),
         "server": ("owned", 1),
     }
-    requests = [asyncio.create_task(target(dict(scope), receive, send)) for _ in range(4)]
+    requests = [
+        asyncio.create_task(target(dict(scope), receive, send)) for _ in range(4)
+    ]
     try:
         await until(entered)
         if cancel_public:
             for request in requests:
                 request.cancel()
         await asyncio.gather(*requests, return_exceptions=True)
-        assert len(sent) == 2, "saturated failure senders exceeded their separate admission cap"
+        assert len(sent) == 2, (
+            "saturated failure senders exceeded their separate admission cap"
+        )
         assert all(message["type"] == "http.response.start" for message in sent)
         assert all(message["status"] == 503 for message in sent)
         assert canceled.is_set() and settled == []
-        assert not error_workers.acquire(blocking=False), "public completion released live sender ownership"
+        assert not error_workers.acquire(blocking=False), (
+            "public completion released live sender ownership"
+        )
         # More saturated requests cannot accumulate additional private send tasks.
         await target(dict(scope), receive, send)
         assert len(sent) == 2

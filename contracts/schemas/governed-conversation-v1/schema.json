@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "read-request": {
+      "additionalProperties": false,
+      "properties": {"schema_version": {"const": "1.0.0", "title": "Schema Version", "type": "string"}, "mode": {"enum": ["recent", "turn"], "title": "Mode", "type": "string"}, "client_turn_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "null"}], "title": "Client Turn Id"}},
+      "required": ["schema_version", "mode", "client_turn_id"],
+      "title": "ConversationReadRequest",
+      "type": "object"
+    },
+    "DisplayMessage": {
+      "additionalProperties": false,
+      "properties": {"role": {"enum": ["user", "assistant"], "title": "Role", "type": "string"}, "content": {"maxLength": 20000, "minLength": 1, "title": "Content", "type": "string"}, "turn_ref": {"maxLength": 160, "minLength": 8, "pattern": "^[A-Za-z0-9._~-]{8,160}$", "title": "Turn Ref", "type": "string"}, "client_turn_id": {"format": "uuid", "title": "Client Turn Id", "type": "string"}, "recorded_at": {"format": "date-time", "title": "Recorded At", "type": "string"}, "presentation": {"anyOf": [{"$ref": "schema.json#/$defs/Presentation"}, {"type": "null"}]}},
+      "required": ["role", "content", "turn_ref", "client_turn_id", "recorded_at", "presentation"],
+      "title": "DisplayMessage",
+      "type": "object"
+    },
+    "HumanContact": {
+      "additionalProperties": false,
+      "properties": {"label": {"maxLength": 120, "minLength": 1, "title": "Label", "type": "string"}, "action_id": {"pattern": "^[A-Za-z0-9._~-]{8,128}$", "title": "Action Id", "type": "string"}, "fallback_text": {"maxLength": 240, "minLength": 1, "title": "Fallback Text", "type": "string"}},
+      "required": ["label", "action_id", "fallback_text"],
+      "title": "HumanContact",
+      "type": "object"
+    },
+    "Presentation": {
+      "additionalProperties": false,
+      "properties": {"mode": {"enum": ["standard", "emergency", "sensitive_disclosure"], "title": "Mode", "type": "string"}, "suppress": {"items": {"enum": ["disclaimer", "intent_badge", "doctrinal_badge", "citations", "structured_cards", "feature_actions", "guided_paths"], "type": "string"}, "maxItems": 7, "title": "Suppress", "type": "array"}, "human_contact": {"anyOf": [{"$ref": "schema.json#/$defs/HumanContact"}, {"type": "null"}]}},
+      "required": ["mode", "suppress", "human_contact"],
+      "title": "Presentation",
+      "type": "object"
+    },
+    "Projection": {
+      "additionalProperties": false,
+      "properties": {"thread_ref": {"maxLength": 160, "minLength": 8, "pattern": "^[A-Za-z0-9._~-]{8,160}$", "title": "Thread Ref", "type": "string"}, "messages": {"items": {"$ref": "schema.json#/$defs/DisplayMessage"}, "maxItems": 12, "title": "Messages", "type": "array"}, "next_cursor": {"title": "Next Cursor", "type": "null"}},
+      "required": ["thread_ref", "messages", "next_cursor"],
+      "title": "Projection",
+      "type": "object"
+    },
+    "TurnStatus": {
+      "additionalProperties": false,
+      "properties": {"turn_ref": {"maxLength": 160, "minLength": 8, "pattern": "^[A-Za-z0-9._~-]{8,160}$", "title": "Turn Ref", "type": "string"}, "client_turn_id": {"format": "uuid", "title": "Client Turn Id", "type": "string"}, "state": {"enum": ["pending", "completed", "stale"], "title": "State", "type": "string"}, "outcome": {"anyOf": [{"enum": ["completed", "refused", "unavailable"], "type": "string"}, {"type": "null"}], "title": "Outcome"}, "recorded_at": {"format": "date-time", "title": "Recorded At", "type": "string"}},
+      "required": ["turn_ref", "client_turn_id", "state", "outcome", "recorded_at"],
+      "title": "TurnStatus",
+      "type": "object"
+    },
+    "read-response": {
+      "additionalProperties": false,
+      "properties": {"schema_version": {"const": "1.0.0", "default": "1.0.0", "title": "Schema Version", "type": "string"}, "history": {"$ref": "schema.json#/$defs/Projection"}, "turns": {"items": {"$ref": "schema.json#/$defs/TurnStatus"}, "maxItems": 6, "title": "Turns", "type": "array"}},
+      "required": ["history", "turns"],
+      "title": "ConversationReadResponse",
+      "type": "object"
+    },
+    "HistoryArguments": {
+      "additionalProperties": false,
+      "properties": {"source_turn_ref": {"maxLength": 160, "minLength": 8, "pattern": "^[A-Za-z0-9._~-]{8,160}$", "title": "Source Turn Ref", "type": "string"}, "detail": {"const": "recent", "title": "Detail", "type": "string"}},
+      "required": ["source_turn_ref", "detail"],
+      "title": "HistoryArguments",
+      "type": "object"
+    },
+    "context-request": {
+      "additionalProperties": false,
+      "properties": {"tool_name": {"const": "conversation.context.read", "title": "Tool Name", "type": "string"}, "tool_version": {"const": "1.0.0", "title": "Tool Version", "type": "string"}, "subject_ref": {"title": "Subject Ref", "type": "null"}, "arguments": {"$ref": "schema.json#/$defs/HistoryArguments"}},
+      "required": ["tool_name", "tool_version", "subject_ref", "arguments"],
+      "title": "HistoryInvocation",
+      "type": "object"
+    },
+    "HistoryResult": {
+      "additionalProperties": false,
+      "properties": {"schema_version": {"const": "1.0.0", "default": "1.0.0", "title": "Schema Version", "type": "string"}, "messages": {"items": {"$ref": "schema.json#/$defs/MemoryMessage"}, "maxItems": 12, "title": "Messages", "type": "array"}, "source_version_digest": {"anyOf": [{"pattern": "^sha256_[a-f0-9]{64}$", "type": "string"}, {"type": "null"}], "title": "Source Version Digest"}},
+      "required": ["messages", "source_version_digest"],
+      "title": "HistoryResult",
+      "type": "object"
+    },
+    "MemoryMessage": {
+      "additionalProperties": false,
+      "properties": {"role": {"enum": ["user", "assistant"], "title": "Role", "type": "string"}, "content": {"maxLength": 20000, "minLength": 1, "title": "Content", "type": "string"}},
+      "required": ["role", "content"],
+      "title": "MemoryMessage",
+      "type": "object"
+    },
+    "context-response": {
+      "additionalProperties": false,
+      "properties": {"tool_call_ref": {"maxLength": 160, "minLength": 8, "pattern": "^[A-Za-z0-9._~-]{8,160}$", "title": "Tool Call Ref", "type": "string"}, "status": {"const": "completed", "default": "completed", "title": "Status", "type": "string"}, "result": {"$ref": "schema.json#/$defs/HistoryResult"}},
+      "required": ["tool_call_ref", "result"],
+      "title": "HistoryResponse",
+      "type": "object"
+    }
+  }
+}
