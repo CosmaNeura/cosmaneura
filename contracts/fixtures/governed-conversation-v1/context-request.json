@@ -1,0 +1,9 @@
+{
+  "tool_name": "conversation.context.read",
+  "tool_version": "1.0.0",
+  "subject_ref": null,
+  "arguments": {
+    "source_turn_ref": "conversation_turn_fictional_example",
+    "detail": "recent"
+  }
+}

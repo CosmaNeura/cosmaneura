@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { emptyHistory } from "./SovereignHistory.fixture"
 import {
   act,
   cleanup,
@@ -113,6 +114,7 @@ async function fixture() {
   const fetchMock = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+      if (url.endsWith("/embed/history")) return json(emptyHistory())
       const authorization = new Headers(init?.headers).get("authorization")
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges.push({

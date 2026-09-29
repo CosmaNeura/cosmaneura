@@ -42,6 +42,7 @@ from app.services.scribe_source_extension_contract import validate_native_extens
 from app.services.scribe_source_start_contract import (
     NativeStartDecision,
     NativeStartReceipt,
+    NativeStartSequenceResult,
     NativeUnstartedRetirement,
 )
 from app.services.scribe_workflow import (
@@ -530,6 +531,11 @@ async def execute_capture_operation(
         operation = protocol.OPERATION_ADAPTER.validate_python(operation.model_dump())
     except (ValueError, TypeError, AttributeError):
         raise CaptureReceiptInvalid from None
+    if (
+        isinstance(operation, protocol.NativeSourceStartSequence)
+        and client_request_key == operation.authorize_idempotency_key
+    ):
+        raise CaptureReceiptInvalid
     try:
         scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
     except AdmissionConsentRequired:
@@ -539,6 +545,46 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
+    if isinstance(operation, protocol.NativeSourceStartSequence):
+        # Both original intents and stop custody already live in the native
+        # journal. Reuse each existing decision and its post-I/O access check.
+        prepared = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.NativeSourceStart(
+                kind="source_start", action="prepare", payload=operation.payload
+            ),
+            client_request_key,
+            client,
+        )
+        # A cancelled request cannot proceed to the next decision. A changed
+        # admission must be rejected before sending the original source proof
+        # to any replacement session.
+        await asyncio.sleep(0)
+        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+            raise CaptureReceiptInvalid
+        authorized = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.NativeSourceStart(
+                kind="source_start", action="authorize", payload=operation.payload
+            ),
+            operation.authorize_idempotency_key,
+            client,
+        )
+        try:
+            return NativeStartSequenceResult.model_validate(
+                {
+                    "preparation": prepared.model_dump(),
+                    "authorization": authorized.model_dump(),
+                }
+            )
+        except ValueError:
+            raise CaptureReceiptInvalid from None
     if operation.kind == "provider_encounter":
         if not isinstance(scope.session_request, ConfiguredSessionCreate):
             raise CaptureOperationUnavailable

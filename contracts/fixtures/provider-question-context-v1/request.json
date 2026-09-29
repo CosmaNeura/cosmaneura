@@ -1,0 +1,10 @@
+{
+  "tool_name": "provider-question.context.read",
+  "tool_version": "1.0.0",
+  "subject_ref": null,
+  "arguments": {
+    "source_turn_ref": "conversation_turn_01j00000000000000000000000",
+    "purpose": "provider_question",
+    "detail": "prep_summary"
+  }
+}

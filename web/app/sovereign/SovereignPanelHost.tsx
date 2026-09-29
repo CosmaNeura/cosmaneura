@@ -4,6 +4,11 @@ import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
+  HistoryAccessDeniedError,
+  type SovereignHistory,
+  loadSovereignHistory,
+} from "./SovereignHistory"
+import {
   SOVEREIGN_PANEL_ASSET_PATH,
   SOVEREIGN_PANEL_INTEGRITY,
 } from "./SovereignPanelAsset"
@@ -33,6 +38,10 @@ type PanelMountOptions = {
   getContext: () => Promise<PanelContext>
   onHumanContact: (action: HumanContactAction) => void | Promise<void>
   onAccessChange: (granted: boolean) => void
+  loadHistory: (
+    recordId: string,
+    options: { signal: AbortSignal },
+  ) => Promise<SovereignHistory>
   shiftContent: boolean
   fabBottom?: string
 }
@@ -508,6 +517,45 @@ export function SovereignPanelHost({
             return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
+          loadHistory: async (recordId, { signal }) => {
+            const controller = new AbortController()
+            const abort = () => controller.abort()
+            const signals = [signal, statusController.signal]
+            signals.forEach((source) =>
+              source.addEventListener("abort", abort, { once: true }),
+            )
+            if (signals.some((source) => source.aborted)) abort()
+            const assertCurrent = () => {
+              controller.signal.throwIfAborted()
+              if (cancelled || accessLost || recordId !== appointmentId) {
+                throw new DOMException("Open record changed", "AbortError")
+              }
+            }
+            try {
+              const history = await loadSovereignHistory({
+                origin: config.origin,
+                getToken: () => mountTokenProvider.getToken(),
+                signal: controller.signal,
+                assertCurrent,
+              })
+              assertCurrent()
+              return history
+            } catch (error) {
+              if (
+                !cancelled &&
+                !accessLost &&
+                error instanceof HistoryAccessDeniedError
+              ) {
+                discardMounted()
+                setRecovery("unavailable")
+              }
+              throw error
+            } finally {
+              signals.forEach((source) =>
+                source.removeEventListener("abort", abort),
+              )
+            }
+          },
           onAccessChange: (granted) => {
             if (cancelled || accessLost) return
             if (granted) {
@@ -518,12 +566,11 @@ export function SovereignPanelHost({
               // request, turn ID, draft or preparation is replayed into it.
               accessLost = true
               finishBootstrap()
+              statusController.abort()
               mountTokenProvider.discard()
               setRecovery("unavailable")
             }
           },
-          // loadHistory is deliberately omitted until the platform exposes the
-          // governed HydratedHistory read operation.
           shiftContent: true,
           // Keep the V7 launcher above the dashboard's existing support pill.
           fabBottom: PROVIDER_V7_FAB_BOTTOM,

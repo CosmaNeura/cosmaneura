@@ -33,7 +33,10 @@ from app.services.scribe_creator_review_contract import (
     CreatorTranslationDecision,
 )
 from app.services.scribe_source_extension_contract import NativeSourceExtension
-from app.services.scribe_source_start_contract import NativeSourceStart
+from app.services.scribe_source_start_contract import (
+    NativeSourceStart,
+    NativeSourceStartSequence,
+)
 
 Channel = Literal["microphone", "system_audio", "mixed"]
 Generation = Annotated[int, Field(strict=True, ge=1)]
@@ -251,6 +254,7 @@ CaptureOperation = Annotated[
     | RecoverCapture
     | DecideTranslation
     | NativeSourceStart
+    | NativeSourceStartSequence
     | NativeSourceExtension
     | SelectCaptureProfile,
     Field(discriminator="kind"),
