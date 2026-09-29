@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { emptyHistory } from "./SovereignHistory.fixture"
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 
 const authority = vi.hoisted(() => ({
@@ -58,6 +59,7 @@ async function fixture() {
           expires_at: new Date(now + 900000).toISOString(),
         })
       }
+      if (String(input).endsWith("/embed/history")) return json(emptyHistory())
       if (String(input).endsWith("/welcome")) {
         return json({
           persona: "provider",
@@ -168,7 +170,7 @@ describe("pending pinned panel load ownership", () => {
     await f.staleCallbacks(old)
     expect(f.mounts).toHaveLength(1)
     expect(f.scripts[1].remove).not.toHaveBeenCalled()
-    expect(f.fetchMock).toHaveBeenCalledTimes(2) // Fresh exchange and welcome only.
+    expect(f.fetchMock).toHaveBeenCalledTimes(3) // Fresh exchange, welcome and recent history.
   })
 
   it("releases a departing appointment's load and ignores its late callbacks", async () => {

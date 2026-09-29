@@ -679,6 +679,26 @@ class HttpScribeWorkflowClient:
             raise ScribeWorkflowRejectedError("scribe_invalid_operation") from None
         prefix = f"/v1/sessions/{session_id}"
         response_type: type[BaseModel]
+        if operation.kind == "source_extend":
+            from app.services.scribe_source_extension_contract import (
+                NativeExtensionDecision,
+            )
+
+            if creator_actor_id is None or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
+            ):
+                raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+            if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
+                raise ScribeWorkflowRejectedError("scribe_invalid_extension_key")
+            return await self._post(
+                f"/v1/captured-sessions/{session_id}/source-extension",
+                tenant_id,
+                operation.payload,
+                idempotency_key,
+                NativeExtensionDecision,
+                max_bytes=8192,
+                creator_actor_id=creator_actor_id,
+            )
         if operation.kind == "source_start":
             from app.services.scribe_source_start_contract import (
                 NativeStartDecision,
@@ -809,6 +829,11 @@ class HttpScribeWorkflowClient:
                 path, response_type = (
                     "/v1/audio-encryption-key",
                     capture_protocol.EncryptionKey,
+                )
+            elif operation.kind == "capture_lease_state":
+                path, response_type = (
+                    prefix + "/capture-lease-state",
+                    capture_protocol.LeaseState,
                 )
             elif operation.kind == "capture_profile":
                 path, response_type = (

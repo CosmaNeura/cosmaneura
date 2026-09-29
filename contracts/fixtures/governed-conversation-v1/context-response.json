@@ -1,0 +1,9 @@
+{
+  "tool_call_ref": "authority_idem_fictional_example",
+  "status": "completed",
+  "result": {
+    "schema_version": "1.0.0",
+    "messages": [],
+    "source_version_digest": null
+  }
+}
