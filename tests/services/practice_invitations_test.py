@@ -5,6 +5,10 @@ import pytest
 
 from app.routes.public_onboarding import _pending_invitation_count
 from app.services import practice_invitations as invitations
+from app.services.doctor_account_closure import (
+    close_doctor_account,
+    plan_doctor_account_closure,
+)
 from app.services.organization_access import configure_provider_organization
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
@@ -15,7 +19,12 @@ from app.services.public_entitlements import (
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember, practice_seat_lock_held
+from app.models.practice import (
+    Practice,
+    PracticeMember,
+    lock_practice_seats,
+    practice_seat_lock_held,
+)
 from app.models.public_onboarding import PracticeInvitation
 from sqlmodel import select
 
@@ -117,6 +126,40 @@ def _fill_seats(practice: Practice, total: int) -> None:
                 role="workforce",
             )
         )
+
+
+@pytest.mark.parametrize("change", ["disabled", "inactive", "role", "attestation"])
+def test_issue_rechecks_owner_loaded_before_authority_changed(change):
+    practice, owner = _practice()
+    with get_session() as session:
+        cached_owner = session.get(PracticeMember, owner.id)
+        cached_doctor = session.get(Doctor, owner.doctor_id)
+        assert cached_owner is not None and cached_doctor is not None
+        with get_session() as writer:
+            assert lock_practice_seats(writer, practice.id) is not None
+            current = writer.get(PracticeMember, owner.id)
+            doctor = writer.get(Doctor, owner.doctor_id)
+            assert current is not None and doctor is not None
+            if change == "disabled":
+                doctor.deleted_at = _now()
+            elif change == "inactive":
+                current.seat_state = "inactive"
+            elif change == "role":
+                current.role = "workforce"
+            else:
+                current.attested_at = None
+            writer.add_all([current, doctor])
+            writer.commit()
+        assert cached_owner.role == "owner" and cached_doctor.deleted_at is None
+        with pytest.raises(invitations.InvitationNotFound):
+            invitations.issue_invitation(
+                session,
+                owner_member=cached_owner,
+                email="stale-owner@synthetic.invalid",
+                idempotency_key=secrets.token_hex(8),
+                now=_now(),
+            )
+    assert not _invitation_rows(practice)
 
 
 def test_issue_stores_only_digests_and_a_normalized_address():
@@ -554,14 +597,51 @@ def test_accept_refuses_a_member_of_another_practice():
 
 
 def test_accept_refuses_a_practice_without_a_baa():
-    _, owner = _practice(baa_accepted_at=None, baa_version=None)
+    practice, owner = _practice()
     invitee = _doctor(label="nobaa")
     issued = _issue(owner, invitee.email)
+    practice.baa_accepted_at = None
+    practice.baa_version = None
+    practice.save()
 
     with pytest.raises(invitations.InvitationConflict):
         _accept(issued.token, invitee)
 
     assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+def test_pending_invitation_cannot_admit_after_sole_owner_closure():
+    _, owner = _practice()
+    invitee = _doctor(domain="synthetic.invalid", label="pending-after-closure")
+    issued = _issue(owner, invitee.email)
+    args = {
+        "doctor_id": owner.doctor_id,
+        "operator_ref": "test:pending-invite-owner-closure",
+        "reason": "Invented sole-owner closure with a pending invitation",
+    }
+    plan = plan_doctor_account_closure(**args)
+    assert close_doctor_account(**args, confirmed_plan_sha256=plan.plan_sha256).changed
+
+    with pytest.raises(invitations.InvitationInactive):
+        _accept(issued.token, invitee)
+
+    assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+def test_accepted_invitation_replay_preserves_member_after_owner_disabled():
+    _, owner = _practice()
+    invitee = _doctor(domain="synthetic.invalid", label="accepted-before-closure")
+    issued = _issue(owner, invitee.email)
+    _, original = _accept(issued.token, invitee)
+    owner_doctor = Doctor.get(id=owner.doctor_id)
+    assert owner_doctor is not None
+    owner_doctor.deleted_at = _now()
+    owner_doctor.save()
+
+    _, replayed = _accept(issued.token, invitee)
+
+    assert replayed.id == original.id
+    assert replayed.seat_state == original.seat_state
 
 
 @pytest.mark.parametrize("conversion", ["negotiated_baa_required", "organization"])

@@ -14,6 +14,11 @@ from fastapi import HTTPException
 
 from app.routes import internal
 from app.services import practice_invitations
+from app.services.doctor_access import resolve_doctor_access
+from app.services.doctor_account_closure import (
+    close_doctor_account,
+    plan_doctor_account_closure,
+)
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
     active_clinician_seat_count,
@@ -24,6 +29,7 @@ from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
 from app.models.public_onboarding import PracticeInvitation
+from sqlmodel import select
 
 from tests.factories import save_practice_member
 
@@ -59,7 +65,10 @@ def _practice(members: int) -> tuple[Practice, PracticeMember]:
     ).save()
     owner = save_practice_member(
         PracticeMember(
-            practice_id=practice.id, doctor_id=_doctor("owner").id, role="owner"
+            practice_id=practice.id,
+            doctor_id=_doctor("owner").id,
+            role="owner",
+            attested_at=datetime.now(timezone.utc),
         )
     )
     for ordinal in range(members - 1):
@@ -156,6 +165,51 @@ def live_emails(monkeypatch: pytest.MonkeyPatch) -> None:
         return (doctor.email or "").strip().lower() if doctor else None
 
     monkeypatch.setattr(internal, "verified_primary_email", current_email)
+
+
+def test_owner_invitation_queued_behind_account_closure_is_refused():
+    practice, owner = _practice(1)
+    practice.is_solo = True
+    practice.stripe_subscription_id = None
+    practice.save()
+    doctor = Doctor.get(id=owner.doctor_id)
+    assert doctor is not None
+    arguments = {
+        "doctor_id": doctor.id,
+        "operator_ref": "test:queued-owner-closure",
+        "reason": "Invented sole-owner closure",
+    }
+    plan = plan_doctor_account_closure(**arguments)
+
+    def queued_invitation():
+        # The request passes the route's access gate before waiting behind
+        # closure on the practice lock. The service must decide again.
+        assert resolve_doctor_access(doctor).allowed
+        try:
+            return _invite(owner, "after-closure@synthetic.invalid")
+        except practice_invitations.InvitationNotFound as error:
+            return error
+
+    outcomes = _race(
+        practice,
+        [
+            lambda: close_doctor_account(
+                **arguments, confirmed_plan_sha256=plan.plan_sha256
+            ),
+            queued_invitation,
+        ],
+    )
+
+    assert outcomes[0].changed is True
+    assert isinstance(outcomes[1], practice_invitations.InvitationNotFound)
+    doctor.refresh()
+    assert doctor.deleted_at is not None
+    with get_session() as session:
+        assert not session.exec(
+            select(PracticeInvitation).where(
+                PracticeInvitation.practice_id == practice.id
+            )
+        ).all()
 
 
 def test_two_invitees_cannot_both_take_the_last_seat(live_emails):
