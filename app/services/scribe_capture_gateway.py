@@ -667,10 +667,22 @@ async def execute_capture_operation(
         raise CaptureOperationUnavailable
     if recovery and not caller.capture_settings.recovery_enabled:
         raise CaptureOperationUnavailable
+    creator_window = (
+        configured
+        and isinstance(
+            operation,
+            (protocol.IssueLease, protocol.RenewLease, protocol.ReserveChunks),
+        )
+        and getattr(operation, "profile_receipt_id", None) is None
+    )
+    if creator_window and scope.creator_actor_id is None:
+        raise CaptureOperationUnavailable
+    # The creator preparation receiver checks the original creator and consent
+    # in the mutation transaction. Other operations retain the separate review.
     # The status receiver rechecks current processing consent, including before
     # global encryption-key reads. The operation receiver checks it atomically.
     try:
-        if configured:
+        if configured and not creator_window:
             await _execute_creator_review(
                 caller,
                 binding_ref,
@@ -680,7 +692,7 @@ async def execute_capture_operation(
                 "configured-capture-current",
                 client,
             )
-        else:
+        elif not configured:
             async with asyncio.timeout(30):
                 status = await client.get_capture_status(
                     scope.tenant_id, scope.session_id
@@ -768,6 +780,8 @@ async def execute_capture_operation(
             extra = (
                 {"practitioner_id": scope.session_request.practitioner_id}
                 if working or recovery or source
+                else {"creator_actor_id": scope.creator_actor_id}
+                if creator_window
                 else {}
             )
             result = await client.capture_operation(
