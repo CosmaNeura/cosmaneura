@@ -2827,6 +2827,63 @@
         "type": "object",
         "title": "BillingPortalBody"
       },
+      "BillingSeatSummary": {
+        "properties": {
+          "account_kind": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "practice"
+            ],
+            "title": "Account Kind"
+          },
+          "active_clinicians": {
+            "type": "integer",
+            "title": "Active Clinicians"
+          },
+          "billed_seats": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Seats"
+          },
+          "seat_sync_pending": {
+            "type": "boolean",
+            "title": "Seat Sync Pending"
+          },
+          "unit_amount": {
+            "type": "integer",
+            "title": "Unit Amount"
+          },
+          "currency": {
+            "type": "string",
+            "const": "usd",
+            "title": "Currency"
+          },
+          "interval": {
+            "type": "string",
+            "const": "month",
+            "title": "Interval"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_kind",
+          "active_clinicians",
+          "billed_seats",
+          "seat_sync_pending",
+          "unit_amount",
+          "currency",
+          "interval"
+        ],
+        "title": "BillingSeatSummary"
+      },
       "BillingSessionUrl": {
         "properties": {
           "url": {
@@ -5019,6 +5076,16 @@
               }
             ],
             "title": "Subscription Status"
+          },
+          "seat_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BillingSeatSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -5047,7 +5114,8 @@
           "billing_subscription_manageable",
           "billing_checkout_available_at",
           "entitled",
-          "subscription_status"
+          "subscription_status",
+          "seat_summary"
         ],
         "title": "PracticeStatus"
       },

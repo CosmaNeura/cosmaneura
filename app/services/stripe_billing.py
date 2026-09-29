@@ -1278,6 +1278,24 @@ def has_nonterminal_subscription(practice: Practice) -> bool:
     )
 
 
+def confirmed_billed_quantity(practice: Practice) -> int | None:
+    """Return the seat quantity Stripe last confirmed, from persisted state only.
+
+    ``stripe_quantity_sync_target`` equals the remote quantity only while no
+    sync obligation is outstanding: a new obligation overwrites it, and the
+    previously confirmed quantity is not retained. Invalid or unverified
+    projections report nothing rather than a quantity Core has not accepted.
+    """
+
+    if (
+        not has_nonterminal_subscription(practice)
+        or practice.subscription_status not in KNOWN_SUBSCRIPTION_STATUSES
+        or practice.stripe_quantity_sync_required
+    ):
+        return None
+    return practice.stripe_quantity_sync_target
+
+
 def _has_complete_core_subscription_binding(practice: Practice) -> bool:
     """Reject manual or partial customer rows before privileged Stripe calls.
 

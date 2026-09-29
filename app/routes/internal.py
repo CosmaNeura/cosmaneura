@@ -73,6 +73,8 @@ from app.services.organization_access import (
 )
 from app.services.public_entitlements import (
     ActiveClinicianSeatLimitReached,
+    ClinicianSeatPolicyError,
+    active_clinician_seat_count,
     lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
@@ -1219,7 +1221,56 @@ def _practice_payload(
         billing_checkout_available_at=stripe_billing.checkout_deferred_until(practice),
         entitled=practice.entitled(),
         subscription_status=practice.subscription_status,
+        seat_summary=(
+            _billing_seat_summary(practice)
+            if member.role == PracticeRole.owner.value
+            else None
+        ),
     )
+
+
+def _billing_seat_summary(practice: Practice) -> "BillingSeatSummary | None":
+    try:
+        with get_session() as session:
+            active = active_clinician_seat_count(session, practice.id)
+    except ClinicianSeatPolicyError:
+        # The status screen must still load, but a corrupt ledger is an
+        # invariant violation operators have to see, not a missing summary.
+        log.error(
+            "active seat ledger invalid while building billing status",
+            event_code="billing_seat_summary_ledger_invalid",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        return None
+    billed = stripe_billing.confirmed_billed_quantity(practice)
+    return BillingSeatSummary(
+        account_kind="solo" if practice.is_solo else "practice",
+        active_clinicians=active,
+        billed_seats=billed,
+        seat_sync_pending=bool(
+            stripe_billing.has_nonterminal_subscription(practice)
+            and (
+                practice.stripe_quantity_sync_required
+                or (billed is not None and billed != active)
+            )
+        ),
+        unit_amount=stripe_billing.EXPECTED_PRICE_UNIT_AMOUNT,
+        currency=stripe_billing.EXPECTED_PRICE_CURRENCY,
+        interval=stripe_billing.EXPECTED_PRICE_INTERVAL,
+    )
+
+
+class BillingSeatSummary(BaseModel, extra="forbid"):
+    account_kind: Literal["solo", "practice"]
+    active_clinicians: int
+    billed_seats: int | None
+    "Stripe-confirmed quantity; null while unconfirmed or without a live subscription."
+    seat_sync_pending: bool
+    unit_amount: int
+    "Per-seat price in the currency's minor unit; Checkout refuses any other price."
+    currency: Literal["usd"]
+    interval: Literal["month"]
 
 
 class PracticeStatus(BaseModel, extra="forbid"):
@@ -1247,6 +1298,8 @@ class PracticeStatus(BaseModel, extra="forbid"):
     billing_checkout_available_at: datetime | None
     entitled: bool
     subscription_status: str | None
+    seat_summary: BillingSeatSummary | None
+    "Owner-only; workforce and join-code lookups never receive billing seats."
 
 
 class PracticeLookupResult(BaseModel, extra="forbid"):
@@ -1843,6 +1896,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             ),
             entitled=practice.entitled(),
             subscription_status=practice.subscription_status,
+            seat_summary=None,
         )
     )
 

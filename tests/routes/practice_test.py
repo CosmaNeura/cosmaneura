@@ -7,6 +7,7 @@ import pytest
 from fastapi import status
 from fastapi.exceptions import HTTPException
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 from app.configuration.redis import get_redis
 from app.routes import internal
@@ -14,6 +15,7 @@ from app.server import api_app
 from app.services import stripe_billing
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
+    ClinicianSeatPolicyError,
     active_clinician_seat_count,
 )
 from app.utils.email_domain import extract_email_domain
@@ -1284,3 +1286,264 @@ def test_future_negotiated_baa_does_not_open_phi_gate(
     practice.save()
     opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert opened.status_code == status.HTTP_200_OK
+
+
+def _add_active_clinicians(practice: Practice, count: int) -> None:
+    for _ in range(count):
+        clinician = Doctor(
+            clerk_id=f"user_seat_{secrets.token_hex(8)}",
+            email=f"seat-{secrets.token_hex(4)}@{practice.email_domain}",
+            biography="",
+        ).save()
+        save_practice_member(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=clinician.id,
+                role="workforce",
+            )
+        )
+
+
+def _bind_subscription(
+    practice: Practice,
+    *,
+    subscription_status: str,
+    quantity: int | None,
+    sync_required: bool = False,
+) -> None:
+    suffix = secrets.token_hex(6)
+    practice.stripe_customer_id = f"cus_seats_{suffix}"
+    practice.stripe_subscription_id = f"sub_seats_{suffix}"
+    practice.stripe_state_version = 1
+    practice.subscription_status = subscription_status
+    practice.stripe_quantity_sync_target = quantity
+    practice.stripe_quantity_sync_required = sync_required
+    practice.save()
+
+
+def _seat_summary(client: TestClient) -> dict | None:
+    resp = client.get(api_app.url_path_for("practice_status"))
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    return resp.json()["seat_summary"]
+
+
+def test_solo_owner_seat_summary_before_checkout(
+    bare_authenticated_client: TestClient,
+):
+    body = _create_practice(bare_authenticated_client)
+
+    assert body["seat_summary"] == {
+        "account_kind": "solo",
+        "active_clinicians": 1,
+        "billed_seats": None,
+        "seat_sync_pending": False,
+        "unit_amount": stripe_billing.EXPECTED_PRICE_UNIT_AMOUNT,
+        "currency": "usd",
+        "interval": "month",
+    }
+
+
+def test_practice_owner_sees_confirmed_billed_seats(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client, is_solo=False)
+    practice = _own_practice(doctor)
+    _add_active_clinicians(practice, 3)
+    _bind_subscription(practice, subscription_status="active", quantity=4)
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["account_kind"] == "practice"
+    assert summary["active_clinicians"] == 4
+    assert summary["billed_seats"] == 4
+    assert summary["seat_sync_pending"] is False
+
+
+def test_outstanding_quantity_sync_reports_pending_without_a_stale_count(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def forbidden_remote_read(*_args, **_kwargs):
+        raise AssertionError("billing status must not call Stripe")
+
+    monkeypatch.setattr(stripe_billing, "_request", forbidden_remote_read)
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client, is_solo=False)
+    practice = _own_practice(doctor)
+    _add_active_clinicians(practice, 3)
+    _bind_subscription(
+        practice, subscription_status="active", quantity=4, sync_required=True
+    )
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["active_clinicians"] == 4
+    assert summary["billed_seats"] is None
+    assert summary["seat_sync_pending"] is True
+
+
+def test_confirmed_quantity_behind_the_roster_reports_pending(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client, is_solo=False)
+    practice = _own_practice(doctor)
+    _add_active_clinicians(practice, 3)
+    _bind_subscription(practice, subscription_status="active", quantity=3)
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["active_clinicians"] == 4
+    assert summary["billed_seats"] == 3
+    assert summary["seat_sync_pending"] is True
+
+
+@pytest.mark.parametrize(
+    ("subscription_status", "billed_seats"),
+    [
+        ("trialing", 1),
+        ("active", 1),
+        ("past_due", 1),
+        ("unpaid", 1),
+        ("paused", 1),
+        ("incomplete", 1),
+        ("canceled", None),
+        ("incomplete_expired", None),
+        ("invalid", None),
+        ("pending_verification", None),
+    ],
+)
+def test_billed_seats_follow_subscription_state(
+    bare_authenticated_client: TestClient,
+    subscription_status: str,
+    billed_seats: int | None,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    _bind_subscription(
+        _own_practice(doctor),
+        subscription_status=subscription_status,
+        quantity=1,
+    )
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["account_kind"] == "solo"
+    assert summary["billed_seats"] == billed_seats
+    assert summary["seat_sync_pending"] is False
+
+
+def test_terminal_subscription_is_never_pending_sync(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    _bind_subscription(
+        _own_practice(doctor),
+        subscription_status="canceled",
+        quantity=None,
+        sync_required=True,
+    )
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["billed_seats"] is None
+    assert summary["seat_sync_pending"] is False
+
+
+def test_exempt_practice_reports_seats_without_billing(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.billing_exempt = True
+    practice.save()
+
+    summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is not None
+    assert summary["active_clinicians"] == 1
+    assert summary["billed_seats"] is None
+    assert summary["seat_sync_pending"] is False
+
+
+def test_invalid_seat_ledger_hides_summary_and_alerts_operators(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client, is_solo=False)
+    practice = _own_practice(doctor)
+    _bind_subscription(practice, subscription_status="active", quantity=1)
+
+    def invalid_ledger(*_args, **_kwargs):
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    monkeypatch.setattr(internal, "active_clinician_seat_count", invalid_ledger)
+
+    with capture_logs() as logs:
+        summary = _seat_summary(bare_authenticated_client)
+
+    assert summary is None
+    assert [
+        entry
+        for entry in logs
+        if entry.get("event_code") == "billing_seat_summary_ledger_invalid"
+        and entry["log_level"] == "error"
+        and entry["practice_id"] == str(practice.id)
+    ]
+
+
+def test_workforce_member_does_not_receive_seat_summary(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Workforce Seat Practice, PLLC",
+        join_code=f"W{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+    ).save()
+    save_practice_member(
+        PracticeMember(practice_id=practice.id, doctor_id=doctor.id, role="workforce")
+    )
+    _bind_subscription(practice, subscription_status="active", quantity=1)
+
+    assert _seat_summary(bare_authenticated_client) is None
+
+
+def test_join_code_lookup_does_not_disclose_seat_summary(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Lookup Seat Practice, PLLC",
+        join_code=f"L{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+    ).save()
+
+    resp = bare_authenticated_client.post(
+        api_app.url_path_for("lookup_practice"),
+        json={"join_code": practice.join_code},
+    )
+
+    assert resp.status_code == status.HTTP_200_OK, resp.text
+    looked_up = resp.json()["practice"]
+    assert looked_up is not None
+    assert looked_up["seat_summary"] is None
