@@ -44,6 +44,8 @@ from app.models.superadmin_capability import (
     SuperadminCapabilityKind,
 )
 
+from tests.factories import save_practice_member
+
 SUPERADMIN_ISSUER = "https://staging.example.clerk.accounts.dev"
 
 
@@ -67,13 +69,15 @@ def _scope(*, is_solo: bool = True, role: str = "owner"):
         baa_signature_name="Retained Signer",
         baa_signature_title="Owner",
     ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=role,
-        attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-        attestation_name="Retained Signer",
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role=role,
+            attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            attestation_name="Retained Signer",
+        )
+    )
     return doctor, practice, member
 
 
@@ -273,13 +277,15 @@ def test_closure_refuses_owner_while_another_active_member_remains():
         email=f"other-{secrets.token_hex(5)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=other.id,
-        role="workforce",
-        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        attestation_name="Other Provider",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=other.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Other Provider",
+        )
+    )
 
     with pytest.raises(DoctorAccountClosureError, match="transfer ownership first"):
         plan_doctor_account_closure(
@@ -348,13 +354,15 @@ def test_closure_permits_non_owner_and_leaves_owner_active():
         email=f"workforce-{secrets.token_hex(5)}@example.com",
         biography="",
     ).save()
-    workforce_member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=workforce.id,
-        role="workforce",
-        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        attestation_name="Workforce Provider",
-    ).save()
+    workforce_member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=workforce.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Workforce Provider",
+        )
+    )
     args = {
         "doctor_id": workforce.id,
         "operator_ref": "change:workforce-closure-test",
@@ -469,7 +477,7 @@ def test_closure_retry_refuses_missing_grant_evidence():
     member.access_revoked_by_ref = operator_ref
     member.access_revocation_reason = reason
     member.access_records_retain_until = retain_until
-    member.save()
+    save_practice_member(member)
     PracticeAccessAudit(
         practice_id=practice.id,
         action=PracticeAccessAction.doctor_account_closed.value,

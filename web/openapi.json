@@ -1203,6 +1203,33 @@
         ]
       }
     },
+    "/internal/v1/practice/members": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Roster",
+        "description": "The practice's members, for its owner. Carries no contact details.",
+        "operationId": "practice_roster",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRoster"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/practice/lookup": {
       "post": {
         "tags": [
@@ -2826,6 +2853,63 @@
         "additionalProperties": false,
         "type": "object",
         "title": "BillingPortalBody"
+      },
+      "BillingSeatSummary": {
+        "properties": {
+          "account_kind": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "practice"
+            ],
+            "title": "Account Kind"
+          },
+          "active_clinicians": {
+            "type": "integer",
+            "title": "Active Clinicians"
+          },
+          "billed_seats": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Seats"
+          },
+          "seat_sync_pending": {
+            "type": "boolean",
+            "title": "Seat Sync Pending"
+          },
+          "unit_amount": {
+            "type": "integer",
+            "title": "Unit Amount"
+          },
+          "currency": {
+            "type": "string",
+            "const": "usd",
+            "title": "Currency"
+          },
+          "interval": {
+            "type": "string",
+            "const": "month",
+            "title": "Interval"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_kind",
+          "active_clinicians",
+          "billed_seats",
+          "seat_sync_pending",
+          "unit_amount",
+          "currency",
+          "interval"
+        ],
+        "title": "BillingSeatSummary"
       },
       "BillingSessionUrl": {
         "properties": {
@@ -4877,6 +4961,79 @@
         "type": "object",
         "title": "PracticeLookupResult"
       },
+      "PracticeRoster": {
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeRosterMember"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "members"
+        ],
+        "title": "PracticeRoster"
+      },
+      "PracticeRosterMember": {
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          },
+          "is_self": {
+            "type": "boolean",
+            "title": "Is Self"
+          },
+          "seat_active": {
+            "type": "boolean",
+            "title": "Seat Active"
+          },
+          "revoked": {
+            "type": "boolean",
+            "title": "Revoked"
+          },
+          "access_in_force": {
+            "type": "boolean",
+            "title": "Access In Force"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Joined At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "display_name",
+          "role",
+          "is_self",
+          "seat_active",
+          "revoked",
+          "access_in_force",
+          "joined_at"
+        ],
+        "title": "PracticeRosterMember"
+      },
       "PracticeStatus": {
         "properties": {
           "legal_name": {
@@ -5019,6 +5176,16 @@
               }
             ],
             "title": "Subscription Status"
+          },
+          "seat_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BillingSeatSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -5047,7 +5214,8 @@
           "billing_subscription_manageable",
           "billing_checkout_available_at",
           "entitled",
-          "subscription_status"
+          "subscription_status",
+          "seat_summary"
         ],
         "title": "PracticeStatus"
       },

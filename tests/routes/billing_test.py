@@ -30,6 +30,7 @@ from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGran
 from app.models.practice import Practice, PracticeMember
 from app.models.stripe_event_inbox import StripeEventInbox
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user
 
 STRIPE_WEBHOOK_PATH = "/external/v1/webhooks/stripe"
@@ -922,12 +923,14 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
         email=f"webhook-owner-{secrets.token_hex(4)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=owner.id,
-        role="owner",
-        attested_at=datetime.now(timezone.utc),
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=owner.id,
+            role="owner",
+            attested_at=datetime.now(timezone.utc),
+        )
+    )
     subscription = _subscription(practice, status_value="active")
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]

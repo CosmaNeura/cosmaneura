@@ -35,7 +35,7 @@ from app.models.authority import AuthorityActorExternalIdentity
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
@@ -99,6 +99,7 @@ def real_record_capture(capture_engine, monkeypatch):
                 appointment_date=now,
                 external_id=None,
             )
+            assert lock_practice_seats(session, practice.id) is not None
             session.add_all(
                 [
                     previous,

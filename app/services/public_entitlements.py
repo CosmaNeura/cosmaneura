@@ -9,8 +9,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models.practice import ClinicianSeatState, Practice, PracticeMember
-from sqlalchemy import func, or_
+from app.models.practice import (
+    ClinicianSeatState,
+    Practice,
+    PracticeMember,
+    lock_practice_seats,
+    practice_seat_lock_held,
+)
+from sqlalchemy import ColumnElement, and_, func, or_
 from sqlmodel import Session, col, select
 
 PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
@@ -48,12 +54,19 @@ def lock_practice_for_active_seat_mutation(
 ) -> Practice:
     """Serialize every active-seat decision on the owning practice."""
 
-    practice = session.exec(
-        select(Practice).where(Practice.id == practice_id).with_for_update()
-    ).one_or_none()
+    practice = lock_practice_seats(session, practice_id)
     if practice is None:
         raise ClinicianSeatPolicyError("practice seat ledger is unavailable")
     return practice
+
+
+def occupies_active_clinician_seat() -> ColumnElement[bool]:
+    """The one membership predicate behind the billed seat quantity."""
+
+    return and_(
+        col(PracticeMember.seat_state) == ClinicianSeatState.active.value,
+        col(PracticeMember.access_revoked_at).is_(None),
+    )
 
 
 def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
@@ -88,8 +101,7 @@ def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
         .select_from(PracticeMember)
         .where(
             PracticeMember.practice_id == practice_id,
-            PracticeMember.seat_state == ClinicianSeatState.active.value,
-            col(PracticeMember.access_revoked_at).is_(None),
+            occupies_active_clinician_seat(),
         )
     ).one()
     return int(count)
@@ -113,6 +125,8 @@ def record_active_clinician_seat_quantity(
 ) -> int:
     """Persist the exact Stripe quantity obligation in the seat transaction."""
 
+    if not practice_seat_lock_held(session, locked_practice.id):
+        raise ClinicianSeatPolicyError("practice seat ledger is not locked")
     session.flush()
     count = active_clinician_seat_count(session, locked_practice.id)
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:

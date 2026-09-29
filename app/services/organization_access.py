@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from app.services.public_entitlements import lock_practice_for_active_seat_mutation
+
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.organization_access import (
@@ -1032,13 +1034,21 @@ def doctor_has_managed_roster_assignment(
 
 
 def member_authorization_basis(
-    member: PracticeMember, *, at: datetime | None = None
+    member: PracticeMember,
+    *,
+    at: datetime | None = None,
+    practice: Practice | None = None,
 ) -> str | None:
-    """Return the live authorization basis without manufacturing attestation."""
+    """Return the live authorization basis without manufacturing attestation.
+
+    ``practice`` lets a caller that already loaded the member's practice skip
+    reloading it.
+    """
 
     if member.access_revoked_at is not None:
         return None
-    practice = Practice.get(id=member.practice_id)
+    if practice is None or practice.id != member.practice_id:
+        practice = Practice.get(id=member.practice_id)
     if practice is None:
         return None
     # Once a practice is organization-managed, exact roster authorization is
@@ -1432,11 +1442,9 @@ def claim_roster_access(
         # All organization-access mutations take the practice lock first. This
         # serializes import, claim, rotation, and offboarding and avoids lock
         # cycles between those workflows.
-        practice = session.exec(
-            select(Practice)
-            .where(Practice.id == opportunity.practice.id)
-            .with_for_update()
-        ).one()
+        practice = lock_practice_for_active_seat_mutation(
+            session, opportunity.practice.id
+        )
         organization = session.exec(
             select(ProviderOrganization)
             .where(ProviderOrganization.id == opportunity.organization.id)
@@ -1594,9 +1602,7 @@ def revoke_roster_access(
     retain_until = _seven_calendar_years_after(current)
 
     with get_session() as session:
-        locked_practice = session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        locked_practice = lock_practice_for_active_seat_mutation(session, practice.id)
         if locked_practice.organization_id is None:
             raise OrganizationAccessError(
                 "offboarding requires an organization-managed practice"

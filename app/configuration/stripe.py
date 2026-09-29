@@ -23,6 +23,19 @@ STRIPE_LIVE_MODE = config("STRIPE_LIVE_MODE", default=False, cast=bool)
 # 2026-08-20. A mutable environment value alone must never select the contract.
 SUPPORTED_STRIPE_API_VERSION = "2025-09-30.clover"
 
+# Outbound requests speak exactly one version. Inbound events are a different
+# problem: the version on a webhook is chosen by the endpoint's configuration in
+# the Stripe dashboard, which no deploy of this repository can change. Gating
+# events on `SUPPORTED_STRIPE_API_VERSION` alone makes the two settings a single
+# atomic flip, and every subscription and invoice event that arrives in the gap
+# is rejected before it reaches the durable inbox.
+#
+# Widening this set to {old, new} opens a migration window: deploy with both
+# accepted, change the endpoint in the dashboard, then narrow it back. It is a
+# code constant rather than an environment variable on purpose — same reason as
+# above, and so that a window left open shows up in review.
+ACCEPTED_EVENT_API_VERSIONS = frozenset({SUPPORTED_STRIPE_API_VERSION})
+
 
 def _secret_mode_matches() -> bool:
     expected = (
