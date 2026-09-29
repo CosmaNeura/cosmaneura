@@ -153,6 +153,7 @@ def test_issue_rechecks_owner_loaded_before_authority_changed(change):
                 owner_member=cached_owner,
                 email="stale-owner@synthetic.invalid",
                 idempotency_key=secrets.token_hex(8),
+                now=_now(),
             )
     assert not _invitation_rows(practice)
 

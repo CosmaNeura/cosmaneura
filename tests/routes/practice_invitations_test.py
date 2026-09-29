@@ -616,7 +616,12 @@ def test_link_used_by_another_account_is_inactive_to_its_addressee():
     owner = _doctor()
     invitee = _doctor()
     save_practice_member(
-        PracticeMember(practice_id=practice.id, doctor_id=owner.id, role="owner")
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=owner.id,
+            role="owner",
+            attested_at=datetime.now(timezone.utc),
+        )
     )
     now = datetime.now(timezone.utc)
     with get_session() as session:

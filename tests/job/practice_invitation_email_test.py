@@ -38,6 +38,7 @@ def _issue(*, now: datetime | None = None) -> practice_invitations.IssuedInvitat
             doctor_id=owner_doctor.id,
             role="owner",
             attestation_name="Dana Owner",
+            attested_at=datetime.now(timezone.utc),
         )
     )
     with get_session() as session:
