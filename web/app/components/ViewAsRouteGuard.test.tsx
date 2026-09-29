@@ -21,6 +21,7 @@ import { act, render, screen } from "@testing-library/react"
 
 vi.mock("@clerk/clerk-react", () => ({
   UserButton: () => <button>Clerk account menu</button>,
+  useUser: () => ({ user: { primaryEmailAddress: { emailAddress: "provider@synthetic.invalid" } } }),
 }))
 
 vi.mock("~/lib/view-as-api", async (importOriginal) => {

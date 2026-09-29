@@ -40,6 +40,7 @@ from .routes.companion_appointment_setup import (
     install as install_companion_appointment_setup,
 )
 from .routes.companion_encounters import install as install_companion_encounters
+from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.companion_records import install as install_companion_records
 from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
 from .routes.companion_session_prep import router as companion_session_prep_router
@@ -123,6 +124,7 @@ add_middleware(api_app)
 install_companion_records(api_app)
 install_companion_encounters(api_app)
 install_companion_appointment_setup(api_app)
+install_scribe_encounters(api_app)
 install_capture_boundaries(api_app)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
