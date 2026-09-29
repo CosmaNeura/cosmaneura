@@ -16,6 +16,33 @@ from app.configuration import stripe as stripe_config
 from app.services import stripe_billing
 
 
+@pytest.mark.parametrize("body", [[], "unavailable", {"error": "unavailable"}])
+def test_malformed_error_body_preserves_http_failure(monkeypatch, slept, body):
+    calls = _drive(monkeypatch, [httpx.Response(503, json=body) for _ in range(3)])
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        stripe_billing._request("GET", "/account")
+
+    assert raised.value.response.status_code == 503
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("retry_after", ["-1", "nan", "-inf"])
+def test_invalid_retry_delay_uses_bounded_backoff(monkeypatch, slept, retry_after):
+    _drive(
+        monkeypatch,
+        [
+            httpx.Response(429, headers={"retry-after": retry_after}),
+            httpx.Response(200, json={}),
+        ],
+    )
+
+    stripe_billing._request("GET", "/account")
+
+    assert len(slept) == 1
+    assert 0 < slept[0] <= stripe_billing._RETRY_MAX_DELAY_SECONDS
+
+
 @pytest.fixture(autouse=True)
 def configured(monkeypatch):
     """Satisfy `stripe_runtime_configured()` without touching a real account."""

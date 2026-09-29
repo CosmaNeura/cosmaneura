@@ -280,8 +280,11 @@ def _stripe_error_detail(response: httpx.Response) -> str:
 
     request_id = response.headers.get("request-id", "")
     try:
-        error = response.json().get("error") or {}
+        body = response.json()
     except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
         error = {}
     fields = {
         "type": error.get("type"),
@@ -322,7 +325,9 @@ def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
         retry_after = response.headers.get("retry-after")
         if retry_after:
             try:
-                return min(float(retry_after), _RETRY_MAX_DELAY_SECONDS)
+                delay = float(retry_after)
+                if math.isfinite(delay) and delay >= 0:
+                    return min(delay, _RETRY_MAX_DELAY_SECONDS)
             except ValueError:
                 pass
     backoff = min(_RETRY_BASE_DELAY_SECONDS * (2**attempt), _RETRY_MAX_DELAY_SECONDS)
