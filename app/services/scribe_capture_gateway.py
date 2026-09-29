@@ -38,9 +38,11 @@ from app.services.scribe_creator_review_contract import (
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
+from app.services.scribe_source_extension_contract import validate_native_extension
 from app.services.scribe_source_start_contract import (
     NativeStartDecision,
     NativeStartReceipt,
+    NativeStartSequenceResult,
     NativeUnstartedRetirement,
 )
 from app.services.scribe_workflow import (
@@ -291,6 +293,23 @@ def validate_receipt(
     capture_profile: protocol.CaptureProfileReceipt | None = None,
 ) -> BaseModel:
     """Validate even injected clients; retained or malformed receipts grant nothing."""
+    if isinstance(operation, protocol.NativeSourceExtension):
+        try:
+            if (
+                not isinstance(scope.session_request, ConfiguredSessionCreate)
+                or scope.creator_actor_id is None
+            ):
+                raise ValueError
+            return validate_native_extension(
+                operation,
+                receipt.model_dump(mode="json"),
+                scope.session_id,
+                scope.creator_actor_id,
+                now or datetime.now(UTC),
+                scope.session_request.consent_record_id,
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise CaptureReceiptInvalid from None
     if isinstance(operation, protocol.NativeSourceStart):
         return _validate_source_start(
             operation, receipt, scope, now or datetime.now(UTC)
@@ -305,6 +324,7 @@ def validate_receipt(
         "bind_key": protocol.KeyReceipt,
         "issue_lease": protocol.LeaseReceipt,
         "renew_lease": protocol.LeaseReceipt,
+        "capture_lease_state": protocol.LeaseState,
         "reserve_chunks": protocol.ReservationReceipt,
         "authorize_upload": protocol.UploadReceipt,
         "chunk_receipt": protocol.ChunkReceipt,
@@ -511,6 +531,11 @@ async def execute_capture_operation(
         operation = protocol.OPERATION_ADAPTER.validate_python(operation.model_dump())
     except (ValueError, TypeError, AttributeError):
         raise CaptureReceiptInvalid from None
+    if (
+        isinstance(operation, protocol.NativeSourceStartSequence)
+        and client_request_key == operation.authorize_idempotency_key
+    ):
+        raise CaptureReceiptInvalid
     try:
         scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
     except AdmissionConsentRequired:
@@ -520,6 +545,46 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
+    if isinstance(operation, protocol.NativeSourceStartSequence):
+        # Both original intents and stop custody already live in the native
+        # journal. Reuse each existing decision and its post-I/O access check.
+        prepared = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.NativeSourceStart(
+                kind="source_start", action="prepare", payload=operation.payload
+            ),
+            client_request_key,
+            client,
+        )
+        # A cancelled request cannot proceed to the next decision. A changed
+        # admission must be rejected before sending the original source proof
+        # to any replacement session.
+        await asyncio.sleep(0)
+        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+            raise CaptureReceiptInvalid
+        authorized = await _execute_creator_review(
+            caller,
+            binding_ref,
+            workspace_id,
+            scope,
+            protocol.NativeSourceStart(
+                kind="source_start", action="authorize", payload=operation.payload
+            ),
+            operation.authorize_idempotency_key,
+            client,
+        )
+        try:
+            return NativeStartSequenceResult.model_validate(
+                {
+                    "preparation": prepared.model_dump(),
+                    "authorization": authorized.model_dump(),
+                }
+            )
+        except ValueError:
+            raise CaptureReceiptInvalid from None
     if operation.kind == "provider_encounter":
         if not isinstance(scope.session_request, ConfiguredSessionCreate):
             raise CaptureOperationUnavailable
@@ -560,7 +625,17 @@ async def execute_capture_operation(
             session_id=scope.session_id,
             status=view.status,
         )
-    if operation.kind in {"creator_review", "decide_translation", "source_start"}:
+    if (
+        operation.kind == "source_extend"
+        and not caller.capture_settings.long_visits_enabled
+    ):
+        raise CaptureOperationUnavailable
+    if operation.kind in {
+        "creator_review",
+        "decide_translation",
+        "source_start",
+        "source_extend",
+    }:
         return await _execute_creator_review(
             caller,
             binding_ref,
@@ -735,7 +810,7 @@ async def _execute_creator_review(
     client: ScribeWorkflowClient,
 ) -> BaseModel:
     if scope.creator_actor_id is None or (
-        operation.kind == "source_start"
+        operation.kind in {"source_start", "source_extend"}
         and not isinstance(scope.session_request, ConfiguredSessionCreate)
     ):
         raise CaptureOperationUnavailable
