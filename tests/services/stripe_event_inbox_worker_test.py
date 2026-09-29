@@ -19,7 +19,9 @@ from app.configuration import stripe as stripe_config
 from app.jobs import stripe_billing as stripe_billing_job
 from app.jobs import stripe_events as stripe_events_job
 from app.services import stripe_billing
+from app.services.public_entitlements import lock_practice_seats
 
+from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember, PracticeRole
 from app.models.stripe_event_inbox import StripeEventInbox
@@ -206,12 +208,17 @@ def _bound_practice(subscription_id: str) -> Practice:
         email=f"sweep-{secrets.token_hex(4)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=owner.id,
-        role=PracticeRole.owner.value,
-        attested_at=datetime.now(timezone.utc),
-    ).save()
+    with get_session() as session:
+        lock_practice_seats(session, practice.id)
+        session.add(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=owner.id,
+                role=PracticeRole.owner.value,
+                attested_at=datetime.now(timezone.utc),
+            )
+        )
+        session.commit()
     return practice
 
 
