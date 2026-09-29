@@ -26,6 +26,10 @@ from app.services.organization_access import (
     lock_roster_enrollment_email,
     normalize_email,
 )
+from app.services.practice_owner_access import (
+    PracticeOwnerUnavailable,
+    lock_authorized_practice_owner,
+)
 from app.services.public_entitlements import (
     lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
@@ -181,19 +185,14 @@ def _lock_owner_practice(
     session: Session, owner_member: PracticeMember, *, issuing: bool = True
 ) -> Practice:
     practice = lock_practice_for_active_seat_mutation(session, owner_member.practice_id)
-    owner = session.exec(
-        select(PracticeMember).where(PracticeMember.id == owner_member.id)
-    ).one_or_none()
-    if (
-        owner is None
-        or owner.practice_id != practice.id
-        or owner.role != PracticeRole.owner.value
-    ):
-        raise InvitationNotFound
     if issuing and (
         practice.organization_id is not None or practice.negotiated_baa_required
     ):
         raise _managed_practice_conflict()
+    try:
+        lock_authorized_practice_owner(session, practice, owner_member)
+    except PracticeOwnerUnavailable:
+        raise InvitationNotFound from None
     return practice
 
 

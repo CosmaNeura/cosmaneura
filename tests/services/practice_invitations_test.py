@@ -15,7 +15,7 @@ from app.services.public_entitlements import (
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.public_onboarding import PracticeInvitation
 from sqlmodel import select
 
@@ -118,6 +118,39 @@ def _fill_seats(practice: Practice, total: int) -> None:
                 role="workforce",
             )
         )
+
+
+@pytest.mark.parametrize("change", ["disabled", "inactive", "role", "attestation"])
+def test_issue_rechecks_owner_loaded_before_authority_changed(change):
+    practice, owner = _practice()
+    with get_session() as session:
+        cached_owner = session.get(PracticeMember, owner.id)
+        cached_doctor = session.get(Doctor, owner.doctor_id)
+        assert cached_owner is not None and cached_doctor is not None
+        with get_session() as writer:
+            assert lock_practice_seats(writer, practice.id) is not None
+            current = writer.get(PracticeMember, owner.id)
+            doctor = writer.get(Doctor, owner.doctor_id)
+            assert current is not None and doctor is not None
+            if change == "disabled":
+                doctor.deleted_at = _now()
+            elif change == "inactive":
+                current.seat_state = "inactive"
+            elif change == "role":
+                current.role = "workforce"
+            else:
+                current.attested_at = None
+            writer.add_all([current, doctor])
+            writer.commit()
+        assert cached_owner.role == "owner" and cached_doctor.deleted_at is None
+        with pytest.raises(invitations.InvitationNotFound):
+            invitations.issue_invitation(
+                session,
+                owner_member=cached_owner,
+                email="stale-owner@synthetic.invalid",
+                idempotency_key=secrets.token_hex(8),
+            )
+    assert not _invitation_rows(practice)
 
 
 def test_issue_stores_only_digests_and_a_normalized_address():
@@ -555,9 +588,12 @@ def test_accept_refuses_a_member_of_another_practice():
 
 
 def test_accept_refuses_a_practice_without_a_baa():
-    _, owner = _practice(baa_accepted_at=None, baa_version=None)
+    practice, owner = _practice()
     invitee = _doctor(label="nobaa")
     issued = _issue(owner, invitee.email)
+    practice.baa_accepted_at = None
+    practice.baa_version = None
+    practice.save()
 
     with pytest.raises(invitations.InvitationConflict):
         _accept(issued.token, invitee)
