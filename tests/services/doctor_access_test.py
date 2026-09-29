@@ -4,12 +4,23 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.services.doctor_access import resolve_doctor_access
+from app.services.doctor_access import (
+    practice_members_access_in_force,
+    resolve_doctor_access,
+)
+from app.services.organization_access import (
+    RosterApprovalInput,
+    claim_roster_access,
+    configure_provider_organization,
+    import_roster_approvals,
+)
 
+from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
+from sqlmodel import col, select
 
 from tests.factories import save_practice_member
 
@@ -310,3 +321,155 @@ def test_acquisition_provenance_is_authorization_neutral(
     assert decision.allowed is True
     assert decision.authorization_basis == "workforce_attestation"
     assert not hasattr(PracticeMember, "credential_state")
+
+
+def _member(
+    practice: Practice,
+    label: str,
+    *,
+    role: str = "workforce",
+    attested: bool = True,
+    onboarded: bool = False,
+    **overrides,
+) -> Doctor:
+    nonce = secrets.token_hex(4)
+    doctor = Doctor(
+        clerk_id=f"user_access_{label}_{nonce}",
+        email=f"access-{label}-{nonce}@{practice.email_domain}",
+        biography="",
+        onboarding_completed_at=datetime.now(timezone.utc) if onboarded else None,
+    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role=role,
+            attested_at=datetime.now(timezone.utc) if attested else None,
+            attestation_name=f"Clinician {label}" if attested else None,
+            **overrides,
+        )
+    )
+    return doctor
+
+
+def _revocation() -> dict:
+    now = datetime.now(timezone.utc)
+    return {
+        "access_revoked_at": now,
+        "access_revoked_by_ref": "test-suite",
+        "access_revocation_reason": "Test offboarding",
+        "access_records_retain_until": now + timedelta(days=365 * 8),
+    }
+
+
+def _independent_practice(*, entitled: bool) -> Practice:
+    domain = f"batch-{secrets.token_hex(4)}.example.com"
+    practice = Practice(
+        legal_name="Batch Access Practice",
+        join_code=f"B{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+        billing_exempt=entitled,
+    ).save()
+    _member(practice, "owner", role="owner")
+    _member(practice, "active")
+    _member(practice, "unattested", attested=False)
+    _member(practice, "inactive", seat_state="inactive")
+    _member(practice, "revoked", **_revocation())
+    _grant(
+        _member(practice, "pilot", attested=False, onboarded=True),
+        practice=practice,
+    )
+    _grant(_member(practice, "bound-grant"), practice=practice)
+    _grant(
+        _member(practice, "revoked-pilot-member", onboarded=True, **_revocation()),
+        practice=practice,
+    )
+    _grant(_member(practice, "grant-tombstone"), practice=practice, revoked=True)
+    disabled = _member(practice, "disabled")
+    disabled.deleted_at = datetime.now(timezone.utc)
+    disabled.save()
+    return practice
+
+
+def _organization_practice() -> Practice:
+    now = datetime.now(timezone.utc) - timedelta(minutes=5)
+    domain = f"batch-org-{secrets.token_hex(4)}.example.com"
+    practice = Practice(
+        legal_name="Batch Organization Practice",
+        join_code=f"O{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=now - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+        billing_exempt=True,
+    ).save()
+    _, code, _ = configure_provider_organization(
+        practice,
+        legal_name=f"{domain} Provider Organization",
+        slug=f"batch-{secrets.token_hex(5)}",
+        email_domain=domain,
+        operator_ref="test-operator",
+        reason="Test organization setup",
+        now=now,
+    )
+    rostered = []
+    for label in ("rostered", "rostered-inactive"):
+        doctor = Doctor(
+            clerk_id=f"user_access_{label}_{secrets.token_hex(4)}",
+            email=f"{label}@{domain}",
+            biography="",
+        ).save()
+        import_roster_approvals(
+            practice,
+            [RosterApprovalInput(email=doctor.email)],
+            operator_ref="test-roster-operator",
+            reason="Approved pilot roster",
+            source_ref="test://sanitized-roster-v1",
+            source_sha256="a" * 64,
+            now=now,
+        )
+        rostered.append(claim_roster_access(doctor, supplied_code=code, now=now)[1])
+    rostered[1].seat_state = "inactive"
+    save_practice_member(rostered[1])
+    _member(practice, "owner", role="owner")
+    _member(practice, "attested-unrostered")
+    _member(practice, "revoked", **_revocation())
+    _grant(
+        _member(practice, "pilot", attested=False, onboarded=True),
+        practice=practice,
+    )
+    return practice
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: _independent_practice(entitled=True),
+        lambda: _independent_practice(entitled=False),
+        _organization_practice,
+    ],
+    ids=["independent", "independent-lapsed", "organization"],
+)
+def test_practice_batch_access_matches_single_doctor_decision(build):
+    practice = build()
+    with get_session() as session:
+        rows = [
+            (member, doctor)
+            for member, doctor in session.exec(
+                select(PracticeMember, Doctor)
+                .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
+                .where(PracticeMember.practice_id == practice.id)
+            ).all()
+        ]
+    assert len(rows) >= 6
+
+    batch = practice_members_access_in_force(practice, rows)
+
+    single = [resolve_doctor_access(doctor).allowed for _, doctor in rows]
+    assert batch == single
+    assert True in single and False in single

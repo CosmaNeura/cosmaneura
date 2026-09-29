@@ -9,7 +9,9 @@ import pytest
 
 import app.configuration.stripe as stripe_config
 from app.services import stripe_billing
+from app.services.public_entitlements import lock_practice_seats
 
+from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember, PracticeRole
 
@@ -302,12 +304,17 @@ def test_overlapping_quantity_syncs_cannot_prorate_the_same_seats_twice(
             email=f"quantity-race-{secrets.token_hex(5)}@example.com",
             biography="",
         ).save()
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=clinician.id,
-            role=PracticeRole.workforce.value,
-            attested_at=datetime.now(timezone.utc),
-        ).save()
+        with get_session() as session:
+            lock_practice_seats(session, practice.id)
+            session.add(
+                PracticeMember(
+                    practice_id=practice.id,
+                    doctor_id=clinician.id,
+                    role=PracticeRole.workforce.value,
+                    attested_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
     subscription = {
         "id": "sub_quantity_race",
         "customer": "cus_quantity_race",

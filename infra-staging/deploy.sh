@@ -370,8 +370,8 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 		SCRIBE_WORKFLOW_ENABLED: "false",
 		SESSION_PREP_SYNTHETIC_ENABLED: "false",
 		AUTO_MIGRATE_ON_STARTUP: "false",
-		STRIPE_INTEGRATION_ENABLED: "false",
-		STRIPE_BILLING_ENABLED: "false",
+		STRIPE_INTEGRATION_ENABLED: (.STRIPE_INTEGRATION_ENABLED // "false"),
+		STRIPE_BILLING_ENABLED: (.STRIPE_BILLING_ENABLED // "false"),
 		STRIPE_LIVE_MODE: "false",
 		DURABLE_WEBHOOK_INBOX_ENABLED: "false",
 		SENTRY_STAGING_ENABLED: "false",
@@ -425,7 +425,7 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
     fail()
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
-forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
+forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
 if sys.argv[2] == "v2":
     forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
     if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
@@ -942,7 +942,7 @@ verify_candidate_workload_state() {
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
 	' <<<"$state_json" >/dev/null; then
-		echo "Candidate workload image or disabled feature-gate evidence is inconsistent."
+		echo "Candidate workload image or feature-gate evidence is inconsistent."
 		return 1
 	fi
 }

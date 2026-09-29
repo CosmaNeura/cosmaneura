@@ -38,6 +38,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     billing_checkout_available_at: null,
     entitled: false,
     subscription_status: null,
+    seat_summary: null,
     ...overrides,
   }
 }
