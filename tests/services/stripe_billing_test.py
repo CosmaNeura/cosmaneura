@@ -23,6 +23,7 @@ from app.services.organization_access import (
     import_roster_approvals,
     revoke_roster_access,
 )
+from app.services.public_entitlements import lock_practice_seats
 
 from activemodel.session_manager import get_session, global_session
 from app.models.doctor import Doctor
@@ -37,6 +38,7 @@ from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
 from sqlalchemy.exc import IntegrityError
+from sqlmodel import select
 
 WEBHOOK_SECRET = "whsec_test_secret"
 NOW = datetime(2026, 8, 20, 20, 0, tzinfo=timezone.utc)
@@ -3512,12 +3514,17 @@ def _add_attested_clinician(practice: Practice) -> None:
         email=f"clinician-{secrets.token_hex(4)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=clinician.id,
-        role=PracticeRole.workforce.value,
-        attested_at=NOW,
-    ).save()
+    with get_session() as session:
+        lock_practice_seats(session, practice.id)
+        session.add(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=clinician.id,
+                role=PracticeRole.workforce.value,
+                attested_at=NOW,
+            )
+        )
+        session.commit()
 
 
 def _quantity_sync_practice(
@@ -3556,14 +3563,19 @@ def _quantity_updates(remote: FakeStripe) -> list[tuple[dict, str | None]]:
 
 
 def _deactivate_one_clinician(practice: Practice) -> None:
-    member = PracticeMember.where(
-        PracticeMember.practice_id == practice.id,
-        PracticeMember.role == PracticeRole.workforce.value,
-        PracticeMember.seat_state == ClinicianSeatState.active.value,
-    ).first()
-    assert isinstance(member, PracticeMember)
-    member.seat_state = ClinicianSeatState.inactive.value
-    member.save()
+    with get_session() as session:
+        lock_practice_seats(session, practice.id)
+        member = session.exec(
+            select(PracticeMember).where(
+                PracticeMember.practice_id == practice.id,
+                PracticeMember.role == PracticeRole.workforce.value,
+                PracticeMember.seat_state == ClinicianSeatState.active.value,
+            )
+        ).first()
+        assert isinstance(member, PracticeMember)
+        member.seat_state = ClinicianSeatState.inactive.value
+        session.add(member)
+        session.commit()
 
 
 def _sync_seats(practice: Practice) -> bool:
