@@ -677,7 +677,24 @@ class HttpScribeWorkflowClient:
             )
         except (ValueError, TypeError, AttributeError):
             raise ScribeWorkflowRejectedError("scribe_invalid_operation") from None
-        prefix = f"/v1/sessions/{session_id}"
+        creator_window = creator_actor_id is not None and isinstance(
+            operation,
+            (
+                capture_protocol.IssueLease,
+                capture_protocol.RenewLease,
+                capture_protocol.ReserveChunks,
+            ),
+        )
+        if creator_window and (
+            not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id or ""
+            )
+            or getattr(operation, "profile_receipt_id", None) is not None
+        ):
+            raise ScribeWorkflowRejectedError("scribe_invalid_creator_preparation")
+        prefix = (
+            f"/v1/{'captured-sessions' if creator_window else 'sessions'}/{session_id}"
+        )
         response_type: type[BaseModel]
         if operation.kind == "source_extend":
             from app.services.scribe_source_extension_contract import (
@@ -902,6 +919,7 @@ class HttpScribeWorkflowClient:
                 if isinstance(operation, capture_protocol.ReserveChunks)
                 else None
             ),
+            creator_actor_id=creator_actor_id if creator_window else None,
         )
 
     async def close(self) -> None:
