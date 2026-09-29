@@ -1,7 +1,7 @@
 """Add the scheduled end of an owner-revoked member's access.
 
 Revision ID: 9a23eb377df7
-Revises: 71d6e1ac9b04
+Revises: ed76434b6308
 Create Date: 2026-09-27 12:00:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 
 revision: str = "9a23eb377df7"
-down_revision: str | None = "71d6e1ac9b04"
+down_revision: str | None = "ed76434b6308"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
