@@ -19,7 +19,7 @@ from app.models.doctor_video_integration import (
     VideoProvider,
 )
 
-from tests.factories import DoctorFactory
+from tests.factories import DoctorFactory, save_practice_member
 from tests.routes.utils import provision_practice_in_force
 
 
@@ -118,7 +118,7 @@ def test_revoked_doctor_access_returns_404_without_fetching_zak(
     member.access_records_retain_until = datetime.now(timezone.utc) + timedelta(
         days=365 * 8
     )
-    member.save()
+    save_practice_member(member)
 
     calls: list[object] = []
 
