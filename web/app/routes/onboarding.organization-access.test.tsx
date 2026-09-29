@@ -34,6 +34,7 @@ vi.mock("~/lib/practice-api", async (importOriginal) => {
 vi.mock("@clerk/clerk-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clerk/clerk-react")>()),
   UserButton: () => null,
+  useUser: () => ({ user: { primaryEmailAddress: { emailAddress: "provider@synthetic.invalid" } } }),
 }))
 
 function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
