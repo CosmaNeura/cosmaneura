@@ -891,21 +891,36 @@ def _fingerprint_set(config: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize(
-    ("sslmode", "fingerprint_matches", "grant_secret", "expected_message"),
+    (
+        "sslmode",
+        "fingerprint_matches",
+        "grant_secret",
+        "portal_configuration_id",
+        "expected_message",
+    ),
     [
         (
             "require",
             True,
             "synthetic-record-grant-secret",
+            "",
             "unresolved deployment blockers",
         ),
         (
             "verify-full",
             False,
             "synthetic-record-grant-secret",
+            "",
             "unresolved deployment blockers",
         ),
-        ("verify-full", True, "", "enabled without a configured key"),
+        ("verify-full", True, "", "", "enabled without a configured key"),
+        (
+            "verify-full",
+            True,
+            "synthetic-record-grant-secret",
+            "pc_default_portal",
+            "Failed to build sanitized staging configuration evidence",
+        ),
     ],
 )
 def test_configuration_blockers_stop_before_any_azure_call(
@@ -913,10 +928,12 @@ def test_configuration_blockers_stop_before_any_azure_call(
     sslmode: str,
     fingerprint_matches: bool,
     grant_secret: str,
+    portal_configuration_id: str,
     expected_message: str,
 ) -> None:
     config = _staging_config(sslmode)
     config["SOVEREIGN_RECORD_GRANT_SECRET"] = grant_secret
+    config["STRIPE_PORTAL_CONFIGURATION_ID"] = portal_configuration_id
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     az_log = tmp_path / "az.log"

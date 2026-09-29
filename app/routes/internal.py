@@ -41,7 +41,7 @@ from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
 from app.configuration.stripe import (
     stripe_billing_configured,
-    stripe_runtime_configured,
+    stripe_portal_configured,
     stripe_webhook_configured,
 )
 from app.services import lab_ranges as lab_ranges_service
@@ -193,6 +193,7 @@ from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
+from .note_template_fields import note_template_fields_api
 from .session_prep_review import (
     PriorNoteOverview,
     SessionPrepNoteReview,
@@ -238,6 +239,7 @@ internal_api_app = APIRouter(
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
 internal_api_app.include_router(session_prep_review_api)
+internal_api_app.include_router(note_template_fields_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -1260,7 +1262,7 @@ def _practice_payload(
         billing_exempt_until=practice.billing_exempt_until,
         billing_exempt_active=practice.billing_exemption_active(),
         billing_enabled=stripe_billing_configured(),
-        billing_management_enabled=stripe_runtime_configured(),
+        billing_management_enabled=stripe_portal_configured(),
         billing_portal_available=practice.stripe_customer_id is not None,
         billing_checkout_resumable=(
             stripe_webhook_configured()
@@ -2458,7 +2460,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             billing_exempt_until=practice.billing_exempt_until,
             billing_exempt_active=practice.billing_exemption_active(),
             billing_enabled=stripe_billing_configured(),
-            billing_management_enabled=stripe_runtime_configured(),
+            billing_management_enabled=stripe_portal_configured(),
             billing_portal_available=practice.stripe_customer_id is not None,
             billing_checkout_resumable=(
                 stripe_webhook_configured()
@@ -2820,14 +2822,6 @@ def create_billing_checkout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
         ) from exc
-    except stripe_billing.StripeTrialCarryoverDeferred as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Checkout opens when the current trial ends at "
-                f"{exc.available_at.isoformat()}; no trial time will be shortened."
-            ),
-        ) from exc
     except stripe_billing.StripeCheckoutAlreadyCompleted as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2898,7 +2892,7 @@ def create_billing_portal(
     practice = _owner_practice_for_billing(doctor)
 
     # Acquisition can be paused without stranding existing customers.
-    if not stripe_runtime_configured():
+    if not stripe_portal_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
@@ -2916,6 +2910,16 @@ def create_billing_portal(
             return_url=f"{origin}{_safe_redirect_path(data.return_path)}",
         )
     except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except stripe_billing.StripePortalConfigurationInvalid as exc:
+        log.error(
+            "stripe portal configuration validation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",

@@ -140,7 +140,6 @@ async def test_concurrent_edits_publish_one_version(
         "source",
         "note_id",
         "note_hash",
-        "schema",
         "fields",
         "in_place_edit",
     ],
@@ -170,20 +169,49 @@ async def test_stale_or_changed_edit_cannot_replace_current(
         edit = edit.model_copy(update={"fields": {"Unexpected": "Private sentinel"}})
     else:
         with Session(f.engine) as session:
-            if fault == "schema":
-                row = session.get(DoctorNoteSchema, f.schema_ref)
-                assert row is not None
-                row.fields = {"Different": "Changed template"}
-            else:
-                row = session.get(AIVisitNote, first.note_ref)
-                assert row is not None
-                row.note = {"CC": "Sleep", "Plan": "Changed elsewhere"}
+            row = session.get(AIVisitNote, first.note_ref)
+            assert row is not None
+            row.note = {"CC": "Sleep", "Plan": "Changed elsewhere"}
             session.add(row)
             session.commit()
     count = len(rows(f, AIVisitNote))
     with pytest.raises(notes.CaptureNoteConflict):
         await edits.save_capture_note(**{**request, "edit": edit})
     assert len(rows(f, AIVisitNote)) == count
+
+
+@pytest.mark.asyncio
+async def test_template_rename_preserves_saved_note_edit_structure(
+    admission_case, monkeypatch
+):
+    f = admission_case
+    first, request = await editable(f, monkeypatch)
+    with Session(f.engine) as session:
+        schema = session.get(DoctorNoteSchema, f.schema_ref)
+        assert schema is not None
+        schema.fields = {"Concern": "Reason for visit", "Next steps": "Discussed plan"}
+        session.add(schema)
+        session.commit()
+    saved = await edits.save_capture_note(**request)
+    assert saved.field_order == first.field_order == ("CC", "Plan")
+    assert saved.fields == {"CC": "Sleep", "Plan": "Clinician's synthetic correction."}
+    assert await edits.save_capture_note(**request) == saved
+    versions = rows(f, AIVisitNote)
+    assert (
+        next(note for note in versions if str(note.id) == first.note_ref).note
+        == first.fields
+    )
+    bad = request["edit"].model_copy(
+        update={
+            "client_key": uuid4(),
+            "expected_note_ref": saved.note_ref,
+            "expected_note_sha256": saved.note_sha256,
+            "fields": {"Concern": "Sleep", "Next steps": "Synthetic edit"},
+        }
+    )
+    with pytest.raises(notes.CaptureNoteConflict):
+        await edits.save_capture_note(**{**request, "edit": bad})
+    assert len(rows(f, AIVisitNote)) == 2
 
 
 @pytest.mark.asyncio
