@@ -206,6 +206,10 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
         super().__init__(str(reason))
 
 
+class StripeQuantitySyncUnsafe(StripeStateInvalid):
+    """Core's subscription projection does not allow a quantity sync."""
+
+
 class StripeTrialClockReconciliationRequired(Exception):
     """A prior paid-pilot trial cannot be replaced by a fresh trial."""
 
@@ -3037,7 +3041,15 @@ def _finish_quantity_sync(
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
-            row.stripe_quantity_sync_error = str(error)[:512] or type(error).__name__
+            # The refresh that refused the sync has already recorded why the
+            # projection is invalid; the generic refusal would bury that cause.
+            if not (
+                isinstance(error, StripeQuantitySyncUnsafe)
+                and row.stripe_quantity_sync_error
+            ):
+                row.stripe_quantity_sync_error = (
+                    str(error)[:512] or type(error).__name__
+                )
             session.add(row)
             session.commit()
             return False
@@ -3137,7 +3149,7 @@ def _sync_subscription_quantity_leased(
             or subscription["id"] != subscription_id
             or subscription["customer"] != practice.stripe_customer_id
         ):
-            raise StripeStateInvalid(
+            raise StripeQuantitySyncUnsafe(
                 "Stripe subscription identity or contract is not safe for quantity sync"
             )
         if subscription["status"] in TERMINAL_SUBSCRIPTION_STATUSES:
