@@ -8,9 +8,11 @@ import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 import app.configuration.stripe as stripe_config
 import app.jobs.stripe_events
@@ -34,6 +36,7 @@ from tests.routes.utils import get_clerk_dev_user
 STRIPE_WEBHOOK_PATH = "/external/v1/webhooks/stripe"
 WEBHOOK_SECRET = "whsec_test_secret"
 VALID_ORIGIN = "https://cosma.localhost"
+PORTAL_CONFIGURATION_ID = "bpc_route_pinned"
 
 
 class RouteStripe:
@@ -53,6 +56,18 @@ class RouteStripe:
                 "interval": "month",
                 "interval_count": 1,
                 "usage_type": "licensed",
+            },
+        }
+        self.portal_configuration = {
+            "id": PORTAL_CONFIGURATION_ID,
+            "active": True,
+            "livemode": False,
+            "features": {
+                "customer_update": {"enabled": False},
+                "invoice_history": {"enabled": True},
+                "payment_method_update": {"enabled": True},
+                "subscription_cancel": {"enabled": True, "mode": "at_period_end"},
+                "subscription_update": {"enabled": False},
             },
         }
         self.calls: list[tuple[str, str, dict | None, str | None]] = []
@@ -103,6 +118,8 @@ class RouteStripe:
             return deepcopy(session)
         if path.startswith("/checkout/sessions/"):
             return deepcopy(self.sessions[path.rsplit("/", 1)[-1]])
+        if path.startswith("/billing_portal/configurations/"):
+            return deepcopy(self.portal_configuration)
         if path == "/billing_portal/sessions":
             return {"url": "https://billing.stripe.com/p/session/route-test"}
         raise AssertionError(f"unexpected Stripe request: {method} {path}")
@@ -159,6 +176,9 @@ def stripe_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(
+        stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", PORTAL_CONFIGURATION_ID
+    )
     monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setattr(stripe_config, "STRIPE_API_VERSION", "2025-09-30.clover")
     monkeypatch.setattr(
@@ -677,6 +697,127 @@ def test_checkout_requires_recognized_origin(authenticated_client: TestClient):
         headers={"origin": "https://evil.example.com"},
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+def _past_due_customer(route_stripe: RouteStripe) -> Practice:
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    subscription = _subscription(practice, status_value="past_due")
+    route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "past_due"
+    practice.save()
+    return practice
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_unpinned_portal_is_unavailable_without_stopping_webhooks(
+    authenticated_client: TestClient,
+    client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", "")
+    _past_due_customer(route_stripe)
+
+    body = authenticated_client.get(api_app.url_path_for("practice_status")).json()
+    assert body["billing_enabled"] is False
+    assert body["billing_management_enabled"] is False
+    portal = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+    assert portal.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert portal.json()["detail"] == "Billing is not configured in this environment."
+    assert route_stripe.calls == []
+
+    webhook = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=b"{}",
+        headers={"Stripe-Signature": "t=1,v1=invalid"},
+    )
+    assert webhook.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_with_unsafe_pinned_configuration_is_unavailable(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    _past_due_customer(route_stripe)
+    route_stripe.portal_configuration["features"]["subscription_update"] = {
+        "enabled": True
+    }
+
+    portal = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert portal.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert portal.json()["detail"] == "Billing is not configured in this environment."
+    assert not any(call[1] == "/billing_portal/sessions" for call in route_stripe.calls)
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_with_missing_pinned_configuration_is_unavailable_not_transient(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _past_due_customer(route_stripe)
+
+    def request(method, path, data=None, *, idempotency_key=None):
+        if path.startswith("/billing_portal/configurations/"):
+            http_request = httpx.Request("GET", f"https://api.stripe.com/v1{path}")
+            raise httpx.HTTPStatusError(
+                "No such billing portal configuration",
+                request=http_request,
+                response=httpx.Response(404, request=http_request),
+            )
+        return route_stripe(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", request)
+
+    with capture_logs() as logs:
+        portal = authenticated_client.post(
+            api_app.url_path_for("create_billing_portal"),
+            json={},
+            headers={"origin": VALID_ORIGIN},
+        )
+
+    assert portal.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert portal.json()["detail"] == "Billing is not configured in this environment."
+    assert any(
+        entry["event"] == "stripe portal configuration validation failed"
+        and entry["log_level"] == "error"
+        for entry in logs
+    )
+    assert not any(call[1] == "/billing_portal/sessions" for call in route_stripe.calls)
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_session_names_pinned_configuration(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    _past_due_customer(route_stripe)
+
+    portal = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert portal.status_code == status.HTTP_200_OK
+    session_call = next(
+        call for call in route_stripe.calls if call[1] == "/billing_portal/sessions"
+    )
+    assert session_call[2]
+    assert session_call[2]["configuration"] == PORTAL_CONFIGURATION_ID
 
 
 @pytest.mark.usefixtures("stripe_configured")

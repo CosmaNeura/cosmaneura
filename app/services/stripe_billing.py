@@ -197,6 +197,10 @@ class StripeManagedBilling(StripeStateInvalid):
     """The public paid-pilot Checkout is unavailable to a managed practice."""
 
 
+class StripePortalConfigurationInvalid(StripeStateInvalid):
+    """The pinned customer portal configuration is missing or could bypass seats."""
+
+
 class StripeSubscriptionContractInvalid(StripeStateInvalid):
     """A fetched subscription is authentic enough to revoke, but not to trust."""
 
@@ -2904,13 +2908,112 @@ def create_checkout_session(
     return url
 
 
+REVIEWED_PORTAL_FEATURES = frozenset(
+    {
+        "customer_update",
+        "invoice_history",
+        "payment_method_update",
+        "subscription_cancel",
+        "subscription_update",
+    }
+)
+
+
+def _validated_portal_configuration() -> str:
+    configuration_id = stripe_config.STRIPE_PORTAL_CONFIGURATION_ID
+    if not configuration_id.startswith("bpc_"):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration is not pinned"
+        )
+    try:
+        configuration = _request(
+            "GET", f"/billing_portal/configurations/{configuration_id}"
+        )
+    except httpx.HTTPStatusError as exc:
+        # A deleted, mistyped, or other-account id, or a restricted key without
+        # Customer portal access, will not heal on retry.
+        if exc.response.status_code == 404:
+            raise StripePortalConfigurationInvalid(
+                "Stripe portal configuration was not found"
+            ) from exc
+        if exc.response.status_code in (401, 403):
+            raise StripePortalConfigurationInvalid(
+                "Stripe key cannot read the portal configuration"
+            ) from exc
+        raise
+    if configuration.get("id") != configuration_id:
+        raise StripePortalConfigurationInvalid(
+            "Stripe returned the wrong portal configuration"
+        )
+    try:
+        _validate_livemode(configuration.get("livemode"), source="portal configuration")
+    except StripeStateInvalid as exc:
+        raise StripePortalConfigurationInvalid(str(exc)) from exc
+    if configuration.get("active") is not True:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration is not active"
+        )
+    # The pinned configuration must not double as a no-code portal entry point.
+    if "login_page" in configuration:
+        login_page = configuration["login_page"]
+        if not isinstance(login_page, dict) or login_page.get("enabled") is not False:
+            raise StripePortalConfigurationInvalid(
+                "Stripe portal configuration enables the login page"
+            )
+    features = configuration.get("features")
+    if not isinstance(features, dict):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration features are missing"
+        )
+    # An allowlist, so a feature Stripe adds later is refused until reviewed.
+    unreviewed = sorted(set(features) - REVIEWED_PORTAL_FEATURES)
+    if unreviewed:
+        raise StripePortalConfigurationInvalid(
+            f"Stripe portal configuration has unreviewed features: {unreviewed}"
+        )
+    for name, feature in features.items():
+        if not isinstance(feature, dict):
+            raise StripePortalConfigurationInvalid(
+                f"Stripe portal configuration {name} is malformed"
+            )
+    for name in ("subscription_update", "subscription_cancel", "customer_update"):
+        if name not in features:
+            raise StripePortalConfigurationInvalid(
+                f"Stripe portal configuration {name} is missing"
+            )
+    # Quantity and plan changes must go through Core, which charges added
+    # seats immediately and never credits removed ones.
+    if features["subscription_update"].get("enabled") is not False:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows subscription updates"
+        )
+    subscription_cancel = features["subscription_cancel"]
+    if subscription_cancel.get("enabled") is not False and (
+        subscription_cancel.get("enabled") is not True
+        or subscription_cancel.get("mode") != "at_period_end"
+    ):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration cancels before the period ends"
+        )
+    if features["customer_update"].get("enabled") is not False:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows customer updates"
+        )
+    return configuration_id
+
+
 def create_portal_session(practice: Practice, *, return_url: str) -> str:
     assert practice.stripe_customer_id
     _validate_runtime_configuration()
+    configuration_id = _validated_portal_configuration()
     session = _request(
         "POST",
         "/billing_portal/sessions",
-        {"customer": practice.stripe_customer_id, "return_url": return_url},
+        {
+            "customer": practice.stripe_customer_id,
+            "return_url": return_url,
+            "configuration": configuration_id,
+        },
     )
     return _hosted_url(session.get("url"), hostname="billing.stripe.com")
 

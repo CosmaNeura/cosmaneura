@@ -139,3 +139,52 @@ def test_staging_stripe_flags_are_never_inherited_from_the_operator_shell() -> N
     recipe = recipes[start : recipes.index("\n@", start + 1)]
     assert "env -i " in recipe
     assert "STRIPE_" not in recipe
+
+
+def test_portal_configuration_is_resolved_only_with_the_integration() -> None:
+    for path, vault in (
+        (".env.production.backend", "OP_PROD_VAULT_UID"),
+        (".env.staging.backend", "OP_STAGING_VAULT_UID"),
+    ):
+        source = _read(path)
+        assert source.count("export STRIPE_PORTAL_CONFIGURATION_ID=\n") == 1
+        integration = source[source.index("STRIPE_BILLING_ITEM_ID is required") :]
+        integration = integration[integration.index("op_inject_source <<'EOF'") :]
+        integration = integration[: integration.index("\nEOF\n")]
+        assert (
+            "export STRIPE_PORTAL_CONFIGURATION_ID="
+            f"'op://${{{vault}}}/${{STRIPE_BILLING_ITEM_ID}}/portal-configuration-id'"
+        ) in integration
+
+
+def test_portal_configuration_is_scoped_like_other_billing_settings() -> None:
+    for path in ("infra/variables.tf", "infra-staging/variables.tf"):
+        variables = _read(path)
+        billing = _hcl_block(variables, 'variable "python_billing_public_vars"')
+        public = _hcl_block(variables, 'variable "python_public_vars"')
+        assert billing.count('"STRIPE_PORTAL_CONFIGURATION_ID"') == 1
+        assert "STRIPE_PORTAL_CONFIGURATION_ID" not in public
+
+    deploy = _read("infra-staging/deploy.sh")
+    assert (
+        _shell_array(deploy, "BILLING_PUBLIC_VARS").count(
+            "STRIPE_PORTAL_CONFIGURATION_ID"
+        )
+        == 1
+    )
+    public = deploy[deploy.index("\nPUBLIC_VARS=(") :]
+    assert "STRIPE_PORTAL_CONFIGURATION_ID" not in public[: public.index("\n)")]
+
+
+def test_integration_requires_pinned_portal_configuration_shape() -> None:
+    main = _read("infra/main.tf")
+    assert (
+        'startswith(trimspace(try(data.external.secrets.result["STRIPE_PORTAL_CONFIGURATION_ID"], "")), "bpc_")'
+        in main
+    )
+
+    deploy = _read("infra-staging/deploy.sh")
+    assert '"STRIPE_PORTAL_CONFIGURATION_ID": ("bpc_",),' in deploy
+    required = deploy[deploy.index("\tfor var in STRIPE_SECRET_KEY") :]
+    assert "STRIPE_PORTAL_CONFIGURATION_ID" in required[: required.index("; do")]
+    assert '"STRIPE_PORTAL_CONFIGURATION_ID:bpc_"' in deploy

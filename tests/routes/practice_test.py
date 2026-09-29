@@ -933,6 +933,38 @@ def test_lookup_does_not_disclose_practice_to_a_stale_bound_email(
     assert practice.email_domain not in response.text
 
 
+@pytest.mark.parametrize("portal_configured", [True, False])
+def test_lookup_reports_billing_management_from_portal_readiness(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    portal_configured: bool,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Lookup Billing Practice",
+        join_code=f"L{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        pastoral_pack=False,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version=BAA_CURRENT_REFERENCE,
+    ).save()
+    monkeypatch.setattr(internal, "stripe_portal_configured", lambda: portal_configured)
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("lookup_practice"),
+        json={"join_code": practice.join_code},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert (
+        response.json()["practice"]["billing_management_enabled"] is portal_configured
+    )
+
+
 def test_join_rechecks_live_email_while_rows_are_locked(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
