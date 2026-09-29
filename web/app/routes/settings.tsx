@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
+import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
 import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
@@ -202,6 +203,7 @@ function BiographyInput({ biography }: { biography: string | null }) {
 
 function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   const [expandedIds, setExpandedIds] = useState<string[]>([])
+  const revalidator = useRevalidator()
 
   const toggleExpand = (id: string) => {
     setExpandedIds((prev) =>
@@ -212,7 +214,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose w-full max-w-3xl space-y-4">
       <h3>Note Types</h3>
       {noteSchemas.length > 0 ? (
         <p>Below are the notes you've uploaded.</p>
@@ -244,15 +246,19 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 Here's the structure we've extracted from your note:
               </p>
               <div className="mt-4 border-l-2 pl-4">
-                <p className="text-muted-foreground text-sm">
+                <div className="text-muted-foreground text-sm">
                   {Object.entries(schema.fields).map(([field, description]) => (
                     <div key={field} className="mb-2">
                       <span className="font-semibold">{field}:</span>{" "}
                       {String(description)}
                     </div>
                   ))}
-                </p>
+                </div>
               </div>
+              <NoteTemplateFieldsEditor
+                schemaId={schema.id}
+                onSaved={() => void revalidator.revalidate()}
+              />
             </>
           )}
         </div>

@@ -244,10 +244,7 @@ async def save_capture_note(
             raise notes.CaptureNoteConflict
         inputs = notes._inputs(session, scope, schema_ref, source)
         current = inputs.note
-        if (
-            current.status != "draft"
-            or tuple(inputs.schema.fields) != current.field_order
-        ):
+        if current.status != "draft" or current.fields is None:
             raise notes.CaptureNoteConflict
         replay = session.exec(
             select(ScribeCaptureNoteEdit).where(
@@ -272,7 +269,7 @@ async def save_capture_note(
             raise notes.CaptureNoteConflict
         try:
             fields = notes._validated_note(
-                orjson.dumps(edit.fields).decode(), inputs.schema.fields
+                orjson.dumps(edit.fields).decode(), current.fields
             )
         except notes.CaptureNoteUnconfirmed:
             raise notes.CaptureNoteConflict from None
