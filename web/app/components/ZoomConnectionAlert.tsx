@@ -43,7 +43,7 @@ export function ZoomConnectionAlert() {
     toast({
       title: "Zoom integration disconnected",
       description:
-        "Your Zoom OAuth was revoked. Reconnect so Cosmas can keep generating notes for new sessions.",
+        "The Cosmas meeting bot was disconnected. Reconnect to use the bot; Scribe app recording remains available.",
       variant: "destructive",
       duration: 10000,
     })
@@ -81,8 +81,8 @@ export function ZoomConnectionAlert() {
     >
       <AlertCircle className="h-4 w-4 shrink-0" />
       <span className="flex-1">
-        Zoom is not connected. Cosmas can&apos;t join your meetings or generate
-        notes until you reconnect.
+        The Cosmas meeting bot is not connected to Zoom. You can still record
+        your meeting and prepare notes with the Scribe desktop app.
       </span>
       <Button
         size="sm"
