@@ -512,8 +512,38 @@ def accept_invitation(
     practice = lock_practice_for_active_seat_mutation(session, candidate.practice_id)
     lock_roster_enrollment_email(session, verified_email)
     invitation = _lock_practice_invitation(session, practice, candidate.id)
+    if practice.organization_id is not None or practice.negotiated_baa_required:
+        raise _managed_practice_conflict()
+    if not practice.baa_in_force():
+        raise InvitationConflict(
+            "This practice has not accepted the Cosmaneura Inc BAA yet."
+        )
+    if invitation.accepted_by_doctor_id != doctor.id:
+        # Issuing reserves no seat and does not convert a solo practice. Its
+        # sole owner can therefore close their account while a link remains
+        # pending. That retained invitation must not admit a new clinician.
+        owner = session.exec(
+            select(PracticeMember).where(
+                PracticeMember.practice_id == practice.id,
+                PracticeMember.doctor_id == invitation.invited_by_doctor_id,
+            )
+        ).one_or_none()
+        if owner is None:
+            raise InvitationInactive
+        try:
+            lock_authorized_practice_owner(
+                session,
+                practice,
+                owner,
+                additional_doctor_ids=(doctor.id,),
+            )
+        except PracticeOwnerUnavailable:
+            raise InvitationInactive from None
     locked_doctor = session.exec(
-        select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        select(Doctor)
+        .where(Doctor.id == doctor.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     ).one()
     if (locked_doctor.email or "").strip().lower() != verified_email:
         raise InvitationConflict(
@@ -531,14 +561,9 @@ def accept_invitation(
         select(PracticeMember)
         .where(PracticeMember.doctor_id == locked_doctor.id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).one_or_none()
 
-    if practice.organization_id is not None or practice.negotiated_baa_required:
-        raise _managed_practice_conflict()
-    if not practice.baa_in_force():
-        raise InvitationConflict(
-            "This practice has not accepted the Cosmaneura Inc BAA yet."
-        )
     if not hmac.compare_digest(
         invitation.invitee_email_digest, _email_digest(verified_email)
     ):

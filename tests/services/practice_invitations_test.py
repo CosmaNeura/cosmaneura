@@ -5,6 +5,10 @@ import pytest
 
 from app.routes.public_onboarding import _pending_invitation_count
 from app.services import practice_invitations as invitations
+from app.services.doctor_account_closure import (
+    close_doctor_account,
+    plan_doctor_account_closure,
+)
 from app.services.organization_access import configure_provider_organization
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
@@ -599,6 +603,40 @@ def test_accept_refuses_a_practice_without_a_baa():
         _accept(issued.token, invitee)
 
     assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+def test_pending_invitation_cannot_admit_after_sole_owner_closure():
+    _, owner = _practice()
+    invitee = _doctor(domain="synthetic.invalid", label="pending-after-closure")
+    issued = _issue(owner, invitee.email)
+    args = {
+        "doctor_id": owner.doctor_id,
+        "operator_ref": "test:pending-invite-owner-closure",
+        "reason": "Invented sole-owner closure with a pending invitation",
+    }
+    plan = plan_doctor_account_closure(**args)
+    assert close_doctor_account(**args, confirmed_plan_sha256=plan.plan_sha256).changed
+
+    with pytest.raises(invitations.InvitationInactive):
+        _accept(issued.token, invitee)
+
+    assert PracticeMember.get(doctor_id=invitee.id) is None
+
+
+def test_accepted_invitation_replay_preserves_member_after_owner_disabled():
+    _, owner = _practice()
+    invitee = _doctor(domain="synthetic.invalid", label="accepted-before-closure")
+    issued = _issue(owner, invitee.email)
+    _, original = _accept(issued.token, invitee)
+    owner_doctor = Doctor.get(id=owner.doctor_id)
+    assert owner_doctor is not None
+    owner_doctor.deleted_at = _now()
+    owner_doctor.save()
+
+    _, replayed = _accept(issued.token, invitee)
+
+    assert replayed.id == original.id
+    assert replayed.seat_state == original.seat_state
 
 
 @pytest.mark.parametrize("conversion", ["negotiated_baa_required", "organization"])
