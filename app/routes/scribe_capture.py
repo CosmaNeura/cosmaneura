@@ -13,7 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 import app.services.scribe_capture_scope as capture_scope
 from app.configuration.authority import (
@@ -84,6 +84,18 @@ class AdmissionRequest(BaseModel):
     request_nonce: UUID
     attestation: admission.ConsentAttestation | None = None
     configured_capture: ConfiguredCaptureSelection | None = None
+    expected_session_id: UUID | None = None
+    resume_current: StrictBool = False
+
+    @model_validator(mode="after")
+    def resume_only(self) -> AdmissionRequest:
+        admission.validate_resume_request(
+            self.expected_session_id,
+            self.resume_current,
+            self.attestation,
+            self.configured_capture,
+        )
+        return self
 
 
 class OperationRequest(BaseModel):
@@ -573,6 +585,8 @@ async def admit_session(
             client_request_key=key,
             attestation=data.attestation,
             configured_capture=data.configured_capture,
+            expected_session_id=data.expected_session_id,
+            resume_current=data.resume_current,
             client=client,
         )
     except authority.AuthorityKernelDisabledError:
@@ -597,7 +611,20 @@ async def admit_session(
     return JSONResponse(
         {
             "contract_version": "1",
-            **{key: str(value) for key, value in asdict(snapshot).items()},
+            **{
+                key: str(value)
+                for key, value in asdict(snapshot).items()
+                if key != "configured_capture"
+            },
+            **(
+                {
+                    "configured_capture": snapshot.configured_capture.model_dump(
+                        mode="json"
+                    )
+                }
+                if snapshot.configured_capture is not None
+                else {}
+            ),
             "request_nonce": str(data.request_nonce),
             "checked_at": datetime.now(UTC).isoformat(),
         },

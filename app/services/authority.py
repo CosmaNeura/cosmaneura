@@ -1174,3 +1174,17 @@ def bootstrap_mount_context(
         clerk_issuer=settings.clerk_issuer,
     )
     return context
+
+
+def authorize_mount_read(
+    *,
+    session: Session,
+    mount_context_token: str,
+    settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+) -> tuple[ResolvedMountContext, MountContextSession]:
+    """Reauthenticate a current read without inventing an interaction lineage."""
+    _ensure_enabled(settings)
+    _, mount = _active_token(session, mount_context_token, lock_for_update=True)
+    return _context_for_session(
+        session, mount, clerk_issuer=settings.clerk_issuer
+    ), mount

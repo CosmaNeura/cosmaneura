@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
+import { emptyHistory } from "./SovereignHistory.fixture"
 import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
@@ -62,6 +63,7 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
+      if (url.endsWith("/embed/history")) return json(emptyHistory())
       if (url === "/embed/v1/context-tokens/exchange") {
         exchanges += 1
         expect(JSON.parse(String(init?.body)).record_ref).toBe(
