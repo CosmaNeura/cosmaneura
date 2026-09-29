@@ -11,6 +11,7 @@ from pydantic import (
     RootModel,
     SerializerFunctionWrapHandler,
     model_serializer,
+    model_validator,
 )
 
 from app.services.scribe_capture_limits import MAX_CAPTURE_CHUNKS
@@ -53,6 +54,14 @@ class NativeSourceStart(NativeStartContract):
     payload: NativeStartPayload
 
 
+class NativeSourceStartSequence(NativeStartContract):
+    kind: Literal["source_start_sequence"]
+    payload: NativeStartPayload
+    authorize_idempotency_key: str = Field(
+        pattern=r"^[A-Za-z0-9._:-]{8,255}$", repr=False
+    )
+
+
 class NativeStartReceipt(NativeStartContract):
     schema_version: Literal["1.0"] = "1.0"
     session_id: UUID
@@ -78,6 +87,24 @@ class NativeStartReceipt(NativeStartContract):
 class NativeStartDecision(NativeStartContract):
     receipt: NativeStartReceipt
     secret: str = Field(pattern=r"^[0-9a-f]{64}$", repr=False)
+
+
+class NativeStartSequenceResult(NativeStartContract):
+    preparation: NativeStartReceipt
+    authorization: NativeStartDecision
+
+    @model_validator(mode="after")
+    def same_source(self):
+        if (
+            self.preparation.state != "prepared"
+            or self.authorization.receipt.state != "issued"
+            or self.preparation.model_dump(exclude={"state", "issued_at", "expires_at"})
+            != self.authorization.receipt.model_dump(
+                exclude={"state", "issued_at", "expires_at"}
+            )
+        ):
+            raise ValueError("source_start_sequence_mismatch")
+        return self
 
 
 class NativeUnstartedRetirement(NativeStartContract):
