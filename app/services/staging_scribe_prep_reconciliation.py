@@ -26,6 +26,7 @@ from app.services.organization_access import (
 from app.services.pilot_access_lock import lock_pilot_access_lineage
 from app.services.provider_record_authority import validate_provider_record_scope
 from app.services.public_entitlements import (
+    lock_practice_for_active_seat_mutation,
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
 )
@@ -113,7 +114,11 @@ def reconcile(
         lock_pilot_access_lineage(session)
 
     candidate = _get(session, ScribeCaptureBinding, capture_binding_id, False)
-    practice = _get(session, Practice, candidate.practice_id, lock)
+    practice = (
+        lock_practice_for_active_seat_mutation(session, candidate.practice_id)
+        if lock
+        else _get(session, Practice, candidate.practice_id, False)
+    )
     _require(practice.organization_id is None and not practice.negotiated_baa_required)
     _require(not practice.stripe_subscription_id)
     # Explicit owner-directed pilot membership may preserve a legacy solo

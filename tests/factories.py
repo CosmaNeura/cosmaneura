@@ -8,6 +8,7 @@ from typeid import TypeID
 from app.commands.intake.create import AppointmentRequest
 
 from activemodel.pytest.factories import ActiveModelFactory
+from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import (
@@ -21,6 +22,9 @@ from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
+from app.models.practice import PracticeMember, lock_practice_seats
+from sqlalchemy.orm.attributes import get_history
+from sqlmodel import Session
 
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
@@ -400,3 +404,18 @@ class DoctorNoteFileFactory(ActiveModelFactory[DoctorNoteFile]):
     @classmethod
     def doctor_id(cls) -> TypeIDType:
         return DoctorFactory.build().save().id
+
+
+def save_practice_member(member: PracticeMember) -> PracticeMember:
+    """Seed or change a membership under the practice seat lock, as Core does."""
+
+    previous = get_history(member, "practice_id").deleted
+    with get_session() as session:
+        if old_session := Session.object_session(member):
+            old_session.expunge(member)
+        for practice_id in sorted({member.practice_id, *previous}, key=str):
+            assert lock_practice_seats(session, practice_id) is not None
+        session.add(member)
+        session.commit()
+        session.refresh(member)
+    return member

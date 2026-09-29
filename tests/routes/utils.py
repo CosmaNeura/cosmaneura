@@ -40,6 +40,7 @@ from tests.constants import (
     CLERK_DEV_USER_EMAIL,
     CLERK_DEV_USER_PASSWORD,
 )
+from tests.factories import save_practice_member
 
 # TODO this is a bit dangerous, let's see how it performs
 clerk_cache_instance = LRUCache(maxsize=128)
@@ -180,13 +181,15 @@ def provision_practice_in_force(doctor: Doctor) -> Practice:
         accepted_at_utc=now,
         content_sha256=version.sha256,
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-        attested_at=now,
-        attestation_name="Test Owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+            attested_at=now,
+            attestation_name="Test Owner",
+        )
+    )
     return practice
 
 
