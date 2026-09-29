@@ -32,7 +32,7 @@ from app.models.doctor import Doctor
 from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import PracticeMember
+from app.models.practice import PracticeMember, lock_practice_seats
 from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
@@ -405,6 +405,7 @@ def test_refusals_leave_membership_and_mapping_unwritten(case, monkeypatch, chan
     elif change == "disabled":
         f.additional.deleted_at = datetime.now(UTC)
     elif change == "inactive_member":
+        assert lock_practice_seats(session, f.practice.id) is not None
         f.practice_member.seat_state = "inactive"
     elif change == "link_revoked":
         f.link.revoked_at = datetime.now(UTC)
@@ -519,6 +520,7 @@ def test_failed_postcondition_rolls_back_all_new_rows(case, monkeypatch):
 
 def test_seat_limit_refuses_addition(case):
     session, f = case
+    assert lock_practice_seats(session, f.practice.id) is not None
     for _ in range(19):
         doctor = Doctor(clerk_id=f"user_seat_{uuid4().hex}", biography=None)
         session.add(doctor)

@@ -10,7 +10,7 @@ from app.jobs.sync_zoom_meetings import perform
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
-from tests.factories import AppointmentFactory, DoctorFactory
+from tests.factories import AppointmentFactory, DoctorFactory, save_practice_member
 from tests.routes.utils import provision_practice_in_force
 
 
@@ -240,7 +240,7 @@ def test_sync_skips_revoked_doctor_before_provider_call(global_session):
     member.access_revoked_by_ref = "test-suite"
     member.access_revocation_reason = "Test offboarding"
     member.access_records_retain_until = now + timedelta(days=365 * 8)
-    member.save()
+    save_practice_member(member)
 
     with patch(
         "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings"

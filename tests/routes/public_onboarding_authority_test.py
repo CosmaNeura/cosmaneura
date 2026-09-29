@@ -24,6 +24,7 @@ from app.models.organization_access import OrganizationRosterApproval
 from app.models.practice import PracticeMember
 from app.models.public_onboarding import PublicLegalAcceptance
 
+from tests.factories import save_practice_member
 from tests.routes.utils import provision_practice_in_force
 
 
@@ -145,7 +146,7 @@ def test_inactive_or_revoked_membership_denies_capabilities(
         )
     else:
         member.seat_state = state
-    member.save()
+    save_practice_member(member)
     result = _preflight(doctor)
     assert result.actor.membership_state == state
     assert result.capabilities["soap_note"]["decision"] == "denied"

@@ -28,7 +28,7 @@ from app.models.authority import (
 )
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember
+from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from app.models.provider_record_authority import ProviderPracticeAuthority
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from sqlalchemy import func, text
@@ -104,6 +104,7 @@ def case(engine):
         )
         session.add_all([doctor, practice])
         session.flush()
+        assert lock_practice_seats(session, practice.id) is not None
         session.add(
             PracticeMember(
                 practice_id=practice.id,
@@ -329,6 +330,10 @@ def test_another_current_clinician_can_join_the_same_reviewed_practice(engine):
     apply(engine, first, plan(engine, first).plan_sha256)
     second = case(engine)
     with session_for(engine) as session:
+        for practice_id in sorted(
+            {first["practice_id"], second["practice_id"]}, key=str
+        ):
+            assert lock_practice_seats(session, practice_id) is not None
         member = session.exec(
             select(PracticeMember).where(
                 PracticeMember.doctor_id == second["doctor_id"]

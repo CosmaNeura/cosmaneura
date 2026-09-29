@@ -35,6 +35,8 @@ from app.models.superadmin_capability import (
 )
 from app.models.view_as import ViewAsAuditEvent, ViewAsSession
 
+from tests.factories import save_practice_member
+
 TEST_CLERK_ISSUER = "https://identity-rebind-test.clerk.example"
 
 
@@ -106,11 +108,13 @@ def _scope(*, provisional: bool = True, provisional_email: str | None = None):
         origin_channel="direct",
         pastoral_pack=False,
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
     replacement_shell = None
     if provisional:
         replacement_shell = Doctor(

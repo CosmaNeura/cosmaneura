@@ -18,6 +18,8 @@ from sqlalchemy import delete, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import SQLModel
 
+from tests.factories import save_practice_member
+
 
 def _owner(label: str = "owner") -> PracticeMember:
     nonce = secrets.token_hex(6)
@@ -31,11 +33,13 @@ def _owner(label: str = "owner") -> PracticeMember:
         join_code=f"V{secrets.token_hex(4).upper()[:7]}",
         email_domain="example.com",
     ).save()
-    return PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    return save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
 
 
 def _question_set(

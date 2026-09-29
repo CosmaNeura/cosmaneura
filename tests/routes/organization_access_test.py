@@ -29,6 +29,7 @@ from app.models.doctor import Doctor
 from app.models.organization_access import ProviderOrganization
 from app.models.practice import Practice, PracticeMember
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user
 
 
@@ -238,11 +239,13 @@ def test_live_managed_email_drift_routes_to_support_and_blocks_personal_baa(
         origin_channel="direct",
         is_solo=True,
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
     live_managed_email = f"moved-{secrets.token_hex(4)}@mycatholicdoctor.com"
     monkeypatch.setattr(
         internal,
@@ -417,11 +420,13 @@ def test_conflicting_managed_assignment_routes_to_support(
         origin_channel="direct",
         is_solo=True,
     ).save()
-    PracticeMember(
-        practice_id=conflict_practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=conflict_practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
 
     conflict = bare_authenticated_client.get(
         api_app.url_path_for("organization_access_opportunity")
@@ -461,11 +466,13 @@ def test_organization_linked_owner_cannot_create_clickwrap_acceptance(
 ):
     doctor = _authed_doctor()
     practice, _ = _provision_roster_access(doctor)
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
     assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
 
     response = bare_authenticated_client.post(
@@ -495,11 +502,13 @@ def test_existing_member_must_claim_roster_before_legacy_enrollment_returns_acce
 ):
     doctor = _authed_doctor()
     practice, code = _provision_roster_access(doctor)
-    existing_member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    existing_member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
     assert doctor.email
     monkeypatch.setattr(internal, "verified_primary_email", lambda _id: doctor.email)
     _isolate_online_attempt_counter(monkeypatch)

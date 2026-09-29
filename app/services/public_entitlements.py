@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.models.practice import ClinicianSeatState, Practice, PracticeMember
+from app.models.practice import (
+    ClinicianSeatState,
+    Practice,
+    PracticeMember,
+    lock_practice_seats,
+    practice_seat_lock_held,
+)
 from sqlalchemy import func, or_
 from sqlmodel import Session, col, select
 
@@ -48,9 +54,7 @@ def lock_practice_for_active_seat_mutation(
 ) -> Practice:
     """Serialize every active-seat decision on the owning practice."""
 
-    practice = session.exec(
-        select(Practice).where(Practice.id == practice_id).with_for_update()
-    ).one_or_none()
+    practice = lock_practice_seats(session, practice_id)
     if practice is None:
         raise ClinicianSeatPolicyError("practice seat ledger is unavailable")
     return practice
@@ -113,6 +117,8 @@ def record_active_clinician_seat_quantity(
 ) -> int:
     """Persist the exact Stripe quantity obligation in the seat transaction."""
 
+    if not practice_seat_lock_held(session, locked_practice.id):
+        raise ClinicianSeatPolicyError("practice seat ledger is not locked")
     session.flush()
     count = active_clinician_seat_count(session, locked_practice.id)
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
