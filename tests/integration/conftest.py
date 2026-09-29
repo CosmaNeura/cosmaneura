@@ -19,10 +19,13 @@ _LOCALIAS_READY = True
 _CLERK_READY = True
 _DATABASE_ONLY_FILES = {
     (Path(__file__).resolve().parent / "session_prep_runtime_race_test.py").resolve(),
-    (Path(__file__).resolve().parent / "provider_record_authority_race_test.py").resolve(),
+    (
+        Path(__file__).resolve().parent / "provider_record_authority_race_test.py"
+    ).resolve(),
     (Path(__file__).resolve().parent / "authority_closure_lock_test.py").resolve(),
     (Path(__file__).resolve().parent / "stripe_billing_state_race_test.py").resolve(),
     (Path(__file__).resolve().parent / "practice_seat_lock_race_test.py").resolve(),
+    (Path(__file__).resolve().parent / "practice_invitation_race_test.py").resolve(),
 }
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _CLERK_REQUIRED_FILES = frozenset(

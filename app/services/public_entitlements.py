@@ -39,7 +39,7 @@ class ClinicianSeatPolicyError(RuntimeError):
 
 
 class ActiveClinicianSeatLimitReached(ClinicianSeatPolicyError):
-    """An activation would exceed the public paid-pilot seat ceiling."""
+    """An activation would exceed the public seat limit."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -131,7 +131,7 @@ def record_active_clinician_seat_quantity(
     count = active_clinician_seat_count(session, locked_practice.id)
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise ClinicianSeatPolicyError(
-            "active clinician count is outside the paid-pilot range"
+            "active clinician count is outside the seat limit"
         )
     if locked_practice.stripe_subscription_id:
         locked_practice.stripe_quantity_sync_required = True

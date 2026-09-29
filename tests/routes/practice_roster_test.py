@@ -16,6 +16,7 @@ from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 ROSTER_FIELDS = {
+    "member_id",
     "display_name",
     "role",
     "is_self",

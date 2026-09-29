@@ -110,7 +110,10 @@ def test_two_joins_cannot_both_take_the_last_seat(monkeypatch: pytest.MonkeyPatc
     rejected = [item for item in outcomes if isinstance(item, HTTPException)]
     assert len(rejected) == 1
     assert rejected[0].status_code == 409
-    assert rejected[0].detail == "A practice may have at most 20 active clinicians."
+    assert rejected[0].detail == (
+        "This practice can't add more clinicians right now. "
+        "Ask the practice owner to contact Cosmaneura."
+    )
     with get_session() as session:
         assert (
             active_clinician_seat_count(session, practice.id)

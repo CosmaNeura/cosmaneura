@@ -1311,7 +1311,7 @@
           "private"
         ],
         "summary": "Practice Roster",
-        "description": "The practice's members, for its owner. Carries no contact details.",
+        "description": "The practice's members and pending invitations, for its owner.\n\nMembers carry no contact details; an invitation carries the address the\nowner typed, except under support view-as.",
         "operationId": "practice_roster",
         "responses": {
           "200": {
@@ -1320,6 +1320,255 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PracticeRoster"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/invitations": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Practice Invitation",
+        "operationId": "create_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePracticeInvitationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationIssued"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/{invitation_id}/revoke": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Revoke Practice Invitation",
+        "operationId": "revoke_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/{invitation_id}/resend": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Resend Practice Invitation",
+        "operationId": "resend_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationIssued"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/inspect": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Inspect Practice Invitation",
+        "operationId": "inspect_practice_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeInvitationTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationInspection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/invitations/accept": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Accept Practice Invitation",
+        "operationId": "accept_practice_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPracticeInvitationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2703,6 +2952,37 @@
         ],
         "title": "AcceptBaaBody"
       },
+      "AcceptPracticeInvitationBody": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Token"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "AcceptPracticeInvitationBody"
+      },
       "Appointment": {
         "properties": {
           "id": {
@@ -3217,6 +3497,22 @@
           "legal_name"
         ],
         "title": "CreatePracticeBody"
+      },
+      "CreatePracticeInvitationBody": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "CreatePracticeInvitationBody"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -5041,6 +5337,87 @@
         ],
         "title": "PlanOrdering"
       },
+      "PracticeInvitationInspection": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "expired",
+              "revoked",
+              "used",
+              "wrong_account",
+              "member_elsewhere",
+              "already_member",
+              "practice_not_ready",
+              "managed_account"
+            ],
+            "title": "State"
+          },
+          "legal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Name"
+          },
+          "baa_accepted": {
+            "type": "boolean",
+            "title": "Baa Accepted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "legal_name",
+          "baa_accepted"
+        ],
+        "title": "PracticeInvitationInspection"
+      },
+      "PracticeInvitationIssued": {
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/PracticeRosterInvitation"
+          },
+          "invite_url": {
+            "type": "string",
+            "title": "Invite Url"
+          },
+          "email_queued": {
+            "type": "boolean",
+            "title": "Email Queued"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitation",
+          "invite_url",
+          "email_queued"
+        ],
+        "title": "PracticeInvitationIssued"
+      },
+      "PracticeInvitationTokenBody": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "PracticeInvitationTokenBody"
+      },
       "PracticeLookupResult": {
         "properties": {
           "practice": {
@@ -5071,17 +5448,77 @@
             },
             "type": "array",
             "title": "Members"
+          },
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeRosterInvitation"
+            },
+            "type": "array",
+            "title": "Invitations"
+          },
+          "occupied_seats": {
+            "type": "integer",
+            "title": "Occupied Seats"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "members"
+          "members",
+          "invitations",
+          "occupied_seats"
         ],
         "title": "PracticeRoster"
       },
+      "PracticeRosterInvitation": {
+        "properties": {
+          "invitation_id": {
+            "type": "string",
+            "title": "Invitation Id"
+          },
+          "invitee_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitee Email"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Issued At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitation_id",
+          "invitee_email",
+          "issued_at",
+          "expires_at",
+          "expired"
+        ],
+        "title": "PracticeRosterInvitation"
+      },
       "PracticeRosterMember": {
         "properties": {
+          "member_id": {
+            "type": "string",
+            "title": "Member Id"
+          },
           "display_name": {
             "anyOf": [
               {
@@ -5126,6 +5563,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "member_id",
           "display_name",
           "role",
           "is_self",

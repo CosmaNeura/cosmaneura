@@ -89,7 +89,7 @@ class CapabilityEntitlement(BaseModel, extra="forbid"):
     capabilities: dict[str, dict]
 
 
-def _pending_invitation_count(session, practice_id) -> int:
+def _pending_invitation_count(session, practice_id, now: datetime) -> int:
     count = session.exec(
         select(func.count())
         .select_from(PracticeInvitation)
@@ -97,6 +97,7 @@ def _pending_invitation_count(session, practice_id) -> int:
             PracticeInvitation.practice_id == practice_id,
             col(PracticeInvitation.accepted_at).is_(None),
             col(PracticeInvitation.revoked_at).is_(None),
+            PracticeInvitation.expires_at > now,
         )
     ).one()
     return int(count)
@@ -167,10 +168,11 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
         public_pilot_cohort=practice.public_pilot_cohort,
     )
 
+    generated_at = datetime.now(timezone.utc)
     return CapabilityEntitlement(
         contract_version=PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
         policy_revision=PUBLIC_ENTITLEMENT_POLICY_REVISION,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=generated_at,
         actor=CapabilityActor(
             actor_id=str(doctor.id),
             practice_id=str(practice.id),
@@ -189,7 +191,9 @@ def _capability_entitlement(session, doctor: Doctor) -> "CapabilityEntitlement":
         seats=CapabilitySeats(
             active_clinician_seats=active_clinician_seat_count(session, practice.id),
             maximum_active_clinician_seats=MAX_ACTIVE_CLINICIAN_SEATS,
-            pending_invitations=_pending_invitation_count(session, practice.id),
+            pending_invitations=_pending_invitation_count(
+                session, practice.id, generated_at
+            ),
             stripe_quantity_sync_required=practice.stripe_quantity_sync_required,
         ),
         capabilities=capability_decisions(facts),
