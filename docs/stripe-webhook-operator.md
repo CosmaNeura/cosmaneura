@@ -27,7 +27,9 @@ secrets are configured, an empty `POST` to the endpoint must return:
 
 That response is the expected dormant state. Webhook ingest is gated by
 `stripe_webhook_configured()` and does not depend on
-`STRIPE_BILLING_ENABLED`.
+`STRIPE_BILLING_ENABLED` or `STRIPE_PORTAL_CONFIGURATION_ID`. The customer
+portal requires the pinned portal configuration described in
+[Stripe billing activation](stripe-billing-activation.md#customer-portal-configuration).
 
 After the integration and secrets are configured, a request with an invalid
 `Stripe-Signature` must return:

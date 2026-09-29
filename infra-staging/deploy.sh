@@ -370,8 +370,8 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 		SCRIBE_WORKFLOW_ENABLED: "false",
 		SESSION_PREP_SYNTHETIC_ENABLED: "false",
 		AUTO_MIGRATE_ON_STARTUP: "false",
-		STRIPE_INTEGRATION_ENABLED: "false",
-		STRIPE_BILLING_ENABLED: "false",
+		STRIPE_INTEGRATION_ENABLED: (.STRIPE_INTEGRATION_ENABLED // "false"),
+		STRIPE_BILLING_ENABLED: (.STRIPE_BILLING_ENABLED // "false"),
 		STRIPE_LIVE_MODE: "false",
 		DURABLE_WEBHOOK_INBOX_ENABLED: "false",
 		SENTRY_STAGING_ENABLED: "false",
@@ -425,7 +425,7 @@ if c.get("PYTHON_ENV") != "staging" or any(c.get(k) != v for k, v in urls.items(
     fail()
 flag_names = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED AGENT_API_ENABLED AUTHORITY_KERNEL_ENABLED SENTRY_STAGING_ENABLED".split()
 flags = {k: c.get(k) for k in flag_names}
-forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
+forced_false = "SCRIBE_HANDOFF_ENABLED SCRIBE_WORKFLOW_ENABLED SESSION_PREP_SYNTHETIC_ENABLED AUTO_MIGRATE_ON_STARTUP STRIPE_LIVE_MODE DURABLE_WEBHOOK_INBOX_ENABLED ZOOM_WATCHDOG_ENABLED SENTRY_STAGING_ENABLED".split()
 if sys.argv[2] == "v2":
     forced_false.remove("SCRIBE_WORKFLOW_ENABLED")
     if flags["SCRIBE_WORKFLOW_ENABLED"] != "true":
@@ -447,6 +447,7 @@ if not isinstance(clerk_publishable, str) or not isinstance(clerk_private, str) 
     fail()
 for name, prefixes in {
     "STRIPE_ACCOUNT_ID": ("acct_",),
+    "STRIPE_PORTAL_CONFIGURATION_ID": ("bpc_",),
     "STRIPE_SECRET_KEY": ("sk_test_", "rk_test_"),
     "STRIPE_WEBHOOK_SECRET": ("whsec_",),
 }.items():
@@ -516,6 +517,7 @@ BILLING_API_ONLY_SECRET_VARS=(STRIPE_WEBHOOK_SECRET)
 BILLING_PUBLIC_VARS=(
 	STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_ACCOUNT_ID
 	STRIPE_PRICE_ID STRIPE_API_VERSION STRIPE_LIVE_MODE
+	STRIPE_PORTAL_CONFIGURATION_ID
 )
 PUBLIC_VARS=(
 	PYTHON_ENV
@@ -942,7 +944,7 @@ verify_candidate_workload_state() {
 		([.[] | select(.name == $worker)][0].readyRevisionArgs == [$worker_command]) and
 		([.[] | select(.name == $scheduler)][0].readyRevisionArgs == [$scheduler_command])
 	' <<<"$state_json" >/dev/null; then
-		echo "Candidate workload image or disabled feature-gate evidence is inconsistent."
+		echo "Candidate workload image or feature-gate evidence is inconsistent."
 		return 1
 	fi
 }
@@ -1040,7 +1042,7 @@ if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_LIVE_MODE // empty')" != "false" ]]; 
 	exit 1
 fi
 if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then
-	for var in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_ACCOUNT_ID STRIPE_PRICE_ID STRIPE_API_VERSION; do
+	for var in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_ACCOUNT_ID STRIPE_PRICE_ID STRIPE_PORTAL_CONFIGURATION_ID STRIPE_API_VERSION; do
 		if [[ -z "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" ]]; then
 			echo "$var is required when Stripe integration is enabled."
 			exit 1
@@ -1051,7 +1053,7 @@ done
 		echo "Staging Stripe key must be a test-mode secret or restricted key."
 		exit 1
 	fi
-	for spec in "STRIPE_WEBHOOK_SECRET:whsec_" "STRIPE_ACCOUNT_ID:acct_" "STRIPE_PRICE_ID:price_"; do
+	for spec in "STRIPE_WEBHOOK_SECRET:whsec_" "STRIPE_ACCOUNT_ID:acct_" "STRIPE_PRICE_ID:price_" "STRIPE_PORTAL_CONFIGURATION_ID:bpc_"; do
 		var=${spec%%:*}
 		prefix=${spec#*:}
 		if [[ "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" != "$prefix"* ]]; then
