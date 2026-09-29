@@ -9,8 +9,9 @@ remain hard denials.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from app.services.organization_access import member_authorization_basis
@@ -82,30 +83,32 @@ def _has_valid_legacy_pilot_access(
     return doctor.onboarding_completed_at is not None and has_active_grant
 
 
-def resolve_doctor_access(
-    doctor: Doctor,
-    *,
-    require_entitlement: bool = True,
-    at: datetime | None = None,
-) -> DoctorAccessDecision:
-    """Resolve effective product access without mutating identity or tenancy.
-
-    A disabled Doctor, a revoked grandfather grant, or a revoked or inactive
-    membership is an explicit tombstone and therefore outranks every positive
-    authorization basis. An active exact-account pilot grant on an
-    already-onboarded Doctor then permits access without requiring a membership,
-    BAA, trial, subscription, or billing exemption. Everyone else continues
-    through the normal practice/member authorization rules.
-    """
-
+def _doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
     if doctor.deleted_at is not None:
-        return _denied("doctor_disabled")
-
+        return "doctor_disabled"
     if revoked_pilot_access_grant(doctor.clerk_id) is not None:
-        return _denied("pilot_grant_revoked")
+        return "pilot_grant_revoked"
+    return None
 
-    member = PracticeMember.get(doctor_id=doctor.id)
-    practice = Practice.get(id=member.practice_id) if member is not None else None
+
+def _membership_tombstone(member: PracticeMember) -> DoctorAccessDenialReason | None:
+    if member.access_revoked_at is not None:
+        return "practice_membership_revoked"
+    if member.seat_state != ClinicianSeatState.active.value:
+        return "practice_membership_inactive"
+    return None
+
+
+def _decide(
+    doctor: Doctor,
+    member: PracticeMember | None,
+    practice: Practice | None,
+    *,
+    require_entitlement: bool,
+    at: datetime,
+) -> DoctorAccessDecision:
+    """The access rules for a Doctor whose own tombstones are already cleared."""
+
     baa_in_force = bool(practice and practice.baa_in_force(at=at))
     pilot_grant = active_pilot_access_grant(doctor, at=at)
     pilot_entitlement_in_force = bool(
@@ -115,16 +118,10 @@ def resolve_doctor_access(
         practice and (practice.entitled(at=at) or pilot_entitlement_in_force)
     )
 
-    if member is not None and member.access_revoked_at is not None:
+    tombstone = _membership_tombstone(member) if member is not None else None
+    if tombstone is not None:
         return _denied(
-            "practice_membership_revoked",
-            baa_in_force=baa_in_force,
-            entitlement_in_force=entitlement_in_force,
-        )
-
-    if member is not None and member.seat_state != ClinicianSeatState.active.value:
-        return _denied(
-            "practice_membership_inactive",
+            tombstone,
             baa_in_force=baa_in_force,
             entitlement_in_force=entitlement_in_force,
         )
@@ -146,7 +143,7 @@ def resolve_doctor_access(
     if practice is None:
         return _denied("practice_not_found")
 
-    basis = member_authorization_basis(member, at=at)
+    basis = member_authorization_basis(member, at=at, practice=practice)
     if basis not in ("organization_roster", "workforce_attestation"):
         return _denied(
             "practice_access_not_authorized",
@@ -170,6 +167,73 @@ def resolve_doctor_access(
         baa_in_force=True,
         entitlement_in_force=entitlement_in_force,
     )
+
+
+def resolve_doctor_access(
+    doctor: Doctor,
+    *,
+    require_entitlement: bool = True,
+    at: datetime | None = None,
+) -> DoctorAccessDecision:
+    """Resolve effective product access without mutating identity or tenancy.
+
+    A disabled Doctor, a revoked grandfather grant, or a revoked or inactive
+    membership is an explicit tombstone and therefore outranks every positive
+    authorization basis. An active exact-account pilot grant on an
+    already-onboarded Doctor then permits access without requiring a membership,
+    BAA, trial, subscription, or billing exemption. Everyone else continues
+    through the normal practice/member authorization rules.
+    """
+
+    tombstone = _doctor_tombstone(doctor)
+    if tombstone is not None:
+        return _denied(tombstone)
+
+    member = PracticeMember.get(doctor_id=doctor.id)
+    practice = Practice.get(id=member.practice_id) if member is not None else None
+    return _decide(
+        doctor,
+        member,
+        practice,
+        require_entitlement=require_entitlement,
+        at=at or datetime.now(timezone.utc),
+    )
+
+
+def practice_members_access_in_force(
+    practice: Practice,
+    members: Iterable[tuple[PracticeMember, Doctor]],
+    *,
+    at: datetime | None = None,
+) -> list[bool]:
+    """:func:`doctor_access_in_force` for each of one practice's members.
+
+    Equivalent per member, but loads the practice once and settles revoked or
+    unseated memberships before any per-Doctor lookup, so the cost of a roster
+    does not grow with its retained revocation history.
+    """
+
+    current = at or datetime.now(timezone.utc)
+    results: list[bool] = []
+    for member, doctor in members:
+        if member.practice_id != practice.id or member.doctor_id != doctor.id:
+            raise ValueError("member does not belong to this practice and doctor")
+        if (
+            _membership_tombstone(member) is not None
+            or _doctor_tombstone(doctor) is not None
+        ):
+            results.append(False)
+            continue
+        results.append(
+            _decide(
+                doctor,
+                member,
+                practice,
+                require_entitlement=True,
+                at=current,
+            ).allowed
+        )
+    return results
 
 
 def doctor_access_in_force(

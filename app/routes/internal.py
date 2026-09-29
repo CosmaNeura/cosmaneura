@@ -54,7 +54,11 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
-from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.doctor_access import (
+    DoctorAccessDecision,
+    practice_members_access_in_force,
+    resolve_doctor_access,
+)
 from app.services.managed_organization_access import (
     ManagedOrganizationAccessState,
     resolve_managed_organization_access,
@@ -76,6 +80,7 @@ from app.services.public_entitlements import (
     ClinicianSeatPolicyError,
     active_clinician_seat_count,
     lock_practice_for_active_seat_mutation,
+    occupies_active_clinician_seat,
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
 )
@@ -151,7 +156,7 @@ from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import col, select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -1152,6 +1157,13 @@ def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
 
+def _owner_membership(doctor: Doctor, detail: str) -> PracticeMember:
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    return member
+
+
 def _practice_ready(
     doctor: Doctor,
     *,
@@ -1810,6 +1822,68 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
     ]
 
 
+class PracticeRosterMember(BaseModel, extra="forbid"):
+    display_name: str | None
+    "Name recorded at attestation; null for roster-authorized members who never attested."
+    role: Literal["owner", "workforce"]
+    is_self: bool
+    seat_active: bool
+    "Holds a clinician seat: active seat state and no access revocation."
+    revoked: bool
+    "Access was revoked, as distinct from a seat that is merely inactive."
+    access_in_force: bool
+    "Passes the same effective-access decision that gates protected routes."
+    joined_at: datetime
+
+
+class PracticeRoster(BaseModel, extra="forbid"):
+    members: list[PracticeRosterMember]
+
+
+@internal_api_app.get("/practice/members", name="practice_roster")
+def practice_roster(request: Request) -> PracticeRoster:
+    """The practice's members, for its owner. Carries no contact details."""
+    doctor: Doctor = request.state.doctor
+    member = _owner_membership(
+        doctor, "Only the practice owner can view the practice roster."
+    )
+    with get_session() as session:
+        rows = session.exec(
+            select(
+                PracticeMember,
+                Doctor,
+                occupies_active_clinician_seat(),
+            )
+            .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
+            .where(PracticeMember.practice_id == member.practice_id)
+            .order_by(
+                col(PracticeMember.role) != PracticeRole.owner.value,
+                col(PracticeMember.created_at),
+                col(PracticeMember.id),
+            )
+        ).all()
+        practice = session.get(Practice, member.practice_id)
+        assert practice is not None
+        access = practice_members_access_in_force(
+            practice, [(row, subject) for row, subject, _ in rows]
+        )
+        roster: list[PracticeRosterMember] = []
+        for (row, _, seat_active), access_in_force in zip(rows, access, strict=True):
+            assert row.created_at is not None
+            roster.append(
+                PracticeRosterMember(
+                    display_name=row.attestation_name,
+                    role=cast(Literal["owner", "workforce"], row.role),
+                    is_self=row.doctor_id == doctor.id,
+                    seat_active=seat_active,
+                    revoked=row.access_revoked_at is not None,
+                    access_in_force=access_in_force,
+                    joined_at=row.created_at,
+                )
+            )
+    return PracticeRoster(members=roster)
+
+
 class JoinCodeBody(BaseModel, extra="forbid"):
     join_code: str = Field(min_length=4, max_length=16)
 
@@ -2116,12 +2190,7 @@ class BillingSessionUrl(BaseModel, extra="forbid"):
 
 
 def _owner_practice_for_billing(doctor: Doctor) -> Practice:
-    member = _membership_for(doctor)
-    if not member or member.role != PracticeRole.owner.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the practice owner can manage billing.",
-        )
+    member = _owner_membership(doctor, "Only the practice owner can manage billing.")
     practice = Practice.get(id=member.practice_id)
     assert practice
     return practice

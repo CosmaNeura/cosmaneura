@@ -16,7 +16,7 @@ from app.models.practice import (
     lock_practice_seats,
     practice_seat_lock_held,
 )
-from sqlalchemy import func, or_
+from sqlalchemy import ColumnElement, and_, func, or_
 from sqlmodel import Session, col, select
 
 PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
@@ -60,6 +60,15 @@ def lock_practice_for_active_seat_mutation(
     return practice
 
 
+def occupies_active_clinician_seat() -> ColumnElement[bool]:
+    """The one membership predicate behind the billed seat quantity."""
+
+    return and_(
+        col(PracticeMember.seat_state) == ClinicianSeatState.active.value,
+        col(PracticeMember.access_revoked_at).is_(None),
+    )
+
+
 def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
     """Return Core's authoritative paid-seat quantity for one practice.
 
@@ -92,8 +101,7 @@ def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
         .select_from(PracticeMember)
         .where(
             PracticeMember.practice_id == practice_id,
-            PracticeMember.seat_state == ClinicianSeatState.active.value,
-            col(PracticeMember.access_revoked_at).is_(None),
+            occupies_active_clinician_seat(),
         )
     ).one()
     return int(count)
