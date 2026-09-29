@@ -651,6 +651,45 @@ async def invoke_tool(
 ):
     """Read a current provider brief or the isolated synthetic compatibility path."""
 
+    return await _invoke_tool(
+        request=request,
+        response=response,
+        principal=principal,
+        mount_context_token=mount_context_token,
+        interaction_ref=interaction_ref,
+        client_turn_id=client_turn_id,
+        idempotency_key=idempotency_key,
+        authority_settings=authority_settings,
+        session_prep_settings=session_prep_settings,
+        trace_id=trace_id,
+    )
+
+
+async def _invoke_tool(
+    *,
+    request: Request,
+    response: Response,
+    principal: EntraServicePrincipal,
+    mount_context_token: str,
+    interaction_ref: str,
+    client_turn_id: UUID,
+    idempotency_key: str,
+    authority_settings: AuthorityKernelSettings,
+    session_prep_settings: SessionPrepSyntheticSettings,
+    trace_id: str | None,
+    companion_brief: bool = False,
+) -> (
+    app.services.session_prep.SessionPrepToolResponse
+    | provider_question.ProviderQuestionResponse
+    | history.HistoryResponse
+    | JSONResponse
+):
+    """Execute shared receipt semantics after the route's own workload gate.
+
+    The companion constraint is trusted route configuration, never request data.
+    Apply it before any authority/data access and never enter the demo fallback.
+    """
+
     resolved_trace_id = normalize_trace_id(trace_id)
     singleton_headers = (
         "x-cosmaneura-mount-context",
@@ -674,7 +713,7 @@ async def invoke_tool(
     if isinstance(data, JSONResponse):
         return data
     tool_key = (data.tool_name, data.tool_version)
-    if tool_key not in {
+    if (companion_brief and tool_key != _SESSION_PREP_TOOL_KEY) or tool_key not in {
         _SESSION_PREP_TOOL_KEY,
         provider_question.TOOL_KEY,
         history.TOOL_KEY,
@@ -700,6 +739,11 @@ async def invoke_tool(
                 data.model_dump(mode="json", exclude_unset=True)
             )
         )
+        if companion_brief and (
+            not isinstance(invocation, SessionPrepContextReadInvocation)
+            or invocation.arguments.detail != "brief"
+        ):
+            raise ValueError("companion_requires_brief")
     except (ValidationError, ValueError, RecursionError):
         return agent_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -710,9 +754,8 @@ async def invoke_tool(
         )
 
     if (
-        not session_prep_settings.is_complete()
-        and not session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
-    ):
+        companion_brief or not session_prep_settings.is_complete()
+    ) and not session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code="PLATFORM_UNAVAILABLE",
@@ -782,7 +825,7 @@ async def invoke_tool(
                     settings=authority_settings,
                 )
                 session.commit()
-            elif session_prep_settings.is_complete():
+            elif not companion_brief and session_prep_settings.is_complete():
                 result = app.services.session_prep.SYNTHETIC_SESSION_PREP_SERVICE.invoke(
                     workload_client_id=principal.client_id,
                     interaction_ref=interaction_ref,
