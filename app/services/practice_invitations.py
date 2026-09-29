@@ -10,7 +10,7 @@ import hashlib
 import hmac
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 from typeid import TypeID
@@ -26,6 +26,7 @@ from app.services.organization_access import (
     lock_roster_enrollment_email,
     normalize_email,
 )
+from app.services.practice_member_access import access_cutoff_after
 from app.services.practice_owner_access import (
     PracticeOwnerUnavailable,
     lock_authorized_practice_owner,
@@ -37,7 +38,13 @@ from app.services.public_entitlements import (
 )
 
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    MemberAccessState,
+    Practice,
+    PracticeMember,
+    PracticeRole,
+    member_access_state,
+)
 from app.models.public_onboarding import PracticeInvitation
 from sqlalchemy import func
 from sqlmodel import Session, col, select
@@ -50,6 +57,7 @@ ACCOUNT_IN_ANOTHER_PRACTICE = (
 INVITATION_TTL = timedelta(days=7)
 OWNER_REVOCATION_REASON = "Revoked by the practice owner."
 REPLACEMENT_REVOCATION_REASON = "Replaced by a new invitation."
+_RESTORABLE_STATES = frozenset({MemberAccessState.ending, MemberAccessState.revoked})
 
 
 class PracticeInvitationError(Exception):
@@ -170,6 +178,10 @@ def invitation_expired(invitation: PracticeInvitation, now: datetime) -> bool:
     return invitation.expires_at <= now
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 def _is_pending(invitation: PracticeInvitation) -> bool:
     return invitation.accepted_at is None and invitation.revoked_at is None
 
@@ -231,7 +243,7 @@ def _issue_locked(
     # Membership elsewhere is deliberately not checked: it would disclose an
     # invitee's employer to this owner. Acceptance refuses it instead.
     existing_member = session.exec(
-        select(col(PracticeMember.id))
+        select(PracticeMember)
         .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
         .where(
             PracticeMember.practice_id == practice.id,
@@ -239,6 +251,11 @@ def _issue_locked(
         )
     ).first()
     if existing_member is not None:
+        if member_access_state(existing_member, at=now) in _RESTORABLE_STATES:
+            raise InvitationConflict(
+                "This clinician is already a member of the practice. "
+                "Restore them from the roster instead."
+            )
         raise InvitationConflict("This clinician is already a member of the practice.")
 
     email_digest = _email_digest(email)
@@ -274,7 +291,10 @@ def _issue_locked(
             "An invitation to this address is already pending. Resend it instead."
         )
     # Advisory only: the seat is claimed, under this same lock, at acceptance.
-    require_active_clinician_seat_capacity(session, practice)
+    # Seats that free at tonight's cut-off already count as free here.
+    require_active_clinician_seat_capacity(
+        session, practice, at=access_cutoff_after(now)
+    )
 
     # The token binds the id, and the database forbids changing token_digest
     # later, so the id is chosen here rather than at insert.
@@ -309,9 +329,10 @@ def issue_invitation(
     owner_member: PracticeMember,
     email: str,
     idempotency_key: str,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> IssuedInvitation:
     practice = _lock_owner_practice(session, owner_member)
+    now = clock()
     try:
         normalized = normalize_email(email)
     except OrganizationAccessError:
@@ -334,10 +355,11 @@ def revoke_invitation(
     *,
     owner_member: PracticeMember,
     invitation_id: Any,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> PracticeInvitation:
     practice = _lock_owner_practice(session, owner_member, issuing=False)
     invitation = _lock_practice_invitation(session, practice, invitation_id)
+    now = clock()
     if invitation.accepted_at is not None:
         raise InvitationConflict("An accepted invitation cannot be revoked.")
     if invitation.revoked_at is None:
@@ -356,10 +378,11 @@ def resend_invitation(
     owner_member: PracticeMember,
     invitation_id: Any,
     idempotency_key: str,
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> IssuedInvitation:
     practice = _lock_owner_practice(session, owner_member)
     invitation = _lock_practice_invitation(session, practice, invitation_id)
+    now = clock()
     key_digest = _replacement_idempotency_digest(invitation.id, idempotency_key)
     replacement = session.exec(
         select(col(PracticeInvitation.id)).where(
@@ -493,7 +516,7 @@ def accept_invitation(
     verified_email: str,
     attestation_name: str,
     reverify_email: Callable[[Doctor], str],
-    now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
 ) -> tuple[Practice, PracticeMember]:
     """Admit the invited clinician under their own workforce attestation.
 
@@ -579,9 +602,12 @@ def accept_invitation(
             session.refresh(member)
             return practice, member
         raise InvitationConflict("This account is already a member of the practice.")
+    # Read under the seat lock: acceptance queued behind another seat change
+    # must judge expiry and the seat count at the moment it is released.
+    now = clock()
     if not _is_pending(invitation) or invitation_expired(invitation, now):
         raise InvitationInactive
-    require_active_clinician_seat_capacity(session, practice)
+    require_active_clinician_seat_capacity(session, practice, at=now)
 
     member = PracticeMember(
         practice_id=practice.id,

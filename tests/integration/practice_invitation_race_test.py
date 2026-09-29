@@ -89,7 +89,6 @@ def _invite(owner: PracticeMember, email: str) -> str:
             owner_member=owner,
             email=email,
             idempotency_key=secrets.token_hex(8),
-            now=datetime.now(timezone.utc),
         ).token
 
 

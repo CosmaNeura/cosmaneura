@@ -1,18 +1,23 @@
 import { useEffect, useRef, useState } from "react"
 
 import { CopyButton } from "~/components/shared/CopyButton"
+import {
+  MemberAccessActions,
+  accessEnding,
+  memberAccessLabel,
+} from "~/components/shared/PracticeMemberAccess"
 import { Button } from "~/components/ui/button"
 import { Input } from "~/components/ui/input"
 import {
   type PracticeInvitationIssued,
   type PracticeRosterInvitation,
-  type PracticeRosterMember,
   type PracticeRoster as Roster,
   createPracticeInvitation,
   practiceRoster,
   resendPracticeInvitation,
   revokePracticeInvitation,
 } from "~/configuration/client"
+import { errorDetail } from "~/lib/error-detail"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 /**
@@ -35,14 +40,6 @@ export async function loadPracticeRoster(): Promise<PracticeRosterLoad> {
   } catch {
     return "unavailable"
   }
-}
-
-function errorDetail(error: unknown, fallback: string) {
-  if (error && typeof error === "object" && "detail" in error) {
-    const { detail } = error as { detail: unknown }
-    if (typeof detail === "string") return detail
-  }
-  return fallback
 }
 
 type Outcome = { data?: unknown; error?: unknown; response?: Response }
@@ -71,15 +68,12 @@ function useRetryKey() {
   }
 }
 
+const CUTOFF_RELOAD_SLACK_MS = 1_000
+const MAX_TIMER_MS = 2 ** 31 - 1
+const SKEWED_CLOCK_RETRY_MS = 30_000
+
 function count(n: number, singular: string, plural: string) {
   return `${n} ${n === 1 ? singular : plural}`
-}
-
-function accessLabel(member: PracticeRosterMember) {
-  if (member.revoked) return "Revoked"
-  if (!member.seat_active) return "Inactive"
-  if (!member.access_in_force) return "No access"
-  return "Active"
 }
 
 function InvitationLink({
@@ -142,7 +136,7 @@ export function InviteClinicianForm({
         setEmail("")
         onIssued(data)
       } else {
-        setError(errorDetail(failure, "The invitation could not be sent."))
+        setError(errorDetail(failure) ?? "The invitation could not be sent.")
       }
     } catch {
       setError("The invitation could not be sent.")
@@ -204,7 +198,7 @@ function InvitationRow({
     try {
       const { error: failure } = await run()
       if (failure) {
-        setError(errorDetail(failure, "That did not work. Try again."))
+        setError(errorDetail(failure) ?? "That did not work. Try again.")
       }
     } catch {
       setError("That did not work. Try again.")
@@ -303,6 +297,30 @@ export function PracticeRoster({
     }
   }
 
+  // a member's cut-off passes without any request from this page; reload then
+  // so the row and the seat count stop saying "tonight"
+  const endsAt =
+    roster && typeof roster === "object"
+      ? Math.min(
+          ...roster.members
+            .filter(accessEnding)
+            .map((member) => Date.parse(member.access_ends_at)),
+        )
+      : Infinity
+  useEffect(() => {
+    if (endsAt === Infinity) return
+    const wait = endsAt - Date.now()
+    // the server decides; a browser clock running ahead gets "not yet" back,
+    // so it waits a while instead of asking again at once
+    const delay =
+      wait > 0
+        ? Math.min(wait + CUTOFF_RELOAD_SLACK_MS, MAX_TIMER_MS)
+        : SKEWED_CLOCK_RETRY_MS
+    const timer = setTimeout(() => void reload(), delay)
+    return () => clearTimeout(timer)
+    // every reload yields a new roster, which re-arms the wait
+  }, [endsAt, roster])
+
   async function onIssued(next: PracticeInvitationIssued) {
     setIssued(next)
     await reload()
@@ -323,6 +341,7 @@ export function PracticeRoster({
   }
   const { members, invitations } = roster
   const pending = invitations.filter((invitation) => !invitation.expired).length
+  const freeingTonight = members.filter(accessEnding).length
   // a solo account has no one else yet, so "so far" would mislead; without a
   // seat summary the account kind is unknown and the line is omitted
   const onlyYou =
@@ -335,6 +354,9 @@ export function PracticeRoster({
       <p className="font-semibold">Practice members</p>
       <p className="text-muted-foreground mt-1">
         {count(roster.occupied_seats, "seat", "seats")} in use
+        {freeingTonight > 0
+          ? ` · ${count(freeingTonight, "seat frees", "seats free")} at midnight ET`
+          : null}
         {pending > 0
           ? ` · ${count(pending, "invitation", "invitations")} pending — not billed until accepted`
           : null}
@@ -364,12 +386,13 @@ export function PracticeRoster({
                   : "text-muted-foreground"
               }
             >
-              {accessLabel(member)}
+              {memberAccessLabel(member)}
               <span className="text-muted-foreground">
                 {" "}
                 · joined {new Date(member.joined_at).toLocaleDateString()}
               </span>
             </span>
+            <MemberAccessActions member={member} onChanged={reload} />
           </li>
         ))}
         {invitations.map((invitation) => (

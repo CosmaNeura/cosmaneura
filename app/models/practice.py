@@ -11,7 +11,7 @@ from sqlalchemy import event
 from sqlalchemy.orm import PassiveFlag, SessionTransaction
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm.attributes import get_history
-from sqlmodel import Column, Field, Relationship, Session, select
+from sqlmodel import Column, Field, Relationship, Session, col, select
 
 from .doctor import Doctor
 
@@ -380,6 +380,10 @@ class PracticeMember(
             name="ck_practice_member_seat_state",
         ),
         sa.CheckConstraint(
+            "access_ends_at IS NULL OR seat_state = 'inactive'",
+            name="ck_practice_member_access_end_requires_inactive_seat",
+        ),
+        sa.CheckConstraint(
             "(organization_roster_approval_id IS NULL "
             "AND organization_authorized_at IS NULL) OR "
             "(organization_roster_approval_id IS NOT NULL "
@@ -418,6 +422,11 @@ class PracticeMember(
     role: str
     seat_state: str = Field(default=ClinicianSeatState.active.value)
     "Active, non-revoked memberships occupy one clinician seat; inactive memberships do not."
+    access_ends_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "When an owner-revoked member's access stops; the seat is held until then."
     attested_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
@@ -452,11 +461,64 @@ class PracticeMember(
     )
 
 
+class MemberAccessState(str, Enum):
+    active = "active"
+    ending = "ending"
+    "Revoked by the owner; access and the seat last until access_ends_at."
+    revoked = "revoked"
+    "Revoked by the owner and past its end; restorable, holds no seat."
+    permanently_revoked = "permanently_revoked"
+    "Support offboarding or account closure; final."
+
+
+SEAT_HOLDING_ACCESS_STATES = frozenset(
+    {MemberAccessState.active, MemberAccessState.ending}
+)
+
+
+def member_access_state(member: PracticeMember, *, at: datetime) -> MemberAccessState:
+    """The one reading of a membership's access; must agree with the SQL below."""
+
+    if member.access_revoked_at is not None:
+        return MemberAccessState.permanently_revoked
+    if member.seat_state == ClinicianSeatState.active.value:
+        return MemberAccessState.active
+    if (
+        member.seat_state == ClinicianSeatState.inactive.value
+        and member.access_ends_at is not None
+        and member.access_ends_at > at
+    ):
+        return MemberAccessState.ending
+    return MemberAccessState.revoked
+
+
+def member_holds_seat_clause(at: datetime) -> sa.ColumnElement[bool]:
+    """SQL form of ``member_access_state(member, at=at) in SEAT_HOLDING_ACCESS_STATES``."""
+
+    return sa.and_(
+        col(PracticeMember.access_revoked_at).is_(None),
+        sa.or_(
+            col(PracticeMember.seat_state) == ClinicianSeatState.active.value,
+            sa.and_(
+                col(PracticeMember.seat_state) == ClinicianSeatState.inactive.value,
+                # Keeps the expression false, not NULL, when selected as a value.
+                col(PracticeMember.access_ends_at).is_not(None),
+                col(PracticeMember.access_ends_at) > at,
+            ),
+        ),
+    )
+
+
 class PracticeSeatLockNotHeld(RuntimeError):
     """A seat-affecting membership write was flushed without the practice lock."""
 
 
-_SEAT_OCCUPANCY_FIELDS = ("practice_id", "seat_state", "access_revoked_at")
+_SEAT_OCCUPANCY_FIELDS = (
+    "practice_id",
+    "seat_state",
+    "access_ends_at",
+    "access_revoked_at",
+)
 
 _seat_locked_practices: WeakKeyDictionary[SessionTransaction, set[str]] = (
     WeakKeyDictionary()

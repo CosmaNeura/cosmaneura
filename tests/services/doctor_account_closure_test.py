@@ -727,3 +727,84 @@ def test_closure_cli_is_dry_run_first_and_does_not_print_identity_values():
     assert doctor.clerk_id not in result.output
     doctor.refresh()
     assert doctor.deleted_at is None
+
+
+def _workforce_closure_with_subscription() -> tuple[Doctor, Practice, dict]:
+    owner, practice, _ = _scope(is_solo=False)
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.save()
+    workforce = Doctor(
+        clerk_id=f"user_close_workforce_{secrets.token_hex(5)}",
+        email=f"workforce-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=workforce.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Workforce Provider",
+        )
+    )
+    args = {
+        "doctor_id": workforce.id,
+        "operator_ref": "change:workforce-seat-closure-test",
+        "reason": "Close a departing workforce provider account",
+    }
+    return workforce, practice, args
+
+
+def test_closure_records_the_stripe_seat_target_in_its_transaction(monkeypatch):
+    workforce, practice, args = _workforce_closure_with_subscription()
+
+    def refuse_post_commit_marking(_: Practice) -> None:
+        raise AssertionError("the seat target must be recorded before commit")
+
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", refuse_post_commit_marking
+    )
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 0, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 1
+
+
+def test_closure_still_applies_when_the_seat_ledger_is_invalid(monkeypatch):
+    import app.services.doctor_account_closure as closure
+    from app.services.public_entitlements import ClinicianSeatPolicyError
+
+    workforce, practice, args = _workforce_closure_with_subscription()
+
+    def invalid_ledger(*_args, **_kwargs) -> int:
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    marked: list[str] = []
+    monkeypatch.setattr(
+        closure, "record_active_clinician_seat_quantity", invalid_ledger
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "mark_quantity_sync_required",
+        lambda value: marked.append(str(value.id)),
+    )
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 0, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    workforce.refresh()
+    assert workforce.deleted_at is not None
+    assert marked == [str(practice.id)]

@@ -50,6 +50,8 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: true,
     authorization_basis: "workforce_attestation",
     access_revoked: false,
+    access_ends_at: null,
+    access_ended: false,
     pilot_access_grant_active: false,
     trial_ends_at: null,
     billing_exempt: true,
@@ -77,6 +79,7 @@ const MEMBERS: PracticeRosterMember[] = [
     seat_active: true,
     revoked: false,
     access_in_force: true,
+    access_ends_at: null,
     joined_at: "2026-08-20T20:00:00Z",
   },
   {
@@ -87,6 +90,7 @@ const MEMBERS: PracticeRosterMember[] = [
     seat_active: true,
     revoked: false,
     access_in_force: true,
+    access_ends_at: null,
     joined_at: "2026-08-21T20:00:00Z",
   },
 ]
@@ -156,6 +160,20 @@ describe("settings practice roster", () => {
     ).toBeInTheDocument()
     expect(screen.queryByText("Practice members")).not.toBeInTheDocument()
     expect(client.practiceRoster).not.toHaveBeenCalled()
+  })
+
+  it("tells a revoked clinician when their access ends", async () => {
+    practiceApi.getPractice.mockResolvedValue(
+      practice({ role: "workforce", access_ends_at: "2026-09-28T04:00:00Z" }),
+    )
+
+    openSettings()
+
+    expect(
+      await screen.findByText(
+        "Your practice owner ended your access to Cosmas.",
+      ),
+    ).toBeInTheDocument()
   })
 
   it("loads settings and the practice without waiting on each other", async () => {

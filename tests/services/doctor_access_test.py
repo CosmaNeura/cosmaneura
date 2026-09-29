@@ -473,3 +473,55 @@ def test_practice_batch_access_matches_single_doctor_decision(build):
     single = [resolve_doctor_access(doctor).allowed for _, doctor in rows]
     assert batch == single
     assert True in single and False in single
+
+
+def _entitled_practice(doctor: Doctor) -> tuple[Practice, PracticeMember]:
+    practice, member = _practice(doctor)
+    practice.baa_accepted_at = datetime.now(timezone.utc)
+    practice.baa_version = BAA_CURRENT_REFERENCE
+    practice.billing_exempt = True
+    practice.save()
+    return practice, member
+
+
+def test_owner_revoked_access_holds_until_the_cutoff_then_denies():
+    doctor = _doctor("ending")
+    practice, member = _entitled_practice(doctor)
+    cutoff = datetime.now(timezone.utc) + timedelta(hours=3)
+    member.seat_state = "inactive"
+    member.access_ends_at = cutoff
+    save_practice_member(member)
+
+    before = resolve_doctor_access(doctor, at=cutoff - timedelta(microseconds=1))
+    at_cutoff = resolve_doctor_access(doctor, at=cutoff)
+
+    assert before.allowed is True
+    assert before.authorization_basis == "workforce_attestation"
+    assert at_cutoff.allowed is False
+    assert at_cutoff.denial_reason == "practice_membership_inactive"
+    with get_session() as session:
+        loaded = session.get(PracticeMember, member.id)
+        assert loaded is not None
+        assert practice_members_access_in_force(
+            practice, [(loaded, doctor)], at=cutoff - timedelta(microseconds=1)
+        ) == [True]
+        assert practice_members_access_in_force(
+            practice, [(loaded, doctor)], at=cutoff
+        ) == [False]
+
+
+def test_pilot_grant_cannot_extend_owner_revoked_access_past_the_cutoff():
+    doctor = _doctor("ending-pilot")
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+    practice, member = _practice(doctor)
+    cutoff = datetime.now(timezone.utc) + timedelta(hours=3)
+    member.seat_state = "inactive"
+    member.access_ends_at = cutoff
+    save_practice_member(member)
+    _grant(doctor, practice=practice)
+
+    assert resolve_doctor_access(doctor, at=cutoff - timedelta(seconds=1)).allowed
+    after = resolve_doctor_access(doctor, at=cutoff + timedelta(seconds=1))
+    assert after.allowed is False
+    assert after.denial_reason == "practice_membership_inactive"

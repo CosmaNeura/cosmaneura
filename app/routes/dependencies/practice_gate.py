@@ -91,6 +91,12 @@ def require_practice_in_force(request: Request) -> None:
             detail="Name or join a practice and accept the BAA before using Cosmas.",
         )
 
+    if decision.denial_reason == "practice_membership_inactive":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your practice owner ended your access to Cosmas.",
+        )
+
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",

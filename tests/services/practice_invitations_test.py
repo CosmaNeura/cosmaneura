@@ -19,7 +19,12 @@ from app.services.public_entitlements import (
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
-from app.models.practice import Practice, PracticeMember, lock_practice_seats
+from app.models.practice import (
+    Practice,
+    PracticeMember,
+    lock_practice_seats,
+    practice_seat_lock_held,
+)
 from app.models.public_onboarding import PracticeInvitation
 from sqlmodel import select
 
@@ -76,7 +81,7 @@ def _issue(
             owner_member=owner,
             email=email,
             idempotency_key=key or secrets.token_hex(8),
-            now=now or _now(),
+            clock=(lambda: now) if now else _now,
         )
 
 
@@ -96,7 +101,6 @@ def _accept(
             verified_email=verified,
             attestation_name="  Riley Clinician ",
             reverify_email=lambda _doctor: live_email or verified,
-            now=_now(),
         )
 
 
@@ -153,7 +157,7 @@ def test_issue_rechecks_owner_loaded_before_authority_changed(change):
                 owner_member=cached_owner,
                 email="stale-owner@synthetic.invalid",
                 idempotency_key=secrets.token_hex(8),
-                now=_now(),
+                clock=_now,
             )
     assert not _invitation_rows(practice)
 
@@ -316,7 +320,7 @@ def test_every_owner_action_rechecks_the_owner_role_in_the_database():
 def _revoke(owner: PracticeMember, invitation_id) -> PracticeInvitation:
     with get_session() as session:
         return invitations.revoke_invitation(
-            session, owner_member=owner, invitation_id=invitation_id, now=_now()
+            session, owner_member=owner, invitation_id=invitation_id
         )
 
 
@@ -364,7 +368,7 @@ def _resend(
             owner_member=owner,
             invitation_id=invitation_id,
             idempotency_key=key,
-            now=now or _now(),
+            clock=(lambda: now) if now else _now,
         )
 
 
@@ -718,3 +722,61 @@ def test_pending_invitations_exclude_answered_rows_and_flag_expiry():
         (live.invitation.id, False),
     ]
     assert counted == 1
+
+
+def _clock_under_seat_lock(session, practice: Practice, reads: list[datetime]):
+    """A clock that refuses to be read before the practice seat lock is held."""
+
+    def clock() -> datetime:
+        assert practice_seat_lock_held(session, practice.id)
+        reads.append(_now())
+        return reads[-1]
+
+    return clock
+
+
+def test_every_invitation_change_reads_the_clock_under_the_seat_lock():
+    practice, owner = _practice()
+    invitee = _doctor(domain="gmail.com", label="invitee")
+    email = (invitee.email or "").lower()
+    reads: list[datetime] = []
+
+    with get_session() as session:
+        issued = invitations.issue_invitation(
+            session,
+            owner_member=owner,
+            email=email,
+            idempotency_key=secrets.token_hex(8),
+            clock=_clock_under_seat_lock(session, practice, reads),
+        )
+    with get_session() as session:
+        invitations.resend_invitation(
+            session,
+            owner_member=owner,
+            invitation_id=issued.invitation.id,
+            idempotency_key=secrets.token_hex(8),
+            clock=_clock_under_seat_lock(session, practice, reads),
+        )
+    with get_session() as session:
+        _, member = invitations.accept_invitation(
+            session,
+            token=issued.token,
+            doctor=invitee,
+            verified_email=email,
+            attestation_name="Riley Clinician",
+            reverify_email=lambda _doctor: email,
+            clock=_clock_under_seat_lock(session, practice, reads),
+        )
+    doomed = _issue(owner, "doomed@clinic-invite.example")
+    with get_session() as session:
+        revoked = invitations.revoke_invitation(
+            session,
+            owner_member=owner,
+            invitation_id=doomed.invitation.id,
+            clock=_clock_under_seat_lock(session, practice, reads),
+        )
+
+    assert len(reads) == 4
+    assert issued.invitation.issued_at == reads[0]
+    assert member.attested_at == reads[2]
+    assert revoked.revoked_at == reads[3]

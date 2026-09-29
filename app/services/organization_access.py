@@ -16,7 +16,11 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
-from app.services.public_entitlements import lock_practice_for_active_seat_mutation
+from app.services.public_entitlements import (
+    ClinicianSeatPolicyError,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+)
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -1436,7 +1440,6 @@ def claim_roster_access(
         raise OrganizationAccessError("organization access is not available")
     if not organization_code_matches(opportunity.organization, supplied_code):
         raise OrganizationAccessError("organization access is not available")
-    current = now or datetime.now(timezone.utc)
 
     with get_session() as session:
         # All organization-access mutations take the practice lock first. This
@@ -1471,6 +1474,9 @@ def claim_roster_access(
                 .with_for_update()
             ).all()
         )
+        # Read once the locks are held, so a claim queued behind another seat
+        # change judges the approval, BAA and entitlement when it runs.
+        current = now or datetime.now(timezone.utc)
         active_approvals = [
             item for item in approval_history if approval_is_active(item, at=current)
         ]
@@ -1598,8 +1604,7 @@ def revoke_roster_access(
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
     email = normalize_email(approved_email)
-    current = now or datetime.now(timezone.utc)
-    retain_until = _seven_calendar_years_after(current)
+    seat_quantity_recorded = False
 
     with get_session() as session:
         locked_practice = lock_practice_for_active_seat_mutation(session, practice.id)
@@ -1670,6 +1675,11 @@ def revoke_roster_access(
                 raise OrganizationAccessError(
                     "claimed roster approval has no matching practice member"
                 )
+
+        # Read once the locks are held, so an offboarding queued behind another
+        # seat change judges the other owners' approvals when it runs.
+        current = now or datetime.now(timezone.utc)
+        retain_until = _seven_calendar_years_after(current)
 
         if (
             approval.revoked_at is None
@@ -1774,6 +1784,14 @@ def revoke_roster_access(
                 document_reference=str(approval.id),
             )
             session.add(audit)
+            if locked_practice.stripe_subscription_id:
+                try:
+                    record_active_clinician_seat_quantity(session, locked_practice)
+                    seat_quantity_recorded = True
+                except ClinicianSeatPolicyError:
+                    # A bad ledger must never block an access revocation; the
+                    # post-commit marking below reports it instead.
+                    pass
             session.commit()
             session.refresh(approval)
             if member is not None:
@@ -1784,7 +1802,7 @@ def revoke_roster_access(
 
         session.refresh(locked_practice)
 
-    if locked_practice.stripe_subscription_id:
+    if locked_practice.stripe_subscription_id and not seat_quantity_recorded:
         from app.services import stripe_billing
 
         stripe_billing.mark_quantity_sync_required(locked_practice)

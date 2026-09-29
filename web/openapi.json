@@ -1332,6 +1332,102 @@
         ]
       }
     },
+    "/internal/v1/practice/members/{member_id}/revoke": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Revoke Practice Member",
+        "description": "End a clinician's access at midnight US Eastern tonight; reversible.",
+        "operationId": "revoke_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRosterMember"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/members/{member_id}/restore": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Restore Practice Member",
+        "description": "Undo a revocation; after its cut-off the clinician takes a seat again.",
+        "operationId": "restore_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRosterMember"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/practice/invitations": {
       "post": {
         "tags": [
@@ -5554,6 +5650,18 @@
             "type": "boolean",
             "title": "Access In Force"
           },
+          "access_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Ends At"
+          },
           "joined_at": {
             "type": "string",
             "format": "date-time",
@@ -5570,6 +5678,7 @@
           "seat_active",
           "revoked",
           "access_in_force",
+          "access_ends_at",
           "joined_at"
         ],
         "title": "PracticeRosterMember"
@@ -5633,6 +5742,22 @@
           "access_revoked": {
             "type": "boolean",
             "title": "Access Revoked"
+          },
+          "access_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Ends At"
+          },
+          "access_ended": {
+            "type": "boolean",
+            "title": "Access Ended"
           },
           "pilot_access_grant_active": {
             "type": "boolean",
@@ -5742,6 +5867,8 @@
           "access_authorized",
           "authorization_basis",
           "access_revoked",
+          "access_ends_at",
+          "access_ended",
           "pilot_access_grant_active",
           "trial_ends_at",
           "billing_exempt",

@@ -21,7 +21,12 @@ from app.services.pilot_access_grandfather import (
 )
 
 from app.models.doctor import Doctor
-from app.models.practice import ClinicianSeatState, Practice, PracticeMember
+from app.models.practice import (
+    MemberAccessState,
+    Practice,
+    PracticeMember,
+    member_access_state,
+)
 
 DoctorAccessBasis = Literal[
     "pilot_grant",
@@ -83,7 +88,7 @@ def _has_valid_legacy_pilot_access(
     return doctor.onboarding_completed_at is not None and has_active_grant
 
 
-def _doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
+def doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
     if doctor.deleted_at is not None:
         return "doctor_disabled"
     if revoked_pilot_access_grant(doctor.clerk_id) is not None:
@@ -91,10 +96,13 @@ def _doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
     return None
 
 
-def _membership_tombstone(member: PracticeMember) -> DoctorAccessDenialReason | None:
-    if member.access_revoked_at is not None:
+def _membership_tombstone(
+    member: PracticeMember, at: datetime
+) -> DoctorAccessDenialReason | None:
+    state = member_access_state(member, at=at)
+    if state is MemberAccessState.permanently_revoked:
         return "practice_membership_revoked"
-    if member.seat_state != ClinicianSeatState.active.value:
+    if state is MemberAccessState.revoked:
         return "practice_membership_inactive"
     return None
 
@@ -118,7 +126,7 @@ def _decide(
         practice and (practice.entitled(at=at) or pilot_entitlement_in_force)
     )
 
-    tombstone = _membership_tombstone(member) if member is not None else None
+    tombstone = _membership_tombstone(member, at) if member is not None else None
     if tombstone is not None:
         return _denied(
             tombstone,
@@ -185,7 +193,7 @@ def resolve_doctor_access(
     through the normal practice/member authorization rules.
     """
 
-    tombstone = _doctor_tombstone(doctor)
+    tombstone = doctor_tombstone(doctor)
     if tombstone is not None:
         return _denied(tombstone)
 
@@ -219,8 +227,8 @@ def practice_members_access_in_force(
         if member.practice_id != practice.id or member.doctor_id != doctor.id:
             raise ValueError("member does not belong to this practice and doctor")
         if (
-            _membership_tombstone(member) is not None
-            or _doctor_tombstone(doctor) is not None
+            _membership_tombstone(member, current) is not None
+            or doctor_tombstone(doctor) is not None
         ):
             results.append(False)
             continue

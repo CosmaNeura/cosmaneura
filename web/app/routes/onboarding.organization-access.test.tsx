@@ -1,3 +1,4 @@
+import { MemoryRouter } from "react-router"
 import { describe, expect, it } from "vitest"
 import { vi } from "vitest"
 
@@ -30,6 +31,11 @@ vi.mock("~/lib/practice-api", async (importOriginal) => {
   }
 })
 
+vi.mock("@clerk/clerk-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clerk/clerk-react")>()),
+  UserButton: () => null,
+}))
+
 function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
   return {
     legal_name: "Test Practice, PLLC",
@@ -43,6 +49,8 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: false,
     authorization_basis: null,
     access_revoked: false,
+    access_ends_at: null,
+    access_ended: false,
     pilot_access_grant_active: false,
     trial_ends_at: null,
     billing_exempt: false,
@@ -77,6 +85,73 @@ describe("onboarding view-as safety", () => {
     expect(
       screen.queryByText("How will this Cosmas account be used?"),
     ).not.toBeInTheDocument()
+  })
+})
+
+function openOnboarding(current: PracticeStatus) {
+  const props = {
+    loaderData: {
+      accountRecoveryRequired: false,
+      practice: current,
+      organizationAccess: null,
+      channel: "direct",
+      email: "clinician@example.com",
+      onboarding_completed: true,
+      biography: "",
+      viewAsCheck: {
+        state: "ready",
+        status: {
+          request_binding: "inactive",
+          can_view_as: false,
+          active: false,
+          read_only: false,
+          diagnostic_code: null,
+          expires_at: null,
+          actor: null,
+          target: null,
+        },
+      },
+    },
+  } as Parameters<typeof OnboardingPage>[0]
+  render(
+    <MemoryRouter>
+      <OnboardingPage {...props} />
+    </MemoryRouter>,
+  )
+}
+
+describe("onboarding for a clinician the owner revoked", () => {
+  const revoked = {
+    role: "workforce",
+    baa_accepted: true,
+    attested: true,
+    access_authorized: true,
+    authorization_basis: "workforce_attestation",
+    // A cut-off still ahead on this machine's clock.
+    access_ends_at: "2099-09-28T04:00:00Z",
+  }
+
+  it("explains the ended access once the server says it has ended", () => {
+    openOnboarding(practice({ ...revoked, access_ended: true }))
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Your practice owner ended your access to Cosmas." +
+        "Ask your practice owner if you need it restored.",
+    )
+    expect(screen.queryByText("Optional setup")).not.toBeInTheDocument()
+  })
+
+  it("trusts the server, not the browser clock, before the cut-off", () => {
+    // A cut-off already past on this machine's clock, but not the server's.
+    openOnboarding(
+      practice({
+        ...revoked,
+        access_ends_at: "2000-01-01T05:00:00Z",
+        access_ended: false,
+      }),
+    )
+
+    expect(screen.getByText("Optional setup")).toBeInTheDocument()
   })
 })
 

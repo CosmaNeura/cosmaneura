@@ -630,7 +630,7 @@ def test_link_used_by_another_account_is_inactive_to_its_addressee():
             owner_member=cast(PracticeMember, PracticeMember.get(doctor_id=owner.id)),
             email=invitee.email or "",
             idempotency_key="used-link-key",
-            now=now,
+            clock=lambda: now,
         )
     # Mark it used by a different account holding the same address.
     other = _doctor()
@@ -663,7 +663,7 @@ def test_link_used_by_another_account_is_inactive_to_its_addressee():
             verified_email=(invitee.email or "").lower(),
             attestation_name="Riley Clinician",
             reverify_email=lambda doctor: (doctor.email or "").lower(),
-            now=now + timedelta(minutes=1),
+            clock=lambda: now + timedelta(minutes=1),
         )
 
 

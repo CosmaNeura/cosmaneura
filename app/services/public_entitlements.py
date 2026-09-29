@@ -7,6 +7,7 @@ authoritative seat quantity or capability grant independently.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.models.practice import (
@@ -14,9 +15,10 @@ from app.models.practice import (
     Practice,
     PracticeMember,
     lock_practice_seats,
+    member_holds_seat_clause,
     practice_seat_lock_held,
 )
-from sqlalchemy import ColumnElement, and_, func, or_
+from sqlalchemy import ColumnElement, func, or_
 from sqlmodel import Session, col, select
 
 PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
@@ -60,22 +62,25 @@ def lock_practice_for_active_seat_mutation(
     return practice
 
 
-def occupies_active_clinician_seat() -> ColumnElement[bool]:
+def occupies_active_clinician_seat(
+    at: datetime | None = None,
+) -> ColumnElement[bool]:
     """The one membership predicate behind the billed seat quantity."""
 
-    return and_(
-        col(PracticeMember.seat_state) == ClinicianSeatState.active.value,
-        col(PracticeMember.access_revoked_at).is_(None),
-    )
+    return member_holds_seat_clause(at or datetime.now(timezone.utc))
 
 
-def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
+def active_clinician_seat_count(
+    session: Session, practice_id: Any, *, at: datetime | None = None
+) -> int:
     """Return Core's authoritative paid-seat quantity for one practice.
 
     Pending invitations have no membership row and therefore do not count.
-    A reversible inactive seat and an irreversible access-revocation tombstone
-    both stop occupancy. Callers that mutate membership must serialize on the
-    Practice row before using this result to enforce the maximum.
+    An owner revocation keeps occupying its seat until the member's access
+    ends; after that the reversible inactive seat and an irreversible
+    access-revocation tombstone both stop occupancy. Callers that mutate
+    membership must serialize on the Practice row before using this result to
+    enforce the maximum.
     """
 
     invalid_state = session.exec(
@@ -101,7 +106,7 @@ def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
         .select_from(PracticeMember)
         .where(
             PracticeMember.practice_id == practice_id,
-            occupies_active_clinician_seat(),
+            occupies_active_clinician_seat(at),
         )
     ).one()
     return int(count)
@@ -110,10 +115,12 @@ def active_clinician_seat_count(session: Session, practice_id: Any) -> int:
 def require_active_clinician_seat_capacity(
     session: Session,
     locked_practice: Practice,
+    *,
+    at: datetime | None = None,
 ) -> int:
-    """Reject an activation unless the locked ledger has room."""
+    """Reject an activation unless the locked ledger has room at ``at``."""
 
-    count = active_clinician_seat_count(session, locked_practice.id)
+    count = active_clinician_seat_count(session, locked_practice.id, at=at)
     if count >= MAX_ACTIVE_CLINICIAN_SEATS:
         raise ActiveClinicianSeatLimitReached
     return count

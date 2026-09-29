@@ -13,6 +13,7 @@ import {
   inspectPracticeInvitation,
 } from "~/configuration/client"
 import { COMPANY } from "~/lib/baa"
+import { errorDetail } from "~/lib/error-detail"
 import {
   capturePendingInvitation,
   clearPendingInvitation,
@@ -36,14 +37,6 @@ type InviteLoad =
       token: string
       inspection: PracticeInvitationInspection
     }
-
-function errorDetail(error: unknown): string | null {
-  if (error && typeof error === "object" && "detail" in error) {
-    const { detail } = error as { detail: unknown }
-    if (typeof detail === "string") return detail
-  }
-  return null
-}
 
 // Terminal answers: keeping the token would only bounce the doctor back here.
 const SPENT_STATES = new Set<PracticeInvitationInspection["state"]>([

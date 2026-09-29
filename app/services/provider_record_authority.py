@@ -31,7 +31,12 @@ from app.models.authority import (
 )
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.models.practice import ClinicianSeatState, Practice, PracticeMember
+from app.models.practice import (
+    SEAT_HOLDING_ACCESS_STATES,
+    Practice,
+    PracticeMember,
+    member_access_state,
+)
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
@@ -44,10 +49,11 @@ class ProviderRecordScopeDenied(ValueError):
 
 
 def _current_practice(session: Session, doctor: Doctor) -> Practice:
+    now = datetime.now(UTC)
     if (
         doctor.deleted_at is not None
         or not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id)
-        or not doctor_access_in_force(doctor)
+        or not doctor_access_in_force(doctor, at=now)
     ):
         raise ProviderRecordScopeDenied
     member = session.exec(
@@ -57,8 +63,7 @@ def _current_practice(session: Session, doctor: Doctor) -> Practice:
     ).one_or_none()
     if (
         member is None
-        or member.access_revoked_at is not None
-        or member.seat_state != ClinicianSeatState.active.value
+        or member_access_state(member, at=now) not in SEAT_HOLDING_ACCESS_STATES
     ):
         raise ProviderRecordScopeDenied
     practice = session.get(Practice, member.practice_id, populate_existing=True)

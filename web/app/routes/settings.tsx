@@ -20,6 +20,7 @@ import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
+import { PracticeAccessEndingNotice } from "~/components/shared/PracticeMemberAccess"
 import {
   PracticeRoster,
   type PracticeRosterLoad,
@@ -94,6 +95,7 @@ function PracticeSettings({
         onPracticeChange={onPracticeChange}
       />
       <h3>Practice</h3>
+      <PracticeAccessEndingNotice practice={practice} />
       <PracticeJoinPanel
         practice={practice}
         showBillingActions
