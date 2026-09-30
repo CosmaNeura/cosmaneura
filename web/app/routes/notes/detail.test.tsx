@@ -146,7 +146,7 @@ describe("note transcript provenance", () => {
     expect(scroll.mock.instances[0]).toHaveAttribute("id", "note-summary")
   })
   it("explains how to resume a capture with no generated note", () => {
-    show({ notes: [], captureRequired: true })
+    show({ notes: [], captureRequired: true, transcript: null })
     expect(screen.getByText(/Reopen it in Scribe/)).toHaveTextContent(
       "Use a new visit for a separate upload",
     )
