@@ -33,6 +33,7 @@ from app.services.scribe_capture_working_contract import (
     canonical_hash,
 )
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
+from app.services.scribe_creator_edit_contract import CreatorTranscriptEditReceiptV1
 from app.services.scribe_creator_review_contract import (
     MAX_CREATOR_REVIEW_BYTES,
     CreatorDecisionReceipt,
@@ -310,6 +311,12 @@ def validate_receipt(
             )
         except (ValueError, TypeError, AttributeError):
             raise CaptureReceiptInvalid from None
+    if isinstance(operation, protocol.PrepareContinuationWindow):
+        from app.services.scribe_continuation_window import (
+            validate_prepared_continuation_window,
+        )
+
+        return validate_prepared_continuation_window(operation, receipt, scope)
     if isinstance(operation, protocol.NativeSourceStart):
         return _validate_source_start(
             operation, receipt, scope, now or datetime.now(UTC)
@@ -340,6 +347,7 @@ def validate_receipt(
         "correct_capture_source": CaptureSource,
         "creator_review": CreatorReviewView,
         "decide_translation": CreatorDecisionReceipt,
+        "edit_transcript": CreatorTranscriptEditReceiptV1,
     }
     try:
         result = types[operation.kind].model_validate(receipt.model_dump(mode="json"))
@@ -347,7 +355,10 @@ def validate_receipt(
         _acknowledged_profile(operation, capture_profile, scope, at)
         if getattr(result, "session_id", scope.session_id) != scope.session_id:
             raise ValueError
-        if isinstance(result, (CreatorReviewView, CreatorDecisionReceipt)) and (
+        if isinstance(
+            result,
+            (CreatorReviewView, CreatorDecisionReceipt, CreatorTranscriptEditReceiptV1),
+        ) and (
             scope.creator_actor_id is None
             or len(result.model_dump_json().encode("utf-8")) > MAX_CREATOR_REVIEW_BYTES
         ):
@@ -359,6 +370,14 @@ def validate_receipt(
                 and result.request != operation.payload
             ):
                 raise ValueError
+        if isinstance(operation, protocol.EditTranscript) and (
+            not isinstance(result, CreatorTranscriptEditReceiptV1)
+            or result.working_transcript_id
+            != operation.payload.expected_working_transcript_id
+            or result.working_transcript_version
+            != operation.payload.expected_working_transcript_version + 1
+        ):
+            raise ValueError
         if isinstance(result, CaptureRecoveryReceipt) and (
             not isinstance(operation, protocol.RecoverCapture)
             or result.acknowledged_by_practitioner_id
@@ -545,6 +564,19 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
+    if isinstance(operation, protocol.PrepareRecordingWindow):
+        from app.services.scribe_recording_window import execute_recording_window
+
+        return await execute_recording_window(
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
+            scope=scope,
+            operation=operation,
+            client_request_key=client_request_key,
+            client=client,
+            upload_origins=upload_origins,
+        )
     if isinstance(operation, protocol.NativeSourceStartSequence):
         # Both original intents and stop custody already live in the native
         # journal. Reuse each existing decision and its post-I/O access check.
@@ -630,9 +662,38 @@ async def execute_capture_operation(
         and not caller.capture_settings.long_visits_enabled
     ):
         raise CaptureOperationUnavailable
+    if isinstance(operation, protocol.PrepareContinuationWindow):
+        body = operation.payload
+        if (
+            not isinstance(scope.session_request, ConfiguredSessionCreate)
+            or scope.creator_actor_id is None
+            or client_request_key
+            in {body.renew_idempotency_key, body.reservation_idempotency_key}
+        ):
+            raise CaptureOperationUnavailable
+        # Preserve the exact downstream keys used by ordinary component replay.
+        # The native reservation journal may resume through that older path.
+        mapped = operation.model_copy(
+            update={
+                "payload": body.model_copy(
+                    update={
+                        "renew_idempotency_key": component_request_key(
+                            scope, "renew_lease", body.renew_idempotency_key
+                        ),
+                        "reservation_idempotency_key": component_request_key(
+                            scope, "reserve_chunks", body.reservation_idempotency_key
+                        ),
+                    }
+                )
+            }
+        )
+        return await _execute_creator_review(
+            caller, binding_ref, workspace_id, scope, mapped, client_request_key, client
+        )
     if operation.kind in {
         "creator_review",
         "decide_translation",
+        "edit_transcript",
         "source_start",
         "source_extend",
     }:
@@ -766,15 +827,7 @@ async def execute_capture_operation(
             raise CaptureReceiptInvalid from None
         if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
             raise CaptureReceiptInvalid
-    key = (
-        "core-capture-"
-        + hashlib.sha256(
-            json.dumps(
-                [scope.operation_ref, operation.kind, client_request_key],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-    )
+    key = component_request_key(scope, operation.kind, client_request_key)
     try:
         async with asyncio.timeout(30):
             extra = (
@@ -847,3 +900,18 @@ async def _execute_creator_review(
     if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
         raise CaptureReceiptInvalid
     return validate_receipt(operation, result, scope, upload_origins=())
+
+
+def component_request_key(
+    scope: AdmittedCaptureScope, kind: str, client_request_key: str
+) -> str:
+    """Stable component namespace shared by direct and grouped native requests."""
+    return (
+        "core-capture-"
+        + hashlib.sha256(
+            json.dumps(
+                [scope.operation_ref, kind, client_request_key],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+    )

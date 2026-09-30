@@ -28,10 +28,13 @@ from app.services.scribe_capture_limits import (
 )
 from app.services.scribe_capture_recovery_contract import CaptureRecoveryRequest
 from app.services.scribe_capture_working_contract import TranscriptCorrection
+from app.services.scribe_continuation_window_contract import PrepareContinuationWindow
+from app.services.scribe_creator_edit_contract import CreatorTranscriptEditBodyV1
 from app.services.scribe_creator_review_contract import (
     CreatorReviewView,
     CreatorTranslationDecision,
 )
+from app.services.scribe_recording_window_contract import PrepareRecordingWindow
 from app.services.scribe_source_extension_contract import NativeSourceExtension
 from app.services.scribe_source_start_contract import (
     NativeSourceStart,
@@ -239,6 +242,11 @@ class DecideTranslation(ProtectedContract):
     payload: CreatorTranslationDecision
 
 
+class EditTranscript(ProtectedContract):
+    kind: Literal["edit_transcript"]
+    payload: CreatorTranscriptEditBodyV1
+
+
 CaptureOperation = Annotated[
     ReadOperation
     | BindKey
@@ -253,6 +261,9 @@ CaptureOperation = Annotated[
     | CorrectCaptureSource
     | RecoverCapture
     | DecideTranslation
+    | EditTranscript
+    | PrepareRecordingWindow
+    | PrepareContinuationWindow
     | NativeSourceStart
     | NativeSourceStartSequence
     | NativeSourceExtension

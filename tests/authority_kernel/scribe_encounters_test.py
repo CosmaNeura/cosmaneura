@@ -50,15 +50,20 @@ def engine():
     if not raw:
         pytest.skip("Explicit owned local PostgreSQL required")
     url = make_url(raw)
-    assert (
+    original_scope = (
         url.database
         in {"scribe_encounter_workflow_test", "scribe_optional_dob_workflow_test"}
         and url.host is None
-    )
-    assert (
-        url.query["host"]
+        and url.query.get("host")
         == "/private/tmp/scribe-provider-receiver-opening-20260928/socket"
     )
+    ux_scope = (url.database, url.host, url.port, url.username) == (
+        "core_ux_01_test",
+        "127.0.0.1",
+        55930,
+        "scribe_ux_lab_owner",
+    )
+    assert original_scope or ux_scope
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)

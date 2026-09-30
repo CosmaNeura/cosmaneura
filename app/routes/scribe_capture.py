@@ -133,7 +133,7 @@ class NoteRequest(NoteScopeRequest):
     schema_ref: str | None = Field(
         default=None, pattern=r"^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$"
     )
-    action: Literal["read", "prepare", "templates", "save", "resolve"]
+    action: Literal["read", "prepare", "templates", "save", "resolve", "save_status"]
     edit: note_edits.NoteEdit | None = None
     scratch_notes: ScratchNotes | None = None
 
@@ -141,7 +141,7 @@ class NoteRequest(NoteScopeRequest):
     def template_selection(self) -> NoteRequest:
         if (self.action == "templates") != (self.schema_ref is None):
             raise ValueError("invalid_template_selection")
-        if (self.action in {"save", "resolve"}) != (self.edit is not None):
+        if (self.action in {"save", "resolve", "save_status"}) != (self.edit is not None):
             raise ValueError("invalid_note_edit_selection")
         if self.scratch_notes is not None and (
             self.action not in {"read", "prepare"}
@@ -471,13 +471,13 @@ async def prepare_or_read_note(
                     expected_session_id=data.expected_session_id,
                     client=client,
                 )
-            elif data.action in {"save", "resolve"}:
+            elif data.action in {"save", "resolve", "save_status"}:
                 assert data.schema_ref is not None and data.edit is not None
-                operation = (
-                    note_edits.save_capture_note
-                    if data.action == "save"
-                    else note_edits.resolve_capture_note_save
-                )
+                operation = {
+                    "save": note_edits.save_capture_note,
+                    "resolve": note_edits.resolve_capture_note_save,
+                    "save_status": note_edits.check_capture_note_save,
+                }[data.action]
                 receipt = await operation(
                     caller=caller,
                     binding_ref=data.binding_ref,

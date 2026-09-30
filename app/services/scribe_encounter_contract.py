@@ -15,6 +15,7 @@ from pydantic import (
 
 from app.services.companion_record_contract import (
     ActorRef,
+    AppointmentRef,
     Label,
     PatientRef,
     TenantRef,
@@ -71,7 +72,15 @@ class CreateRequest(Request):
     title: Label = "Visit"
 
 
-EncounterRequest = PatientsRequest | CatalogRequest | LookupRequest | CreateRequest
+class AddBirthDateRequest(Request):
+    action: Literal["add_birth_date"]
+    appointment_ref: AppointmentRef
+    patient_ref: PatientRef
+    change_key: UUID
+    date_of_birth: date
+
+
+EncounterRequest = PatientsRequest | CatalogRequest | LookupRequest | CreateRequest | AddBirthDateRequest
 REQUEST_ADAPTER: TypeAdapter[EncounterRequest] = TypeAdapter(
     Annotated[EncounterRequest, Field(discriminator="action")]
 )

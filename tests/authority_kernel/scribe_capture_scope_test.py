@@ -211,7 +211,13 @@ def capture_engine(monkeypatch):
         "beta_scribe_integrated_test",
         "staging_release_test",
     } and (url.host, url.port, url.username) == ("127.0.0.1", 32768, "beta_local")
-    if not (original_scope or resolution_scope or operational_beta_scope):
+    ux_scope = (url.database, url.host, url.port, url.username) == (
+        "core_ux_01_test",
+        "127.0.0.1",
+        55930,
+        "scribe_ux_lab_owner",
+    )
+    if not (original_scope or resolution_scope or operational_beta_scope or ux_scope):
         pytest.fail("Refusing a database outside the disposable W8 scope")
     # Match Core's configured engine when exercising nested transcript entries.
     from activemodel.session_manager import _serialize_pydantic_model

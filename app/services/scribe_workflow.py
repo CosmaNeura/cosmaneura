@@ -44,6 +44,7 @@ from app.services.scribe_configured_capture_contract import (
     ConfiguredSessionCreate,
     ConfiguredSessionReceipt,
 )
+from app.services.scribe_creator_edit_contract import CreatorTranscriptEditReceiptV1
 from app.services.scribe_creator_review_contract import (
     MAX_CREATOR_REVIEW_BYTES,
     CreatorDecisionReceipt,
@@ -742,7 +743,12 @@ class HttpScribeWorkflowClient:
                 max_bytes=8192,
                 creator_actor_id=creator_actor_id,
             )
-        if operation.kind in {"creator_review", "decide_translation"}:
+        if operation.kind in {
+            "creator_review",
+            "decide_translation",
+            "edit_transcript",
+            "prepare_continuation_window",
+        }:
             if creator_actor_id is None or not re.fullmatch(
                 r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
             ):
@@ -752,7 +758,36 @@ class HttpScribeWorkflowClient:
             path = f"/v1/captured-sessions/{session_id}/review"
             # This receiver atomically checks the configured session's immutable
             # creator and current consent. Legacy transcript status cannot do so.
-            if isinstance(operation, capture_protocol.DecideTranslation):
+            if isinstance(operation, capture_protocol.PrepareContinuationWindow):
+                from app.services.scribe_continuation_window import (
+                    PreparedContinuationWindow,
+                )
+
+                result = await self._post(
+                    f"/v1/captured-sessions/{session_id}/continuation-window",
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    PreparedContinuationWindow,
+                    max_bytes=131072,
+                    creator_actor_id=creator_actor_id,
+                )
+                if (
+                    result.lease.session_id != session_id
+                    or result.reservations.session_id != session_id
+                ):
+                    raise ScribeWorkflowRejectedError("scribe_response_scope_mismatch")
+                return result
+            if isinstance(operation, capture_protocol.EditTranscript):
+                result = await self._post(
+                    path + "/edit",
+                    tenant_id,
+                    operation.payload,
+                    idempotency_key,
+                    CreatorTranscriptEditReceiptV1,
+                    creator_actor_id=creator_actor_id,
+                )
+            elif isinstance(operation, capture_protocol.DecideTranslation):
                 result = await self._post(
                     path,
                     tenant_id,
