@@ -33,7 +33,7 @@ class ExistingPatient(Closed):
 class NewPatient(Closed):
     kind: Literal["new"]
     name: Label
-    date_of_birth: date
+    date_of_birth: date | None = None
 
     @field_validator("name")
     @classmethod

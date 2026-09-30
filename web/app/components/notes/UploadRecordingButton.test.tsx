@@ -1,4 +1,4 @@
-import { format } from "date-fns"
+import { format, parseISO } from "date-fns"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { appointmentDateFormat } from "~/lib/date"
@@ -20,6 +20,11 @@ vi.mock("@tanstack/react-query", () => ({
         name: "Synthetic date check",
         date_of_birth: "2000-01-01T00:00:00Z",
       },
+      {
+        id: "patient_unknown_dob",
+        name: "Synthetic unknown date",
+        date_of_birth: null,
+      },
     ],
   }),
 }))
@@ -34,8 +39,25 @@ vi.mock("~/utils/terminology", () => ({
 // Keep the actual form, validation, selection handler, and upload submission.
 // Date picker presentation uses the same local-calendar format as the real UI.
 vi.mock("~/components/lingua-time/datetime-picker", () => ({
-  DateTimePicker: ({ id, value }: { id: string; value?: Date }) => (
-    <input id={id} readOnly value={value ? format(value, "yyyy-MM-dd") : ""} />
+  DateTimePicker: ({
+    id,
+    value,
+    onChange,
+    "aria-invalid": invalid,
+  }: {
+    id: string
+    value?: Date
+    onChange: (value: Date | undefined) => void
+    "aria-invalid"?: boolean
+  }) => (
+    <input
+      id={id}
+      aria-invalid={invalid}
+      value={value ? format(value, "yyyy-MM-dd") : ""}
+      onChange={(event) =>
+        onChange(event.target.value ? parseISO(event.target.value) : undefined)
+      }
+    />
   ),
 }))
 vi.mock("~/components/shared/SimpleComboBox", () => ({
@@ -48,9 +70,17 @@ vi.mock("~/components/shared/SimpleComboBox", () => ({
     onSelectedItemChange: (item: { value: string; label: string }) => void
     renderItem: (item: { value: string; label: string }) => React.ReactNode
   }) => (
-    <button type="button" onClick={() => onSelectedItemChange(items[0])}>
-      {renderItem(items[0])}
-    </button>
+    <>
+      {items.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          onClick={() => onSelectedItemChange(item)}
+        >
+          {renderItem(item)}
+        </button>
+      ))}
+    </>
   ),
 }))
 vi.mock("~/components/shared/AudioVideoDropzone", () => ({
@@ -78,6 +108,44 @@ afterEach(() => {
 })
 
 describe("date-only recording upload", () => {
+  it("clears the previous birthday for a patient with no date and still requires an entered date for legacy upload", async () => {
+    upload.mockResolvedValue({ ok: true })
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic date check/ }),
+    )
+    expect(screen.getByLabelText("Date of Birth")).toHaveValue("2000-01-01")
+    const unknown = screen.getByRole("button", {
+      name: /Synthetic unknown date/,
+    })
+    expect(unknown).toHaveTextContent("Date of birth not provided")
+    fireEvent.click(unknown)
+    expect(screen.getByLabelText("Date of Birth")).toHaveValue("")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await waitFor(() =>
+      expect(screen.getByLabelText("Date of Birth")).toHaveAttribute(
+        "aria-invalid",
+        "true",
+      ),
+    )
+    expect(upload).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText("Date of Birth"), {
+      target: { value: "1995-02-03" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+    expect(upload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        patientName: "Synthetic unknown date",
+        dateOfBirth: "1995-02-03T00:00:00",
+      }),
+    )
+  })
+
   it.each([
     "2026-09-25T00:45:00Z",
     "2026-09-24T23:45:00Z",

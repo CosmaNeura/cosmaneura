@@ -96,6 +96,30 @@ beforeEach(() => {
 })
 
 describe("meeting bot authorization", () => {
+  it("shows an unknown birthday while selecting the exact existing appointment", async () => {
+    authorizeZoomCapture.mockResolvedValue({
+      data: { state: "armed" },
+      error: undefined,
+    })
+    renderMeeting(meeting, [appointment], [{ ...patient, date_of_birth: null }])
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Enable meeting bot" }),
+    )
+    expect(
+      screen.getByRole("option", { name: /Test Patient — DOB not provided/ }),
+    ).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("Cosmas appointment"), {
+      target: { value: "appointment_test" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Confirm and enable" }))
+    await waitFor(() =>
+      expect(authorizeZoomCapture).toHaveBeenCalledWith({
+        path: { zoom_meeting_id: "123456789" },
+        body: { appointment_id: "appointment_test" },
+      }),
+    )
+  })
+
   it("requires an existing appointment and authorizes the selected Zoom meeting", async () => {
     authorizeZoomCapture.mockResolvedValue({
       data: { appointment_id: "appt_test", state: "armed" },

@@ -380,6 +380,7 @@ def _validate_synthetic_scope(
         appointment is None
         or patient is None
         or patient.name != SYNTHETIC_PATIENT_NAME
+        or patient.date_of_birth is None
         or _normalized_naive_utc(patient.date_of_birth)
         != SYNTHETIC_PATIENT_DATE_OF_BIRTH
         or _normalized_naive_utc(appointment.appointment_date)
