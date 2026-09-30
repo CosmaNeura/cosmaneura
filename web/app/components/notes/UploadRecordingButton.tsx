@@ -113,7 +113,13 @@ function PatientComboboxSearch({
       // update the patient name field with the name of the patient, not the ID
       onChange(patient.name)
 
-      form.setValue("date_of_birth", patientBirthDate(patient.date_of_birth))
+      if (patient.date_of_birth) {
+        form.setValue("date_of_birth", patientBirthDate(patient.date_of_birth))
+      } else {
+        // This legacy upload still requires a date for identity matching. Never
+        // carry the previous patient's date into a patient whose date is unknown.
+        form.resetField("date_of_birth")
+      }
     }
   }
 
@@ -137,7 +143,12 @@ function PatientComboboxSearch({
                 {patientItem.label}
               </span>
               <span className="text-muted-foreground text-xs">
-                {format(patientBirthDate(patientItem.date_of_birth), "M/d/yy")}
+                {patientItem.date_of_birth
+                  ? format(
+                      patientBirthDate(patientItem.date_of_birth),
+                      "M/d/yy",
+                    )
+                  : "Date of birth not provided"}
               </span>
               {patientItem.isSelected && (
                 <span className="absolute start-2 top-0 flex h-full items-center justify-center">

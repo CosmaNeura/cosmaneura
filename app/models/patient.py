@@ -37,4 +37,4 @@ class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
     doctor: Doctor = Relationship()
 
     name: str
-    date_of_birth: datetime
+    date_of_birth: datetime | None = None

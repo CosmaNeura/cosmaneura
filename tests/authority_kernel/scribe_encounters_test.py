@@ -18,6 +18,7 @@ from companion_provider_provisioning_test import (
     plan,
     session_for,
 )
+from typeid import TypeID
 
 from app.configuration import session_prep
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -49,7 +50,11 @@ def engine():
     if not raw:
         pytest.skip("Explicit owned local PostgreSQL required")
     url = make_url(raw)
-    assert url.database == "scribe_encounter_workflow_test" and url.host is None
+    assert (
+        url.database
+        in {"scribe_encounter_workflow_test", "scribe_optional_dob_workflow_test"}
+        and url.host is None
+    )
     assert (
         url.query["host"]
         == "/private/tmp/scribe-provider-receiver-opening-20260928/socket"
@@ -164,6 +169,72 @@ def test_simultaneous_double_click_creates_once(engine, workflow):
         a, b = list(pool.map(lambda _: run(), range(2)))
     assert a["encounter"] == b["encounter"]
     assert count(engine, ScribeEncounterCreation) == before + 1
+
+
+@pytest.mark.parametrize("birth_date", [{}, {"date_of_birth": None}])
+def test_unknown_birth_date_persists_and_retries_same_patient(
+    engine, workflow, birth_date
+):
+    _, _, request, invoke = workflow
+    before = [count(engine, m) for m in (Patient, Appointment, ScribeEncounterCreation)]
+    value = request(
+        patient={"kind": "new", "name": "Invented unknown birthday", **birth_date}
+    )
+    first = invoke(value)["encounter"]
+    # Omitted and explicit null have one canonical intent, including a lost reply.
+    retry = request(
+        **{
+            **value.model_dump(mode="json"),
+            "request_nonce": str(uuid4()),
+            "patient": {
+                "kind": "new",
+                "name": "Invented unknown birthday",
+                "date_of_birth": None,
+            },
+        }
+    )
+    assert invoke(retry)["encounter"] == first
+    with session_for(engine) as session:
+        assert (
+            session.get(Patient, TypeID.from_string(first["patient_ref"])).date_of_birth
+            is None
+        )
+    patients = invoke(request("patients", query="Invented unknown birthday"))[
+        "patients"
+    ]
+    assert patients == [
+        {
+            "patient_ref": first["patient_ref"],
+            "name": "Invented unknown birthday",
+            "date_of_birth": None,
+        }
+    ]
+    next_visit = invoke(
+        request(patient={"kind": "existing", "patient_ref": first["patient_ref"]})
+    )["encounter"]
+    assert next_visit["patient_ref"] == first["patient_ref"]
+    assert next_visit["appointment_ref"] != first["appointment_ref"]
+    after = [count(engine, m) for m in (Patient, Appointment, ScribeEncounterCreation)]
+    assert [b - a for a, b in zip(before, after, strict=True)] == [1, 2, 2]
+
+
+@pytest.mark.parametrize("date_of_birth", ["1899-12-31", "2999-01-01"])
+def test_provided_birth_date_must_remain_in_range(engine, workflow, date_of_birth):
+    _, _, request, invoke = workflow
+    before = [count(engine, m) for m in (Patient, Appointment, ScribeEncounterCreation)]
+    with pytest.raises(ValueError, match="birth_date_out_of_range"):
+        invoke(
+            request(
+                patient={
+                    "kind": "new",
+                    "name": "Invented invalid birthday",
+                    "date_of_birth": date_of_birth,
+                }
+            )
+        )
+    assert [
+        count(engine, m) for m in (Patient, Appointment, ScribeEncounterCreation)
+    ] == before
 
 
 def test_reusing_key_for_different_details_conflicts(workflow):

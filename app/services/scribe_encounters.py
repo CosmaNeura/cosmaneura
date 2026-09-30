@@ -157,12 +157,17 @@ def _create(session, request, doctor_id, link, issuer, subject):
         if patient is None:
             raise authority.AuthorityRequestDeniedError
     elif isinstance(request.patient, NewPatient):
-        if not date(1900, 1, 1) <= request.patient.date_of_birth <= now.date():
+        birth_date = request.patient.date_of_birth
+        if birth_date is not None and not date(1900, 1, 1) <= birth_date <= now.date():
             raise ValueError("birth_date_out_of_range")
         patient = Patient(
             doctor_id=doctor_id,
             name=request.patient.name,
-            date_of_birth=datetime.combine(request.patient.date_of_birth, time.min),
+            date_of_birth=(
+                datetime.combine(birth_date, time.min)
+                if birth_date is not None
+                else None
+            ),
         )
         session.add(patient)
         session.flush()
@@ -276,7 +281,11 @@ def encounter_workflow(
                             {
                                 "patient_ref": str(p.id),
                                 "name": p.name,
-                                "date_of_birth": p.date_of_birth.date().isoformat(),
+                                "date_of_birth": (
+                                    p.date_of_birth.date().isoformat()
+                                    if p.date_of_birth is not None
+                                    else None
+                                ),
                             }
                             for p in patients[:100]
                         ],

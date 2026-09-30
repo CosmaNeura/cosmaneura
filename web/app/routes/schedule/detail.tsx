@@ -36,7 +36,8 @@ function formatDateTime(isoString: string): string {
   })
 }
 
-function formatDateOfBirth(isoString: string): string {
+function formatDateOfBirth(isoString: string | null | undefined): string {
+  if (!isoString) return "not provided"
   const calendarDate = isoString.slice(0, 10)
   return new Date(`${calendarDate}T00:00:00Z`).toLocaleDateString("en-US", {
     month: "short",

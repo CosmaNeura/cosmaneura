@@ -134,3 +134,42 @@ def test_delegates_verified_identity_not_submitted_account(monkeypatch):
         and captured["session_id"] == "session_test"
     )
     assert result.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("birth_date", [{}, {"date_of_birth": None}])
+def test_unknown_birth_date_is_accepted_and_normalized_at_human_boundary(
+    monkeypatch, birth_date
+):
+    captured = []
+
+    def workflow(**kwargs):
+        captured.append(kwargs["request"].patient.date_of_birth)
+        return {"version": "1", "action": "create"}
+
+    monkeypatch.setattr(route.scribe_encounters, "encounter_workflow", workflow)
+    value = body(
+        patient={"kind": "new", "name": "Invented unknown birthday", **birth_date}
+    )
+    result = client().post(route.PATH, json=value, headers=headers(value))
+    assert result.status_code == 200 and captured == [None]
+    assert result.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.parametrize("birth_date", ["", "not-a-date", "2026-02-30"])
+def test_optional_birth_date_does_not_accept_invalid_supplied_date(birth_date):
+    with pytest.raises(ValueError):
+        REQUEST_ADAPTER.validate_python(
+            body(
+                patient={
+                    "kind": "new",
+                    "name": "Invented patient",
+                    "date_of_birth": birth_date,
+                }
+            )
+        )
+
+
+def test_existing_non_null_request_retains_exact_canonical_payload():
+    value = body()
+    value["title"] = "Visit"
+    assert REQUEST_ADAPTER.validate_python(value).model_dump(mode="json") == value
