@@ -2,6 +2,7 @@ import { type MetaFunction, isRouteErrorResponse } from "react-router"
 
 import type { Route } from "./+types/detail"
 
+import { CaptureNoteReadiness } from "@/components/notes/CaptureNoteReadiness"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { Separator } from "@/components/ui/separator"
@@ -213,6 +214,8 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               }
             />
           ))
+        ) : loaderData.capture_workflow_required && transcript ? (
+          <CaptureNoteReadiness key={loaderData.appointment.id} />
         ) : (
           <EmptyNotes captureRequired={loaderData.capture_workflow_required} />
         )}
