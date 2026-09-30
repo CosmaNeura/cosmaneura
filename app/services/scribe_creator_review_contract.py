@@ -24,6 +24,10 @@ from app.services.scribe_capture_working_contract import (
     SegmentOrigin,
     Version,
 )
+from app.services.scribe_creator_edit_contract import (
+    CreatorTranscriptEditV1,
+    validate_edit_history,
+)
 
 MAX_CREATOR_REVIEW_BYTES = 32 * 1024 * 1024
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")]
@@ -200,12 +204,20 @@ class CreatorReviewView(ProtectedContract):
         default=(), max_length=10_000
     )
     capture_continuity: CaptureContinuity | None = None
+    editing_allowed: Literal[True] | None = None
+    review_edits: tuple[CreatorTranscriptEditV1, ...] = Field(
+        default=(), max_length=1024
+    )
 
     @model_serializer(mode="wrap")
     def compatible_continuity(self, handler: SerializerFunctionWrapHandler):
         result = handler(self)
         if self.capture_continuity is None:
             result.pop("capture_continuity", None)
+        if self.editing_allowed is None:
+            result.pop("editing_allowed", None)
+        if not self.review_edits:
+            result.pop("review_edits", None)
         return result
 
     @model_validator(mode="after")
@@ -224,6 +236,8 @@ class CreatorReviewView(ProtectedContract):
                     for v in (source, working, queue, self.capture_continuity)
                 )
                 or self.translation_progress
+                or self.review_edits
+                or self.editing_allowed
             ):
                 raise ValueError("invalid_creator_metadata_view")
             return self
@@ -240,6 +254,34 @@ class CreatorReviewView(ProtectedContract):
         ):
             raise ValueError("invalid_creator_lineage")
         originals = {s.source_segment_id: s for s in source.segments}
+        validate_edit_history(self.review_edits)
+        corrections = {}
+        speakers = {}
+        source_speakers = {s.speaker_id for s in source.segments}
+        for edit in self.review_edits:
+            request = edit.request
+            if (
+                request.expected_source_transcript_version
+                != source.source_transcript_version
+                or request.expected_working_transcript_id
+                != working.working_transcript_id
+                or edit.working_transcript_version > working.working_transcript_version
+            ):
+                raise ValueError("invalid_creator_edit_lineage")
+            for correction in request.corrections:
+                original = originals.get(correction.source_segment_id)
+                if (
+                    original is None
+                    or original.source_segment_version
+                    != correction.expected_source_segment_version
+                ):
+                    raise ValueError("invalid_creator_edit_source")
+                corrections[correction.source_segment_id] = correction.content
+            for speaker in request.speakers:
+                if speaker.speaker_id not in source_speakers:
+                    raise ValueError("invalid_creator_edit_speaker")
+                speakers[speaker.speaker_id] = speaker.role
+
         blockers = {(b.source_segment_id, b.code) for b in working.blockers}
         if len(blockers) != len(working.blockers) or any(
             i not in originals for i, _ in blockers
@@ -254,8 +296,18 @@ class CreatorReviewView(ProtectedContract):
             if any(
                 getattr(original, k) != getattr(projected, k)
                 for k in SegmentOrigin.model_fields
+                if k != "speaker_role"
             ):
                 raise ValueError("invalid_creator_segment_lineage")
+            if projected.speaker_role != speakers.get(
+                original.speaker_id, original.speaker_role
+            ):
+                raise ValueError("invalid_creator_edit_role")
+            if original.source_segment_id in corrections and (
+                projected.resolution == "unresolved"
+                or projected.content != corrections[original.source_segment_id]
+            ):
+                raise ValueError("invalid_creator_edit_content")
             codes = codes_by_segment.get(original.source_segment_id, set()).copy()
             overlap = original.start_ms < end
             end = max(end, original.end_ms)
@@ -265,7 +317,8 @@ class CreatorReviewView(ProtectedContract):
             if original.source_locale == "en-US":
                 if (
                     projected.resolution != "english_source"
-                    or projected.content != original.content
+                    or projected.content
+                    != corrections.get(original.source_segment_id, original.content)
                     or codes
                 ):
                     raise ValueError("invalid_creator_english_source")

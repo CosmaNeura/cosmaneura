@@ -14,6 +14,7 @@ from app.services.companion_records import (
     transaction_budget,
 )
 from app.services.scribe_encounter_contract import (
+    AddBirthDateRequest,
     CatalogRequest,
     CreateRequest,
     ExistingPatient,
@@ -21,6 +22,7 @@ from app.services.scribe_encounter_contract import (
     NewPatient,
     PatientsRequest,
 )
+from app.services.scribe_encounter_status import saved_encounter_statuses
 
 from activemodel.session_manager import global_session
 from app.models.appointment import Appointment
@@ -42,7 +44,7 @@ class EncounterConflict(RecordUnavailable):
     """The retained creation key was already used for different visit details."""
 
 
-def _visit(session, row, *, doctor_id, link, subject):
+def _visit(session, row, *, doctor_id, link, subject, saved_statuses=None):
     if row.doctor_id != doctor_id or row.provider_link_id != link.id:
         raise authority.AuthorityRequestDeniedError
     appointment = session.get(Appointment, row.appointment_id)
@@ -91,13 +93,20 @@ def _visit(session, row, *, doctor_id, link, subject):
         or capture.provider_link_id != link.id
     ):
         raise authority.AuthorityRequestDeniedError
+    if saved_statuses is None:
+        saved_statuses = saved_encounter_statuses(session, doctor_id, [appointment.id])
+    status = saved_statuses.get(str(appointment.id))
     return {
         "workspace_id": str(row.workspace_id),
         "appointment_ref": str(appointment.id),
         "patient_ref": str(patient.id),
         "patient_name": patient.name,
+        "date_of_birth": patient.date_of_birth.date().isoformat()
+        if patient.date_of_birth
+        else None,
         "title": appointment.appointment_name or "Visit",
         "appointment_at": appointment.appointment_date.replace(tzinfo=UTC).isoformat(),
+        **({"status": status} if status else {}),
     }
 
 
@@ -305,9 +314,17 @@ def encounter_workflow(
                     )
                     if len(rows) > 1000:
                         raise RecordUnavailable
+                    statuses = saved_encounter_statuses(
+                        session, doctor_id, [r.appointment_id for r in rows]
+                    )
                     result["encounters"] = [
                         _visit(
-                            session, r, doctor_id=doctor_id, link=link, subject=subject
+                            session,
+                            r,
+                            doctor_id=doctor_id,
+                            link=link,
+                            subject=subject,
+                            saved_statuses=statuses,
                         )
                         for r in rows
                     ]
@@ -325,6 +342,80 @@ def encounter_workflow(
                     result["encounter"] = _visit(
                         session, row, doctor_id=doctor_id, link=link, subject=subject
                     )
+                elif isinstance(request, AddBirthDateRequest):
+                    row = session.exec(
+                        select(ScribeEncounterCreation).where(
+                            ScribeEncounterCreation.appointment_id
+                            == TypeID.from_string(request.appointment_ref),
+                            ScribeEncounterCreation.patient_id
+                            == TypeID.from_string(request.patient_ref),
+                            ScribeEncounterCreation.doctor_id == doctor_id,
+                            ScribeEncounterCreation.provider_link_id == link.id,
+                        )
+                    ).one_or_none()
+                    if row is None:
+                        raise authority.AuthorityRequestDeniedError
+                    _visit(
+                        session, row, doctor_id=doctor_id, link=link, subject=subject
+                    )
+                    now = datetime.now(UTC)
+                    if not date(1900, 1, 1) <= request.date_of_birth <= now.date():
+                        raise ValueError("birth_date_out_of_range")
+                    patient = session.exec(
+                        select(Patient)
+                        .where(Patient.id == row.patient_id)
+                        .with_for_update()
+                    ).one()
+                    request_digest = digest(
+                        request.model_dump(mode="json", exclude={"request_nonce"})
+                    )
+                    # A metadata-only audit receipt binds the retry key and exact
+                    # request. Filling a missing DOB never overwrites a known DOB.
+                    event_type = "scribe.patient.birth_date_added"
+                    receipt_ref = "scribe_birth_date:" + str(request.change_key)
+                    previous = session.exec(
+                        select(AuthorityAuditEvent).where(
+                            AuthorityAuditEvent.actor_id == link.actor_id,
+                            AuthorityAuditEvent.tenant_id == link.tenant_id,
+                            AuthorityAuditEvent.event_type == event_type,
+                            AuthorityAuditEvent.resource_ref == receipt_ref,
+                        )
+                    ).one_or_none()
+                    if (
+                        previous is not None
+                        and previous.request_digest != request_digest
+                    ):
+                        raise EncounterConflict
+                    if (
+                        patient.date_of_birth is not None
+                        and patient.date_of_birth.date() != request.date_of_birth
+                    ):
+                        raise EncounterConflict
+                    if previous is None:
+                        patient.date_of_birth = datetime.combine(
+                            request.date_of_birth, time.min
+                        )
+                        session.add(patient)
+                        session.add(
+                            AuthorityAuditEvent(
+                                event_source="platform_authoritative",
+                                event_type=event_type,
+                                outcome="accepted",
+                                occurred_at=now,
+                                recorded_at=now,
+                                tenant_id=link.tenant_id,
+                                actor_id=link.actor_id,
+                                resource_type="patient_demographic_update",
+                                resource_ref=receipt_ref,
+                                request_digest=request_digest,
+                            )
+                        )
+                        session.flush()
+                        changed = True
+                    result["encounter"] = _visit(
+                        session, row, doctor_id=doctor_id, link=link, subject=subject
+                    )
+                    result["change_key"] = str(request.change_key)
                 elif isinstance(request, CreateRequest):
                     row, changed = _create(
                         session, request, doctor_id, link, issuer, subject

@@ -4,7 +4,8 @@ import { useRevalidator } from "react-router"
 import { Button } from "@/components/ui/button"
 
 const CHECK_INTERVAL_MS = 3_000
-const CHECK_WINDOW_MS = 90_000
+// Covers the bounded note request plus recovery without requiring a page refresh.
+const CHECK_WINDOW_MS = 300_000
 
 /** Mounted only for a capture transcript with no current note or note editor. */
 export function CaptureNoteReadiness() {

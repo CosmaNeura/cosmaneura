@@ -194,15 +194,25 @@ describe("prepared Scribe note readiness through the actual page and router", ()
     expect(read).toHaveBeenCalledTimes(3)
   })
 
+  it("finds a draft prepared after the former 90 second cutoff", async () => {
+    read.mockResolvedValue(response(visit()))
+    await openVisit()
+    await advance(96_000)
+    expect(screen.getByText("Checking for a prepared note…")).toBeVisible()
+    read.mockResolvedValue(response(visit("synthetic_visit", true)))
+    await advance(3_000)
+    expect(screen.getByText("Prepared draft for synthetic_visit")).toBeVisible()
+  })
+
   it("ends the automatic window and permits only an explicit read after it", async () => {
     read.mockResolvedValue(response(visit()))
     await openVisit()
-    await advance(90_000)
+    await advance(300_000)
     expect(
       screen.getByText(/A prepared note hasn’t appeared yet/),
     ).toBeVisible()
     const count = read.mock.calls.length
-    expect(count).toBe(30)
+    expect(count).toBe(100)
     await advance(180_000)
     fireEvent.focus(window)
     fireEvent(document, new Event("visibilitychange"))
@@ -211,7 +221,7 @@ describe("prepared Scribe note readiness through the actual page and router", ()
       fireEvent.click(screen.getByRole("button", { name: "Check for note" }))
     })
     expect(read).toHaveBeenCalledTimes(count + 1)
-    await advance(90_000)
+    await advance(300_000)
     expect(read).toHaveBeenCalledTimes(count + 1)
   })
 

@@ -66,7 +66,7 @@ class SaveResolution(BaseModel):
     schema_ref: str = Field(pattern=r"^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$")
     client_key: UUID
     request_sha256: Digest
-    status: Literal["saved", "closed"]
+    status: Literal["saved", "closed", "pending"]
     result_note_ref: str | None = Field(
         default=None, pattern=r"^visit_note_[0-7][0-9a-hjkmnp-tv-z]{25}$"
     )
@@ -106,6 +106,7 @@ async def resolve_capture_note_save(
     schema_ref: str,
     edit: NoteEdit,
     client: ScribeWorkflowClient,
+    _close_pending: bool = True,
 ) -> SaveResolution:
     """Confirm a retained save or prevent an unpublished request from committing."""
     notes._enabled(caller)
@@ -178,27 +179,53 @@ async def resolve_capture_note_save(
                 != edit.expected_note_sha256
             ):
                 raise notes.CaptureNoteConflict
-            session.add(
-                ScribeCaptureNoteSaveFence(
-                    binding_id=cast(TypeIDType, TypeID.from_string(binding_ref)),
-                    client_key=edit.client_key,
-                    session_id=scope.session_id,
-                    base_note_id=base.id,
-                    request_sha256=digest,
+            if _close_pending:
+                session.add(
+                    ScribeCaptureNoteSaveFence(
+                        binding_id=cast(TypeIDType, TypeID.from_string(binding_ref)),
+                        client_key=edit.client_key,
+                        session_id=scope.session_id,
+                        base_note_id=base.id,
+                        request_sha256=digest,
+                    )
                 )
-            )
-            session.flush()
+                session.flush()
         receipt = SaveResolution(
             session_id=scope.session_id,
             schema_ref=schema_ref,
             client_key=edit.client_key,
             request_sha256=digest,
-            status="saved" if saved is not None else "closed",
+            status="saved"
+            if saved is not None
+            else ("closed" if closed is not None or _close_pending else "pending"),
             result_note_ref=str(result.id) if result is not None else None,
             result_sha256=saved.result_sha256 if saved is not None else None,
         )
         session.commit()
         return receipt
+
+
+async def check_capture_note_save(
+    *,
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    expected_session_id: UUID,
+    schema_ref: str,
+    edit: NoteEdit,
+    client: ScribeWorkflowClient,
+) -> SaveResolution:
+    """Read the exact save receipt without fencing or publishing the request."""
+    return await resolve_capture_note_save(
+        caller=caller,
+        binding_ref=binding_ref,
+        workspace_id=workspace_id,
+        expected_session_id=expected_session_id,
+        schema_ref=schema_ref,
+        edit=edit,
+        client=client,
+        _close_pending=False,
+    )
 
 
 async def save_capture_note(
