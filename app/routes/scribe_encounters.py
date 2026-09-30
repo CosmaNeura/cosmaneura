@@ -22,7 +22,11 @@ from app.routes.embed_context import (
 )
 from app.services import authority, companion_records, scribe_encounters
 from app.services.provider_record_authority import ProviderRecordScopeDenied
-from app.services.scribe_encounter_contract import REQUEST_ADAPTER, AddBirthDateRequest, CreateRequest
+from app.services.scribe_encounter_contract import (
+    REQUEST_ADAPTER,
+    AddBirthDateRequest,
+    CreateRequest,
+)
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
 
