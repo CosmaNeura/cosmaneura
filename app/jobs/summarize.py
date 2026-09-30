@@ -553,11 +553,17 @@ def build_structured_prompt(
     *,
     action_items: str | None = None,
     doctor: Doctor | None = None,
+    source_indexes: bool = False,
 ) -> str:
     c = customization or NoteTypeCustomization()
 
     transcript_text = "\n".join(
-        [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
+        [
+            f"{u.speaker}: "
+            + (f"[source {index}] " if source_indexes else "")
+            + u.content
+            for index, u in enumerate(transcript.transcript_data, 1)
+        ]
     )
 
     # TODO:

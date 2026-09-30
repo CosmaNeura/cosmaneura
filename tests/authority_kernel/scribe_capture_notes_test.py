@@ -13,6 +13,7 @@ from app.commands import scribe_transcript as ingest
 from app.services import authority
 from app.services import scribe_capture_notes as notes
 from app.services.scribe_capture_gateway import CaptureOperationUnavailable
+from app.services.scribe_capture_plan_grounding import CONTRACT_END, CONTRACT_START
 from app.services.scribe_workflow import CaptureTranscript, ScribeWorkflowRejectedError
 
 from activemodel.session_manager import _session_context
@@ -45,6 +46,20 @@ class FakeModel:
         self.calls.append((prompt, json_output))
         if self.after:
             self.after(len(self.calls))
+        if json_output and CONTRACT_START in prompt:
+            contract = json.loads(
+                prompt.rsplit(CONTRACT_START, 1)[1].split(CONTRACT_END)[0]
+            )
+            refs = {field: [] for field in contract["prospective_fields"]}
+            # Preserve deliberately malformed/duplicate-key output for the real
+            # production validator rather than normalizing it in this fixture.
+            return (
+                '{"fields":'
+                + self.output
+                + ',"plan_source_refs":'
+                + json.dumps(refs)
+                + "}"
+            )
         return self.output if json_output else "- Discuss sleep at follow-up."
 
 
