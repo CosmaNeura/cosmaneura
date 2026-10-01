@@ -376,7 +376,7 @@ def test_sql_or_encryption_failure_is_private_and_never_returns_a_result(
         raise (
             SQLAlchemyError("Synthetic private parameter")
             if method == "GET"
-            else EncryptionError("Synthetic private parameter")
+            else EncryptionError()
         )
 
     monkeypatch.setattr(
