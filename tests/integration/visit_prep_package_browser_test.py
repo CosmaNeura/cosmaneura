@@ -15,12 +15,16 @@ from playwright.sync_api import expect, sync_playwright
 from app import root
 from app.services.visit_prep_contributions import correct_contribution
 from app.services.visit_prep_interview_contract import ResponseInput
+from app.services.visit_prep_synthesis_worker import run_one_build
 
 from tests.routes.visit_prep_question_sets_test import _provider_client
 from tests.services.visit_prep_contribution_projection_test import (
     _prepared,
     _projection,
 )
+from tests.services.visit_prep_synthesis_publication_test import _rows, _selected
+from tests.services.visit_prep_synthesis_test import _brief, _fake
+from tests.services.visit_prep_synthesis_usage_test import _events
 
 
 @pytest.mark.parametrize("width,height", [(1440, 1000), (390, 844)])
@@ -44,7 +48,9 @@ def test_provider_package_displays_current_patient_words_and_clears_on_denial(
             "story", "answered", "My revised synthetic pre-visit story."
         ),
     )
-    denied = False
+    selected = _selected(fixture)
+    captured = _fake(monkeypatch, _brief(selected).model_dump_json())
+    lose_ack = False
     api_paths = []
     with (
         _provider_client(fixture.doctor, monkeypatch) as client,
@@ -79,21 +85,30 @@ def test_provider_package_displays_current_patient_words_and_clears_on_denial(
                 elif url.path == "/synthetic.css":
                     route.fulfill(content_type="text/css", body=styles[0].read_bytes())
                 else:
-                    assert (
-                        url.path.startswith("/internal/v1/visit-prep/preps")
-                        and request.method == "GET"
-                    )
+                    assert url.path.startswith(
+                        "/internal/v1/visit-prep/preps"
+                    ) and request.method in {"GET", "POST"}
                     api_paths.append(url.path)
-                    if denied:
-                        route.fulfill(
-                            status=404,
-                            content_type="application/json",
-                            body='{"detail":"Not found"}',
-                        )
-                        return
-                    response = client.get(
-                        url.path + ("?" + url.query if url.query else "")
+                    response = client.request(
+                        request.method,
+                        url.path + ("?" + url.query if url.query else ""),
+                        content=request.post_data,
+                        headers={"Content-Type": "application/json"}
+                        if request.method == "POST"
+                        else {},
                     )
+                    if request.method == "POST":
+                        assert response.status_code == 202
+                        assert response.headers["cache-control"] == "no-store"
+                        assert set(response.json()) == {
+                            "package_id",
+                            "source_version",
+                            "state",
+                        }
+                        if lose_ack:
+                            assert run_one_build() == "ready"
+                            route.abort("failed")
+                            return
                     route.fulfill(
                         status=response.status_code,
                         headers={
@@ -121,10 +136,38 @@ def test_provider_package_displays_current_patient_words_and_clears_on_denial(
             expect(
                 page.get_by_text("My revised synthetic pre-visit story.", exact=True)
             ).to_be_visible()
-            expect(page.get_by_text("Caregiver report", exact=False)).to_be_visible()
+            expect(
+                page.get_by_text("Caregiver report", exact=False).first
+            ).to_be_visible()
             expect(
                 page.get_by_text("AI synthesis has not been generated.", exact=False)
             ).to_be_visible()
+            assert not captured and not _events(fixture)
+            page.get_by_role("button", name="Generate synthesis", exact=True).click()
+            expect(page.get_by_text("Synthesis queued.", exact=False)).to_be_visible()
+            assert not captured and not _events(fixture)
+            assert run_one_build() == "ready"
+            page.get_by_role("button", name="Reload contribution").click()
+            expect(
+                page.get_by_text("AI interpretation of patient-reported", exact=False)
+            ).to_be_visible()
+            expect(
+                page.get_by_text(
+                    "Recipient reports: My revised synthetic pre-visit story.",
+                    exact=True,
+                )
+            ).to_be_visible()
+            page.locator("li > details").filter(
+                has=page.locator("blockquote").filter(
+                    has_text="My revised synthetic pre-visit story."
+                )
+            ).get_by_text("Supporting patient words", exact=True).click()
+            expect(
+                page.locator("blockquote").filter(
+                    has_text="My revised synthetic pre-visit story."
+                )
+            ).to_be_visible()
+            assert len(_rows(fixture)) == 1 and len(_events(fixture)) == 2
             page.get_by_text(
                 "Recipient revised this response — original wording", exact=True
             ).click()
@@ -144,11 +187,61 @@ def test_provider_package_displays_current_patient_words_and_clears_on_denial(
             page.screenshot(
                 path=str(root / f"tmp/visit-prep-provider-{width}.png"), full_page=True
             )
-            denied = True
+            # Correction supersedes the old brief; a lost POST acknowledgement
+            # must recover by GET, not an automatic second model request.
+            correct_contribution(
+                access_token=fixture.access_token,
+                first_name="José",
+                role="caregiver",
+                expected_basis=_projection(fixture).basis,
+                idempotency_key=str(uuid4()),
+                response=ResponseInput(
+                    "story", "answered", "My latest synthetic interval story."
+                ),
+            )
+            page.get_by_role("button", name="Reload contribution").click()
+            expect(
+                page.get_by_text("The contribution changed.", exact=False)
+            ).to_be_visible()
+            expect(
+                page.get_by_text(
+                    "Recipient reports: My revised synthetic pre-visit story.",
+                    exact=True,
+                )
+            ).to_have_count(0)
+            current = _selected(fixture)
+            _fake(monkeypatch, _brief(current).model_dump_json())
+            lose_ack = True
+            page.get_by_role("button", name="Generate synthesis", exact=True).click()
+            expect(page.get_by_role("alert")).to_contain_text("status is unknown")
+            expect(
+                page.get_by_text("My latest synthetic interval story.", exact=True)
+            ).to_have_count(0)
+            page.get_by_role("button", name="Reload contribution").click()
+            expect(
+                page.get_by_text(
+                    "Recipient reports: My latest synthetic interval story.", exact=True
+                )
+            ).to_be_visible()
+            assert len(_rows(fixture)) == 2 and len(_events(fixture)) == 4
+            assert run_one_build() == "idle"
+            assert (
+                api_paths.count(
+                    f"/internal/v1/visit-prep/preps/{fixture.prep_id}/synthesis"
+                )
+                >= 6
+            )
+            fixture.practice.negotiated_baa_on_file = False
+            fixture.practice.save()
             page.get_by_role("button", name="Reload contribution").click()
             expect(page.get_by_role("alert")).to_be_visible()
             expect(
                 page.get_by_text("My revised synthetic pre-visit story.", exact=True)
+            ).to_have_count(0)
+            expect(
+                page.get_by_text(
+                    "Recipient reports: My latest synthetic interval story.", exact=True
+                )
             ).to_have_count(0)
             expect(
                 page.get_by_text("My invented health story.", exact=True)

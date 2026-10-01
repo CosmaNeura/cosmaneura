@@ -41,12 +41,14 @@ await build({
         builder.onLoad({ filter: /client\.ts$/ }, (args) => {
           if (args.path !== sdk) return
           return {
-            contents: `async function read(path) {
-          const response = await fetch("${origin}" + path, {cache:"no-store"});
+            contents: `async function read(path, options = {}) {
+          const response = await fetch("${origin}" + path, {cache:"no-store", ...options});
           return response.ok ? {data:await response.json(),response} : {error:{detail:"Unavailable"},response};
         }
         export const visitPrepList = ({query}) => read("/internal/v1/visit-prep/preps?" + new URLSearchParams(query));
-        export const visitPrepPackage = ({path}) => read("/internal/v1/visit-prep/preps/" + encodeURIComponent(path.prep_id) + "/package");`,
+        const synthesisPath = (path) => "/internal/v1/visit-prep/preps/" + encodeURIComponent(path.prep_id) + "/synthesis";
+        export const visitPrepSynthesis = ({path}) => read(synthesisPath(path));
+        export const visitPrepSynthesisRequest = ({path,body}) => read(synthesisPath(path), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});`,
             loader: "js",
           }
         })

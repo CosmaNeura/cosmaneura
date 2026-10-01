@@ -6,11 +6,13 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 const api = vi.hoisted(() => ({
   list: vi.fn(),
   package: vi.fn(),
+  request: vi.fn(),
   subscribe: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => ({
   visitPrepList: (...args: unknown[]) => api.list(...args),
-  visitPrepPackage: (...args: unknown[]) => api.package(...args),
+  visitPrepSynthesis: (...args: unknown[]) => api.package(...args),
+  visitPrepSynthesisRequest: (...args: unknown[]) => api.request(...args),
 }))
 vi.mock("~/lib/view-as-binding", () => ({
   VIEW_AS_HARD_BLOCK_EVENT: "cosmaneura:view-as-hard-block",
@@ -31,7 +33,7 @@ const prep = {
   patient_id: null,
   question_set_version_id: "visit_prep_question_set_version_synthetic",
 }
-const value = {
+const sources = {
   contract: "visit_prep.patient_sources.v1",
   package_id: prep.id,
   source_version: "a".repeat(64),
@@ -104,6 +106,47 @@ const value = {
     },
   ],
 }
+const value = {
+  contract: "visit_prep.patient_synthesis.v1",
+  sources,
+  status: "missing",
+  build_status: "not_requested",
+  retry_at: null,
+  brief: null,
+  artifact_id: null,
+  version: null,
+  recorded_at: null,
+  generator_version: "patient_sources_v1",
+  prompt_version: "patient_report_only_v1",
+  model_profile: "synthetic_model",
+}
+function ready() {
+  const item = {
+    text: "Recipient reports a corrected story.",
+    evidence: [
+      {
+        source_ref: "visit_prep_contribution_correction",
+        quote: "corrected synthetic story",
+      },
+    ],
+  }
+  return {
+    ...value,
+    status: "ready",
+    build_status: "ready",
+    version: 1,
+    artifact_id: "visit_prep_synthesis_synthetic",
+    recorded_at: "2099-01-01T11:01:00Z",
+    brief: {
+      headline: item,
+      summary: [item],
+      visit_priorities: [],
+      medication_and_adherence: [],
+      barriers: [],
+      uncertainties: [],
+    },
+  }
+}
 async function open() {
   fireEvent.click(screen.getByRole("button", { name: "Load preparations" }))
   fireEvent.click(
@@ -147,7 +190,7 @@ describe("provider current-answer package", () => {
     expect(screen.getByText("Some of the time")).toBeInTheDocument()
     expect(screen.getByText("Not answered")).toBeInTheDocument()
     expect(screen.getByText("Skipped — not supplied")).toBeInTheDocument()
-    expect(screen.getByText(/Caregiver report/)).toHaveTextContent(
+    expect(screen.getAllByText(/Caregiver report/)[1]).toHaveTextContent(
       "Incomplete contribution",
     )
     expect(
@@ -279,7 +322,10 @@ describe("provider current-answer package", () => {
   })
   it("rejects a response for another preparation instead of displaying its answers", async () => {
     api.package.mockResolvedValue({
-      data: { ...value, package_id: "visit_prep_wrong" },
+      data: {
+        ...value,
+        sources: { ...sources, package_id: "visit_prep_wrong" },
+      },
     })
     render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
     fireEvent.click(screen.getByRole("button", { name: "Load preparations" }))
@@ -292,5 +338,229 @@ describe("provider current-answer package", () => {
     expect(
       screen.queryByText("My corrected synthetic story."),
     ).not.toBeInTheDocument()
+  })
+  it("renders a current cited brief as interpretation alongside actual words, without generation", async () => {
+    api.package.mockResolvedValue({ data: ready() })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    expect(
+      screen.getByRole("heading", { name: "Pre-visit brief" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/AI interpretation of patient-reported/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getAllByText("Recipient reports a corrected story."),
+    ).toHaveLength(2)
+    expect(screen.getAllByText("corrected synthetic story")).toHaveLength(2)
+    expect(
+      screen.getByText("My corrected synthetic story."),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("visit_prep_synthesis_synthetic"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Generate synthesis" }),
+    ).not.toBeInTheDocument()
+    expect(api.request).not.toHaveBeenCalled()
+  })
+  it("queues only an explicit exact-source request, clears old content and re-reads atomically", async () => {
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    const pending = deferred<unknown>()
+    api.request.mockReturnValue(pending.promise)
+    api.package.mockResolvedValue({
+      data: { ...value, build_status: "pending" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Generate synthesis" }))
+    expect(api.request).toHaveBeenCalledWith({
+      path: { prep_id: prep.id },
+      body: { expected_source_version: sources.source_version },
+      cache: "no-store",
+    })
+    expect(
+      screen.queryByText("My corrected synthetic story."),
+    ).not.toBeInTheDocument()
+    await act(async () =>
+      pending.resolve({
+        data: {
+          package_id: prep.id,
+          source_version: sources.source_version,
+          state: "pending",
+        },
+      }),
+    )
+    await screen.findByText(/Synthesis queued/)
+    expect(api.package).toHaveBeenCalledTimes(2)
+    expect(api.request).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByRole("button", { name: "Generate synthesis" }),
+    ).not.toBeInTheDocument()
+  })
+  it("never retries an uncertain POST automatically and requires a fresh read", async () => {
+    api.request.mockRejectedValue(new Error("Synthetic acknowledgment lost"))
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Generate synthesis" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "status is unknown",
+    )
+    expect(
+      screen.queryByText("My corrected synthetic story."),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Generate synthesis" }),
+    ).not.toBeInTheDocument()
+    api.package.mockResolvedValue({
+      data: { ...value, build_status: "running" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Reload contribution" }))
+    await screen.findByText(/Synthesis is being generated/)
+    expect(api.request).toHaveBeenCalledOnce()
+  })
+  it("keeps terminal cooldown read-only until Core's retry time", async () => {
+    api.package.mockResolvedValue({
+      data: {
+        ...value,
+        build_status: "failed",
+        retry_at: "2099-01-01T12:00:00Z",
+      },
+    })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    expect(screen.getByText(/Synthesis is unavailable/)).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Request synthesis again" }),
+    ).toBeDisabled()
+    expect(
+      screen.getByRole("button", { name: "Reload contribution" }),
+    ).toBeEnabled()
+    expect(
+      screen.getByText("My corrected synthetic story."),
+    ).toBeInTheDocument()
+    expect(api.request).not.toHaveBeenCalled()
+  })
+  it("discards a late synthesis request after support denial without reading its result", async () => {
+    const pending = deferred<unknown>()
+    api.request.mockReturnValue(pending.promise)
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Generate synthesis" }))
+    fireEvent(window, new Event("cosmaneura:view-as-hard-block"))
+    await act(async () =>
+      pending.resolve({
+        data: {
+          package_id: prep.id,
+          source_version: sources.source_version,
+          state: "ready",
+        },
+      }),
+    )
+    expect(api.package).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByRole("heading", { name: "Pre-visit brief" }),
+    ).not.toBeInTheDocument()
+  })
+  it("discards the post-request atomic read when the account changes", async () => {
+    const pending = deferred<unknown>()
+    api.request.mockResolvedValue({
+      data: {
+        package_id: prep.id,
+        source_version: sources.source_version,
+        state: "ready",
+      },
+    })
+    const view = render(
+      <VisitPrepPackages access={access} scopeKey="user_synthetic" />,
+    )
+    await open()
+    api.package.mockReturnValue(pending.promise)
+    fireEvent.click(screen.getByRole("button", { name: "Generate synthesis" }))
+    await act(async () => {})
+    expect(api.package).toHaveBeenCalledTimes(2)
+    view.rerender(<VisitPrepPackages access={access} scopeKey="other_user" />)
+    await act(async () => pending.resolve({ data: ready() }))
+    expect(
+      screen.queryByText("Recipient reports a corrected story."),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("My corrected synthetic story."),
+    ).not.toBeInTheDocument()
+    expect(api.request).toHaveBeenCalledOnce()
+  })
+  it("never displays the previous brief after a correction makes its version stale", async () => {
+    api.package.mockResolvedValueOnce({ data: ready() }).mockResolvedValueOnce({
+      data: {
+        ...value,
+        status: "stale",
+        sources: { ...sources, source_version: "b".repeat(64) },
+      },
+    })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Reload contribution" }))
+    await screen.findByText(/The contribution changed/)
+    expect(
+      screen.queryByText("Recipient reports a corrected story."),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("b".repeat(64))).toBeInTheDocument()
+    expect(api.request).not.toHaveBeenCalled()
+  })
+  it.each(["unknown_source", "old_quote", "stale_output", "wrong_contract"])(
+    "rejects %s synthesis instead of rendering a mismatched interpretation",
+    async (failure) => {
+      const body = ready()
+      if (failure === "unknown_source")
+        body.brief.headline.evidence[0].source_ref = "old_source"
+      if (failure === "old_quote")
+        body.brief.headline.evidence[0].quote = "original synthetic story"
+      if (failure === "stale_output") body.status = "stale"
+      if (failure === "wrong_contract") body.contract = "wrong_contract"
+      api.package.mockResolvedValue({ data: body })
+      render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+      fireEvent.click(screen.getByRole("button", { name: "Load preparations" }))
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: `Open contribution ${prep.id}`,
+        }),
+      )
+      await screen.findByRole("alert")
+      expect(
+        screen.queryByText("My corrected synthetic story."),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByText("Recipient reports a corrected story."),
+      ).not.toBeInTheDocument()
+    },
+  )
+  it("shows an honest empty brief without filling in skipped answers", async () => {
+    const body = {
+      ...ready(),
+      sources: {
+        ...sources,
+        topics: sources.topics.map((topic) => ({
+          ...topic,
+          response_kind: "skipped",
+          answer: null,
+          initial_response_kind: "skipped",
+          initial_answer: null,
+        })),
+      },
+      brief: {
+        headline: null,
+        summary: [],
+        visit_priorities: [],
+        medication_and_adherence: [],
+        barriers: [],
+        uncertainties: [],
+      },
+    }
+    api.package.mockResolvedValue({ data: body })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    expect(
+      screen.getByText(/No answers were supplied for synthesis/),
+    ).toBeInTheDocument()
+    expect(api.request).not.toHaveBeenCalled()
   })
 })
