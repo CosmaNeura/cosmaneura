@@ -2,6 +2,7 @@ import { AppSidebar } from "~/components/app-sidebar"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar"
 import { VisitPrepCreator } from "~/components/visit-prep/VisitPrepCreator"
+import { VisitPrepPackages } from "~/components/visit-prep/VisitPrepPackages"
 import { useVisitPrepAccess } from "~/configuration/visit-prep-access"
 
 import { useUser } from "@clerk/clerk-react"
@@ -10,7 +11,7 @@ export const meta = () => [
   { title: "Visit Prep" },
   {
     name: "description",
-    content: "Create and manage a patient Visit Prep invitation",
+    content: "Create invitations and review patient Visit Prep contributions",
   },
 ]
 
@@ -32,6 +33,7 @@ export default function VisitPrepsPage() {
             access={access}
             physicianDisplayName={user?.fullName ?? ""}
           />
+          <VisitPrepPackages access={access} scopeKey={user?.id ?? ""} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

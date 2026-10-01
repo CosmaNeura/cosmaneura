@@ -237,7 +237,14 @@ def encounter_workflow(
     settings_provider,
     authority_settings,
     deadline,
+    include_lookup_status: bool = True,
 ):
+    """Authorize each request; optionally omit unpublished lookup display status.
+
+    The native facade uses this internal option for intermediate reauthorization
+    only. Public lookup callers and catalog/create responses retain enrichment.
+    """
+
     def available():
         check_deadline(deadline)
         if not settings_provider().enabled:
@@ -340,7 +347,12 @@ def encounter_workflow(
                     if row is None:
                         raise authority.AuthorityRequestDeniedError
                     result["encounter"] = _visit(
-                        session, row, doctor_id=doctor_id, link=link, subject=subject
+                        session,
+                        row,
+                        doctor_id=doctor_id,
+                        link=link,
+                        subject=subject,
+                        saved_statuses=None if include_lookup_status else {},
                     )
                 elif isinstance(request, AddBirthDateRequest):
                     row = session.exec(
