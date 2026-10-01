@@ -28,10 +28,17 @@ from starlette.types import Receive, Scope, Send
 
 from app import log
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
+from app.services import visit_prep_contributions as contributions
 from app.services import visit_prep_interviews as interview_service
 from app.services import visit_prep_rate_limits as rate_limits
+from app.services.visit_prep_contribution_contract import (
+    ContributionBasis,
+    ContributionMutationReceipt,
+    PatientContribution,
+)
 from app.services.visit_prep_interview_contract import (
     InterviewMutationResult,
+    InterviewQuestion,
     InterviewState,
     ResponseInput,
     VisitPrepInterviewConflict,
@@ -56,6 +63,16 @@ _CONFLICT_DETAIL = "Visit Prep request conflicts with its current state."
 _RATE_LIMIT_DETAIL = "Too many Visit Prep requests. Try again later."
 _TEMPORARY_DETAIL = "Visit Prep is temporarily unavailable."
 _PUBLIC_PREFIX = "/external/v1/visit-prep"
+_CONFIRMATION_PATHS = frozenset(
+    f"{_PUBLIC_PREFIX}{suffix}"
+    for suffix in (
+        "/confirm",
+        "/wrong-recipient",
+        "/contribution",
+        "/contribution/response",
+        "/contribution/review",
+    )
+)
 
 _ResultT = TypeVar("_ResultT")
 
@@ -312,6 +329,48 @@ class VisitPrepResponseRequest(_StrictModel):
     answer: str | None = Field(default=None, repr=False)
 
 
+class VisitPrepContributionBasis(_StrictModel):
+    original_response_count: int = Field(ge=0, le=5)
+    event_sequence: int = Field(ge=0)
+
+
+class VisitPrepContributionChangeRequest(VisitPrepConfirmationRequest):
+    basis: VisitPrepContributionBasis
+    question_key: str = Field(min_length=1, max_length=64)
+    response_kind: Literal["answered", "skipped"]
+    answer: str | None = Field(default=None, max_length=2000, repr=False)
+
+
+class VisitPrepContributionReviewRequest(VisitPrepConfirmationRequest):
+    basis: VisitPrepContributionBasis
+
+
+class VisitPrepPatientReviewTopic(_StrictModel):
+    question: VisitPrepPublicQuestionResponse
+    response_kind: Literal["answered", "skipped"] | None
+    answer: str | None = Field(repr=False)
+    initial_response_kind: Literal["answered", "skipped"] | None
+    initial_answer: str | None = Field(repr=False)
+    changed: bool
+    recorded_at: datetime | None
+
+
+class VisitPrepPatientContributionResponse(_StrictModel):
+    basis: VisitPrepContributionBasis
+    actor_role: Literal["patient", "caregiver"]
+    original_interview_completed: bool
+    current_answers_complete: bool
+    current_answers_reviewed: bool
+    topics: list[VisitPrepPatientReviewTopic] = Field(repr=False)
+
+
+class VisitPrepContributionReceiptResponse(_StrictModel):
+    disposition: Literal["accepted", "replayed"]
+    basis: VisitPrepContributionBasis
+    current_answers_complete: bool
+    current_answers_reviewed: bool
+
+
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {
         "model": VisitPrepPublicErrorResponse,
@@ -476,9 +535,7 @@ def require_public_visit_prep_bearer(
             rate_limits.enforce_credential_rate_limits(
                 network_signal=network_signal,
                 access_token=None,
-                confirmation=request.url.path.endswith(
-                    ("/confirm", "/wrong-recipient")
-                ),
+                confirmation=request.url.path in _CONFIRMATION_PATHS,
             )
         except (
             rate_limits.RateLimited,
@@ -495,7 +552,7 @@ def require_public_visit_prep_bearer(
         rate_limits.enforce_credential_rate_limits(
             network_signal=network_signal,
             access_token=access_token,
-            confirmation=request.url.path.endswith(("/confirm", "/wrong-recipient")),
+            confirmation=request.url.path in _CONFIRMATION_PATHS,
         )
     except (
         rate_limits.RateLimited,
@@ -544,6 +601,22 @@ def _invoke(operation: Callable[[], _ResultT]) -> _ResultT:
         ) from None
 
 
+def _question_response(question: InterviewQuestion) -> VisitPrepPublicQuestionResponse:
+    return VisitPrepPublicQuestionResponse(
+        key=question.key,
+        position=question.position,
+        prompt=question.prompt,
+        helper_text=question.helper_text,
+        kind=question.kind,
+        choices=[
+            VisitPrepPublicChoiceResponse(
+                value=choice.value, label=choice.label, hint=choice.hint
+            )
+            for choice in question.choices
+        ],
+    )
+
+
 def _state_response(state: InterviewState) -> VisitPrepPublicStateResponse:
     question = state.current_question
     return VisitPrepPublicStateResponse(
@@ -555,23 +628,7 @@ def _state_response(state: InterviewState) -> VisitPrepPublicStateResponse:
         submitted_questions=state.submitted_questions,
         maximum_questions=state.maximum_questions,
         current_question=(
-            VisitPrepPublicQuestionResponse(
-                key=question.key,
-                position=question.position,
-                prompt=question.prompt,
-                helper_text=question.helper_text,
-                kind=question.kind,
-                choices=[
-                    VisitPrepPublicChoiceResponse(
-                        value=choice.value,
-                        label=choice.label,
-                        hint=choice.hint,
-                    )
-                    for choice in question.choices
-                ],
-            )
-            if question is not None
-            else None
+            _question_response(question) if question is not None else None
         ),
     )
 
@@ -679,6 +736,146 @@ def visit_prep_public_wrong_recipient(
     return VisitPrepWrongRecipientResponse(disposition="reported")
 
 
+def _contribution_basis(basis: ContributionBasis) -> VisitPrepContributionBasis:
+    return VisitPrepContributionBasis(
+        original_response_count=basis.original_response_count,
+        event_sequence=basis.event_sequence,
+    )
+
+
+def _patient_contribution_response(
+    current: PatientContribution,
+) -> VisitPrepPatientContributionResponse:
+    # Never serialize the internal dataclass: it carries owner/source IDs and
+    # retained hidden responses. Only explicitly applicable topics leave Core.
+    topics = []
+    for topic in current.topics:
+        if not topic.applicable:
+            continue
+        original = topic.original_response_id is not None
+        initial_kind = (
+            topic.original_response_kind if original else topic.additional_response_kind
+        )
+        initial_answer = topic.original_answer if original else topic.additional_answer
+        topics.append(
+            VisitPrepPatientReviewTopic(
+                question=_question_response(topic.question),
+                response_kind=topic.response_kind,
+                answer=topic.answer,
+                initial_response_kind=initial_kind,
+                initial_answer=initial_answer,
+                changed=topic.response_kind != initial_kind
+                or topic.answer != initial_answer,
+                recorded_at=topic.recorded_at,
+            )
+        )
+    return VisitPrepPatientContributionResponse(
+        basis=_contribution_basis(current.basis),
+        actor_role=current.actor_role,
+        original_interview_completed=current.original_interview_completed,
+        current_answers_complete=current.current_answers_complete,
+        current_answers_reviewed=current.current_answers_reviewed,
+        topics=topics,
+    )
+
+
+def _contribution_receipt(
+    receipt: ContributionMutationReceipt,
+) -> VisitPrepContributionReceiptResponse:
+    return VisitPrepContributionReceiptResponse(
+        disposition=receipt.disposition,
+        basis=_contribution_basis(receipt.basis),
+        current_answers_complete=receipt.current_answers_complete,
+        current_answers_reviewed=receipt.current_answers_reviewed,
+    )
+
+
+def _contribution_key(request: Request) -> str:
+    values = request.headers.getlist("idempotency-key")
+    if len(values) != 1:
+        raise HTTPException(status_code=422, detail=_VALIDATION_DETAIL)
+    return values[0]
+
+
+@visit_prep_interviews_api_app.post(
+    "/contribution",
+    name="visit_prep_public_read_contribution",
+    response_model=VisitPrepPatientContributionResponse,
+)
+def visit_prep_public_read_contribution(
+    data: VisitPrepConfirmationRequest,
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepPatientContributionResponse:
+    return _patient_contribution_response(
+        _invoke(
+            lambda: contributions.get_patient_contribution(
+                access_token=access_token,
+                first_name=data.first_name,
+                role=data.role,
+            )
+        )
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/contribution/response",
+    name="visit_prep_public_correct_contribution",
+    response_model=VisitPrepContributionReceiptResponse,
+)
+def visit_prep_public_correct_contribution(
+    request: Request,
+    data: VisitPrepContributionChangeRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepContributionReceiptResponse:
+    del documented_idempotency_key
+    key = _contribution_key(request)
+    return _contribution_receipt(
+        _invoke(
+            lambda: contributions.correct_contribution(
+                access_token=access_token,
+                first_name=data.first_name,
+                role=data.role,
+                expected_basis=ContributionBasis(
+                    data.basis.original_response_count, data.basis.event_sequence
+                ),
+                idempotency_key=key,
+                response=ResponseInput(
+                    data.question_key, data.response_kind, data.answer
+                ),
+            )
+        )
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/contribution/review",
+    name="visit_prep_public_review_contribution",
+    response_model=VisitPrepContributionReceiptResponse,
+)
+def visit_prep_public_review_contribution(
+    request: Request,
+    data: VisitPrepContributionReviewRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepContributionReceiptResponse:
+    del documented_idempotency_key
+    key = _contribution_key(request)
+    return _contribution_receipt(
+        _invoke(
+            lambda: contributions.review_contribution(
+                access_token=access_token,
+                first_name=data.first_name,
+                role=data.role,
+                expected_basis=ContributionBasis(
+                    data.basis.original_response_count, data.basis.event_sequence
+                ),
+                idempotency_key=key,
+            )
+        )
+    )
+
+
 def visit_prep_public_reject_unsupported_method() -> None:
     """Keep framework-generated 405 responses outside the public surface."""
 
@@ -700,7 +897,7 @@ def visit_prep_public_reject_unsupported_path(unsupported_path: str) -> None:
 
 # These routes must be last. Their route class promotes method mismatches from a
 # partial to a full match, preventing Starlette's bare 405 response for any HTTP
-# extension method while preserving the four explicitly supported operations.
+# extension method while preserving the explicitly supported operations.
 visit_prep_interviews_api_app.add_api_route(
     "",
     visit_prep_public_reject_unsupported_method,

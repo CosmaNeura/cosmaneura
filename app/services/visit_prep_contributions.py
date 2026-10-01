@@ -551,3 +551,21 @@ def review_contribution(
             fingerprint=fingerprint,
         )
         return _receipt(updated)
+
+
+def get_patient_contribution(
+    *, access_token: str, first_name: str, role: ContributionRole
+) -> PatientContribution:
+    """Read this patient's current contribution after fresh confirmation evidence.
+
+    A bearer alone never discloses saved answers. This uses the invitation's
+    existing recipient evidence; it does not claim verified patient identity.
+    Explicit wire serializers must exclude internal lineage and hidden topics.
+    """
+
+    with _visit_prep_session() as session:
+        authorized = _lock_authorized_interview(session, access_token=access_token)
+        _require_recipient(authorized, first_name=first_name, role=role)
+        current = _load_contribution(session, visit_prep=authorized.visit_prep)
+        _commit(session)
+        return current

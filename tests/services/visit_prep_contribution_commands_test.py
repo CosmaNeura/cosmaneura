@@ -12,6 +12,7 @@ from app.services import visit_prep_interviews as interviews
 from app.services.visit_prep_contribution_contract import ContributionBasis
 from app.services.visit_prep_contributions import (
     correct_contribution,
+    get_patient_contribution,
     review_contribution,
 )
 from app.services.visit_prep_interview_contract import (
@@ -291,9 +292,9 @@ def test_invalid_correction_is_rejected_before_persistence(monkeypatch, answer):
 @pytest.mark.parametrize(
     "gate", ["cohort", "public", "baa", "entitlement", "membership", "doctor"]
 )
-@pytest.mark.parametrize("review", [False, True])
+@pytest.mark.parametrize("operation", ["correct", "review", "read"])
 def test_current_practice_authority_is_rechecked_for_each_command(
-    monkeypatch, gate, review
+    monkeypatch, gate, operation
 ):
     fixture = _prepared(monkeypatch, f"command-authority-{gate}")
     basis = _projection(fixture).basis
@@ -345,7 +346,11 @@ def test_current_practice_authority_is_rechecked_for_each_command(
                 )
             session.commit()
     with pytest.raises(VisitPrepInterviewUnavailable):
-        if review:
+        if operation == "read":
+            get_patient_contribution(
+                access_token=fixture.access_token, first_name="José", role="patient"
+            )
+        elif operation == "review":
             _review(fixture, basis=basis)
         else:
             _correct(fixture, basis=basis)

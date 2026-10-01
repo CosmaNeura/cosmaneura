@@ -44,6 +44,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Attributable correction and review storage | New work for the approved patient correction/review requirement; current aggregate and response guards | Generate additive migration `4ad34f59136c` after `e161ca7c8448`. Preserve original answers and append encrypted corrections or content-free review events. Bind each event to the confirmed patient/caregiver role, current credential and exact original-response count plus prior event sequence. Recheck expiry after database locks; retain legal-hold and aggregate-cleanup rules. This dormant structure adds no patient read, correction API, UI or model call. |
 | Current contribution and correction/review commands | New work using the recovered interview authorization, question validation and encryption primitives | Add one internal current-contribution projection with original wording/source IDs, effective corrections, current applicability and separate completion/review evidence. Add domain commands that reacquire current authority and confirmation evidence, append encrypted corrections, reject stale bases and preserve exact retries. Reviews require every applicable topic to have an answer or explicit skip. Return value-free receipts. No public correction/read route or patient review UI is mounted. |
 | Answers to newly revealed conditional topics | New work for the approved correction/review loop | Generate `fe53eb110e32` after `4ad34f59136c`. Add a nullable exact-version question reference and closed `topic_answer` event shape. Record answer/skip and later revisions in the same immutable contribution sequence, preserving the first additional source separately from the original interview. Keep original response and retention guards unchanged. |
+| Gated patient contribution read and revision API | New work using the contribution domain commands and existing public privacy boundary | Add three POST operations for saved-answer review, correction and confirmation of the exact current contribution. Recheck the current invitation, recipient first name and confirmed role on every operation. Expose only applicable topics and their initial/current wording; omit internal source IDs and retained hidden answers. Corrections and reviews return value-free receipts. All three consume the existing confirmation-attempt limits. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -141,14 +142,31 @@ AI call, package read or delivery is activated by this increment.
 
 ## Remaining recovery and integration
 
-Patient correction/review API and UI and bounded AI clarification are next.
+The patient contribution API increment passed 608 selected backend/browser
+checks, including 19 new full-app HTTP scenarios and six additional current
+authority read cases. All tests used disposable synthetic PostgreSQL and
+networkless Redis. The 49 warnings were framework deprecations. Changed-file
+lint, formatting and focused typechecks passed. OpenAPI checks verify the new
+POST-only bearer routes, required confirmation bodies and mutation idempotency
+headers. The existing desktop/mobile browser regression still uses the earlier
+patient assets and does not demonstrate browser review or correction.
+
+Saved responses require the current invitation plus the first name and role
+matching the original recipient confirmation. This is the existing recipient
+check, not identity verification. Bearer-only GET requests disclose no answers.
+Read and mutation requests share the existing eight-attempt, 15-minute
+confirmation buckets; no release control or limit was relaxed. Independent
+synthetic HTTP journeys have separate transport peers so their legitimate
+network counters do not contaminate one another.
+
+Patient correction/review UI and bounded AI clarification are next.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics, but the
 patient cannot yet review or correct persisted responses through the browser.
 Newly revealed answers have their own immutable source; they are not fabricated
 original interview rows. Missing ordinary interview topics still use the original
 ordered capture flow.
-The basic patient UI and five public operations are wired and tested but remain
+The basic patient UI and eight public operations are wired and tested but remain
 gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
