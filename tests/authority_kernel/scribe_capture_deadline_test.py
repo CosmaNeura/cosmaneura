@@ -25,6 +25,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_scribe_capture_request,
 )
+from app.routes.scribe_native_capture import native_capture_api_app
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_scope as scope_service
@@ -86,6 +87,7 @@ def app(monkeypatch, *, seconds=DELAY):
     monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", seconds)
     result = FastAPI()
     result.include_router(agent_api_app)
+    result.include_router(native_capture_api_app)
     result.dependency_overrides[aglobal_session] = lambda: None
     result.dependency_overrides[authenticate_scribe_capture_request] = (
         lambda: EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")

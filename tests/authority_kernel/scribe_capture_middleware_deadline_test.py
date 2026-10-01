@@ -21,6 +21,7 @@ PATHS = tuple(
         "capture-operations",
         "capture-notes",
         "encounter-context",
+        "native-capture",
     )
 )
 BUDGET = 0.08

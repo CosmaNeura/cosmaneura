@@ -21,6 +21,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_scribe_capture_request,
 )
+from app.routes.scribe_native_capture import native_capture_api_app
 from app.services import scribe_capture_admission as admission
 
 from activemodel.session_manager import aglobal_session
@@ -32,6 +33,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
     """Exercise real route/gateway/transaction code, replacing only SQL effects."""
     target = FastAPI()
     target.include_router(agent_api_app)
+    target.include_router(native_capture_api_app)
     target.dependency_overrides[aglobal_session] = lambda: None
     target.dependency_overrides[authenticate_scribe_capture_request] = lambda: (
         EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
