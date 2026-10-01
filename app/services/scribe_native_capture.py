@@ -85,7 +85,7 @@ async def execute_native_capture(
     Local Scribe registry checks bracket this request in the native receiver.
     """
 
-    def lookup():
+    def lookup(*, include_status=False):
         check_async_capture_deadline()
         remaining = check_capture_deadline()
         if remaining is None:
@@ -105,6 +105,7 @@ async def execute_native_capture(
             authority_settings=authority_settings,
             # This shorter SQL budget supplements the unchanged capture budget.
             deadline=time.monotonic() + min(15, remaining),
+            include_lookup_status=include_status,
         )
         check_async_capture_deadline()
         row = result["encounter"]
@@ -114,8 +115,8 @@ async def execute_native_capture(
 
     first = lookup()
 
-    def current():
-        row = lookup()
+    def current(*, include_status=False):
+        row = lookup(include_status=include_status)
         if any(
             row[name] != first[name]
             for name in ("workspace_id", "appointment_ref", "patient_ref")
@@ -204,7 +205,9 @@ async def execute_native_capture(
             upload_origins=capture_settings.upload_origins,
         )
         check_async_capture_deadline()
-    last = current()
+    # Only the final mount row is published. All other lookups still execute
+    # their full fresh authority checks without unused saved-note display reads.
+    last = current(include_status=data.action == "mount")
     envelope = {
         "contract_version": "1",
         "workspace_id": str(data.workspace_id),
