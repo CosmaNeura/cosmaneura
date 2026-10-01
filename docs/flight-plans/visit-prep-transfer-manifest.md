@@ -26,11 +26,13 @@ Transfers use committed source and preserve the repository's existing license.
 | Preparation creation, replay, rotation, revocation, rescheduling and optional chart linking | `app/services/visit_preps.py`; command and lock tests | Separate pure command contract from persistence; refresh and lock current owner authority. Revalidate the five-topic published version before creation. Return plaintext credentials only after a successful commit and never on replay. |
 | Provider preparation API | `app/routes/visit_prep_preparations.py`; route tests | Register in current internal API with current rollout and authority gates. Keep bearer material in a fixed patient-origin URL fragment; redact errors and enforce no-store and no-referrer responses. |
 | Physician preparation workspace | `VisitPrepCreator.tsx`, schedule helper and tests at the pinned source | Add a server-gated dashboard route using the current SDK. Discard sensitive state on access or identity change. Keep copied links out of rendered DOM and storage; clearly mark the workflow synthetic-only until patient completion is restored. |
+| Immutable patient answer and skip storage | `app/models/visit_prep_response.py`; response migration and model/lock tests at the pinned source | Generate `e161ca7c8448` after the current aggregate migration; reuse its existing lineage key. Preserve encrypted envelopes, keyed request fingerprints, ordering and current-credential guards. Database time is checked after the root lock. Refuse downgrade; test direct truncate rejection and approved synthetic aggregate cleanup. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
 complete empty-database migration through `16a6bf2d1539` was exercised locally;
-the subsequent aggregate migration through `0b6ed6c49dd4` was also exercised.
+the subsequent aggregate and response migrations through `e161ca7c8448` were
+also exercised.
 
 Review increments are dependency ordered: question contract and validation
 support; persistence lifecycle; gated API; physician editor; aggregate schema;
@@ -39,7 +41,7 @@ Each must remain
 below the repository's 2,000-line and 50-file change budget. The integration
 branch retains all increments until the feature is ready for the agreed merge.
 
-Local evidence after Core synchronization: 239 backend tests passed and 62
+Local evidence after response-storage recovery: 251 backend tests passed and 62
 frontend tests passed across ten files, including the new current-BAA settings
 tests. Generated SDK and full frontend typecheck passed. Backend focused
 typechecks and changed-file lint/format checks passed for the implementation
@@ -49,7 +51,7 @@ Commit-specific final evidence belongs in the corresponding draft PRs.
 
 ## Remaining recovery and integration
 
-Patient confirmation, answer storage, resume/submit, and the patient UI are
+Patient confirmation, answer submission, resume/submit, and the patient UI are
 next. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
