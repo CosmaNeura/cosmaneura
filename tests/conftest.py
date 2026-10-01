@@ -43,6 +43,11 @@ from .log import log
 
 
 _APPEND_ONLY_TEST_TRIGGERS = {
+    "visit_prep": "visit_prep_guard_mutation",
+    "visit_prep_schedule_generation": "visit_prep_schedule_guard_mutation",
+    "visit_prep_credential_generation": "visit_prep_credential_guard_mutation",
+    "visit_prep_legal_hold": "visit_prep_legal_hold_guard_mutation",
+    "visit_prep_question_response": "visit_prep_response_guard_mutation",
     "scribe_capture_source_version": "scribe_working_source_immutable",
     "scribe_capture_gap_manifest": "scribe_gap_manifest_immutable",
     "scribe_capture_note_edit": "scribe_note_edit_immutable",
@@ -76,6 +81,10 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     ),
 }
 
+_TRUNCATE_TEST_TRIGGERS = {
+    "visit_prep_question_response": "visit_prep_response_guard_truncate",
+}
+
 
 def database_reset_truncate_for_tests() -> None:
     """Reset fixtures without weakening production append-only enforcement.
@@ -91,7 +100,10 @@ def database_reset_truncate_for_tests() -> None:
     engine = SessionManager.get_instance().get_engine()
     try:
         with engine.begin() as connection:
-            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
+            for table_name, trigger_name in (
+                *_APPEND_ONLY_TEST_TRIGGERS.items(),
+                *_TRUNCATE_TEST_TRIGGERS.items(),
+            ):
                 connection.execute(
                     text(
                         f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}"
@@ -100,7 +112,10 @@ def database_reset_truncate_for_tests() -> None:
         database_reset_truncate()
     finally:
         with engine.begin() as connection:
-            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
+            for table_name, trigger_name in (
+                *_APPEND_ONLY_TEST_TRIGGERS.items(),
+                *_TRUNCATE_TEST_TRIGGERS.items(),
+            ):
                 connection.execute(
                     text(f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}")
                 )

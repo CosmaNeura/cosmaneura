@@ -192,16 +192,31 @@ def test_create_atomically_persists_encrypted_recipient_and_bounded_lineage() ->
     assert "access_token" not in credential_table.columns
 
     with get_session() as session:
-        assert session.exec(select(func.count()).select_from(VisitPrep)).one() == 1
         assert (
             session.exec(
-                select(func.count()).select_from(VisitPrepScheduleGeneration)
+                select(func.count())
+                .select_from(VisitPrep)
+                .where(VisitPrep.owner_practice_member_id == scope.owner.id)
             ).one()
             == 1
         )
         assert (
             session.exec(
-                select(func.count()).select_from(VisitPrepCredentialGeneration)
+                select(func.count())
+                .select_from(VisitPrepScheduleGeneration)
+                .where(
+                    VisitPrepScheduleGeneration.visit_prep_id == result.visit_prep.id
+                )
+            ).one()
+            == 1
+        )
+        assert (
+            session.exec(
+                select(func.count())
+                .select_from(VisitPrepCredentialGeneration)
+                .where(
+                    VisitPrepCredentialGeneration.visit_prep_id == result.visit_prep.id
+                )
             ).one()
             == 1
         )
@@ -601,7 +616,14 @@ def test_invalid_timezone_and_tokens_fail_closed_without_creating_a_prep() -> No
         )
 
     with get_session() as session:
-        assert session.exec(select(func.count()).select_from(VisitPrep)).one() == 0
+        assert (
+            session.exec(
+                select(func.count())
+                .select_from(VisitPrep)
+                .where(VisitPrep.owner_practice_member_id == scope.owner.id)
+            ).one()
+            == 0
+        )
 
     for invalid in (
         "",
