@@ -54,6 +54,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Patient saved-answer review and correction UI | New work using the existing patient public client, branded interview frame and one-topic form | Add an explicit saved-answer review step before or after original completion. Re-enter recipient evidence before disclosure; display current wording, caregiver attribution, skips and retained initial wording. Freeze uncertain requests and retry the exact payload/UUID; reload Core applicability after corrections. Permit newly relevant topics to be answered or skipped and confirm the exact current contribution without clinician-review claims. Clear displayed answers on focus loss and discard them on support-view/current-authority denial. |
 | Provider source package and preparation list | New work using the current locked contribution projection, owner authorization and Core audit store | Add bounded owner-only pagination and a current-answer package with source version, original and revised wording, skips, missing topics and caregiver attribution. Exclude hidden conditional answers from the wire. Recheck locked identity, workforce authorization, BAA, entitlement, rollout, optional chart links and quarantine. Reject support-view disclosure. Retained provider reads do not depend on the public patient gate or invitation expiry. Record content-free read audits. No model synthesis or bot read capability is introduced. |
 | Provider package dashboard | New `VisitPrepPackages.tsx`, existing current account SDK, support-view change events and dashboard route | Read preparations and answers only on explicit selection. Display patient/caregiver report, current words, missing/skipped topics, original wording and source provenance. Clear content before reload, on focus loss, account/access changes or support-view hard block; discard late replies. Reuse the generated SDK and no-store requests. A local synthetic harness exercises the actual component and real API at desktop/mobile sizes, replacing only account authentication/bootstrap. |
+| Patient-source synthesis contract and dormant model adapter | Archived brief behavior at Core `b164ad7a8121ea08794d09f832d8ca7b7ee23f92`; current Session Prep generator/worker patterns at `c5cd21ec2e09758a335c739f339a40c6a2649e99`; new implementation | Preserve the concise headline, reported information and discussion priorities, but replace legacy Intake/chart assumptions with current Visit Prep sources. Add bounded sections, exact supporting quotes, current response/revision references and separate missing/skipped metadata. Use Core's existing Azure client with strict schema, zero automatic retries and bounded timeout. Require a usage-recorder callback before returning generated content. No route, job, artifact persistence or live model call is introduced. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -214,8 +215,50 @@ revocation before the read denies disclosure. Provider source/API changed-file
 lint and focused types passed; the component was linted explicitly despite the
 repository's broad component ignore. The API is committed at `9c000cd8`.
 
-Model synthesis, bounded AI clarification and the approved delivery reuse work
-remain separate increments.
+The provider source API and dashboard are published as draft PRs 579 and 580;
+the integration branch is backed up remotely at `e90e581b`. Both remain unmerged.
+
+The first synthesis increment now defines a concise patient-report brief and
+a dormant batch generator. Model input contains only current applicable answers
+and the selected choice label; it excludes retained original/hidden wording,
+chart content and separate recipient-contact, bearer and owner-identity fields.
+It does not automatically redact identifiers volunteered inside free-form text.
+The selection separately binds the authoritative package/source/question version,
+current contribution basis, attribution and completion/review state. The model
+cannot set those declarations. All-skipped input produces an empty brief without
+a model request, while Core's missing/skipped state remains intact.
+
+Each brief item requires an exact quote from its cited current source. The
+validator checks source membership, quote matching, supported numeric tokens,
+bounded scan length and a conservative prohibited-output filter. These are
+mechanical checks, not proof of semantic accuracy, medication correctness,
+complete de-identification or clinical usefulness. The original patient words
+must remain separately available, and synthetic model-quality/clinician review
+is still required. The schema has no diagnostic, treatment or billing output.
+
+The adapter uses the existing configured model profile, not a new model or
+service. It requests strict JSON Schema, one completion, `store=False`, a
+45-second read/5-second connect timeout and no SDK retries or tools. Refusal,
+truncation, invalid output, SDK failure and usage-recording failure return a
+content-free error. Every attempted call must report content-free usage through
+the supplied callback; this increment does not pretend that callback is already
+wired into a durable ledger. The existing ledger's required chart-bound agent
+lineage needs a compatible batch path for unlinked Visit Prep before activation.
+
+The expanded owned PostgreSQL/Redis regression passed 686 backend/browser tests
+with 52 existing framework-deprecation warnings, including 41 new synthesis
+checks. The new tests use real patient contribution/owner reads and synthetic
+responses. They cover effective revisions, hidden topics, newly revealed topic
+sources, partial/caregiver attribution, all-skipped input, exact evidence,
+unsupported numbers, output bounds, safe failure and mandatory usage recording.
+One test exercises the actual Azure SDK with a local fake HTTP transport; no
+external request occurs. Scoped Ruff/format and focused Pyright pass. Existing
+frontend source and runtime flags are unchanged.
+
+Immutable encrypted artifact/build storage, source-version revalidation at
+publication, durable usage recording, the recoverable worker and dashboard
+synthesis display remain the next synthesis increments. Bounded patient AI
+clarification and the approved delivery reuse work remain separate work.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
 the patient browser as well as the API.
@@ -227,10 +270,11 @@ gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
-Synthesis, bounded AI clarification, CAB delivery mechanics,
+End-to-end synthesis, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
-Their source inventory is in the approved plan; this manifest does not mark them
-as transferred. Pin selected external revisions and record each adaptation here.
+Their source inventory is in the approved plan. Only the synthesis contract and
+dormant adapter described above are implemented; none of these complete flows
+is marked ready. Pin selected external revisions and record each adaptation here.
 
 Deployment, actual patient messages, cohort activation and workspace retirement
 remain separate release decisions. All current runtime release controls remain
