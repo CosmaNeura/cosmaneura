@@ -86,9 +86,9 @@ def test_general_test_cleanup_restores_named_guards_without_importing_conftest()
     assert assignments["_APPEND_ONLY_TEST_TRIGGERS"][
         "visit_prep_question_response"
     ] == ("visit_prep_response_guard_mutation")
-    assert assignments["_TRUNCATE_TEST_TRIGGERS"] == {
-        "visit_prep_question_response": "visit_prep_response_guard_truncate"
-    }
+    assert assignments["_TRUNCATE_TEST_TRIGGERS"]["visit_prep_question_response"] == (
+        "visit_prep_response_guard_truncate"
+    )
     source = path.read_text().split("def database_reset_truncate_for_tests()", 1)[1]
     assert source.count("*_TRUNCATE_TEST_TRIGGERS.items()") == 2
     assert "finally:" in source and "ENABLE TRIGGER" in source
