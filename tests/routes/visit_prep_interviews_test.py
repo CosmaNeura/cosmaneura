@@ -153,6 +153,10 @@ def test_router_is_mounted_at_exact_public_paths_without_doctor_auth() -> None:
             "POST",
         ),
         "visit_prep_public_complete": ("/external/v1/visit-prep/complete", "POST"),
+        "visit_prep_public_wrong_recipient": (
+            "/external/v1/visit-prep/wrong-recipient",
+            "POST",
+        ),
     }
     public_routes = {
         item.route.name: item
@@ -291,6 +295,7 @@ def test_openapi_declares_bearer_security_and_idempotency_header() -> None:
         ("/external/v1/visit-prep/confirm", "post"),
         ("/external/v1/visit-prep/responses", "post"),
         ("/external/v1/visit-prep/complete", "post"),
+        ("/external/v1/visit-prep/wrong-recipient", "post"),
     ):
         assert paths[path][method]["security"] == [{"VisitPrepBearer": []}]
 
@@ -304,6 +309,28 @@ def test_openapi_declares_bearer_security_and_idempotency_header() -> None:
     )
     assert idempotency["in"] == "header"
     assert idempotency["required"] is True
+
+
+def test_wrong_recipient_has_no_identity_or_incident_response(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        route.interview_service,
+        "report_wrong_recipient",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    rates = _install_happy_seams(monkeypatch)
+    app = FastAPI()
+    app.include_router(route.visit_prep_interviews_api_app)
+    app.dependency_overrides[route.aglobal_session] = lambda: None
+    response = TestClient(app).post(
+        "/external/v1/visit-prep/wrong-recipient",
+        headers={"Authorization": AUTHORIZATION},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"disposition": "reported"}
+    assert calls == [{"access_token": ACCESS_TOKEN}]
+    assert rates[-1]["confirmation"] is True
+    _assert_private(response)
 
 
 @pytest.mark.parametrize(

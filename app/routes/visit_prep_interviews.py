@@ -292,6 +292,10 @@ class VisitPrepPublicMutationResponse(_StrictModel):
     disposition: Literal["confirmed", "accepted", "replayed", "completed"]
 
 
+class VisitPrepWrongRecipientResponse(_StrictModel):
+    disposition: Literal["reported"]
+
+
 class VisitPrepConfirmationRequest(_StrictModel):
     first_name: str = Field(min_length=1, max_length=120, repr=False)
     role: Literal["patient", "caregiver"]
@@ -467,7 +471,9 @@ def require_public_visit_prep_bearer(
             rate_limits.enforce_credential_rate_limits(
                 network_signal=network_signal,
                 access_token=None,
-                confirmation=request.url.path.endswith("/confirm"),
+                confirmation=request.url.path.endswith(
+                    ("/confirm", "/wrong-recipient")
+                ),
             )
         except (
             rate_limits.RateLimited,
@@ -484,7 +490,7 @@ def require_public_visit_prep_bearer(
         rate_limits.enforce_credential_rate_limits(
             network_signal=network_signal,
             access_token=access_token,
-            confirmation=request.url.path.endswith("/confirm"),
+            confirmation=request.url.path.endswith(("/confirm", "/wrong-recipient")),
         )
     except (
         rate_limits.RateLimited,
@@ -654,6 +660,18 @@ def visit_prep_public_complete(
     return _mutation_response(
         _invoke(lambda: interview_service.complete_interview(access_token=access_token))
     )
+
+
+@visit_prep_interviews_api_app.post(
+    "/wrong-recipient",
+    name="visit_prep_public_wrong_recipient",
+    response_model=VisitPrepWrongRecipientResponse,
+)
+def visit_prep_public_wrong_recipient(
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepWrongRecipientResponse:
+    _invoke(lambda: interview_service.report_wrong_recipient(access_token=access_token))
+    return VisitPrepWrongRecipientResponse(disposition="reported")
 
 
 def visit_prep_public_reject_unsupported_method() -> None:

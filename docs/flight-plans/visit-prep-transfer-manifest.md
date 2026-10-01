@@ -30,6 +30,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Patient confirmation and deterministic interview lifecycle | `app/services/visit_prep_interviews.py`; service tests at the pinned source | Split the bounded input/state contract; restore confirmation, conditional topics, answer/skip, resume, replay and explicit completion. Add current seat/organization locks, owner tombstones, strict envelope versions and five-topic revalidation. Keep the independent public gate off. Corrections and AI clarification are not yet implemented. |
 | Public rate limits and interview concurrency checks | `app/services/visit_prep_rate_limits.py`; rate-limit and interview lock tests at the pinned source | Recover fixed-window network, credential and confirmation limits with HMAC-only Redis keys and bounded store timeouts. Adapt lock tests to the current seat factory. Exercise the real Lua script in a disposable networkless Redis container, without connecting Python to shared Redis. |
 | Public interview API | `app/routes/visit_prep_interviews.py`; public route tests at the pinned source | Mount four bearer-authorized operations outside account authentication. Bound request bodies, forbid extra/coerced fields, reject query credentials and slash redirects, return fixed generic errors, and apply no-store/no-referrer through CORS preflights and failures. Suppress exception causes and arbitrary error headers. Two new full-app HTTP tests exercise patient/caregiver five-topic completion, skips, retries, resume and credential rotation using real PostgreSQL and Redis. This is API evidence, not a patient UI demonstration. |
+| Wrong-recipient reporting | New work using the recovered aggregate's existing revocation and quarantine fields | Add a fifth public operation. Revoke unused invitations, quarantine confirmed or answered preparations for review, and retain original encrypted answers and retention terms. Only the same current credential can replay its own acknowledgment; reads and writes stay denied. Real PostgreSQL races cover simultaneous reports, confirmation and answer submission. Full-app HTTP checks cover reports before and after confirmation. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -44,7 +45,7 @@ Each must remain
 below the repository's 2,000-line and 50-file change budget. The integration
 branch retains all increments until the feature is ready for the agreed merge.
 
-Local evidence after public API recovery: 402 backend tests passed, including eight
+Local evidence after wrong-recipient reporting: 418 backend tests passed, including eight
 selected current-Core privacy/middleware checks, and 62
 frontend tests passed across ten files, including the new current-BAA settings
 tests. Generated SDK and full frontend typecheck passed. Backend focused
@@ -55,8 +56,8 @@ Commit-specific final evidence belongs in the corresponding draft PRs.
 
 ## Remaining recovery and integration
 
-Wrong-recipient reporting, patient corrections and the patient UI
-are next. The four public operations are wired and tested but remain gated off. Generate additive
+Patient corrections and the patient UI
+are next. The five public operations are wired and tested but remain gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 

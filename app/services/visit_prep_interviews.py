@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
+from uuid import uuid4
 
 import app.services.visit_prep_access as visit_prep_access
 from app.services.doctor_access import doctor_tombstone
@@ -178,6 +179,7 @@ def _lock_authorized_interview(
     session: Session,
     *,
     access_token: str,
+    allow_wrong_recipient_replay: bool = False,
 ) -> _AuthorizedInterview:
     """Resolve and recheck a bearer using the canonical public lock order."""
 
@@ -289,6 +291,17 @@ def _lock_authorized_interview(
         settings=visit_prep_access.VISIT_PREP_SETTINGS,
         at=event_at,
     )
+    own_wrong_recipient_report = (
+        allow_wrong_recipient_replay
+        and visit_prep.revoked_at is not None
+        and credential.revoked_at is not None
+        and visit_prep.revocation_reason
+        == credential.revocation_reason
+        == "wrong_recipient"
+        and visit_prep.revoked_by_ref
+        == credential.revoked_by_ref
+        == _wrong_recipient_actor(token_hash)
+    )
     if (
         not decision.eligible
         or decision.doctor_id != visit_prep.owner_doctor_id
@@ -300,11 +313,14 @@ def _lock_authorized_interview(
         not in {"organization_roster", "workforce_attestation"}
         or not practice.baa_in_force(at=event_at)
         or not practice.entitled(at=event_at)
-        or visit_prep.revoked_at is not None
-        or visit_prep.lifecycle_state == "misdirected"
+        or (visit_prep.revoked_at is not None and not own_wrong_recipient_report)
+        or (
+            visit_prep.lifecycle_state == "misdirected"
+            and not own_wrong_recipient_report
+        )
         or credential.id != locator.credential_id
         or credential.schedule_generation_id != schedule.id
-        or credential.revoked_at is not None
+        or (credential.revoked_at is not None and not own_wrong_recipient_report)
         or credential.token_format_version != 1
         or credential.issued_at > event_at
         or credential.expires_at <= event_at
@@ -659,6 +675,51 @@ def get_interview(*, access_token: str) -> InterviewState:
         state = _interview_state(session, authorized=authorized)
         _commit(session)
         return state
+
+
+def _wrong_recipient_actor(token_hash: str) -> str:
+    # The verifier is already a context-separated HMAC, never the bearer.
+    # Attribute the report to a credential holder, not a verified patient.
+    return f"visit-prep-recipient-report:{token_hash}"
+
+
+def report_wrong_recipient(*, access_token: str) -> None:
+    """Stop an invitation; quarantine interacted content without deleting it.
+
+    A holder may report misdelivery without passing intended-name confirmation.
+    No contact data, answers, clinical identifiers or incident reference returns
+    to the public caller. Only the same current credential may replay its own
+    report; this exception never permits interview reads or writes.
+    """
+
+    with _visit_prep_session() as session:
+        authorized = _lock_authorized_interview(
+            session, access_token=access_token, allow_wrong_recipient_replay=True
+        )
+        visit_prep = authorized.visit_prep
+        credential = authorized.credential
+        if visit_prep.revoked_at is not None:
+            _commit(session)
+            return
+        actor_ref = _wrong_recipient_actor(credential.token_hash)
+        visit_prep.revoked_at = credential.revoked_at = authorized.event_at
+        visit_prep.revoked_by_ref = credential.revoked_by_ref = actor_ref
+        visit_prep.revocation_reason = credential.revocation_reason = "wrong_recipient"
+        visit_prep.updated_at = authorized.event_at
+        if visit_prep.confirmed_at is not None:
+            visit_prep.lifecycle_state = "misdirected"
+            visit_prep.misdirected_at = authorized.event_at
+            visit_prep.misdirected_reason = "wrong_recipient"
+            visit_prep.misdirected_incident_ref = f"visit-prep-incident:{uuid4()}"
+            visit_prep.misdirected_disposition = "pending_review"
+        session.add(credential)
+        session.add(visit_prep)
+        try:
+            session.flush()
+        except IntegrityError:
+            session.rollback()
+            raise VisitPrepInterviewConflict("Visit Prep state changed") from None
+        _commit(session)
 
 
 def confirm_interview(
