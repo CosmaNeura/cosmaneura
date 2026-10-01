@@ -1,6 +1,6 @@
 // Local synthetic component acceptance only; never part of application routes.
-import { createRequire } from "node:module"
 import { realpathSync } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
