@@ -843,8 +843,8 @@ function QuestionSetSettingsPanel({ canManage }: { canManage: boolean }) {
 export function VisitPrepQuestionSetSettings({
   access,
 }: {
-  access: VisitPrepAccess
+  access: VisitPrepAccess | null | undefined
 }) {
-  if (!access.eligible) return null
+  if (!access?.eligible) return null
   return <QuestionSetSettingsPanel canManage={access.can_manage} />
 }

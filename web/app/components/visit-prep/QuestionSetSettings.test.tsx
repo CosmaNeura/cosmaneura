@@ -170,6 +170,15 @@ beforeEach(() => {
 })
 
 describe("VisitPrepQuestionSetSettings", () => {
+  it.each([null, undefined])("fails closed when access is %s", (access) => {
+    const { container } = render(
+      <VisitPrepQuestionSetSettings access={access} />,
+    )
+
+    expect(container).toBeEmptyDOMElement()
+    expect(api.list).not.toHaveBeenCalled()
+  })
+
   it("does not reveal or request the feature for an ineligible physician", () => {
     render(
       <VisitPrepQuestionSetSettings

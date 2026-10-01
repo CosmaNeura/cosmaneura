@@ -138,6 +138,12 @@ beforeEach(() => {
       has_natmed_subscription: false,
       terminology: "doctor_patient",
       billing_recovery_required: false,
+      visit_prep: {
+        eligible: false,
+        can_manage: false,
+        can_send_email: false,
+        can_send_sms: false,
+      },
     },
     response: new Response(null, { status: 200 }),
   })
