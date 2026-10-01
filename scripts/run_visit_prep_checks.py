@@ -278,6 +278,7 @@ def main() -> int:
                     "tests.visit_prep.isolated_plugin",
                     "-p",
                     "pytest_asyncio.plugin",
+                    "--asyncio-mode=auto",
                     "-q",
                     "--tb=short",
                     *tests,

@@ -45,13 +45,17 @@ from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
 from .routes.companion_session_prep import router as companion_session_prep_router
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
-from .routes.middleware import add_middleware
+from .routes.middleware import add_middleware, allowed_hosts
 from .routes.public_onboarding import public_onboarding_api_app
 from .routes.scribe_capture_deadline import install_capture_boundaries
 from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .routes.visit_prep_interviews import (
+    visit_prep_interviews_api_app,
+    visit_prep_public_network_boundary,
+)
 
 fast_api_args = {}
 
@@ -99,6 +103,7 @@ api_app.include_router(native_capture_api_app, include_in_schema=False)
 api_app.include_router(companion_session_prep_router, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
+api_app.include_router(visit_prep_interviews_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
 api_app.include_router(zoom_auth_app)
@@ -123,6 +128,10 @@ def register_public_onboarding_routes(app) -> bool:
 register_public_onboarding_routes(api_app)
 
 add_middleware(api_app)
+api_app.state.visit_prep_allowed_origins = frozenset(allowed_hosts(True))
+# Include preflights and framework errors in the public network/privacy boundary.
+# The independent public gate remains fail-closed in the interview service.
+api_app.middleware("http")(visit_prep_public_network_boundary)
 # Final-send budgets must wrap the full middleware chain, including no-store,
 # logging and session response transforms; route-level sends are intermediate.
 install_companion_records(api_app)
