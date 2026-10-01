@@ -1,7 +1,6 @@
-"""Dormant owner-authorized publication/read of immutable patient-report briefs.
+"""Owner-authorized publication/read of immutable patient-report briefs.
 
-No model caller, route or worker is mounted here. A future worker must also
-prove its live build lease and durable usage recording before using publication.
+The worker additionally proves its live lease and durable usage recording.
 Patient sources and authority are reacquired in the same transaction as the
 artifact and audit; caller-supplied sources are never publication authority.
 """
@@ -154,52 +153,68 @@ def publish_visit_prep_synthesis(
             expected_clerk_subject=expected_clerk_subject,
             visit_prep_id=visit_prep_id,
         )
-        current = select_patient_sources(locked.package)
-        if current != expected_selection:
-            raise VisitPrepSynthesisStale()
-        validate_generated_brief(prepared, current)
-        existing = _current_artifact(
-            session, prep_id=visit_prep_id, source_version=current.source_version
-        )
-        if existing is not None:
-            _decoded_current(existing, locked, current)
-            receipt = VisitPrepPublicationReceipt(
-                existing.id, existing.version, existing.source_version, "replayed"
-            )
-        else:
-            predecessor = session.exec(
-                select(VisitPrepSynthesisArtifact)
-                .where(VisitPrepSynthesisArtifact.visit_prep_id == visit_prep_id)
-                .order_by(cast(Any, VisitPrepSynthesisArtifact.version).desc())
-                .limit(1)
-            ).first()
-            artifact = VisitPrepSynthesisArtifact(
-                visit_prep_id=visit_prep_id,
-                owner_practice_member_id=locked.owner.id,
-                question_set_version_id=locked.preparation.question_set_version_id,
-                schedule_generation_id=locked.schedule.id,
-                credential_generation=locked.credential.generation,
-                version=predecessor.version + 1 if predecessor else 1,
-                source_version=current.source_version,
-                basis_response_count=current.basis.original_response_count,
-                basis_event_sequence=current.basis.event_sequence,
-                actor_role=current.actor_role,
-                original_interview_completed=current.original_interview_completed,
-                current_answers_complete=current.current_answers_complete,
-                current_answers_reviewed=current.current_answers_reviewed,
-                generator_version=GENERATOR_VERSION,
-                prompt_version=PROMPT_VERSION,
-                model_profile=MODEL_PROFILE,
-                payload_ciphertext=encrypt_synthesis_payload(prepared, current),
-                payload_format_version=1,
-            )
-            session.add(artifact)
-            session.flush()
-            receipt = VisitPrepPublicationReceipt(
-                artifact.id, artifact.version, artifact.source_version, "published"
-            )
+        receipt = _publish_locked(session, locked, expected_selection, prepared)
         _finish_audit(session, locked, "synthesis_published")
         return receipt
+
+
+def _publish_locked(
+    session: Session,
+    locked: _LockedPackage,
+    expected_selection: VisitPrepSynthesisSelection,
+    prepared: VisitPrepPreparedBrief,
+) -> VisitPrepPublicationReceipt:
+    """Stage an artifact without committing; the caller owns the final fence.
+
+    Both owner publication and the worker use the same source comparison and
+    first-valid-artifact rule. The worker commits this write, ready job state
+    and audit together, not through a second publication transaction.
+    """
+    validate_selection(expected_selection)
+    current = select_patient_sources(locked.package)
+    if current != expected_selection:
+        raise VisitPrepSynthesisStale()
+    validate_generated_brief(prepared, current)
+    prep_id = locked.preparation.id
+    existing = _current_artifact(
+        session, prep_id=prep_id, source_version=current.source_version
+    )
+    if existing is not None:
+        _decoded_current(existing, locked, current)
+        return VisitPrepPublicationReceipt(
+            existing.id, existing.version, existing.source_version, "replayed"
+        )
+    predecessor = session.exec(
+        select(VisitPrepSynthesisArtifact)
+        .where(VisitPrepSynthesisArtifact.visit_prep_id == prep_id)
+        .order_by(cast(Any, VisitPrepSynthesisArtifact.version).desc())
+        .limit(1)
+    ).first()
+    artifact = VisitPrepSynthesisArtifact(
+        visit_prep_id=prep_id,
+        owner_practice_member_id=locked.owner.id,
+        question_set_version_id=locked.preparation.question_set_version_id,
+        schedule_generation_id=locked.schedule.id,
+        credential_generation=locked.credential.generation,
+        version=predecessor.version + 1 if predecessor else 1,
+        source_version=current.source_version,
+        basis_response_count=current.basis.original_response_count,
+        basis_event_sequence=current.basis.event_sequence,
+        actor_role=current.actor_role,
+        original_interview_completed=current.original_interview_completed,
+        current_answers_complete=current.current_answers_complete,
+        current_answers_reviewed=current.current_answers_reviewed,
+        generator_version=GENERATOR_VERSION,
+        prompt_version=PROMPT_VERSION,
+        model_profile=MODEL_PROFILE,
+        payload_ciphertext=encrypt_synthesis_payload(prepared, current),
+        payload_format_version=1,
+    )
+    session.add(artifact)
+    session.flush()
+    return VisitPrepPublicationReceipt(
+        artifact.id, artifact.version, artifact.source_version, "published"
+    )
 
 
 def get_visit_prep_synthesis(

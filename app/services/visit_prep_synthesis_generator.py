@@ -1,8 +1,8 @@
 """Source-only batch synthesis using Core's existing bounded Azure client.
 
-Dormant adapter: no route or job invokes it yet. The caller must supply the
-central-ledger usage recorder; there is no unmetered default. A worker must
-recheck source version and current authority before publishing this output.
+The gated worker supplies the central-ledger usage recorder; there is no
+unmetered default. It rechecks source version, authority and its lease before
+publishing this output. Patient conversational AI belongs in Sovereign.
 """
 
 from __future__ import annotations

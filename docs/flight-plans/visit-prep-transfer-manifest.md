@@ -59,6 +59,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Owner-authorized synthesis publication and read domain | Current locked Visit Prep owner/source package and explicit artifact codec; Session Prep retry/publication pattern; new implementation | Share one transaction-bound package loader. Reacquire current owner authority, exact source hash, complete selected wording, attribution, review and lineage before publishing. Deduplicate the first valid source/profile artifact without overwrite. Read only the current artifact and return value-free missing/stale status for prior output without decrypting it. Commit content-free Core audits before any result. No route, build lease, worker or model call is mounted. |
 | Durable synthesis queue and source-selection leases | Current Session Prep short-lease and bounded-retry pattern; Visit Prep owner/package authorization and encryption | Generate additive revision `2f87498bb9fa` after `1cc41ced28aa`. Keep one build per preparation/profile with an encrypted, context-bound original requester, source version, epoch, three-attempt limit and 90-second lease. Recheck owner access, identity, current answers and the lease before returning model sources. Superseded work is requeued under a new epoch; stale workers cannot release a newer claim. No model caller, publication worker or API is mounted. |
 | Central usage accounting for chart-free synthesis | Existing Core `AgentModelUsageEvent` ledger and locked Visit Prep source/lease loader | Generate revision `54bedaad381a` after `2f87498bb9fa`. Add an explicit batch origin with canonical preparation/owner references, without creating a person, chart, authority identity or conversation. Commit one immutable call intent per fenced attempt before model work and append an exact-replay result afterward. Preserve the old agent-turn authorization and required lineage. No worker or model call is mounted. |
+| Recoverable synthesis worker and atomic publication | Current Session Prep queue-drain and metadata-only job patterns; Visit Prep queue, generator, publication and central ledger | Connect source selection, committed call intent, bounded generation and durable result recording. Reacquire exact current sources, owner authority and live claim before committing artifact, ready job and Core audit together. Register argument-free, default-off drain and health tasks with no Celery autoretries. Report expired unmatched intents as uncertain without fabricating results. No provider synthesis API or dashboard display is mounted yet. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -360,11 +361,42 @@ artifacts and jobs; the unchanged agent service still records and replays after
 the expand. Final commit-specific test totals are recorded in the draft PR.
 No frontend source, model adapter or release control changes in this increment.
 
-Lease-checked atomic publication, the recoverable worker and dashboard synthesis
-display remain the next synthesis increments. A worker
-must enforce its current lease and durable central-ledger recording before publication;
-these domain functions do not substitute for those conditions. Bounded patient AI
-clarification and the approved delivery reuse work remain separate work.
+The recoverable worker now connects the existing generator to the central ledger
+and atomic publication. The model call runs after the intent commits and without
+owner or patient database locks. Publication requires the immutable successful
+result for that exact source, lease, epoch and attempt; merely returning from a
+callback cannot bypass the database proof. Recorded unavailable token counts
+remain explicitly unavailable, while a missing result denies publication.
+The worker rechecks current sources and authority, then commits the encrypted
+brief, ready job state and content-free audit in one transaction. It checks the
+lease and time-dependent authority again after the audit flush.
+
+Corrections or review during generation retain accounting for the attempted
+call but requeue current sources without rebasing its output. Revocation,
+quarantine or withdrawn authority denies publication. A lost publication
+acknowledgment leaves one durable artifact and ready job; the next drain does
+not repeat the model call. Expired leases recover through the existing
+three-attempt queue policy, not Celery's automatic retries. Expired unmatched
+usage intents remain uncertain even if a later attempt finishes. Metadata-only
+health reads expose that uncertainty; they do not guess results or token counts.
+
+Argument-free drain and health tasks are registered in Core's existing scheduler
+at five-second and sixty-second intervals. Both return before accessing storage
+when the existing feature flag is disabled or configuration is invalid. No new
+environment setting, deployment, channel activation or live model request is
+introduced. Provider synthesis API/display, bounded patient AI clarification
+and the approved delivery reuse work remain separate implementation work.
+
+The focused worker/publication selection passed 95 synthetic checks, including
+four independent-connection worker scenarios and the existing Celery privacy
+checks. They prove unlocked model work, concurrent publication exclusion,
+atomic artifact/job/audit visibility, correction blocking only during publication,
+and lost-acknowledgment recovery. Other checks cover chart-free partial/caregiver
+input, all-skipped completion without a model call, explicit unavailable tokens,
+refusal/truncation/invalid output, bounded attempts, exact durable usage proof,
+in-flight authority/source changes, rollback and final lease/access expiry.
+Scoped lint, formatting and implementation typechecks passed. Final expanded
+regression totals and exact tested revision belong in the draft review increment.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
 the patient browser as well as the API.
@@ -376,12 +408,13 @@ gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
-End-to-end synthesis, bounded AI clarification, CAB delivery mechanics,
+Provider synthesis API/display, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
-Their source inventory is in the approved plan. Only the synthesis contract,
-dormant adapter, artifact expand, owner publication/read domain and durable queue
-described above are implemented; none of these complete flows
-is marked ready. Pin selected external revisions and record each adaptation here.
+Their source inventory is in the approved plan. The synthesis contract, adapter,
+artifact storage, owner publication/read domain, durable queue, central accounting
+and gated worker described above are implemented. This does not yet constitute
+a complete provider-facing synthesis journey or clinical-quality qualification.
+Pin selected external revisions and record each adaptation here.
 
 Deployment, actual patient messages, cohort activation and workspace retirement
 remain separate release decisions. All current runtime release controls remain

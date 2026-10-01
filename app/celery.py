@@ -531,6 +531,14 @@ def capture_worker_stop(sender, **kwargs):
 # }
 
 celery_app.conf.beat_schedule = {
+    "visit_prep_synthesis": {
+        "task": "app.jobs.visit_prep_synthesis.perform",
+        "schedule": 5.0,
+    },
+    "visit_prep_synthesis_maintenance": {
+        "task": "app.jobs.visit_prep_synthesis.maintain",
+        "schedule": 60.0,
+    },
     "session_prep_maintenance": {
         "task": "app.jobs.session_prep.maintain",
         "schedule": 60.0,
