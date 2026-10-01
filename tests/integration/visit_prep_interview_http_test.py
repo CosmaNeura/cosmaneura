@@ -12,6 +12,7 @@ from app.services.visit_preps import rotate_visit_prep_credential
 from app.utils.encryption import decrypt_value
 
 from activemodel.session_manager import get_session
+from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_response import VisitPrepQuestionResponse
 from sqlmodel import select
 
@@ -110,3 +111,40 @@ def test_patient_http_journey_uses_real_domain_sessions_and_rate_limits(
     assert "My original synthetic story, in my own words." in decrypt_value(
         story.answer_ciphertext
     )
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_wrong_recipient_http_report_stops_disclosure_and_replays_only_acknowledgment(
+    monkeypatch, owned_rate_limit_redis, confirmed
+):
+    fixture = _fixture(monkeypatch, "http-misdelivery")
+    monkeypatch.setattr(
+        route.rate_limits, "get_rate_limit_redis", lambda: owned_rate_limit_redis
+    )
+    client = TestClient(api_app, base_url=allowed_hosts(with_scheme=True)[0])
+    headers = {"Authorization": f"Bearer {fixture.access_token}"}
+    if confirmed:
+        response = client.post(
+            "/external/v1/visit-prep/confirm",
+            headers=headers,
+            json={
+                "first_name": "Jos\N{LATIN SMALL LETTER E WITH ACUTE}",
+                "role": "patient",
+            },
+        )
+        assert response.status_code == 200
+    for _ in range(2):
+        report = client.post("/external/v1/visit-prep/wrong-recipient", headers=headers)
+        assert report.status_code == 200
+        assert report.json() == {"disposition": "reported"}
+        assert "no-store" in report.headers["Cache-Control"]
+        assert report.headers["Referrer-Policy"] == "no-referrer"
+    resumed = client.get("/external/v1/visit-prep", headers=headers)
+    assert resumed.status_code == 404
+    assert resumed.json() == {"detail": "Visit Prep link is unavailable."}
+    with get_session() as session:
+        prep = session.exec(
+            select(VisitPrep).where(VisitPrep.id == fixture.prep_id)
+        ).one()
+        assert prep.revoked_at is not None
+        assert prep.lifecycle_state == ("misdirected" if confirmed else "invited")
