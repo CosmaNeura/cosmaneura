@@ -30,6 +30,7 @@ export default [
       ]),
     ]),
     route("/settings", "routes/settings.tsx"),
+    route("/visit-preps", "routes/visit-preps.tsx"),
   ]),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),
