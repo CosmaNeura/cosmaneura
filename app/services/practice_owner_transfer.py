@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.services.doctor_access import doctor_tombstone
+from app.services.practice_owner_identity_contract import OwnerIdentityAbsence
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -89,6 +90,8 @@ def transfer_practice_owner(
     operator_ref: str,
     reason: str,
     verify_primary_email: Callable[[str], str | None],
+    recover_orphaned_owner: bool = False,
+    verify_owner_absence: Callable[[str], OwnerIdentityAbsence | None] | None = None,
     apply: bool = False,
     confirm_plan_sha256: str | None = None,
     now: datetime | None = None,
@@ -99,6 +102,8 @@ def transfer_practice_owner(
     afresh after locks. No authority is inferred from an old owner's product
     access: expired BAA/billing can be the reason operator repair is needed.
     Explicit Doctor, pilot-grant and membership tombstones still deny repair.
+    Orphan recovery is opt-in and requires a current, provenance-bound absence
+    proof. It never treats an unavailable or unverified identity as absent.
     """
 
     for subject in (expected_owner_subject, new_owner_subject):
@@ -107,6 +112,11 @@ def transfer_practice_owner(
             "exact Clerk subjects are required",
         )
     _require(expected_owner_subject != new_owner_subject, "identities must differ")
+    _require(type(recover_orphaned_owner) is bool, "recovery mode must be explicit")
+    _require(
+        not recover_orphaned_owner or callable(verify_owner_absence),
+        "orphan recovery requires the configured absence verifier",
+    )
     for value, pattern in (
         (transfer_ref, r"[A-Za-z0-9][A-Za-z0-9._:-]{7,95}"),
         (operator_ref, r"[A-Za-z0-9][A-Za-z0-9._:/-]{2,127}"),
@@ -187,10 +197,34 @@ def transfer_practice_owner(
                 .limit(2)
             ).all()
             _require(len(owners) == 1, "the exact practice must have one owner")
-            # Each lookup must be current, exact-subject and verified. Neither a
-            # stored email nor another account's identity can authorize a transfer.
+            # Each lookup is current and bound to the exact subject. The default
+            # path continues to require both live verified primary emails.
+            absence = None
+            if recover_orphaned_owner:
+                assert verify_owner_absence is not None
+                try:
+                    absence = verify_owner_absence(old.clerk_id)
+                except Exception:
+                    raise PracticeOwnerTransferError(
+                        "the prior owner identity absence could not be proven"
+                    ) from None
+                _require(
+                    isinstance(absence, OwnerIdentityAbsence)
+                    and absence.subject == old.clerk_id
+                    and absence.evidence_mode == "clerk_404_resource_not_found"
+                    and isinstance(absence.environment, str)
+                    and absence.environment
+                    in {"development", "test", "staging", "production"}
+                    and isinstance(absence.issuer_sha256, str)
+                    and re.fullmatch(r"[0-9a-f]{64}", absence.issuer_sha256),
+                    "the prior owner identity absence could not be proven",
+                )
             try:
-                old_email = _email(verify_primary_email(old.clerk_id))
+                old_email = _email(
+                    old.email
+                    if recover_orphaned_owner
+                    else verify_primary_email(old.clerk_id)
+                )
                 new_email = _email(verify_primary_email(new.clerk_id))
             except Exception:
                 raise PracticeOwnerTransferError(
@@ -213,6 +247,12 @@ def transfer_practice_owner(
                 "new_subject": new.clerk_id,
                 "reason": reason,
             }
+            if absence is not None:
+                metadata.update(
+                    old_identity=absence.evidence_mode,
+                    env=absence.environment,
+                    issuer_sha256=absence.issuer_sha256,
+                )
             audit_reason = _canonical(metadata)
             _require(
                 len(audit_reason) <= 512, "transfer metadata exceeds the audit limit"
@@ -296,6 +336,14 @@ def transfer_practice_owner(
                 ],
                 "verified_email_binding_sha256": _digest([old_email, new_email]),
             }
+            if absence is not None:
+                # The old email is retained local metadata, not a verified live
+                # identity. Keep this evidence distinct from ordinary transfers.
+                payload["schema_version"] = 2
+                del payload["verified_email_binding_sha256"]
+                payload["recovery_email_binding_sha256"] = _digest(
+                    {"stored_previous": old_email, "verified_new": new_email}
+                )
             digest = _digest(payload)
             if not apply:
                 return result(digest)

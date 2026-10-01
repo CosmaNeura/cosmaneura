@@ -1673,12 +1673,18 @@ def transfer_practice_owner_command(
     apply: bool = typer.Option(
         False, "--apply", help="Apply the reviewed ownership transfer."
     ),
+    recover_orphaned_owner: bool = typer.Option(
+        False,
+        "--recover-orphaned-owner",
+        help="Require current exact not-found proof for the prior owner's sign-in.",
+    ),
 ) -> None:
     """Preview one owner correction; retain the former owner as workforce.
 
     No member is created, moved, revoked or re-attested. BAA, billing, provider
     bindings, account roles, clinical records and access grants remain intact.
     """
+    from app.configuration.clerk import prove_absent_owner_identity
     from app.services.clerk_identity import verified_primary_email
     from app.services.practice_owner_transfer import (
         PracticeOwnerTransferError,
@@ -1703,6 +1709,10 @@ def transfer_practice_owner_command(
                 operator_ref=operator_ref,
                 reason=reason,
                 verify_primary_email=verified_primary_email,
+                recover_orphaned_owner=recover_orphaned_owner,
+                verify_owner_absence=(
+                    prove_absent_owner_identity if recover_orphaned_owner else None
+                ),
                 apply=apply,
                 confirm_plan_sha256=confirm_plan_sha256,
             )

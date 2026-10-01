@@ -7,12 +7,14 @@ this test's synthetic rows, even when the service commits its own savepoint.
 import hashlib
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
+from app.services.practice_owner_identity_contract import OwnerIdentityAbsence
 from app.services.practice_owner_transfer import (
     PracticeOwnerTransferError,
     transfer_practice_owner,
@@ -80,14 +82,14 @@ def case():
 def _seed(session):
     suffix = uuid4().hex
     old = Doctor(
-        clerk_id=f"user_transferOld{suffix}",
+        clerk_id=f"user_O{suffix}",
         email=f"old-{suffix}@synthetic.invalid",
         biography=None,
         last_active_at=NOW,
         onboarding_completed_at=NOW,
     )
     new = Doctor(
-        clerk_id=f"user_transferNew{suffix}",
+        clerk_id=f"user_N{suffix}",
         email=f"new-{suffix}@synthetic.invalid",
         biography=None,
         last_active_at=NOW,
@@ -149,6 +151,17 @@ def _seed(session):
 
 def call(f, **overrides):
     return transfer_practice_owner(**(f.args | overrides))
+
+
+def orphan_args(f, proof=None):
+    proof = proof or OwnerIdentityAbsence(f.old.clerk_id, "staging", "a" * 64)
+
+    def prove(subject):
+        assert subject == f.old.clerk_id
+        assert practice_seat_lock_held(f.session, f.practice.id)
+        return proof
+
+    return dict(recover_orphaned_owner=True, verify_owner_absence=prove)
 
 
 def audits(f):
@@ -323,6 +336,7 @@ def test_changed_owner_state_refuses_stale_apply_or_receipt_replay(
     assert snapshot(f) == before and len(audits(f)) == int(already_applied)
 
 
+@pytest.mark.parametrize("recovery", [False, True])
 @pytest.mark.parametrize(
     "guard",
     [
@@ -333,8 +347,8 @@ def test_changed_owner_state_refuses_stale_apply_or_receipt_replay(
         "duplicate_owner",
     ],
 )
-def test_exact_practice_and_sole_owner_guards(case, guard):
-    f, overrides = case, {}
+def test_exact_practice_and_sole_owner_guards(case, guard, recovery):
+    f, overrides = case, orphan_args(case) if recovery else {}
     if guard == "same_identity":
         overrides["new_owner_subject"] = f.old.clerk_id
     elif guard == "missing_owner":
@@ -359,12 +373,13 @@ def test_exact_practice_and_sole_owner_guards(case, guard):
     assert_unchanged(f, before)
 
 
+@pytest.mark.parametrize("recovery", [False, True])
 @pytest.mark.parametrize("side", ["old", "new"])
 @pytest.mark.parametrize(
     "denial", ["disabled", "permanent", "ended", "inactive", "ending"]
 )
 def test_disabled_or_revoked_accounts_and_members_never_gain_owner_authority(
-    case, side, denial
+    case, side, denial, recovery
 ):
     f = case
     doctor = getattr(f, side)
@@ -390,12 +405,13 @@ def test_disabled_or_revoked_accounts_and_members_never_gain_owner_authority(
         )
     before = snapshot(f)
     with pytest.raises(PracticeOwnerTransferError):
-        call(f)
+        call(f, **(orphan_args(f) if recovery else {}))
     assert_unchanged(f, before)
 
 
+@pytest.mark.parametrize("recovery", [False, True])
 @pytest.mark.parametrize("side", ["old", "new"])
-def test_revoked_pilot_grant_remains_a_hard_denial(case, side):
+def test_revoked_pilot_grant_remains_a_hard_denial(case, side, recovery):
     f = case
     doctor = getattr(f, side)
     f.session.add(
@@ -421,12 +437,13 @@ def test_revoked_pilot_grant_remains_a_hard_denial(case, side):
     f.session.commit()
     before = snapshot(f)
     with pytest.raises(PracticeOwnerTransferError):
-        call(f)
+        call(f, **(orphan_args(f) if recovery else {}))
     assert_unchanged(f, before)
 
 
+@pytest.mark.parametrize("recovery", [False, True])
 @pytest.mark.parametrize("managed", ["organization", "negotiated_baa"])
-def test_managed_practice_is_not_changed_by_ordinary_transfer(case, managed):
+def test_managed_practice_is_not_changed_by_ordinary_transfer(case, managed, recovery):
     f = case
     if managed == "organization":
         domain = uuid4().hex + ".synthetic.invalid"
@@ -456,7 +473,7 @@ def test_managed_practice_is_not_changed_by_ordinary_transfer(case, managed):
         )
     before = snapshot(f)
     with pytest.raises(PracticeOwnerTransferError):
-        call(f)
+        call(f, **(orphan_args(f) if recovery else {}))
     assert_unchanged(f, before)
 
 
@@ -509,9 +526,13 @@ def test_apply_rechecks_live_email_while_practice_lock_is_held(case):
     assert_unchanged(f, before)
 
 
-def test_failed_commit_rolls_back_roles_and_the_flushed_audit(case, monkeypatch):
+@pytest.mark.parametrize("recovery", [False, True])
+def test_failed_commit_rolls_back_roles_and_the_flushed_audit(
+    case, monkeypatch, recovery
+):
     f = case
-    plan, before = call(f), snapshot(f)
+    options = orphan_args(f) if recovery else {}
+    plan, before = call(f, **options), snapshot(f)
 
     def fail_commit():
         f.session.flush()
@@ -519,13 +540,15 @@ def test_failed_commit_rolls_back_roles_and_the_flushed_audit(case, monkeypatch)
 
     monkeypatch.setattr(f.session, "commit", fail_commit)
     with pytest.raises((PracticeOwnerTransferError, SQLAlchemyError)):
-        call(f, apply=True, confirm_plan_sha256=plan.plan_sha256)
+        call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
     assert_unchanged(f, before)
 
 
-def test_audit_insert_failure_rolls_back_both_roles(case):
+@pytest.mark.parametrize("recovery", [False, True])
+def test_audit_insert_failure_rolls_back_both_roles(case, recovery):
     f = case
-    plan, before = call(f), snapshot(f)
+    options = orphan_args(f) if recovery else {}
+    plan, before = call(f, **options), snapshot(f)
 
     def invalid_audit(_mapper, _connection, audit):
         if audit.practice_id == f.practice.id:
@@ -534,7 +557,159 @@ def test_audit_insert_failure_rolls_back_both_roles(case):
     event.listen(PracticeAccessAudit, "before_insert", invalid_audit)
     try:
         with pytest.raises((PracticeOwnerTransferError, SQLAlchemyError)):
-            call(f, apply=True, confirm_plan_sha256=plan.plan_sha256)
+            call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
     finally:
         event.remove(PracticeAccessAudit, "before_insert", invalid_audit)
+    assert_unchanged(f, before)
+
+
+def test_recovery_requires_explicit_opt_in_and_never_weakens_normal_verification(case):
+    f, calls = case, []
+    f.emails[f.old.clerk_id] = None
+    before = snapshot(f)
+    with pytest.raises(PracticeOwnerTransferError, match="live primary"):
+        call(f, verify_owner_absence=lambda subject: calls.append(subject))
+    assert calls == []
+    with pytest.raises(PracticeOwnerTransferError, match="configured absence verifier"):
+        call(f, recover_orphaned_owner=True)
+    assert_unchanged(f, before)
+
+
+def test_recovery_preview_apply_and_replay_preserve_records_and_bind_evidence(case):
+    f = case
+    options = orphan_args(f)
+    seen = []
+
+    def verify_new_only(subject):
+        assert subject == f.new.clerk_id
+        assert practice_seat_lock_held(f.session, f.practice.id)
+        seen.append(subject)
+        return f.new.email
+
+    options["verify_primary_email"] = verify_new_only
+    before = snapshot(f)
+    plan = call(f, **options)
+    assert call(f, **options).plan_sha256 == plan.plan_sha256
+    assert_unchanged(f, before)
+    applied = call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    expected = [dict(row) for row in before]
+    expected[3]["role"], expected[4]["role"] = "workforce", "owner"
+    assert snapshot(f) == expected
+    [audit] = audits(f)
+    metadata = json.loads(audit.reason)
+    assert metadata["old_identity"] == "clerk_404_resource_not_found"
+    assert metadata["env"] == "staging" and metadata["issuer_sha256"] == "a" * 64
+    assert len(audit.reason) <= 512
+    assert f.old.email not in audit.reason and f.new.email not in audit.reason
+    replay = call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    assert replay.already_applied and replay.audit_id == applied.audit_id
+    assert len(seen) == 4 and len(audits(f)) == 1 and snapshot(f) == expected
+
+
+@pytest.mark.parametrize(
+    "proof_kind",
+    [
+        "none",
+        "bool",
+        "wrong_subject",
+        "wrong_mode",
+        "bad_issuer",
+        "bad_environment",
+        "exception",
+    ],
+)
+def test_recovery_requires_a_typed_exact_bound_absence_proof(case, proof_kind):
+    f = case
+    proof = OwnerIdentityAbsence(f.old.clerk_id, "staging", "a" * 64)
+    if proof_kind == "none":
+        proof = None
+    elif proof_kind == "bool":
+        proof = True
+    elif proof_kind == "wrong_subject":
+        proof = replace(proof, subject=f.new.clerk_id)
+    elif proof_kind == "wrong_mode":
+        proof = replace(proof, evidence_mode="unverified")
+    elif proof_kind == "bad_issuer":
+        proof = replace(proof, issuer_sha256="not-a-hash")
+    elif proof_kind == "bad_environment":
+        proof = replace(proof, environment="unscoped")
+
+    def absent(_subject):
+        if proof_kind == "exception":
+            raise RuntimeError("private provider detail")
+        return proof
+
+    before = snapshot(f)
+    with pytest.raises(PracticeOwnerTransferError, match="absence could not be proven"):
+        call(f, recover_orphaned_owner=True, verify_owner_absence=absent)
+    assert_unchanged(f, before)
+
+
+@pytest.mark.parametrize("applied", [False, True])
+@pytest.mark.parametrize(
+    "drift", ["issuer", "environment", "identity_reappears", "mode", "new_email"]
+)
+def test_recovery_apply_and_replay_refuse_identity_or_mode_drift(case, applied, drift):
+    f = case
+    options = orphan_args(f)
+    plan = call(f, **options)
+    if applied:
+        call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    before = snapshot(f)
+    if drift == "issuer":
+        options = orphan_args(
+            f, OwnerIdentityAbsence(f.old.clerk_id, "staging", "b" * 64)
+        )
+    elif drift == "environment":
+        options = orphan_args(
+            f, OwnerIdentityAbsence(f.old.clerk_id, "production", "a" * 64)
+        )
+    elif drift == "identity_reappears":
+        options["verify_owner_absence"] = lambda _subject: None
+    elif drift == "mode":
+        options = {}
+    else:
+        f.emails[f.new.clerk_id] = None
+    with pytest.raises(PracticeOwnerTransferError):
+        call(f, **options, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    assert snapshot(f) == before and len(audits(f)) == int(applied)
+
+
+@pytest.mark.parametrize("applied", [False, True])
+def test_normal_plan_or_receipt_cannot_be_reused_as_orphan_recovery(case, applied):
+    f = case
+    plan = call(f)
+    if applied:
+        call(f, apply=True, confirm_plan_sha256=plan.plan_sha256)
+    before = snapshot(f)
+    with pytest.raises(PracticeOwnerTransferError):
+        call(f, **orphan_args(f), apply=True, confirm_plan_sha256=plan.plan_sha256)
+    assert snapshot(f) == before and len(audits(f)) == int(applied)
+
+
+@pytest.mark.parametrize(
+    "denial",
+    [
+        "new_unverified",
+        "stored_new_mismatch",
+        "confirmation_mismatch",
+        "same_stored_email",
+        "extra_owner",
+    ],
+)
+def test_recovery_retains_new_owner_identity_and_sole_owner_guards(case, denial):
+    f, options = case, orphan_args(case)
+    if denial == "new_unverified":
+        f.emails[f.new.clerk_id] = None
+    elif denial == "stored_new_mismatch":
+        f.emails[f.new.clerk_id] = "different@synthetic.invalid"
+    elif denial == "confirmation_mismatch":
+        options["new_owner_email_confirmation"] = "different@synthetic.invalid"
+    elif denial == "same_stored_email":
+        change(f, f.old, email=f.new.email.upper())
+    else:
+        change(f, f.target, role="owner")
+    before = snapshot(f)
+    with pytest.raises(PracticeOwnerTransferError):
+        call(f, **options)
     assert_unchanged(f, before)
