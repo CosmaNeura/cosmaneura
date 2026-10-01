@@ -14,12 +14,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from app.services.doctor_access_row_ownership import DoctorAccessRowOwnership
 from app.services.organization_access import member_authorization_basis
 from app.services.pilot_access_grandfather import (
     active_pilot_access_grant,
     revoked_pilot_access_grant,
 )
 
+from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import (
     MemberAccessState,
@@ -27,6 +29,7 @@ from app.models.practice import (
     PracticeMember,
     member_access_state,
 )
+from sqlmodel import col, select
 
 DoctorAccessBasis = Literal[
     "pilot_grant",
@@ -88,10 +91,17 @@ def _has_valid_legacy_pilot_access(
     return doctor.onboarding_completed_at is not None and has_active_grant
 
 
-def doctor_tombstone(doctor: Doctor) -> DoctorAccessDenialReason | None:
+def doctor_tombstone(
+    doctor: Doctor, *, _ownership: DoctorAccessRowOwnership | None = None
+) -> DoctorAccessDenialReason | None:
     if doctor.deleted_at is not None:
         return "doctor_disabled"
-    if revoked_pilot_access_grant(doctor.clerk_id) is not None:
+    revoked = (
+        revoked_pilot_access_grant(doctor.clerk_id, _ownership=_ownership)
+        if _ownership is not None
+        else revoked_pilot_access_grant(doctor.clerk_id)
+    )
+    if revoked is not None:
         return "pilot_grant_revoked"
     return None
 
@@ -114,11 +124,16 @@ def _decide(
     *,
     require_entitlement: bool,
     at: datetime,
+    _ownership: DoctorAccessRowOwnership | None = None,
 ) -> DoctorAccessDecision:
     """The access rules for a Doctor whose own tombstones are already cleared."""
 
     baa_in_force = bool(practice and practice.baa_in_force(at=at))
-    pilot_grant = active_pilot_access_grant(doctor, at=at)
+    pilot_grant = (
+        active_pilot_access_grant(doctor, at=at, _ownership=_ownership)
+        if _ownership is not None
+        else active_pilot_access_grant(doctor, at=at)
+    )
     pilot_entitlement_in_force = bool(
         practice and pilot_grant and pilot_grant.practice_id_snapshot == practice.id
     )
@@ -182,6 +197,8 @@ def resolve_doctor_access(
     *,
     require_entitlement: bool = True,
     at: datetime | None = None,
+    _ownership: DoctorAccessRowOwnership | None = None,
+    _practice_id: object = None,
 ) -> DoctorAccessDecision:
     """Resolve effective product access without mutating identity or tenancy.
 
@@ -193,18 +210,45 @@ def resolve_doctor_access(
     through the normal practice/member authorization rules.
     """
 
-    tombstone = doctor_tombstone(doctor)
+    # Only the explicit lock-taking provider caller supplies these private
+    # inputs. A mismatched link/practice or expired proof uses the original SQL.
+    if not isinstance(_ownership, DoctorAccessRowOwnership):
+        _ownership = None
+    if _ownership is not None:
+        with get_session() as session:
+            if not _ownership.matches(session, doctor, practice_id=_practice_id):
+                _ownership = None
+    tombstone = doctor_tombstone(doctor, _ownership=_ownership)
     if tombstone is not None:
         return _denied(tombstone)
 
-    member = PracticeMember.get(doctor_id=doctor.id)
-    practice = Practice.get(id=member.practice_id) if member is not None else None
+    if _ownership is None:
+        member = PracticeMember.get(doctor_id=doctor.id)
+        practice = Practice.get(id=member.practice_id) if member is not None else None
+    else:
+        with get_session() as session:
+            if _ownership.matches(session, doctor, practice_id=_practice_id):
+                current = session.exec(
+                    select(PracticeMember, Practice)
+                    .outerjoin(
+                        Practice, col(Practice.id) == col(PracticeMember.practice_id)
+                    )
+                    .where(PracticeMember.doctor_id == doctor.id)
+                ).first()
+                member, practice = current if current is not None else (None, None)
+            else:
+                _ownership = None
+                member = PracticeMember.get(doctor_id=doctor.id)
+                practice = (
+                    Practice.get(id=member.practice_id) if member is not None else None
+                )
     return _decide(
         doctor,
         member,
         practice,
         require_entitlement=require_entitlement,
         at=at or datetime.now(timezone.utc),
+        _ownership=_ownership,
     )
 
 
@@ -249,11 +293,21 @@ def doctor_access_in_force(
     *,
     require_entitlement: bool = True,
     at: datetime | None = None,
+    _ownership: DoctorAccessRowOwnership | None = None,
+    _practice_id: object = None,
 ) -> bool:
     """Boolean convenience wrapper around :func:`resolve_doctor_access`."""
 
+    if _ownership is None:
+        return resolve_doctor_access(
+            doctor,
+            require_entitlement=require_entitlement,
+            at=at,
+        ).allowed
     return resolve_doctor_access(
         doctor,
         require_entitlement=require_entitlement,
         at=at,
+        _ownership=_ownership,
+        _practice_id=_practice_id,
     ).allowed

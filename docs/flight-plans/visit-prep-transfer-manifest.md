@@ -23,6 +23,13 @@ The upstream change narrows unpublished native-Scribe status enrichment while
 retaining its fresh authorization. It changes no Visit Prep routes, storage,
 authority gates or migration ancestry; the merge had no conflicts.
 
+After the recoverable synthesis worker, the branch was reconciled with Core
+`master` at `a06f04253b529de7270f61ce95ad3151c41f871d`. The upstream native
+provider optimization uses private proof of already-held row locks to reduce
+access queries; it is not a new authorization basis. Visit Prep retains the
+ordinary fresh-access path and does not adopt that optimization. This merge
+changes no Visit Prep schema, rollout settings or routes and had no conflicts.
+
 The approved scope is in [the integration plan](visit-prep-integration.md).
 Transfers use committed source and preserve the repository's existing license.
 
