@@ -166,10 +166,13 @@ def test_newly_applicable_topic_requires_response_before_review(monkeypatch):
     assert _projection(fixture).missing_question_keys == ("adherence_barrier",)
     with pytest.raises(VisitPrepInterviewConflict):
         _review(fixture)
-    # Additional-topic capture needs its next additive storage/API increment;
-    # do not pretend a correction targets a nonexistent original response.
-    with pytest.raises(VisitPrepInterviewConflict):
-        _correct(fixture, question="adherence_barrier")
+    added = _correct(fixture, question="adherence_barrier")
+    assert added.current_answers_complete and not added.current_answers_reviewed
+    topic = _topic(_projection(fixture), "adherence_barrier")
+    assert topic.original_response_id is None and topic.original_answer is None
+    assert topic.additional_answer_source_id == topic.current_correction_id
+    assert topic.additional_answer == "An invented correction."
+    assert _review(fixture).current_answers_reviewed
 
 
 def test_hidden_old_answer_cannot_be_edited_but_exact_retry_still_acknowledges(

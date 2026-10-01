@@ -24,7 +24,7 @@ from app.utils.encryption import EncryptionError, pseudonymous_digest
 from activemodel.types import TypeIDType
 
 ContributionRole = Literal["patient", "caregiver"]
-ContributionEventKind = Literal["correction", "review"]
+ContributionEventKind = Literal["correction", "review", "topic_answer"]
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,10 @@ class ContributionTopic:
     original_recorded_at: datetime | None
     current_correction_id: TypeIDType | None
     recorded_at: datetime | None
+    additional_answer_source_id: TypeIDType | None = None
+    additional_answer: str | None = field(default=None, repr=False)
+    additional_response_kind: ResponseKind | None = None
+    additional_recorded_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -94,25 +98,39 @@ def contribution_payload_hmac(
     event_kind: ContributionEventKind,
     basis: ContributionBasis,
     original_response_id: TypeIDType | None = None,
+    question_id: TypeIDType | None = None,
     response: _CanonicalResponse | None = None,
 ) -> str:
     """Bind operation, source, actor, answer and exact basis; never plain SHA."""
 
     if (
         actor_role not in {"patient", "caregiver"}
-        or event_kind not in {"correction", "review"}
+        or event_kind not in {"correction", "review", "topic_answer"}
         or not isinstance(basis, ContributionBasis)
         or basis.original_response_count == 0
         or (
             event_kind == "correction"
             and (
                 original_response_id is None
+                or question_id is not None
+                or not isinstance(response, _CanonicalResponse)
+            )
+        )
+        or (
+            event_kind == "topic_answer"
+            and (
+                original_response_id is not None
+                or question_id is None
                 or not isinstance(response, _CanonicalResponse)
             )
         )
         or (
             event_kind == "review"
-            and (original_response_id is not None or response is not None)
+            and (
+                original_response_id is not None
+                or question_id is not None
+                or response is not None
+            )
         )
     ):
         raise VisitPrepInterviewValidation("contribution event is invalid")
@@ -130,6 +148,12 @@ def contribution_payload_hmac(
             "question_key": response.question_key if response else None,
             "response_kind": response.response_kind if response else None,
             "answer": response.answer if response else None,
+            # Preserve the original v1 fingerprint bytes for existing events.
+            **(
+                {"question_id": str(question_id)}
+                if event_kind == "topic_answer"
+                else {}
+            ),
         },
         ensure_ascii=False,
         separators=(",", ":"),

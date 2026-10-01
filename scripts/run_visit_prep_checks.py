@@ -70,6 +70,24 @@ def main() -> int:
     with_redis = bool(arguments and arguments[0] == "--with-redis")
     if with_redis:
         arguments = arguments[1:]
+    if arguments and arguments[0] == "--migration-target":
+        if len(arguments) < 2 or not re.fullmatch(r"[0-9a-f]{12}", arguments[1]):
+            raise ValueError("migration target requires an existing exact revision")
+        revisions = [
+            path
+            for path in (ROOT / "migrations/versions").glob("*.py")
+            if re.search(
+                rf"^revision(?::[^=]+)?\s*=\s*['\"]{arguments[1]}['\"]",
+                path.read_text(),
+                re.MULTILINE,
+            )
+        ]
+        if len(revisions) != 1:
+            raise ValueError(
+                "migration target must resolve to exactly one local revision"
+            )
+        environment["VISIT_PREP_MIGRATION_TARGET"] = arguments[1]
+        arguments = arguments[2:]
     if arguments and arguments[0] == "--generate-migration":
         if len(arguments) < 2 or not re.fullmatch(
             r"[a-z][a-z0-9_]{0,63}", arguments[1]
