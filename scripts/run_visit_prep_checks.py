@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -65,6 +66,13 @@ def main() -> int:
         **synthetic_environment(),
     }
     arguments = sys.argv[1:]
+    if arguments and arguments[0] == "--generate-migration":
+        if len(arguments) < 2 or not re.fullmatch(
+            r"[a-z][a-z0-9_]{0,63}", arguments[1]
+        ):
+            raise ValueError("migration generation requires a bounded lowercase name")
+        environment["VISIT_PREP_GENERATE_MIGRATION"] = arguments[1]
+        arguments = arguments[2:]
     export_openapi = bool(arguments and arguments[0] == "--export-openapi")
     if export_openapi:
         arguments = arguments[1:]
