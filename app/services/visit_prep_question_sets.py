@@ -116,7 +116,10 @@ def _same_instant(left: datetime | None, right: datetime) -> bool:
 
 def _lock_owner(session: Session, owner_id: TypeIDType) -> PracticeMember:
     owner = session.exec(
-        select(PracticeMember).where(PracticeMember.id == owner_id).with_for_update()
+        select(PracticeMember)
+        .where(PracticeMember.id == owner_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     ).one_or_none()
     if (
         owner is None

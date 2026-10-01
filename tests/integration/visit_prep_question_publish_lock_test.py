@@ -7,16 +7,18 @@ from uuid import uuid4
 from app.services.visit_prep_question_sets import (
     CANONICAL_DEFAULT_QUESTION_SET,
     VisitPrepQuestionSetConflict,
+    VisitPrepQuestionSetNotFound,
     create_question_set,
     get_question_set_version,
     publish_question_set_version,
     replace_question_set_draft,
 )
 
-from activemodel.session_manager import SessionManager
+from activemodel.session_manager import SessionManager, global_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
-from sqlalchemy import event
+from sqlalchemy import event, update
+from sqlmodel import col, select
 
 from tests.factories import save_practice_member
 
@@ -140,3 +142,28 @@ def test_publish_lock_serializes_a_concurrent_question_mutation() -> None:
         version_id=draft.version.id,
     )
     assert current.name == CANONICAL_DEFAULT_QUESTION_SET.name
+
+
+def test_mutation_refreshes_owner_revocation_cached_by_request_access_check():
+    import pytest
+
+    owner = _owner()
+    engine = SessionManager.get_instance().get_engine()
+    with global_session() as request_session:
+        cached = request_session.exec(
+            select(PracticeMember).where(PracticeMember.id == owner.id)
+        ).one()
+        assert cached.seat_state == "active"
+        # A separate transaction ends access after the request's initial read.
+        with engine.begin() as connection:
+            connection.execute(
+                update(PracticeMember)
+                .where(col(PracticeMember.id) == owner.id)
+                .values(seat_state="inactive", access_ends_at=None)
+            )
+        with pytest.raises(VisitPrepQuestionSetNotFound):
+            create_question_set(
+                owner_practice_member_id=owner.id,
+                idempotency_key=str(uuid4()),
+                definition=CANONICAL_DEFAULT_QUESTION_SET,
+            )
