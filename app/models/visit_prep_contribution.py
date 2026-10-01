@@ -1,4 +1,4 @@
-"""Dormant append-only patient corrections and exact-contribution review evidence.
+"""Append-only patient revisions, newly revealed answers and review evidence.
 
 Original question responses remain immutable. Each event is attributed to the
 confirmed recipient role and current invitation generation. Its basis captures
@@ -24,11 +24,12 @@ class VisitPrepContributionEvent(
     TypeIDMixin("visit_prep_contribution"),
     table=True,
 ):
-    """One attributable correction or review of a specific contribution basis."""
+    """One attributable response change or review of a contribution basis."""
 
     __table_args__ = (
         sa.CheckConstraint(
-            "event_kind IN ('correction', 'review')", name="event_kind_allowed"
+            "event_kind IN ('correction', 'review', 'topic_answer')",
+            name="event_kind_allowed",
         ),
         sa.CheckConstraint(
             "actor_role IN ('patient', 'caregiver')", name="actor_role_allowed"
@@ -44,10 +45,13 @@ class VisitPrepContributionEvent(
             "basis_response_count BETWEEN 1 AND 5", name="basis_response_count_range"
         ),
         sa.CheckConstraint(
-            "(event_kind = 'review' AND response_id IS NULL "
+            "(event_kind = 'review' AND response_id IS NULL AND question_id IS NULL "
             "AND response_kind IS NULL AND answer_ciphertext IS NULL "
             "AND answer_format_version IS NULL) OR "
-            "(event_kind = 'correction' AND response_id IS NOT NULL "
+            "(event_kind IN ('correction', 'topic_answer') AND "
+            "((event_kind = 'correction' AND response_id IS NOT NULL "
+            "AND question_id IS NULL) OR (event_kind = 'topic_answer' "
+            "AND response_id IS NULL AND question_id IS NOT NULL)) "
             "AND response_kind IS NOT NULL AND "
             "((response_kind = 'answered' AND answer_ciphertext IS NOT NULL "
             "AND answer_format_version IS NOT DISTINCT FROM 1 "
@@ -81,6 +85,14 @@ class VisitPrepContributionEvent(
             ["response_id"],
             ["visit_prep_question_response.id"],
             name="fk_visit_prep_contribution_response",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["question_set_version_id", "question_id"],
+            ["visit_prep_question.question_set_version_id", "visit_prep_question.id"],
+            name="fk_visit_prep_contribution_question",
             ondelete="NO ACTION",
             deferrable=True,
             initially="DEFERRED",
@@ -127,6 +139,10 @@ class VisitPrepContributionEvent(
     response_id: TypeIDType | None = Field(
         default=None,
         sa_column=Column(TypeIDType("visit_prep_response"), nullable=True),
+    )
+    question_id: TypeIDType | None = Field(
+        default=None,
+        sa_column=Column(TypeIDType("visit_prep_question"), nullable=True),
     )
     response_kind: str | None = Field(default=None, max_length=16)
     answer_ciphertext: str | None = Field(

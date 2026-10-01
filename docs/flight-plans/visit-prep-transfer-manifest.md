@@ -43,6 +43,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Current Core ownership compatibility | Current `practice_owner_transfer.py` and a new isolated integration test | Exercise the real transfer service against owned PostgreSQL. Verify the previous clinician's preparation lineage is unchanged, the new administrative owner cannot rotate that clinician's invitation, and separate offboarding closes patient access without deleting original records. Refresh PostgreSQL activity snapshots in the expiry race test so an early cached observation cannot mask the real row lock. |
 | Attributable correction and review storage | New work for the approved patient correction/review requirement; current aggregate and response guards | Generate additive migration `4ad34f59136c` after `e161ca7c8448`. Preserve original answers and append encrypted corrections or content-free review events. Bind each event to the confirmed patient/caregiver role, current credential and exact original-response count plus prior event sequence. Recheck expiry after database locks; retain legal-hold and aggregate-cleanup rules. This dormant structure adds no patient read, correction API, UI or model call. |
 | Current contribution and correction/review commands | New work using the recovered interview authorization, question validation and encryption primitives | Add one internal current-contribution projection with original wording/source IDs, effective corrections, current applicability and separate completion/review evidence. Add domain commands that reacquire current authority and confirmation evidence, append encrypted corrections, reject stale bases and preserve exact retries. Reviews require every applicable topic to have an answer or explicit skip. Return value-free receipts. No public correction/read route or patient review UI is mounted. |
+| Answers to newly revealed conditional topics | New work for the approved correction/review loop | Generate `fe53eb110e32` after `4ad34f59136c`. Add a nullable exact-version question reference and closed `topic_answer` event shape. Record answer/skip and later revisions in the same immutable contribution sequence, preserving the first additional source separately from the original interview. Keep original response and retention guards unchanged. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -119,14 +120,34 @@ answer makes earlier review evidence stale. No original answer or retention
 guard changes. No frontend, public wire contract, model, provider-package read
 or external delivery is added by these domain commands.
 
+The revealed-topic increment passed 25 focused tests covering additional
+answer/skip, first-source preservation, later revision, hide/reveal, exact retries,
+divergent/stale bases, caregiver attribution, quarantine, encryption failure,
+strict event shapes and lineage, immutable storage, real concurrency and legal
+holds. The expanded backend/browser regression passed 582 checks with the same
+44 existing warnings before the last additional parent-change race; that race
+passed in the focused selection. Final commit-specific regression evidence is
+recorded in the review increment.
+
+The generated `fe53eb110e32` migration was also rehearsed over a populated,
+owned synthetic database at `4ad34f59136c`. All prior original-response and
+correction/review columns remained byte-for-byte unchanged, existing v1 keyed
+fingerprints remained valid, and a newly revealed topic could be answered and
+reviewed after the upgrade. The runner's new exact-revision option is limited to
+an existing local migration and still creates only a disposable database.
+Recovery leaves the additive structure and sources intact and uses a forward
+fix; downgrade refuses deletion. No public correction route, patient review UI,
+AI call, package read or delivery is activated by this increment.
+
 ## Remaining recovery and integration
 
-Patient correction/review API and UI, newly applicable-topic capture after a
-correction, and bounded AI clarification are next. Storage, the internal current
-contribution and correction/review domain commands are implemented, but the
+Patient correction/review API and UI and bounded AI clarification are next.
+Storage, the internal current contribution and correction/review domain commands
+now include answering or skipping newly applicable conditional topics, but the
 patient cannot yet review or correct persisted responses through the browser.
-Corrections currently require an existing original answer/skip; capturing a
-newly applicable topic requires its next additive storage/command increment.
+Newly revealed answers have their own immutable source; they are not fabricated
+original interview rows. Missing ordinary interview topics still use the original
+ordered capture flow.
 The basic patient UI and five public operations are wired and tested but remain
 gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and

@@ -56,7 +56,15 @@ def pytest_sessionstart(session):
         import app  # noqa: F401 -- application setup precedes real migrations
         from app.configuration.database import run_migrations
 
-        run_migrations()
+        if target := os.environ.get("VISIT_PREP_MIGRATION_TARGET"):
+            # Only the owned runner may select a validated, existing revision
+            # for populated expand rehearsals. No downgrade or shared DB.
+            from alembic import command
+            from alembic.config import Config
+
+            command.upgrade(Config("alembic.ini"), target)
+        else:
+            run_migrations()
     finally:
         sys.modules.pop(name, None)
         real_versions = importlib.import_module(name)

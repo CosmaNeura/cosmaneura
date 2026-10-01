@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from app.services.visit_prep_contribution_contract import (
     ContributionBasis,
+    ContributionEventKind,
     ContributionMutationReceipt,
     ContributionRole,
     ContributionTopic,
@@ -49,12 +50,32 @@ from app.utils.encryption import EncryptionError, encrypt_value
 from activemodel.types import TypeIDType
 from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_contribution import VisitPrepContributionEvent
+from app.models.visit_prep_question_set import VisitPrepQuestion
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 
 def _unavailable() -> VisitPrepInterviewUnavailable:
     return VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+
+
+def _applicable_topics(
+    questions: list[VisitPrepQuestion], topics: dict[TypeIDType, ContributionTopic]
+) -> None:
+    """Recompute dependencies in their physician-owned published order."""
+
+    for question in questions:
+        visible = True
+        if question.show_if_question_id is not None:
+            parent = topics.get(question.show_if_question_id)
+            if parent is None or question.show_if_values is None:
+                raise _unavailable()
+            visible = (
+                parent.applicable
+                and parent.response_kind == "answered"
+                and parent.answer in question.show_if_values
+            )
+        topics[question.id] = replace(topics[question.id], applicable=visible)
 
 
 def _load_contribution(
@@ -171,14 +192,39 @@ def _load_contribution(
         basis = ContributionBasis(
             event.basis_response_count, event.basis_event_sequence
         )
-        if event.event_kind == "correction":
-            if event.response_id is None:
-                raise _unavailable()
-            original = by_response.get(event.response_id)
-            if original is None:
-                raise _unavailable()
-            question = questions_by_id.get(original.question_id)
+        _applicable_topics(questions, topics)
+        if event.event_kind in {"correction", "topic_answer"}:
+            original = None
+            if event.event_kind == "correction":
+                if event.response_id is None or event.question_id is not None:
+                    raise _unavailable()
+                original = by_response.get(event.response_id)
+                if original is None:
+                    raise _unavailable()
+                question = questions_by_id.get(original.question_id)
+            else:
+                if event.response_id is not None or event.question_id is None:
+                    raise _unavailable()
+                question = questions_by_id.get(event.question_id)
+                if (
+                    question is None
+                    or question.id in by_question
+                    or question.show_if_question_id is None
+                    or _question_is_visible(
+                        question,
+                        questions_by_id=questions_by_id,
+                        responses_by_question=by_question,
+                    )
+                    or not topics[question.id].applicable
+                    or topics[question.show_if_question_id].current_correction_id
+                    is None
+                ):
+                    raise _unavailable()
             if question is None:
+                raise _unavailable()
+            if original is not None and (
+                original.recorded_at is None or original.recorded_at > event.recorded_at
+            ):
                 raise _unavailable()
             if event.response_kind == "answered":
                 answer = _decrypted_answer(event, question=question)
@@ -206,23 +252,38 @@ def _load_contribution(
             fingerprint = contribution_payload_hmac(
                 visit_prep_id=visit_prep.id,
                 actor_role=role,
-                event_kind="correction",
+                event_kind=cast(ContributionEventKind, event.event_kind),
                 basis=basis,
-                original_response_id=original.id,
+                original_response_id=original.id if original else None,
+                question_id=question.id if original is None else None,
                 response=canonical,
             )
+            previous = topics[question.id]
+            additional = {}
+            if (
+                event.event_kind == "topic_answer"
+                and previous.additional_answer_source_id is None
+            ):
+                additional = dict(
+                    additional_answer_source_id=event.id,
+                    additional_answer=answer,
+                    additional_response_kind=canonical.response_kind,
+                    additional_recorded_at=event.recorded_at,
+                )
             topics[question.id] = replace(
-                topics[question.id],
+                previous,
                 answer=answer,
                 response_kind=canonical.response_kind,
                 current_correction_id=event.id,
                 recorded_at=event.recorded_at,
+                **additional,
             )
             current_review = None
         elif event.event_kind == "review" and all(
             value is None
             for value in (
                 event.response_id,
+                event.question_id,
                 event.response_kind,
                 event.answer_ciphertext,
                 event.answer_format_version,
@@ -243,18 +304,7 @@ def _load_contribution(
 
     # Follow physician-owned conditional dependencies in their published order.
     # Applicability depends on the effective parent, never its original wording.
-    for question in questions:
-        visible = True
-        if question.show_if_question_id is not None:
-            parent = topics.get(question.show_if_question_id)
-            if parent is None or question.show_if_values is None:
-                raise _unavailable()
-            visible = (
-                parent.applicable
-                and parent.response_kind == "answered"
-                and parent.answer in question.show_if_values
-            )
-        topics[question.id] = replace(topics[question.id], applicable=visible)
+    _applicable_topics(questions, topics)
     complete = all(
         topic.response_kind is not None for topic in topics.values() if topic.applicable
     )
@@ -330,6 +380,7 @@ def _append_event(
     key: str,
     fingerprint: str,
     response_id: TypeIDType | None = None,
+    question_id: TypeIDType | None = None,
     response_kind: ResponseKind | None = None,
     ciphertext: str | None = None,
 ) -> PatientContribution:
@@ -341,11 +392,18 @@ def _append_event(
             question_set_version_id=prep.question_set_version_id,
             credential_generation=authorized.credential.generation,
             actor_role=role,
-            event_kind="correction" if response_id is not None else "review",
+            event_kind=(
+                "correction"
+                if response_id is not None
+                else "topic_answer"
+                if question_id is not None
+                else "review"
+            ),
             event_sequence=basis.event_sequence + 1,
             basis_event_sequence=basis.event_sequence,
             basis_response_count=basis.original_response_count,
             response_id=response_id,
+            question_id=question_id,
             response_kind=response_kind,
             answer_ciphertext=ciphertext,
             answer_format_version=1 if ciphertext is not None else None,
@@ -376,9 +434,8 @@ def correct_contribution(
 ) -> ContributionMutationReceipt:
     """Append a patient-owned revision; exact replay returns no answer plaintext.
 
-    No route is wired yet. Corrections currently target an existing original
-    answer/skip. A newly applicable topic without an original row remains
-    explicitly missing until the additive revised-topic command is implemented.
+    No route is wired yet. Newly revealed conditional topics use their own
+    immutable contribution source, not a fabricated original interview row.
     """
 
     if not isinstance(expected_basis, ContributionBasis):
@@ -398,20 +455,32 @@ def correct_contribution(
             ),
             None,
         )
-        if topic is None or topic.original_response_id is None:
+        if topic is None:
             raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
+        questions = _questions(session, visit_prep=prep)
         question = next(
-            row
-            for row in _questions(session, visit_prep=prep)
-            if row.question_key == submitted.question_key
+            row for row in questions if row.question_key == submitted.question_key
         )
+        additional = topic.original_response_id is None
+        if additional and (
+            question.show_if_question_id is None
+            or _question_is_visible(
+                question,
+                questions_by_id={row.id: row for row in questions},
+                responses_by_question={
+                    row.question_id: row for row in _responses(session, visit_prep=prep)
+                },
+            )
+        ):
+            raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
         canonical = _canonical_response(submitted, question=question)
         fingerprint = contribution_payload_hmac(
             visit_prep_id=prep.id,
             actor_role=role,
-            event_kind="correction",
+            event_kind="topic_answer" if additional else "correction",
             basis=expected_basis,
             original_response_id=topic.original_response_id,
+            question_id=question.id if additional else None,
             response=canonical,
         )
         if _existing_event(session, prep=prep, key=key, fingerprint=fingerprint):
@@ -437,6 +506,7 @@ def correct_contribution(
             key=key,
             fingerprint=fingerprint,
             response_id=topic.original_response_id,
+            question_id=question.id if additional else None,
             response_kind=canonical.response_kind,
             ciphertext=ciphertext,
         )
