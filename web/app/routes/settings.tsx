@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useForm } from "react-hook-form"
 import { MetaFunction, useRevalidator, useSearchParams } from "react-router"
 import { z } from "zod"
@@ -15,6 +15,7 @@ import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
 import { TerminologySettings } from "~/components/TerminologySettings"
+import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import { Icons } from "~/components/icons"
 import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
@@ -67,6 +68,7 @@ import { useTerminology } from "~/utils/terminology"
 import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
+import { BaaClickwrap } from "./onboarding"
 import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -87,9 +89,63 @@ function PracticeSettings({
   onPracticeChange: (practice: PracticeStatus) => void
   billingReturnTo: string
 }) {
+  const viewAsActive = useViewAsActive()
+  const revalidator = useRevalidator()
+  const [reviewingAgreement, setReviewingAgreement] = useState(false)
+  const [agreementAccepted, setAgreementAccepted] = useState(false)
+  const agreementRef = useRef<HTMLElement>(null)
+  const reviewButtonRef = useRef<HTMLButtonElement>(null)
+  const restoreReviewFocus = useRef(false)
+  const canReviewAgreement = Boolean(
+    practice?.role === "owner" &&
+      !practice.baa_accepted &&
+      !practice.access_revoked &&
+      !practice.access_ended &&
+      practice.authorization_basis !== "organization_roster" &&
+      !viewAsActive,
+  )
+
+  useEffect(() => {
+    if (reviewingAgreement && canReviewAgreement) {
+      agreementRef.current?.focus()
+      restoreReviewFocus.current = true
+    } else if (restoreReviewFocus.current) {
+      reviewButtonRef.current?.focus()
+      restoreReviewFocus.current = false
+    }
+  }, [reviewingAgreement, canReviewAgreement])
+
   if (!practice) return null
+  if (reviewingAgreement && canReviewAgreement) {
+    return (
+      <section
+        ref={agreementRef}
+        tabIndex={-1}
+        aria-label="Review practice agreement"
+        className="w-full max-w-5xl space-y-4"
+      >
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setReviewingAgreement(false)}
+        >
+          Back to practice settings
+        </Button>
+        <BaaClickwrap
+          practice={practice}
+          onDecline={() => setReviewingAgreement(false)}
+          onPractice={(next) => {
+            setAgreementAccepted(next.baa_accepted)
+            setReviewingAgreement(false)
+            onPracticeChange(next)
+            void revalidator.revalidate()
+          }}
+        />
+      </section>
+    )
+  }
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose w-full max-w-3xl space-y-4">
       <BillingReturnNotice
         practice={practice}
         onPracticeChange={onPracticeChange}
@@ -101,6 +157,29 @@ function PracticeSettings({
         showBillingActions
         billingReturnTo={billingReturnTo}
       />
+      {canReviewAgreement ? (
+        <div className="not-prose rounded-lg border p-4 text-sm">
+          <p className="font-semibold">Review the current practice agreement</p>
+          <p className="text-muted-foreground mt-2">
+            The practice needs the current Business Associate Agreement (BAA).
+            Review it before deciding whether you are authorized to accept on
+            behalf of {practice.legal_name}.
+          </p>
+          <Button
+            ref={reviewButtonRef}
+            type="button"
+            className="mt-3"
+            onClick={() => setReviewingAgreement(true)}
+          >
+            Review current BAA
+          </Button>
+        </div>
+      ) : null}
+      {agreementAccepted && practice.baa_accepted ? (
+        <p role="status" className="text-sm">
+          Agreement accepted. Your practice’s agreement status is up to date.
+        </p>
+      ) : null}
       <PracticeRoster practice={practice} roster={roster} />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
