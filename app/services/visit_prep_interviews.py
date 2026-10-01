@@ -89,6 +89,7 @@ from app.models.visit_prep import (
     VisitPrepCredentialGeneration,
     VisitPrepScheduleGeneration,
 )
+from app.models.visit_prep_contribution import VisitPrepContributionEvent
 from app.models.visit_prep_question_set import (
     VisitPrepQuestion,
     VisitPrepQuestionChoice,
@@ -389,7 +390,7 @@ def _responses(
 
 
 def _decrypted_answer(
-    response: VisitPrepQuestionResponse,
+    response: VisitPrepQuestionResponse | VisitPrepContributionEvent,
     *,
     question: VisitPrepQuestion,
 ) -> str:

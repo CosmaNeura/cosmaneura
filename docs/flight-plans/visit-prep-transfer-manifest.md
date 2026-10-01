@@ -42,6 +42,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Built desktop and mobile acceptance | New `visit_prep_patient_browser_test.py` using existing Playwright and the owned runner | Route every browser request in process to the real app; block external requests and expose no server. At 1440×1000 and 390×844, verify caregiver confirmation, all five topics, skips, a committed answer with lost acknowledgment and same-key replay, final story, completion and encrypted original storage. Check no horizontal overflow, account bootstrap, telemetry requests, credential in URLs/DOM, or patient text in browser persistence. Synthetic screenshots were visually inspected. This does not qualify corrections, AI, the provider package or external delivery. |
 | Current Core ownership compatibility | Current `practice_owner_transfer.py` and a new isolated integration test | Exercise the real transfer service against owned PostgreSQL. Verify the previous clinician's preparation lineage is unchanged, the new administrative owner cannot rotate that clinician's invitation, and separate offboarding closes patient access without deleting original records. Refresh PostgreSQL activity snapshots in the expiry race test so an early cached observation cannot mask the real row lock. |
 | Attributable correction and review storage | New work for the approved patient correction/review requirement; current aggregate and response guards | Generate additive migration `4ad34f59136c` after `e161ca7c8448`. Preserve original answers and append encrypted corrections or content-free review events. Bind each event to the confirmed patient/caregiver role, current credential and exact original-response count plus prior event sequence. Recheck expiry after database locks; retain legal-hold and aggregate-cleanup rules. This dormant structure adds no patient read, correction API, UI or model call. |
+| Current contribution and correction/review commands | New work using the recovered interview authorization, question validation and encryption primitives | Add one internal current-contribution projection with original wording/source IDs, effective corrections, current applicability and separate completion/review evidence. Add domain commands that reacquire current authority and confirmation evidence, append encrypted corrections, reject stale bases and preserve exact retries. Reviews require every applicable topic to have an answer or explicit skip. Return value-free receipts. No public correction/read route or patient review UI is mounted. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -99,12 +100,35 @@ owner; conversational AI belongs in Sovereign. Existing dirty architecture
 files were not used as ratified policy or modified. Counsel and operational
 activation requirements remain separate from synthetic implementation evidence.
 
+The contribution projection/command increment passed 558 selected
+backend/browser tests, adding 52 checks to the previous 506. The focused command,
+projection, concurrency and interview selection passed 110 checks before the
+last additional zero-basis corruption case; that additional case passed in the
+expanded regression. Focused typechecks, lint and formatting passed. The
+three service-level races use independent PostgreSQL connections: divergent
+same-basis corrections, simultaneous same-key retry, and review versus
+correction. Both commands deny current cohort/public-gate, BAA, entitlement,
+membership and clinician-tombstone failures. Correction and review fingerprints
+are keyed and bind operation, actor, source, answer and exact basis.
+
+Original interview completion is retained as history. A correction can make an
+unanswered conditional topic applicable; the projection then reports the
+revised contribution incomplete and refuses a new review. Old hidden answers
+remain retained but are explicitly inapplicable. A later correction or original
+answer makes earlier review evidence stale. No original answer or retention
+guard changes. No frontend, public wire contract, model, provider-package read
+or external delivery is added by these domain commands.
+
 ## Remaining recovery and integration
 
-Patient correction/review services and UI, followed by bounded AI clarification,
-are next. Their storage structure is implemented, but the patient cannot yet
-review or correct persisted responses. The basic patient UI and five public
-operations are wired and tested but remain gated off. Generate additive
+Patient correction/review API and UI, newly applicable-topic capture after a
+correction, and bounded AI clarification are next. Storage, the internal current
+contribution and correction/review domain commands are implemented, but the
+patient cannot yet review or correct persisted responses through the browser.
+Corrections currently require an existing original answer/skip; capturing a
+newly applicable topic requires its next additive storage/command increment.
+The basic patient UI and five public operations are wired and tested but remain
+gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
