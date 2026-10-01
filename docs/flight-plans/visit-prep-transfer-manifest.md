@@ -9,7 +9,13 @@ Existing dirty checkouts have not been adopted or changed.
 The integration branch was subsequently synchronized with Core `master` at
 `1b105a1798dc659be9f216c5ea8a24606ac7b354`. Its current-BAA settings change
 was retained, and the Visit Prep editor now fails closed when access data is
-absent. No protected branch was changed.
+absent. A second synchronization retained Core `master` at
+`9f5c61122934c1eb5a32868be9088945183fab37`, including its practice-owner
+transfer and orphaned-owner recovery behavior. Administrative owner transfer
+does not reassign existing Visit Prep clinical ownership, schedules or patient
+credentials. Core deliberately retains the former owner's active workforce
+access; separate explicit offboarding still denies patient access. No protected
+branch was changed.
 
 The approved scope is in [the integration plan](visit-prep-integration.md).
 Transfers use committed source and preserve the repository's existing license.
@@ -34,6 +40,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Patient browser journey | `QuestionForm.tsx` and `InterviewFrame.tsx` at archived Core commit `0d92405fbe1b363d89ed23922de16d6922d7bb10`; new public API client and journey component | Adapt the narrow branded frame and one-topic screen to the current Visit Prep aggregate. Capture the credential in memory and remove its fragment before account SDKs or telemetry evaluate. Mount outside account providers; keep the bearer out of DOM, storage and request URLs. Restore patient/caregiver confirmation, answer/skip, conditional barriers, unconditional story, resume, explicit completion and wrong-recipient reporting. Preserve the original UUID and payload when acknowledgment is lost. Clear sensitive state on page departure, current-authority denial or browser support-context changes. |
 | Patient telemetry and support-view isolation | Current Core telemetry scrubbers and `deny_view_as_browser_activity` | Do not initialize telemetry on the patient page; suppress patient events if Sentry was initialized before client-side navigation. Add credential redaction and prevent public request spans. Reuse signed-session support-view denial before database dispatch; account cookies do not authorize patient access. Real full-app HTTP tests verify nondisclosing denials without confirmation or revocation. |
 | Built desktop and mobile acceptance | New `visit_prep_patient_browser_test.py` using existing Playwright and the owned runner | Route every browser request in process to the real app; block external requests and expose no server. At 1440×1000 and 390×844, verify caregiver confirmation, all five topics, skips, a committed answer with lost acknowledgment and same-key replay, final story, completion and encrypted original storage. Check no horizontal overflow, account bootstrap, telemetry requests, credential in URLs/DOM, or patient text in browser persistence. Synthetic screenshots were visually inspected. This does not qualify corrections, AI, the provider package or external delivery. |
+| Current Core ownership compatibility | Current `practice_owner_transfer.py` and a new isolated integration test | Exercise the real transfer service against owned PostgreSQL. Verify the previous clinician's preparation lineage is unchanged, the new administrative owner cannot rotate that clinician's invitation, and separate offboarding closes patient access without deleting original records. Refresh PostgreSQL activity snapshots in the expiry race test so an early cached observation cannot mask the real row lock. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -59,6 +66,16 @@ typechecks and changed-file lint/format checks passed for the implementation
 increments. Existing deprecation and Downshift warnings do not establish live
 readiness.
 Commit-specific final evidence belongs in the corresponding draft PRs.
+
+After the second Core synchronization, 477 selected backend/browser tests
+passed: the previous 421 checks, 55 current-Core identity and transfer-CLI
+checks with mocked identity-provider responses, and the new real-database
+Visit Prep transfer check. All 44 warnings were existing deprecations. The
+selected frontend suite again passed 149 tests and the full frontend typecheck
+passed after synchronization. No shared database or identity-provider account
+was used; the runner removed only its owned synthetic PostgreSQL and Redis
+resources. These results are compatibility evidence, not a live transfer or
+deployment rehearsal.
 
 ## Remaining recovery and integration
 
