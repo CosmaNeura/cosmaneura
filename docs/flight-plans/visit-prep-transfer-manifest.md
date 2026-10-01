@@ -47,6 +47,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Gated patient contribution read and revision API | New work using the contribution domain commands and existing public privacy boundary | Add three POST operations for saved-answer review, correction and confirmation of the exact current contribution. Recheck the current invitation, recipient first name and confirmed role on every operation. Expose only applicable topics and their initial/current wording; omit internal source IDs and retained hidden answers. Corrections and reviews return value-free receipts. All three consume the existing confirmation-attempt limits. |
 | Patient saved-answer review and correction UI | New work using the existing patient public client, branded interview frame and one-topic form | Add an explicit saved-answer review step before or after original completion. Re-enter recipient evidence before disclosure; display current wording, caregiver attribution, skips and retained initial wording. Freeze uncertain requests and retry the exact payload/UUID; reload Core applicability after corrections. Permit newly relevant topics to be answered or skipped and confirm the exact current contribution without clinician-review claims. Clear displayed answers on focus loss and discard them on support-view/current-authority denial. |
 | Provider source package and preparation list | New work using the current locked contribution projection, owner authorization and Core audit store | Add bounded owner-only pagination and a current-answer package with source version, original and revised wording, skips, missing topics and caregiver attribution. Exclude hidden conditional answers from the wire. Recheck locked identity, workforce authorization, BAA, entitlement, rollout, optional chart links and quarantine. Reject support-view disclosure. Retained provider reads do not depend on the public patient gate or invitation expiry. Record content-free read audits. No model synthesis or bot read capability is introduced. |
+| Provider package dashboard | New `VisitPrepPackages.tsx`, existing current account SDK, support-view change events and dashboard route | Read preparations and answers only on explicit selection. Display patient/caregiver report, current words, missing/skipped topics, original wording and source provenance. Clear content before reload, on focus loss, account/access changes or support-view hard block; discard late replies. Reuse the generated SDK and no-store requests. A local synthetic harness exercises the actual component and real API at desktop/mobile sizes, replacing only account authentication/bootstrap. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -190,8 +191,25 @@ authority denials prevent disclosure. Database-owned time is rechecked after
 locks and before disclosure; successful reads require a committed Core audit.
 This is a patient-source package, not the planned AI synthesis artifact.
 
-Dashboard presentation, model synthesis, bounded AI clarification and the
-approved delivery reuse work remain separate increments.
+The dashboard now presents this source package on demand. Eight focused UI
+tests cover loading, paging, wrong-package rejection, missing/revised wording,
+late replies, account/access changes and support-view clearing. Two browser
+acceptance scenarios use the actual component and real provider API at
+1440×1000 and 390×844, with synthetic account authentication and production
+CSS. Both screenshots were visually inspected; no horizontal overflow or
+patient/token storage was observed. The production frontend build and full
+typecheck passed. These are not live-account or deployment acceptance checks.
+
+The combined increment passed 645 selected backend/browser tests with 52
+framework-deprecation warnings, and 176 focused frontend tests across fifteen
+files. The independent-connection correction race proves PostgreSQL blocks the
+patient write until the provider snapshot and audit commit. A committed
+revocation before the read denies disclosure. Provider source/API changed-file
+lint and focused types passed; the component was linted explicitly despite the
+repository's broad component ignore. The API is committed at `9c000cd8`.
+
+Model synthesis, bounded AI clarification and the approved delivery reuse work
+remain separate increments.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
 the patient browser as well as the API.
@@ -203,7 +221,7 @@ gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
-Synthesis, dashboard presentation, bounded AI clarification, CAB delivery mechanics,
+Synthesis, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan; this manifest does not mark them
 as transferred. Pin selected external revisions and record each adaptation here.
