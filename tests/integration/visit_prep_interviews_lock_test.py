@@ -308,6 +308,10 @@ def test_response_rechecks_expiry_after_waiting_for_aggregate_lock(
                 wait_deadline = monotonic() + 5
                 blocked = False
                 while monotonic() < wait_deadline:
+                    # PostgreSQL caches activity statistics within this
+                    # transaction. Refresh before each observation; an early
+                    # "not waiting yet" snapshot must not mask the real lock.
+                    lock_session.execute(text("SELECT pg_stat_clear_snapshot()"))
                     blocked = lock_session.execute(
                         text(
                             "SELECT EXISTS ("
