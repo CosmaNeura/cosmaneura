@@ -19,6 +19,7 @@ import {
   SETTINGS_STALE_TIME,
   queryClient,
 } from "~/configuration/tanstack-query"
+import { VisitPrepAccessProvider } from "~/configuration/visit-prep-access"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import { billingRecoveryLocation } from "~/lib/billing-recovery"
 import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
@@ -184,7 +185,11 @@ async function loadAuthenticatedData(
     throw redirect(billingRecoveryLocation(request.url))
   }
 
-  return { viewAsCheck }
+  return {
+    viewAsCheck,
+    visitPrepAccess: data.visit_prep,
+    visitPrepDoctorId: data.doctor_id,
+  }
 }
 
 export default function AuthenticatedLayout({
@@ -199,7 +204,20 @@ export default function AuthenticatedLayout({
       className="flex h-screen flex-col"
     >
       <ZoomConnectionAlert />
-      <Outlet />
+      <VisitPrepAccessProvider
+        key={
+          "visitPrepDoctorId" in loaderData
+            ? loaderData.visitPrepDoctorId
+            : "unavailable"
+        }
+        access={
+          "visitPrepAccess" in loaderData
+            ? (loaderData.visitPrepAccess ?? null)
+            : null
+        }
+      >
+        <Outlet />
+      </VisitPrepAccessProvider>
     </ViewAsRouteGuard>
   )
 }

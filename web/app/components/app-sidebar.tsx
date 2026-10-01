@@ -1,7 +1,7 @@
 import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
-import { Calendar, File, Inbox, Settings } from "lucide-react"
+import { Calendar, ClipboardList, File, Inbox, Settings } from "lucide-react"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils"
 import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
+import { useVisitPrepAccess } from "~/configuration/visit-prep-access"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { motion } from "motion/react"
@@ -71,9 +72,17 @@ const NavigationMenu = () => {
   const currentUrl = location.pathname
   const navigate = useNavigate()
 
+  const visitPrepAccess = useVisitPrepAccess()
+  const navigationItems = visitPrepAccess.eligible
+    ? [
+        ...NAVIGATION_ITEMS,
+        { title: "Visit Prep", icon: ClipboardList, url: href("/visit-preps") },
+      ]
+    : NAVIGATION_ITEMS
+
   return (
     <SidebarMenu>
-      {NAVIGATION_ITEMS.map((item) => {
+      {navigationItems.map((item) => {
         return (
           <SidebarMenuItem key={item.title}>
             <SidebarMenuButton
