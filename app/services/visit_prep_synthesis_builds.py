@@ -335,37 +335,7 @@ def load_claimed_synthesis_sources(
     """
     try:
         with _visit_prep_session() as session:
-            candidate = session.get(VisitPrepSynthesisBuild, claim.build_id)
-            prep = session.get(VisitPrep, claim.visit_prep_id)
-            if (
-                candidate is None
-                or prep is None
-                or not _matches(candidate, claim, _database_now(session))
-            ):
-                raise VisitPrepBuildDiscarded()
-            ciphertext = candidate.requester_ciphertext
-            subject = _decrypt_requester(candidate, prep)
-            locked = _load_authorized_package(
-                session,
-                owner_practice_member_id=prep.owner_practice_member_id,
-                owner_doctor_id=prep.owner_doctor_id,
-                practice_id=prep.practice_id,
-                expected_clerk_subject=subject,
-                visit_prep_id=prep.id,
-            )
-            build = session.exec(
-                select(VisitPrepSynthesisBuild)
-                .where(VisitPrepSynthesisBuild.id == claim.build_id)
-                .with_for_update()
-                .execution_options(populate_existing=True)
-            ).one_or_none()
-            if (
-                build is None
-                or build.requester_ciphertext != ciphertext
-                or not _matches(build, claim, _database_now(session))
-            ):
-                raise VisitPrepBuildDiscarded()
-            current = select_patient_sources(locked.package)
+            locked, build, current = _load_locked_claim(session, claim)
             if current.source_version != claim.source_version:
                 build.source_version = current.source_version
                 build.epoch += 1
@@ -385,3 +355,44 @@ def load_claimed_synthesis_sources(
     except (VisitPrepNotFound, VisitPrepConflict):
         fail_visit_prep_synthesis_claim(claim, code="scope_unavailable")
         raise VisitPrepBuildDiscarded() from None
+
+
+def _load_locked_claim(
+    session: Session, claim: VisitPrepBuildClaim
+) -> tuple[_LockedPackage, VisitPrepSynthesisBuild, VisitPrepSynthesisSelection]:
+    """Keep owner/root/build locked for usage intent or atomic publication.
+
+    No SDK call may run in this transaction. Callers must compare their complete
+    selected snapshot and check the lease again at final audit/commit.
+    """
+    candidate = session.get(VisitPrepSynthesisBuild, claim.build_id)
+    prep = session.get(VisitPrep, claim.visit_prep_id)
+    if (
+        candidate is None
+        or prep is None
+        or not _matches(candidate, claim, _database_now(session))
+    ):
+        raise VisitPrepBuildDiscarded()
+    ciphertext = candidate.requester_ciphertext
+    subject = _decrypt_requester(candidate, prep)
+    locked = _load_authorized_package(
+        session,
+        owner_practice_member_id=prep.owner_practice_member_id,
+        owner_doctor_id=prep.owner_doctor_id,
+        practice_id=prep.practice_id,
+        expected_clerk_subject=subject,
+        visit_prep_id=prep.id,
+    )
+    build = session.exec(
+        select(VisitPrepSynthesisBuild)
+        .where(VisitPrepSynthesisBuild.id == claim.build_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if (
+        build is None
+        or build.requester_ciphertext != ciphertext
+        or not _matches(build, claim, _database_now(session))
+    ):
+        raise VisitPrepBuildDiscarded()
+    return locked, build, select_patient_sources(locked.package)
