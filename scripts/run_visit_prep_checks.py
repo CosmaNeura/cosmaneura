@@ -9,6 +9,7 @@ is denied by the isolated pytest plugin. Requires local PostgreSQL 16 tools.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shutil
@@ -66,6 +67,9 @@ def main() -> int:
         **synthetic_environment(),
     }
     arguments = sys.argv[1:]
+    with_redis = bool(arguments and arguments[0] == "--with-redis")
+    if with_redis:
+        arguments = arguments[1:]
     if arguments and arguments[0] == "--generate-migration":
         if len(arguments) < 2 or not re.fullmatch(
             r"[a-z][a-z0-9_]{0,63}", arguments[1]
@@ -97,7 +101,115 @@ def main() -> int:
             f"postgresql://visit_prep_test_owner@/visit_prep_test?host={socket_dir}"
         )
         started = False
+        redis_container: str | None = None
+        docker: str | None = None
+        docker_environment: dict[str, str] = {}
         try:
+            if with_redis:
+                docker = _executable("docker")
+                endpoint = subprocess.run(
+                    [
+                        docker,
+                        "context",
+                        "inspect",
+                        "--format",
+                        "{{.Endpoints.docker.Host}}",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout.strip()
+                if not endpoint.startswith("unix://"):
+                    raise RuntimeError(
+                        "Visit Prep Redis tests require a local Docker socket"
+                    )
+                docker_environment = {
+                    "PATH": environment["PATH"],
+                    "DOCKER_HOST": endpoint,
+                }
+                image = subprocess.run(
+                    [docker, "image", "inspect", "redis:6.2.18", "--format", "{{.Id}}"],
+                    env=docker_environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout.strip()
+                if not re.fullmatch(r"sha256:[0-9a-f]{64}", image):
+                    raise RuntimeError(
+                        "a locally cached Redis 6.2.18 image is required"
+                    )
+                # No pull, ports, host mounts or network; remove only this owned container.
+                redis_container = owned.name + "-redis"
+                subprocess.run(
+                    [
+                        docker,
+                        "run",
+                        "--detach",
+                        "--rm",
+                        "--pull=never",
+                        "--name",
+                        redis_container,
+                        "--label",
+                        f"cosma.visit-prep-test-owner={owned}",
+                        "--network=none",
+                        "--read-only",
+                        "--cap-drop=ALL",
+                        "--security-opt=no-new-privileges",
+                        "--memory=64m",
+                        "--pids-limit=64",
+                        "--user=999:999",
+                        "--entrypoint=redis-server",
+                        "--workdir=/tmp",
+                        "--tmpfs=/tmp:rw,noexec,nosuid,size=16m",
+                        "--tmpfs=/data:rw,noexec,nosuid,size=1m",
+                        image,
+                        "--save",
+                        "",
+                        "--appendonly",
+                        "no",
+                        "--port",
+                        "0",
+                        "--unixsocket",
+                        "/tmp/visit-prep-redis.sock",
+                    ],
+                    env=docker_environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                ready = False
+                for _ in range(20):
+                    ping = subprocess.run(
+                        [
+                            docker,
+                            "exec",
+                            redis_container,
+                            "redis-cli",
+                            "-s",
+                            "/tmp/visit-prep-redis.sock",
+                            "--raw",
+                            "PING",
+                        ],
+                        env=docker_environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=2,
+                    )
+                    if ping.returncode == 0 and ping.stdout.strip() == "PONG":
+                        ready = True
+                        break
+                if not ready:
+                    raise RuntimeError("owned Redis did not become ready")
+                environment.update(
+                    {
+                        "VISIT_PREP_OWNED_REDIS_CONTAINER": redis_container,
+                        "VISIT_PREP_TEST_DOCKER": docker,
+                        "VISIT_PREP_TEST_DOCKER_HOST": endpoint,
+                    }
+                )
             subprocess.run(
                 [
                     commands["initdb"],
@@ -189,28 +301,60 @@ def main() -> int:
                 print(log.read_text(), file=sys.stderr)
             raise
         finally:
-            if started and (database / "postmaster.pid").exists():
-                subprocess.run(
-                    [
-                        commands["pg_ctl"],
-                        "-D",
-                        str(database),
-                        "-w",
-                        "-t",
-                        "20",
-                        "-m",
-                        "immediate",
-                        "stop",
-                    ],
-                    env=environment,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=25,
-                )
-                print(
-                    "Visit Prep: owned PostgreSQL stopped; disposable synthetic files removed."
-                )
+            # A Docker cleanup failure must not leave PostgreSQL running while
+            # TemporaryDirectory removes its synthetic data directory.
+            try:
+                if redis_container is not None:
+                    assert docker is not None
+                    inspect = subprocess.run(
+                        [docker, "inspect", redis_container],
+                        env=docker_environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    if inspect.returncode == 0:
+                        objects = json.loads(inspect.stdout)
+                        if len(objects) != 1 or objects[0]["Config"]["Labels"].get(
+                            "cosma.visit-prep-test-owner"
+                        ) != str(owned):
+                            raise RuntimeError(
+                                "refusing to stop a Redis container not owned by this run"
+                            )
+                        subprocess.run(
+                            [docker, "stop", "--time=5", objects[0]["Id"]],
+                            env=docker_environment,
+                            check=True,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        print(
+                            "Visit Prep: owned network-isolated Redis stopped and removed."
+                        )
+            finally:
+                if started and (database / "postmaster.pid").exists():
+                    subprocess.run(
+                        [
+                            commands["pg_ctl"],
+                            "-D",
+                            str(database),
+                            "-w",
+                            "-t",
+                            "20",
+                            "-m",
+                            "immediate",
+                            "stop",
+                        ],
+                        env=environment,
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=25,
+                    )
+                    print(
+                        "Visit Prep: owned PostgreSQL stopped; disposable synthetic files removed."
+                    )
 
 
 if __name__ == "__main__":

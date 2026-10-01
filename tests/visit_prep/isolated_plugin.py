@@ -1,7 +1,8 @@
 """Synthetic-only bootstrap used by scripts/run_visit_prep_checks.py.
 
 The runner creates a fresh Unix-socket-only PostgreSQL cluster. No shared
-database reset, Clerk cleanup, Redis connection or provider call is allowed.
+database reset, Clerk cleanup, shared Redis connection or provider call is allowed.
+Optional real Redis checks use a new networkless container through its local CLI.
 Application models and migrations are real, not substitute test schemas.
 """
 
@@ -14,6 +15,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+from tests.visit_prep.owned_redis import (
+    owned_rate_limit_redis as owned_rate_limit_redis,
+)
 
 
 def pytest_sessionstart(session):
