@@ -47,6 +47,15 @@ EXEMPT_ROUTE_NAMES = {
     "end_view_as",
     # enforces its own practice/BAA rules
     "complete_onboarding",
+    # Visit Prep applies its stronger practice/BAA/entitlement/cohort decision
+    # and a non-disclosing denial in every route dependency.
+    "visit_prep_question_set_list",
+    "visit_prep_question_set_version",
+    "visit_prep_question_set_create",
+    "visit_prep_question_set_replace",
+    "visit_prep_question_set_successor",
+    "visit_prep_question_set_publish",
+    "visit_prep_question_set_default",
 }
 
 # These routes still require a real practice, an in-force BAA, and an authorized

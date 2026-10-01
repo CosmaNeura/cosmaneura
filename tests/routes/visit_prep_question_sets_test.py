@@ -1,0 +1,878 @@
+from __future__ import annotations
+
+import secrets
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal, cast
+
+import pytest
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.routing import APIRoute, iter_route_contexts
+from fastapi.testclient import TestClient
+from typeid import TypeID
+
+import app.routes.dependencies.visit_prep as visit_prep_dependency
+import app.routes.visit_prep as route
+from app.configuration.visit_prep import VisitPrepSettings
+from app.routes.dependencies.doctor import inject_doctor_record
+from app.routes.dependencies.practice_gate import EXEMPT_ROUTE_NAMES
+from app.routes.dependencies.view_as import apply_view_as
+from app.routes.dependencies.visit_prep import (
+    require_visit_prep_read,
+    require_visit_prep_write,
+)
+from app.routes.internal import (
+    authenticate_clerk_request_middleware,
+    internal_api_app,
+)
+from app.services.visit_prep_access import (
+    VisitPrepAccessDecision,
+    resolve_visit_prep_access,
+)
+from app.services.visit_prep_question_sets import (
+    QuestionChoiceInput,
+    QuestionConditionInput,
+    QuestionDraftInput,
+    QuestionSetMutationResult,
+    QuestionSetResult,
+    QuestionSetVersionInput,
+    QuestionSetVersionResult,
+    VisitPrepQuestionSetConflict,
+    VisitPrepQuestionSetNotFound,
+    VisitPrepQuestionSetValidation,
+)
+
+from activemodel.session_manager import aglobal_session
+from activemodel.types import TypeIDType
+from app.models.doctor import Doctor
+from sqlalchemy.exc import SQLAlchemyError
+
+from tests.services.visit_prep_access_test import _doctor, _practice
+
+OWNER_ID = cast(TypeIDType, TypeID("practice_member"))
+PRACTICE_ID = cast(TypeIDType, TypeID("practice"))
+DOCTOR_ID = cast(TypeIDType, TypeID("doctor"))
+QUESTION_SET_ID = cast(TypeIDType, TypeID("visit_prep_question_set"))
+VERSION_ID = cast(TypeIDType, TypeID("visit_prep_question_set_version"))
+NOW = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
+IDEMPOTENCY_KEY = "123e4567-e89b-12d3-a456-426614174000"
+
+
+def _decision(*, view_as_active: bool = False) -> VisitPrepAccessDecision:
+    return VisitPrepAccessDecision(
+        eligible=True,
+        can_manage=not view_as_active,
+        can_send_email=False,
+        can_send_sms=False,
+        doctor_id=DOCTOR_ID,
+        practice_id=PRACTICE_ID,
+        practice_member_id=OWNER_ID,
+        denial_reason=None,
+        view_as_active=view_as_active,
+    )
+
+
+def _version_result() -> QuestionSetVersionResult:
+    return QuestionSetVersionResult(
+        id=VERSION_ID,
+        question_set_id=QUESTION_SET_ID,
+        owner_practice_member_id=OWNER_ID,
+        version_number=1,
+        name="Five questions",
+        supersedes_version_id=None,
+        published_at=None,
+        is_default=False,
+        created_at=NOW,
+        updated_at=NOW,
+        questions=(),
+    )
+
+
+def _set_result() -> QuestionSetResult:
+    return QuestionSetResult(
+        id=QUESTION_SET_ID,
+        owner_practice_member_id=OWNER_ID,
+        seed_key=f"client.{IDEMPOTENCY_KEY}",
+        created_at=NOW,
+        updated_at=NOW,
+        versions=(_version_result(),),
+    )
+
+
+def _mutation_result(
+    disposition: Literal["created", "updated", "replayed"] = "created",
+) -> QuestionSetMutationResult:
+    return QuestionSetMutationResult(
+        question_set=_set_result(),
+        version=_version_result(),
+        disposition=disposition,
+    )
+
+
+def _client(decision: VisitPrepAccessDecision) -> TestClient:
+    app = FastAPI()
+    app.include_router(route.visit_prep_api_app, prefix="/internal/v1")
+    app.dependency_overrides[require_visit_prep_read] = lambda: decision
+    app.dependency_overrides[require_visit_prep_write] = lambda: decision
+    return TestClient(app)
+
+
+def test_router_is_wired_only_under_the_internal_provider_api():
+    api_routes = [
+        item
+        for item in iter_route_contexts(internal_api_app.routes)
+        if isinstance(item.original_route, APIRoute)
+    ]
+    paths = {item.path for item in api_routes}
+
+    assert {
+        "/internal/v1/visit-prep/question-sets",
+        "/internal/v1/visit-prep/question-set-versions/{version_id}",
+        "/internal/v1/visit-prep/question-set-versions/{version_id}/successor",
+        "/internal/v1/visit-prep/question-set-versions/{version_id}/publish",
+        "/internal/v1/visit-prep/question-set-versions/{version_id}/default",
+    } <= paths
+    assert not any(path and path.startswith("/visit-prep") for path in paths)
+    assert {
+        item.name
+        for item in api_routes
+        if item.path and item.path.startswith("/internal/v1/visit-prep/")
+    } <= EXEMPT_ROUTE_NAMES
+
+
+@pytest.mark.parametrize(
+    ("method", "route_name", "request_kwargs"),
+    [
+        ("GET", "visit_prep_question_set_list", {}),
+        ("GET", "visit_prep_question_set_version", {}),
+        (
+            "POST",
+            "visit_prep_question_set_create",
+            {
+                "headers": {"Idempotency-Key": IDEMPOTENCY_KEY},
+                "json": {"name": "Draft", "questions": []},
+            },
+        ),
+        (
+            "PUT",
+            "visit_prep_question_set_replace",
+            {
+                "json": {
+                    "name": "Draft",
+                    "questions": [],
+                    "expected_updated_at": NOW.isoformat(),
+                }
+            },
+        ),
+        ("POST", "visit_prep_question_set_successor", {"json": {}}),
+        (
+            "POST",
+            "visit_prep_question_set_publish",
+            {"json": {"make_default": False}},
+        ),
+        ("PUT", "visit_prep_question_set_default", {}),
+    ],
+)
+def test_full_internal_router_keeps_every_visit_prep_denial_non_disclosing(
+    monkeypatch,
+    method: str,
+    route_name: str,
+    request_kwargs: dict[str, Any],
+):
+    doctor = _doctor(f"route-hidden-{secrets.token_hex(4)}")
+    path_params = (
+        {"version_id": str(VERSION_ID)}
+        if route_name != "visit_prep_question_set_list"
+        and route_name != "visit_prep_question_set_create"
+        else {}
+    )
+    with _provider_client(doctor, monkeypatch) as client:
+        response = client.request(
+            method,
+            cast(FastAPI, client.app).url_path_for(route_name, **path_params),
+            **request_kwargs,
+        )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": "Not found"}
+
+
+def test_full_internal_router_hides_lapsed_entitlement_details(
+    monkeypatch,
+):
+    doctor = _doctor("route-lapsed")
+    practice, _ = _practice(doctor)
+    practice.billing_exempt = False
+    practice.billing_exempt_until = None
+    practice.subscription_status = None
+    practice.trial_ends_at = datetime.now(UTC) - timedelta(days=1)
+    practice.save()
+
+    with _provider_client(doctor, monkeypatch) as client:
+        response = client.get(
+            cast(FastAPI, client.app).url_path_for("visit_prep_question_set_list")
+        )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": "Not found"}
+
+
+def _provider_client(doctor: Doctor, monkeypatch) -> TestClient:
+    """Use normalized identity seams, retaining both real access dependencies."""
+    app = FastAPI()
+    app.include_router(internal_api_app)
+
+    def inject_identity(request: Request):
+        request.state.doctor = doctor
+
+    app.dependency_overrides[authenticate_clerk_request_middleware] = lambda: None
+    app.dependency_overrides[inject_doctor_record] = inject_identity
+    app.dependency_overrides[apply_view_as] = lambda: None
+
+    async def inherit_test_transaction():
+        # TestClient carries the fixture's real database transaction into its
+        # request context. Do not open a second ambient ActiveModel session.
+        yield
+
+    app.dependency_overrides[aglobal_session] = inherit_test_transaction
+    settings = VisitPrepSettings(
+        enabled=True,
+        enabled_doctor_ids=frozenset({str(doctor.id)}),
+    )
+
+    def current_access(current_doctor, *, view_as_active=False):
+        return resolve_visit_prep_access(
+            current_doctor, view_as_active=view_as_active, settings=settings
+        )
+
+    monkeypatch.setattr(
+        visit_prep_dependency, "resolve_visit_prep_access", current_access
+    )
+    return TestClient(app)
+
+
+def test_authorized_provider_can_read_seeded_questions_through_full_router(monkeypatch):
+    doctor = _doctor("route-authorized")
+    _practice(doctor)
+    with _provider_client(doctor, monkeypatch) as client:
+        response = client.get("/internal/v1/visit-prep/question-sets")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.headers["cache-control"] == "no-store"
+    questions = response.json()["question_sets"][0]["versions"][0]["questions"]
+    assert len(questions) == 5
+    assert questions[-1]["kind"] == "story"
+    assert questions[-1]["show_if"] is None
+    assert questions[-1]["choices"] == []
+
+
+def test_provider_publishes_a_new_story_prompt_without_changing_the_used_version(
+    monkeypatch,
+):
+    doctor = _doctor("route-story-lifecycle")
+    _practice(doctor)
+    with _provider_client(doctor, monkeypatch) as client:
+        original = client.get("/internal/v1/visit-prep/question-sets").json()[
+            "question_sets"
+        ][0]["versions"][0]
+        created = client.post(
+            f"/internal/v1/visit-prep/question-set-versions/{original['id']}/successor"
+        )
+        assert created.status_code == status.HTTP_201_CREATED
+        draft = created.json()["version"]
+        questions = [
+            {
+                key: question[key]
+                for key in ("key", "prompt", "kind", "helper_text", "choices")
+            }
+            | {
+                "show_if": (
+                    {
+                        key: question["show_if"][key]
+                        for key in ("question_key", "values")
+                    }
+                    if question["show_if"]
+                    else None
+                )
+            }
+            for question in draft["questions"]
+        ]
+        questions[-1]["prompt"] = "Tell me what happened since the last time you saw me"
+        updated = client.put(
+            f"/internal/v1/visit-prep/question-set-versions/{draft['id']}",
+            json={
+                "name": draft["name"],
+                "questions": questions,
+                "expected_updated_at": draft["updated_at"],
+            },
+        )
+        assert updated.status_code == status.HTTP_200_OK
+        published = client.post(
+            f"/internal/v1/visit-prep/question-set-versions/{draft['id']}/publish",
+            json={"make_default": True},
+        )
+        assert published.status_code == status.HTTP_200_OK
+        assert published.json()["version"]["is_default"] is True
+        assert (
+            published.json()["version"]["questions"][-1]["prompt"]
+            == questions[-1]["prompt"]
+        )
+        retained = client.get(
+            f"/internal/v1/visit-prep/question-set-versions/{original['id']}"
+        )
+        assert retained.json()["questions"] == original["questions"]
+        assert retained.json()["is_default"] is False
+
+
+def test_openapi_documents_replays_and_generic_error_contracts():
+    app = FastAPI()
+    app.include_router(route.visit_prep_api_app, prefix="/internal/v1")
+    paths = app.openapi()["paths"]
+    common_errors = {"403", "404", "409", "422", "503"}
+
+    operations = {
+        ("get", "/internal/v1/visit-prep/question-sets"),
+        ("post", "/internal/v1/visit-prep/question-sets"),
+        ("get", "/internal/v1/visit-prep/question-set-versions/{version_id}"),
+        ("put", "/internal/v1/visit-prep/question-set-versions/{version_id}"),
+        (
+            "post",
+            "/internal/v1/visit-prep/question-set-versions/{version_id}/successor",
+        ),
+        (
+            "post",
+            "/internal/v1/visit-prep/question-set-versions/{version_id}/publish",
+        ),
+        (
+            "put",
+            "/internal/v1/visit-prep/question-set-versions/{version_id}/default",
+        ),
+    }
+    for method, path in operations:
+        responses = paths[path][method]["responses"]
+        assert common_errors <= responses.keys()
+        for response_code in common_errors:
+            schema = responses[response_code]["content"]["application/json"]["schema"]
+            assert schema["$ref"].endswith("/VisitPrepQuestionSetErrorResponse")
+
+    for path in {
+        "/internal/v1/visit-prep/question-sets",
+        "/internal/v1/visit-prep/question-set-versions/{version_id}/successor",
+    }:
+        responses = paths[path]["post"]["responses"]
+        assert {"200", "201"} <= responses.keys()
+        replay_schema = responses["200"]["content"]["application/json"]["schema"]
+        assert replay_schema["$ref"].endswith("/VisitPrepQuestionSetMutationResponse")
+
+
+def test_physician_list_lazily_seeds_then_lists_only_the_resolved_owner(monkeypatch):
+    calls: list[tuple[str, TypeIDType]] = []
+
+    def ensure_default_question_set(*, owner_practice_member_id):
+        calls.append(("seed", owner_practice_member_id))
+        return _mutation_result()
+
+    def list_question_sets(*, owner_practice_member_id):
+        calls.append(("list", owner_practice_member_id))
+        return (_set_result(),)
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "ensure_default_question_set",
+        ensure_default_question_set,
+    )
+    monkeypatch.setattr(
+        route.question_set_service,
+        "list_question_sets",
+        list_question_sets,
+    )
+
+    with _client(_decision()) as client:
+        response = client.get("/internal/v1/visit-prep/question-sets")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert calls == [("seed", OWNER_ID), ("list", OWNER_ID)]
+    assert response.json()["question_sets"][0]["id"] == str(QUESTION_SET_ID)
+    assert "owner_practice_member_id" not in response.text
+    assert "seed_key" not in response.text
+
+
+def test_view_as_list_is_read_only_and_never_materializes_the_seed(monkeypatch):
+    def unexpected_seed(**_kwargs):
+        raise AssertionError("view-as must not write a seeded set")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "ensure_default_question_set",
+        unexpected_seed,
+    )
+    monkeypatch.setattr(
+        route.question_set_service,
+        "list_question_sets",
+        lambda *, owner_practice_member_id: (),
+    )
+
+    with _client(_decision(view_as_active=True)) as client:
+        response = client.get("/internal/v1/visit-prep/question-sets")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"question_sets": []}
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [str(TypeID("visit_prep_question_set")), "not-a-typeid"],
+)
+def test_exact_version_rejects_wrong_or_malformed_typeid_as_generic_404(
+    monkeypatch,
+    bad_id: str,
+):
+    def unexpected_read(**_kwargs):
+        raise AssertionError("invalid IDs must not reach persistence")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "get_question_set_version",
+        unexpected_read,
+    )
+
+    with _client(_decision()) as client:
+        response = client.get(f"/internal/v1/visit-prep/question-set-versions/{bad_id}")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": "Not found"}
+
+
+def test_exact_version_uses_resolved_owner_and_serializes_explicitly(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def get_question_set_version(**kwargs):
+        captured.update(kwargs)
+        return _version_result()
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "get_question_set_version",
+        get_question_set_version,
+    )
+
+    with _client(_decision()) as client:
+        response = client.get(
+            f"/internal/v1/visit-prep/question-set-versions/{VERSION_ID}"
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert captured == {
+        "owner_practice_member_id": OWNER_ID,
+        "version_id": VERSION_ID,
+    }
+    assert response.json() == {
+        "id": str(VERSION_ID),
+        "question_set_id": str(QUESTION_SET_ID),
+        "version_number": 1,
+        "name": "Five questions",
+        "supersedes_version_id": None,
+        "published_at": None,
+        "is_default": False,
+        "created_at": "2026-08-25T12:00:00Z",
+        "updated_at": "2026-08-25T12:00:00Z",
+        "questions": [],
+    }
+
+
+def test_create_requires_canonical_idempotency_and_maps_the_full_definition(
+    monkeypatch,
+):
+    captured: dict[str, object] = {}
+
+    def create_question_set(**kwargs):
+        captured.update(kwargs)
+        return _mutation_result()
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        create_question_set,
+    )
+    payload = {
+        "name": "Medication preparation",
+        "questions": [
+            {
+                "key": "adherence",
+                "prompt": "Are you taking them as prescribed?",
+                "kind": "choice",
+                "choices": [
+                    {"value": "yes", "label": "Yes"},
+                    {"value": "no", "label": "No", "hint": "Tell us why"},
+                ],
+            },
+            {
+                "key": "barrier",
+                "prompt": "What got in the way?",
+                "helper_text": "Optional context",
+                "kind": "story",
+                "show_if": {
+                    "question_key": "adherence",
+                    "values": ["no"],
+                },
+            },
+        ],
+    }
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY},
+            json=payload,
+        )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert captured == {
+        "owner_practice_member_id": OWNER_ID,
+        "idempotency_key": IDEMPOTENCY_KEY,
+        "definition": QuestionSetVersionInput(
+            name="Medication preparation",
+            questions=(
+                QuestionDraftInput(
+                    key="adherence",
+                    prompt="Are you taking them as prescribed?",
+                    kind="choice",
+                    choices=(
+                        QuestionChoiceInput(value="yes", label="Yes"),
+                        QuestionChoiceInput(
+                            value="no",
+                            label="No",
+                            hint="Tell us why",
+                        ),
+                    ),
+                ),
+                QuestionDraftInput(
+                    key="barrier",
+                    prompt="What got in the way?",
+                    helper_text="Optional context",
+                    kind="story",
+                    show_if=QuestionConditionInput(
+                        question_key="adherence",
+                        values=("no",),
+                    ),
+                ),
+            ),
+        ),
+    }
+
+
+def test_create_replay_returns_200(monkeypatch):
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        lambda **_kwargs: _mutation_result("replayed"),
+    )
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY},
+            json={"name": "Draft", "questions": []},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["disposition"] == "replayed"
+
+
+def test_create_rejects_noncanonical_uuid_without_leaking_domain_detail(monkeypatch):
+    def reject(**_kwargs):
+        raise VisitPrepQuestionSetValidation(
+            "authored prompt and idempotency details must stay private"
+        )
+
+    monkeypatch.setattr(route.question_set_service, "create_question_set", reject)
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY.upper()},
+            json={"name": "private authored name", "questions": []},
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json() == {"detail": "Question-set definition is invalid."}
+    assert "private authored" not in response.text
+
+
+def test_body_validation_never_echoes_authored_question_content(monkeypatch):
+    def unexpected_create(**_kwargs):
+        raise AssertionError("invalid request must not reach the service")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        unexpected_create,
+    )
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY},
+            json={
+                "name": "private authored name",
+                "questions": [
+                    {
+                        "key": "reason",
+                        "kind": "story",
+                        "helper_text": "private authored helper text",
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json() == {"detail": "Question-set definition is invalid."}
+    assert "private authored" not in response.text
+
+
+def test_header_validation_uses_the_same_redacted_error(monkeypatch):
+    def unexpected_create(**_kwargs):
+        raise AssertionError("invalid request must not reach the service")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        unexpected_create,
+    )
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            json={"name": "Draft", "questions": []},
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json() == {"detail": "Question-set definition is invalid."}
+
+
+def test_dependency_validation_uses_the_same_redacted_error(monkeypatch):
+    app = FastAPI()
+    app.include_router(route.visit_prep_api_app, prefix="/internal/v1")
+
+    def validated_read_dependency(probe: Literal["expected"]):
+        return _decision()
+
+    app.dependency_overrides[require_visit_prep_read] = validated_read_dependency
+
+    def unexpected_list(**_kwargs):
+        raise AssertionError("invalid dependency input must not reach the service")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "list_question_sets",
+        unexpected_list,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/internal/v1/visit-prep/question-sets",
+            params={"probe": "private-dependency-value"},
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert response.json() == {"detail": "Question-set definition is invalid."}
+    assert "private-dependency-value" not in response.text
+
+
+def test_replace_passes_expected_timestamp_and_complete_definition(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def replace_question_set_draft(**kwargs):
+        captured.update(kwargs)
+        return _mutation_result("updated")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "replace_question_set_draft",
+        replace_question_set_draft,
+    )
+
+    with _client(_decision()) as client:
+        response = client.put(
+            f"/internal/v1/visit-prep/question-set-versions/{VERSION_ID}",
+            json={
+                "expected_updated_at": "2026-08-25T12:00:00Z",
+                "name": "Replacement",
+                "questions": [],
+            },
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert captured == {
+        "owner_practice_member_id": OWNER_ID,
+        "version_id": VERSION_ID,
+        "expected_updated_at": NOW,
+        "definition": QuestionSetVersionInput(name="Replacement", questions=()),
+    }
+
+
+def test_successor_publish_and_default_delegate_with_owner_scope(monkeypatch):
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def successor(**kwargs):
+        captured.append(("successor", kwargs))
+        return _mutation_result()
+
+    def publish(**kwargs):
+        captured.append(("publish", kwargs))
+        return _mutation_result("updated")
+
+    def select_default(**kwargs):
+        captured.append(("default", kwargs))
+        return _mutation_result("updated")
+
+    monkeypatch.setattr(route.question_set_service, "create_successor_draft", successor)
+    monkeypatch.setattr(
+        route.question_set_service,
+        "publish_question_set_version",
+        publish,
+    )
+    monkeypatch.setattr(
+        route.question_set_service,
+        "set_default_question_set_version",
+        select_default,
+    )
+
+    with _client(_decision()) as client:
+        successor_response = client.post(
+            f"/internal/v1/visit-prep/question-set-versions/{VERSION_ID}/successor",
+            json={"name": "Next version"},
+        )
+        publish_response = client.post(
+            f"/internal/v1/visit-prep/question-set-versions/{VERSION_ID}/publish",
+            json={"make_default": True},
+        )
+        default_response = client.put(
+            f"/internal/v1/visit-prep/question-set-versions/{VERSION_ID}/default"
+        )
+
+    assert successor_response.status_code == status.HTTP_201_CREATED
+    assert publish_response.status_code == status.HTTP_200_OK
+    assert default_response.status_code == status.HTTP_200_OK
+    assert captured == [
+        (
+            "successor",
+            {
+                "owner_practice_member_id": OWNER_ID,
+                "source_version_id": VERSION_ID,
+                "name": "Next version",
+            },
+        ),
+        (
+            "publish",
+            {
+                "owner_practice_member_id": OWNER_ID,
+                "version_id": VERSION_ID,
+                "make_default": True,
+            },
+        ),
+        (
+            "default",
+            {
+                "owner_practice_member_id": OWNER_ID,
+                "version_id": VERSION_ID,
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail"),
+    [
+        (
+            VisitPrepQuestionSetNotFound("private owner mismatch"),
+            status.HTTP_404_NOT_FOUND,
+            "Not found",
+        ),
+        (
+            VisitPrepQuestionSetConflict("private database state"),
+            status.HTTP_409_CONFLICT,
+            "Question-set operation conflicts with its current state.",
+        ),
+        (
+            SQLAlchemyError("secret authored text and constraint name"),
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Visit Prep question sets are temporarily unavailable.",
+        ),
+    ],
+)
+def test_domain_and_persistence_errors_are_safe(
+    monkeypatch,
+    error: Exception,
+    expected_status: int,
+    expected_detail: str,
+):
+    def fail(**_kwargs):
+        raise error
+
+    monkeypatch.setattr(route.question_set_service, "list_question_sets", fail)
+
+    with _client(_decision(view_as_active=True)) as client:
+        response = client.get("/internal/v1/visit-prep/question-sets")
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert "private" not in response.text
+    assert "secret" not in response.text
+    assert "constraint" not in response.text
+
+
+def test_mutations_use_the_write_dependency(monkeypatch):
+    app = FastAPI()
+    app.include_router(route.visit_prep_api_app, prefix="/internal/v1")
+    app.dependency_overrides[require_visit_prep_read] = lambda: _decision(
+        view_as_active=True
+    )
+
+    def deny_write():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="View-as is read-only. Exit view-as before making changes.",
+        )
+
+    app.dependency_overrides[require_visit_prep_write] = deny_write
+
+    def unexpected_create(**_kwargs):
+        raise AssertionError("read-only view-as must not reach a mutation")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        unexpected_create,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY},
+            json={"name": "Draft", "questions": []},
+        )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_request_models_forbid_unexpected_ownership_fields(monkeypatch):
+    def unexpected_create(**_kwargs):
+        raise AssertionError("invalid request must not reach the service")
+
+    monkeypatch.setattr(
+        route.question_set_service,
+        "create_question_set",
+        unexpected_create,
+    )
+
+    with _client(_decision()) as client:
+        response = client.post(
+            "/internal/v1/visit-prep/question-sets",
+            headers={"Idempotency-Key": IDEMPOTENCY_KEY},
+            json={
+                "name": "Draft",
+                "questions": [],
+                "owner_practice_member_id": str(TypeID("practice_member")),
+            },
+        )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
