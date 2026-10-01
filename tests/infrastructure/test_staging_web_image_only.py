@@ -285,8 +285,9 @@ def test_recovery_keeps_siblings_and_restores_only_bound_web_image(
     template_hash = m["digest"](m["template_projection"](template, without_image=True))
     baseline["workloads"][WEB]["ready_template_without_image_sha256"] = template_hash
     current[WEB]["ready_template_without_image_sha256"] = template_hash
+    # Failed candidate is latest while the old revision still serves traffic.
     current[WEB].update(
-        image=NEW, ready_image=NEW, revision=WEB + "--new", ready_revision=WEB + "--new"
+        image=NEW, ready_image=OLD, revision=WEB + "--new", ready_revision=WEB + "--old"
     )
 
     def az(name, prefix, *args):
@@ -338,6 +339,21 @@ def test_second_source_read_drift_prevents_mutation(monkeypatch, tmp_path):
     with pytest.raises(ValueError):
         m["release"](plan, "7" * 64, "apply")
     assert not Path(plan["intent_path"]).exists()
+
+
+def test_source_expiry_during_second_check_prevents_intent(monkeypatch, tmp_path):
+    plan, _, _, _ = setup(monkeypatch, tmp_path)
+    calls = []
+
+    def expired(*_args):
+        calls.append(True)
+        if len(calls) == 2:
+            raise ValueError("expired")
+
+    monkeypatch.setitem(f, "source_verify", expired)
+    with pytest.raises(ValueError):
+        m["release"](plan, "7" * 64, "apply")
+    assert len(calls) == 2 and not Path(plan["intent_path"]).exists()
 
 
 def test_observe_azure_projection_keeps_complete_app_and_retained_hashes(monkeypatch):
