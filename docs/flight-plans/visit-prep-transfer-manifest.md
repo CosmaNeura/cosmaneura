@@ -17,6 +17,12 @@ credentials. Core deliberately retains the former owner's active workforce
 access; separate explicit offboarding still denies patient access. No protected
 branch was changed.
 
+After the provider source/dashboard increments, the integration branch was
+reconciled with Core `master` at `c5cd21ec2e09758a335c739f339a40c6a2649e99`.
+The upstream change narrows unpublished native-Scribe status enrichment while
+retaining its fresh authorization. It changes no Visit Prep routes, storage,
+authority gates or migration ancestry; the merge had no conflicts.
+
 The approved scope is in [the integration plan](visit-prep-integration.md).
 Transfers use committed source and preserve the repository's existing license.
 
