@@ -12,6 +12,28 @@ primary email through the existing Clerk adapter; compare both with the locked
 Doctor rows and explicitly confirm the new owner's email without terminal echo.
 Identity overlap or disagreement must be resolved before transfer.
 
+### Explicit recovery of an orphaned owner identity
+
+The normal transfer still requires both live verified identities. Only an
+explicit `--recover-orphaned-owner` request uses the recovery mode. The
+configured identity adapter must receive a typed Clerk `404` with exactly one
+`resource_not_found` error for the locked former owner's exact subject. A
+returned `None`, malformed response, unverified account, timeout, transport
+failure, or any other status/error is not absence evidence. The new absence
+request has a six-second timeout and no automatic retries.
+
+The proof binds the subject to the current configured issuer hash and runtime
+environment, checked before and after the request. The new owner must still
+have a current verified primary email matching the stored Doctor and the
+explicit confirmation. The former owner's stored email must differ. Account,
+pilot-grant, membership and managed-practice denial rules remain unchanged.
+
+Recovery adds the absence evidence mode, environment and issuer hash to the
+preview and immutable audit. It uses a distinct hash payload and cannot apply
+or replay an ordinary transfer's plan/receipt. A changed issuer, environment,
+identity state, role or request is refused. Evidence never modifies either
+Doctor's email/subject, memberships' other fields, clinical data or legal history.
+
 The command defaults to a dry run. It requires two existing, active memberships
 in the same ordinary practice and exactly one owner. Disabled Doctors, revoked
 pilot grants, revoked/ending memberships and organization-managed practices
@@ -46,6 +68,11 @@ preview, stale state, owner cardinality, identity disagreement, hard denials,
 role/audit atomicity and replay. Test the CLI's hidden confirmation, default
 dry run and required apply hash. Use an owned synthetic database without the
 repository-wide Clerk cleanup or database-reset hooks.
+
+Recovery coverage additionally exercises exact typed absence versus all
+lookalikes/error classes, current provenance, false/missing/malformed proofs,
+new-owner verification, cross-mode hash/receipt rejection, repeated absence
+checks on apply/replay, identity reappearance and transactional rollback.
 
 Merge the exact reviewed/tested source under the owner's local-validation
 policy. For the authorized staging correction, separately pin that source,
