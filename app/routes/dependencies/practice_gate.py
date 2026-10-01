@@ -63,6 +63,8 @@ EXEMPT_ROUTE_NAMES = {
     "visit_prep_reconcile",
     "visit_prep_list",
     "visit_prep_package",
+    "visit_prep_synthesis",
+    "visit_prep_synthesis_request",
 }
 
 # These routes still require a real practice, an in-force BAA, and an authorized

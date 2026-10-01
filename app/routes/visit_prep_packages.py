@@ -51,7 +51,7 @@ class VisitPrepPackageTopicResponse(_StrictModel):
     initial_recorded_at: datetime | None
 
 
-class VisitPrepPackageResponse(_StrictModel):
+class VisitPrepPatientSourcesResponse(_StrictModel):
     contract: Literal["visit_prep.patient_sources.v1"] = "visit_prep.patient_sources.v1"
     package_id: str
     source_version: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -65,8 +65,13 @@ class VisitPrepPackageResponse(_StrictModel):
     reviewed_at: datetime | None
     missing_question_keys: list[str]
     skipped_question_keys: list[str]
-    synthesis_status: Literal["not_generated"] = "not_generated"
     topics: list[VisitPrepPackageTopicResponse] = Field(repr=False)
+
+
+class VisitPrepPackageResponse(VisitPrepPatientSourcesResponse):
+    # Retain the existing source-only endpoint's wire contract. Synthesis has
+    # its own atomic source/brief projection, not a second read of this route.
+    synthesis_status: Literal["not_generated"] = "not_generated"
 
 
 class VisitPrepListResponse(_StrictModel):
@@ -150,11 +155,18 @@ def visit_prep_package(
             visit_prep_id=_type_id(prep_id, prefix="visit_prep", path=True),
         )
     )
+    return VisitPrepPackageResponse(**_source_response(result).model_dump())
+
+
+def _source_response(
+    result: packages.VisitPrepSourcePackage,
+) -> VisitPrepPatientSourcesResponse:
+    """Serialize an already-authorized snapshot without a second DB read."""
     contribution = result.contribution
     # Hidden topics are retained internally but never enter this wire response,
     # including their original wording, revisions or source identifiers.
     topics = [topic for topic in contribution.topics if topic.applicable]
-    return VisitPrepPackageResponse(
+    return VisitPrepPatientSourcesResponse(
         package_id=str(result.preparation.id),
         source_version=result.source_version,
         preparation=_state_response(result.preparation),

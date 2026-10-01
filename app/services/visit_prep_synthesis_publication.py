@@ -38,6 +38,7 @@ from app.services.visit_preps import VisitPrepConflict, _commit, _visit_prep_ses
 
 from activemodel.types import TypeIDType
 from app.models.visit_prep_synthesis import VisitPrepSynthesisArtifact
+from app.models.visit_prep_synthesis_build import VisitPrepSynthesisBuild
 from sqlmodel import Session, select
 
 
@@ -62,6 +63,10 @@ class VisitPrepSynthesisView:
     version: int | None = None
     recorded_at: datetime | None = None
     prepared: VisitPrepPreparedBrief | None = field(default=None, repr=False)
+    build_status: Literal["not_requested", "pending", "running", "failed", "ready"] = (
+        "not_requested"
+    )
+    retry_at: datetime | None = None
 
 
 def _current_artifact(
@@ -124,6 +129,15 @@ def _finish_audit(
         at=now,
         source_version=locked.package.source_version,
         operation=operation,
+    )
+    session.flush()
+    # Audit insertion may wait. Recheck the time-dependent access boundary
+    # after that wait before committing a provider disclosure receipt.
+    _authorize(
+        session,
+        owner=locked.owner,
+        practice=locked.practice,
+        at=_database_now(session),
     )
     _commit(session)
 
@@ -247,6 +261,7 @@ def get_visit_prep_synthesis(
                 version=artifact.version,
                 recorded_at=artifact.recorded_at,
                 prepared=_decoded_current(artifact, locked, current),
+                build_status="ready",
             )
         else:
             prior_id = session.exec(
@@ -254,8 +269,31 @@ def get_visit_prep_synthesis(
                 .where(VisitPrepSynthesisArtifact.visit_prep_id == visit_prep_id)
                 .limit(1)
             ).first()
+            build = session.exec(
+                select(VisitPrepSynthesisBuild).where(
+                    VisitPrepSynthesisBuild.visit_prep_id == visit_prep_id,
+                    VisitPrepSynthesisBuild.source_version == current.source_version,
+                    VisitPrepSynthesisBuild.generator_version == GENERATOR_VERSION,
+                    VisitPrepSynthesisBuild.prompt_version == PROMPT_VERSION,
+                    VisitPrepSynthesisBuild.model_profile == MODEL_PROFILE,
+                )
+            ).one_or_none()
+            # Old-source work is not current work. A ready queue row without a
+            # valid current artifact is never presented as successful output.
+            build_status = (
+                cast(Literal["pending", "running", "failed"], build.state)
+                if build is not None and build.state in {"pending", "running", "failed"}
+                else "failed"
+                if build is not None
+                else "not_requested"
+            )
             result = VisitPrepSynthesisView(
-                package=locked.package, status="stale" if prior_id else "missing"
+                package=locked.package,
+                status="stale" if prior_id else "missing",
+                build_status=build_status,
+                retry_at=build.retry_at
+                if build is not None and build.state in {"pending", "failed"}
+                else None,
             )
         _finish_audit(session, locked, "synthesis_read")
         return result

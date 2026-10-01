@@ -406,7 +406,7 @@ def test_runtime_health_uses_database_time_and_current_profile_queue_counts(
     assert health == {
         "pending": 1,
         "running": 0,
-        "ready": 0,
+        "ready": baseline["ready"],
         "failed": baseline["failed"],
         "oldest_pending_seconds": 121,
         "uncertain_usage_attempts": 0,
@@ -420,6 +420,7 @@ def test_runtime_health_uses_database_time_and_current_profile_queue_counts(
 def test_crashed_attempt_keeps_intent_uncertain_while_next_attempt_can_finish(
     monkeypatch,
 ):
+    baseline = runtime_health()
     fixture, first, selected = _started(monkeypatch, "worker-crash-recovery")
     begin_synthesis_usage(first, selected)
     _expire(fixture)
@@ -435,7 +436,8 @@ def test_crashed_attempt_keeps_intent_uncertain_while_next_attempt_can_finish(
     # Advancing only the health clock makes the crashed original lease due.
     monkeypatch.setattr(operations, "_database_now", lambda _session: first.lease_until)
     health = runtime_health()
-    assert health["ready"] == 1 and health["uncertain_usage_attempts"] == 1
+    assert health["ready"] == baseline["ready"] + 1
+    assert health["uncertain_usage_attempts"] == 1
     assert health["status"] == "degraded"
     assert len(_rows(fixture)) == 1 and events[0].completed_at is None
     assert run_one_build() == "idle"
