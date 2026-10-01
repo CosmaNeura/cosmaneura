@@ -67,6 +67,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Durable synthesis queue and source-selection leases | Current Session Prep short-lease and bounded-retry pattern; Visit Prep owner/package authorization and encryption | Generate additive revision `2f87498bb9fa` after `1cc41ced28aa`. Keep one build per preparation/profile with an encrypted, context-bound original requester, source version, epoch, three-attempt limit and 90-second lease. Recheck owner access, identity, current answers and the lease before returning model sources. Superseded work is requeued under a new epoch; stale workers cannot release a newer claim. No model caller, publication worker or API is mounted. |
 | Central usage accounting for chart-free synthesis | Existing Core `AgentModelUsageEvent` ledger and locked Visit Prep source/lease loader | Generate revision `54bedaad381a` after `2f87498bb9fa`. Add an explicit batch origin with canonical preparation/owner references, without creating a person, chart, authority identity or conversation. Commit one immutable call intent per fenced attempt before model work and append an exact-replay result afterward. Preserve the old agent-turn authorization and required lineage. No worker or model call is mounted. |
 | Recoverable synthesis worker and atomic publication | Current Session Prep queue-drain and metadata-only job patterns; Visit Prep queue, generator, publication and central ledger | Connect source selection, committed call intent, bounded generation and durable result recording. Reacquire exact current sources, owner authority and live claim before committing artifact, ready job and Core audit together. Register argument-free, default-off drain and health tasks with no Celery autoretries. Report expired unmatched intents as uncertain without fabricating results. No provider synthesis API or dashboard display is mounted yet. |
+| Provider synthesis request and current read API | Existing owner package authorization, source serializer, durable queue and artifact reader | Add bounded owner-only POST/GET operations. Request only the displayed source hash; return current sources, cited brief and build state from one locked/audited snapshot. Exclude old-source job state and stale brief payload. Recheck access after audit flush. Preserve the old source-only endpoint, regenerate the current SDK, and test actual HTTP-to-worker publication and independent PostgreSQL races. Dashboard synthesis presentation remains the next increment. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -391,8 +392,9 @@ Argument-free drain and health tasks are registered in Core's existing scheduler
 at five-second and sixty-second intervals. Both return before accessing storage
 when the existing feature flag is disabled or configuration is invalid. No new
 environment setting, deployment, channel activation or live model request is
-introduced. Provider synthesis API/display, bounded patient AI clarification
-and the approved delivery reuse work remain separate implementation work.
+introduced by that worker increment. The provider API is described below;
+dashboard presentation, bounded patient AI clarification and delivery reuse
+remain separate implementation work.
 
 The focused worker/publication selection passed 95 synthetic checks, including
 four independent-connection worker scenarios and the existing Celery privacy
@@ -404,6 +406,33 @@ refusal/truncation/invalid output, bounded attempts, exact durable usage proof,
 in-flight authority/source changes, rollback and final lease/access expiry.
 Scoped lint, formatting and implementation typechecks passed. Final expanded
 regression totals and exact tested revision belong in the draft review increment.
+
+The provider synthesis API now accepts only a strict current-source hash in a
+request body bounded to 1 KiB before JSON parsing. It never accepts a model
+brief, owner identity, answers or broker payload from the browser and never
+calls a model inline. Exact-source retries preserve attempts, backoff and the
+running lease; the worker owns generation. An explicit current-source request
+can recover an inconsistent ready job with no artifact.
+
+The synthesis read returns current patient sources and the brief together from
+one authorized transaction, with source/artifact version and model/prompt
+provenance. Missing, stale, queued, running and failed states are distinct;
+old-source work is not advertised as current and stale ciphertext is not
+decrypted. A final authorization check after the audit flush denies disclosure
+if time-dependent access expires during that wait. The original source-only
+endpoint keeps its wire contract, using the same explicit source serializer.
+Support-view, wrong-owner, quarantine and current access denials remain private.
+
+HTTP acceptance uses the actual router, queue, worker and central ledger with
+an invented SDK response, including partial caregiver and all-skipped paths.
+Independent-connection HTTP tests cover concurrent requests producing one build,
+changed authority/source while waiting on owner locks, and an atomic source/brief
+read serialized with correction. The aggregate health tests now compare ready
+counts against the prior committed synthetic baseline, as failed counts already
+did; they do not require an otherwise empty integration database. Final exact
+commands and totals are recorded in the draft review. The current SDK is
+generated from the tested internal OpenAPI; no frontend source is changed yet.
+
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
 the patient browser as well as the API.
@@ -415,11 +444,11 @@ gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
-Provider synthesis API/display, bounded AI clarification, CAB delivery mechanics,
+Provider synthesis display, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan. The synthesis contract, adapter,
 artifact storage, owner publication/read domain, durable queue, central accounting
-and gated worker described above are implemented. This does not yet constitute
+and gated worker/API described above are implemented. This does not yet constitute
 a complete provider-facing synthesis journey or clinical-quality qualification.
 Pin selected external revisions and record each adaptation here.
 
