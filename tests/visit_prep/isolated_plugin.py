@@ -64,6 +64,14 @@ def pytest_sessionstart(session):
 
 
 def pytest_sessionfinish(session):
+    if migration_name := os.environ.get("VISIT_PREP_GENERATE_MIGRATION"):
+        if session.exitstatus == 0:
+            from alembic import command
+            from alembic.config import Config
+
+            command.revision(
+                Config("alembic.ini"), message=migration_name, autogenerate=True
+            )
     if os.environ.get("VISIT_PREP_EXPORT_OPENAPI") == "1" and session.exitstatus == 0:
         from app.routes.internal import internal_api_app
         from app.utils.openapi import generate_openapi_schema
