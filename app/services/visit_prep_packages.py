@@ -11,7 +11,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from app.services import visit_prep_access
 from app.services.organization_access import member_authorization_basis
@@ -43,7 +43,11 @@ from app.models.practice import (
     PracticeMember,
     member_access_state,
 )
-from app.models.visit_prep import VisitPrep
+from app.models.visit_prep import (
+    VisitPrep,
+    VisitPrepCredentialGeneration,
+    VisitPrepScheduleGeneration,
+)
 from sqlalchemy import func, or_
 from sqlmodel import Session, select
 
@@ -59,6 +63,18 @@ class VisitPrepSourcePackage:
 class VisitPrepList:
     preparations: tuple[VisitPrepResult, ...]
     next_before_id: TypeIDType | None
+
+
+@dataclass(frozen=True)
+class _LockedPackage:
+    """Internal transaction-bound snapshot; never return the ORM authority rows."""
+
+    package: VisitPrepSourcePackage = field(repr=False)
+    preparation: VisitPrep = field(repr=False)
+    owner: PracticeMember = field(repr=False)
+    practice: Practice = field(repr=False)
+    schedule: VisitPrepScheduleGeneration = field(repr=False)
+    credential: VisitPrepCredentialGeneration = field(repr=False)
 
 
 def _database_now(session: Session) -> datetime:
@@ -120,18 +136,35 @@ def _audit(
     prep_id: TypeIDType | None,
     at: datetime,
     source_version: str | None = None,
+    operation: Literal["read", "synthesis_read", "synthesis_published"] = "read",
 ) -> None:
-    # Existing Core audit store; no new identity binding is fabricated. The
-    # locked canonical owner references attribute this human dashboard read.
+    # Existing Core audit store; no new identity binding is fabricated. Locked
+    # canonical owner references attribute the provider-authorized operation.
     session.add(
         AuthorityAuditEvent(
-            event_type="visit_prep.package_read" if prep_id else "visit_prep.list_read",
+            event_type=(
+                f"visit_prep.{operation}"
+                if operation != "read"
+                else "visit_prep.package_read"
+                if prep_id
+                else "visit_prep.list_read"
+            ),
             outcome="allowed",
             occurred_at=at,
             resource_type="visit_prep" if prep_id else "practice_member",
             resource_ref=str(prep_id or owner.id),
-            route="visit_prep_package" if prep_id else "visit_prep_list",
-            intent="provider_previsit_review",
+            route=(
+                "visit_prep_synthesis"
+                if operation != "read"
+                else "visit_prep_package"
+                if prep_id
+                else "visit_prep_list"
+            ),
+            intent=(
+                "provider_previsit_synthesis"
+                if operation == "synthesis_published"
+                else "provider_previsit_review"
+            ),
             request_digest=source_version,
             platform_refs=[
                 {"kind": "doctor", "ref": str(owner.doctor_id)},
@@ -214,79 +247,120 @@ def get_visit_prep_package(
     visit_prep_id: TypeIDType,
 ) -> VisitPrepSourcePackage:
     with _visit_prep_session() as session:
-        owner, practice = _owner(
+        locked = _load_authorized_package(
             session,
             owner_practice_member_id=owner_practice_member_id,
             owner_doctor_id=owner_doctor_id,
             practice_id=practice_id,
             expected_clerk_subject=expected_clerk_subject,
+            visit_prep_id=visit_prep_id,
         )
-        prep = _lock_visit_prep(
-            session, owner_practice_member_id=owner.id, visit_prep_id=visit_prep_id
+        now = _database_now(session)
+        _authorize(session, owner=locked.owner, practice=locked.practice, at=now)
+        _audit(
+            session,
+            owner=locked.owner,
+            prep_id=locked.preparation.id,
+            at=now,
+            source_version=locked.package.source_version,
+        )
+        _commit(session)
+        return locked.package
+
+
+def _load_authorized_package(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    expected_clerk_subject: str,
+    visit_prep_id: TypeIDType,
+) -> _LockedPackage:
+    """Share the exact owner/source boundary without committing between steps.
+
+    Callers hold this transaction through publication/disclosure and audit. No
+    model request belongs inside these locks. This function grants no bot or
+    patient authority and writes no audit or artifact by itself.
+    """
+    owner, practice = _owner(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        expected_clerk_subject=expected_clerk_subject,
+    )
+    prep = _lock_visit_prep(
+        session, owner_practice_member_id=owner.id, visit_prep_id=visit_prep_id
+    )
+    if (
+        prep.practice_id != practice.id
+        or prep.owner_doctor_id != owner.doctor_id
+        or prep.revoked_at is not None
+        or prep.misdirected_at is not None
+        or prep.lifecycle_state not in {"confirmed", "in_progress", "completed"}
+    ):
+        raise VisitPrepNotFound("Visit Prep is unavailable")
+    schedule, credential = _lock_current_lineage(session, visit_prep=prep)
+    if credential.revoked_at is not None:
+        raise VisitPrepNotFound("Visit Prep is unavailable")
+    if prep.appointment_id is not None:
+        appointment = _owned_appointment(
+            session,
+            owner_doctor_id=owner.doctor_id,
+            appointment_id=prep.appointment_id,
         )
         if (
-            prep.practice_id != practice.id
-            or prep.owner_doctor_id != owner.doctor_id
-            or prep.revoked_at is not None
-            or prep.misdirected_at is not None
-            or prep.lifecycle_state not in {"confirmed", "in_progress", "completed"}
-        ):
-            raise VisitPrepNotFound("Visit Prep is unavailable")
-        schedule, credential = _lock_current_lineage(session, visit_prep=prep)
-        if prep.appointment_id is not None:
-            appointment = _owned_appointment(
+            appointment.patient_id != prep.patient_id
+            or not _appointment_matches_schedule(
                 session,
-                owner_doctor_id=owner.doctor_id,
-                appointment_id=prep.appointment_id,
+                appointment_id=appointment.id,
+                scheduled_at=schedule.scheduled_at,
             )
-            if (
-                appointment.patient_id != prep.patient_id
-                or not _appointment_matches_schedule(
-                    session,
-                    appointment_id=appointment.id,
-                    scheduled_at=schedule.scheduled_at,
-                )
-            ):
-                raise VisitPrepConflict("Visit Prep linked context changed")
-        if prep.patient_id is not None:
-            _owned_patient(
-                session, owner_doctor_id=owner.doctor_id, patient_id=prep.patient_id
-            )
-        now = _database_now(session)
-        _authorize(session, owner=owner, practice=practice, at=now)
-        try:
-            contribution = _load_contribution(session, visit_prep=prep)
-        except VisitPrepInterviewUnavailable:
-            raise VisitPrepNotFound("Visit Prep is unavailable") from None
-        now = _database_now(session)
-        _authorize(session, owner=owner, practice=practice, at=now)
-        # Only immutable source identities and lifecycle metadata, never PHI
-        # wording, enter this digest. A later artifact binds this exact basis.
-        version = hashlib.sha256(
-            json.dumps(
-                {
-                    "contract": "visit_prep.patient_sources.v1",
-                    "prep": str(prep.id),
-                    "questions": str(prep.question_set_version_id),
-                    "schedule": str(schedule.id),
-                    "credential_generation": credential.generation,
-                    "patient": str(prep.patient_id) if prep.patient_id else None,
-                    "appointment": str(prep.appointment_id)
-                    if prep.appointment_id
-                    else None,
-                    "completed": contribution.original_interview_completed,
-                    "responses": contribution.basis.original_response_count,
-                    "events": contribution.basis.event_sequence,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        result = VisitPrepSourcePackage(
+        ):
+            raise VisitPrepConflict("Visit Prep linked context changed")
+    if prep.patient_id is not None:
+        _owned_patient(
+            session, owner_doctor_id=owner.doctor_id, patient_id=prep.patient_id
+        )
+    _authorize(session, owner=owner, practice=practice, at=_database_now(session))
+    try:
+        contribution = _load_contribution(session, visit_prep=prep)
+    except VisitPrepInterviewUnavailable:
+        raise VisitPrepNotFound("Visit Prep is unavailable") from None
+    now = _database_now(session)
+    _authorize(session, owner=owner, practice=practice, at=now)
+    # Preserve the original source-version recipe: immutable source identities
+    # and lifecycle metadata only, never a hash of patient wording.
+    version = hashlib.sha256(
+        json.dumps(
+            {
+                "contract": "visit_prep.patient_sources.v1",
+                "prep": str(prep.id),
+                "questions": str(prep.question_set_version_id),
+                "schedule": str(schedule.id),
+                "credential_generation": credential.generation,
+                "patient": str(prep.patient_id) if prep.patient_id else None,
+                "appointment": str(prep.appointment_id)
+                if prep.appointment_id
+                else None,
+                "completed": contribution.original_interview_completed,
+                "responses": contribution.basis.original_response_count,
+                "events": contribution.basis.event_sequence,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    return _LockedPackage(
+        package=VisitPrepSourcePackage(
             preparation=_snapshot(prep, schedule, credential, at=now),
             source_version=version,
             contribution=contribution,
-        )
-        _audit(session, owner=owner, prep_id=prep.id, at=now, source_version=version)
-        _commit(session)
-        return result
+        ),
+        preparation=prep,
+        owner=owner,
+        practice=practice,
+        schedule=schedule,
+        credential=credential,
+    )

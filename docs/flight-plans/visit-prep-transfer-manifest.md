@@ -56,6 +56,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Provider package dashboard | New `VisitPrepPackages.tsx`, existing current account SDK, support-view change events and dashboard route | Read preparations and answers only on explicit selection. Display patient/caregiver report, current words, missing/skipped topics, original wording and source provenance. Clear content before reload, on focus loss, account/access changes or support-view hard block; discard late replies. Reuse the generated SDK and no-store requests. A local synthetic harness exercises the actual component and real API at desktop/mobile sizes, replacing only account authentication/bootstrap. |
 | Patient-source synthesis contract and dormant model adapter | Archived brief behavior at Core `b164ad7a8121ea08794d09f832d8ca7b7ee23f92`; current Session Prep generator/worker patterns at `c5cd21ec2e09758a335c739f339a40c6a2649e99`; new implementation | Preserve the concise headline, reported information and discussion priorities, but replace legacy Intake/chart assumptions with current Visit Prep sources. Add bounded sections, exact supporting quotes, current response/revision references and separate missing/skipped metadata. Use Core's existing Azure client with strict schema, zero automatic retries and bounded timeout. Require a usage-recorder callback before returning generated content. No route, job, artifact persistence or live model call is introduced. |
 | Encrypted immutable synthesis artifacts | Current Visit Prep encryption, aggregate retention and immutable response guards; Session Prep source/profile uniqueness pattern; new implementation | Generate additive revision `1cc41ced28aa` after `fe53eb110e32`. Store the brief and exact selected patient-source snapshot only in an explicit encrypted envelope. Bind metadata to question/schedule/credential lineage, contribution basis and generator/prompt/model profile. Serialize writes on the parent; reject stale basis, duplicate source/profile, mutation, standalone deletion and truncation. Preserve parent retention/legal holds and new-patient support without a fabricated chart. No runtime publication, reader or worker is mounted. |
+| Owner-authorized synthesis publication and read domain | Current locked Visit Prep owner/source package and explicit artifact codec; Session Prep retry/publication pattern; new implementation | Share one transaction-bound package loader. Reacquire current owner authority, exact source hash, complete selected wording, attribution, review and lineage before publishing. Deduplicate the first valid source/profile artifact without overwrite. Read only the current artifact and return value-free missing/stale status for prior output without decrypting it. Commit content-free Core audits before any result. No route, build lease, worker or model call is mounted. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -278,9 +279,35 @@ and parent retention/legal holds control aggregate-only cleanup. Scoped lint,
 format and focused implementation types passed. No frontend or release flag
 changed.
 
-Build/lease storage, full source-version and current-authority revalidation at
-publication, durable usage recording, the recoverable worker and dashboard
-synthesis display remain the next synthesis increments. Bounded patient AI
+Artifact storage is published as draft PR 582 at `e3565e6e`; it remains unmerged.
+The next increment adds dormant owner publication/read services using a shared
+transaction-bound package loader. Publication compares the full current selected
+source snapshot, not merely caller-provided response counts or a digest, and
+sets artifact metadata from the locked Core rows. Corrections, review, original
+completion, schedule or credential changes reject superseded model output.
+Retry reuses the first validated artifact rather than overwriting it. Reads
+recheck current owner access and the complete artifact metadata and encrypted
+manifest. Prior source/profile artifacts produce missing/stale status without
+decrypting or returning the old brief; the current patient-source package
+remains available. Final database time is checked before the required Core audit
+commit. No API, frontend, build/lease or worker calls these functions yet.
+
+The focused new publication selection passed 42 tests against disposable
+PostgreSQL and network-isolated Redis. Real independent-connection tests cover
+one publication plus one replay under concurrent retries; committed corrections
+or withdrawn BAA observed after a genuine lock wait; and correction blocked
+until an existing brief read and audit commit. Tests also cover new-patient and
+caregiver/partial sources, no invented content for all-skipped input, changed
+wording or attribution with unchanged counts, profile mismatch, malformed
+ciphertext, false stored completion metadata, audit rollback, encryption failure,
+retained owner access after public invitation expiry and expired entitlement at
+the final database clock. These remain synthetic domain results, not clinical
+quality, an operational worker or a dashboard synthesis demonstration.
+
+Build/lease storage, durable usage recording, the recoverable worker and dashboard
+synthesis display remain the next synthesis increments. A worker must enforce
+its current lease and durable central-ledger recording before publication;
+these domain functions do not substitute for those conditions. Bounded patient AI
 clarification and the approved delivery reuse work remain separate work.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
@@ -296,7 +323,8 @@ retention triggers rather than copying obsolete migration ancestry.
 End-to-end synthesis, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan. Only the synthesis contract,
-dormant adapter and artifact expand described above are implemented; none of these complete flows
+dormant adapter, artifact expand and owner publication/read domain described
+above are implemented; none of these complete flows
 is marked ready. Pin selected external revisions and record each adaptation here.
 
 Deployment, actual patient messages, cohort activation and workspace retirement
