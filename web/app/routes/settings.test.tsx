@@ -6,7 +6,7 @@ import type { PracticeRosterMember } from "~/configuration/client"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 import SettingsPage, { clientLoader } from "./settings"
-import { render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const client = vi.hoisted(() => ({
   settingsData: vi.fn(),
@@ -20,6 +20,8 @@ vi.mock("~/configuration/client", () => client)
 const practiceApi = vi.hoisted(() => ({
   getPractice: vi.fn(),
   getBaaAcceptances: vi.fn(),
+  getBaaCurrent: vi.fn(),
+  acceptPracticeBaa: vi.fn(),
 }))
 vi.mock("~/lib/practice-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/lib/practice-api")>()),
@@ -27,6 +29,11 @@ vi.mock("~/lib/practice-api", async (importOriginal) => ({
 }))
 
 vi.mock("@clerk/clerk-react", () => ({ useUser: () => ({ user: null }) }))
+const supportView = vi.hoisted(() => ({ active: false }))
+vi.mock("~/components/ViewAsRouteGuard", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/components/ViewAsRouteGuard")>()),
+  useViewAsActive: () => supportView.active,
+}))
 vi.mock("~/utils/terminology", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/utils/terminology")>()
   return { ...actual, useTerminology: () => actual.getTerminology(null) }
@@ -116,10 +123,12 @@ function openSettings() {
     { initialEntries: ["/settings"] },
   )
   render(<RouterProvider router={router} />)
+  return router
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
+  supportView.active = false
   client.settingsData.mockResolvedValue({
     data: {
       biography: "",
@@ -129,6 +138,12 @@ beforeEach(() => {
       has_natmed_subscription: false,
       terminology: "doctor_patient",
       billing_recovery_required: false,
+      visit_prep: {
+        eligible: false,
+        can_manage: false,
+        can_send_email: false,
+        can_send_sms: false,
+      },
     },
     response: new Response(null, { status: 200 }),
   })
@@ -137,6 +152,12 @@ beforeEach(() => {
     response: new Response(null, { status: 200 }),
   })
   practiceApi.getBaaAcceptances.mockResolvedValue([])
+  practiceApi.getBaaCurrent.mockResolvedValue({
+    doc_id: "CN-BAA-CUST-CW",
+    version: "2.3",
+    sha256: "f".repeat(64),
+    html: "<p>Current synthetic agreement text</p>",
+  })
 })
 
 describe("settings practice roster", () => {
@@ -184,5 +205,206 @@ describe("settings practice roster", () => {
 
     await vi.waitFor(() => expect(client.practiceRoster).toHaveBeenCalled())
     expect(practiceApi.getBaaAcceptances).toHaveBeenCalled()
+  })
+})
+
+describe("settings current practice agreement", () => {
+  const stale = () =>
+    practice({
+      baa_accepted: false,
+      pilot_access_grant_active: true,
+      entitled: false,
+      billing_exempt: false,
+      billing_exempt_active: false,
+    })
+
+  it("lets an existing pilot owner review without accepting or visiting onboarding", async () => {
+    practiceApi.getPractice.mockResolvedValue(stale())
+    openSettings()
+
+    const review = await screen.findByRole("button", {
+      name: "Review current BAA",
+    })
+    expect(practiceApi.getBaaCurrent).not.toHaveBeenCalled()
+    fireEvent.click(review)
+
+    expect(
+      await screen.findByText("Current synthetic agreement text"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("region", { name: "Review practice agreement" }),
+    ).toHaveFocus()
+    expect(screen.getByRole("button", { name: "I Agree" })).toBeDisabled()
+    expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "I’m not authorized to sign this" }),
+    )
+    expect(
+      screen.getByRole("button", { name: "Review current BAA" }),
+    ).toHaveFocus()
+    expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ["workforce", { role: "workforce" }],
+    ["revoked owner", { access_revoked: true }],
+    ["ended owner", { access_ended: true }],
+    ["current agreement", { baa_accepted: true }],
+    [
+      "organization-managed owner",
+      { authorization_basis: "organization_roster" },
+    ],
+  ] as const)("does not offer signing to %s", async (_label, overrides) => {
+    practiceApi.getPractice.mockResolvedValue({ ...stale(), ...overrides })
+    openSettings()
+    await screen.findByRole("heading", { name: "Practice" })
+    expect(
+      screen.queryByRole("button", { name: "Review current BAA" }),
+    ).not.toBeInTheDocument()
+    expect(practiceApi.getBaaCurrent).not.toHaveBeenCalled()
+    expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
+  })
+
+  it("does not offer signing while viewing another account", async () => {
+    supportView.active = true
+    practiceApi.getPractice.mockResolvedValue(stale())
+    openSettings()
+    await screen.findByRole("heading", { name: "Practice" })
+    expect(
+      screen.queryByRole("button", { name: "Review current BAA" }),
+    ).not.toBeInTheDocument()
+    expect(practiceApi.getBaaCurrent).not.toHaveBeenCalled()
+  })
+
+  it("refreshes practice status and acceptance history after explicit exact-document acceptance", async () => {
+    const accepted = practice({
+      entitled: false,
+      billing_exempt: false,
+      billing_exempt_active: false,
+    })
+    practiceApi.getPractice
+      .mockResolvedValueOnce(stale())
+      .mockResolvedValue(accepted)
+    practiceApi.acceptPracticeBaa.mockResolvedValueOnce(accepted)
+    practiceApi.getBaaAcceptances.mockResolvedValueOnce([]).mockResolvedValue([
+      {
+        doc_id: "CN-BAA-CUST-CW",
+        version: "2.3",
+        content_sha256: "f".repeat(64),
+        accepted_at_utc: "2026-10-01T18:00:00Z",
+        accepted_by_name: "Synthetic Owner",
+        accepted_by_title: "Practice owner",
+        accepted_by_email: "owner@synthetic.invalid",
+      },
+    ])
+    openSettings()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review current BAA" }),
+    )
+    await screen.findByText("Current synthetic agreement text")
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /accepting individual/i }),
+      { target: { value: "Synthetic Owner" } },
+    )
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Practice owner" },
+    })
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /I have read and agree/i }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "I Agree" }))
+
+    expect(
+      await screen.findByText(/agreement status is up to date/i),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(practiceApi.getBaaAcceptances).toHaveBeenCalledTimes(2),
+    )
+    expect(
+      await screen.findByText(/accepted by Synthetic Owner/),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Review current BAA" }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText("Practice access is paused")).toBeInTheDocument()
+    expect(practiceApi.acceptPracticeBaa).toHaveBeenCalledExactlyOnceWith({
+      doc_id: "CN-BAA-CUST-CW",
+      version: "2.3",
+      sha256: "f".repeat(64),
+      signature_name: "Synthetic Owner",
+      signature_title: "Practice owner",
+      checks: ["baa"],
+    })
+  })
+
+  it("keeps signing disabled if the displayed agreement version is stale", async () => {
+    practiceApi.getPractice.mockResolvedValue(stale())
+    practiceApi.getBaaCurrent.mockResolvedValueOnce({
+      doc_id: "CN-BAA-CUST-CW",
+      version: "2.2",
+      sha256: "a".repeat(64),
+      html: "<p>Stale text</p>",
+    })
+    openSettings()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review current BAA" }),
+    )
+    await screen.findByText(/agreement version could not be verified/i)
+    expect(screen.queryByText("Stale text")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "I Agree" })).toBeDisabled()
+    expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
+  })
+
+  it("keeps the agreement open when the backend rejects current owner authority", async () => {
+    practiceApi.getPractice.mockResolvedValue(stale())
+    practiceApi.acceptPracticeBaa.mockRejectedValueOnce(
+      new Error("Only the practice owner can accept the BAA."),
+    )
+    openSettings()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review current BAA" }),
+    )
+    await screen.findByText("Current synthetic agreement text")
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /accepting individual/i }),
+      { target: { value: "Synthetic Owner" } },
+    )
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /I have read and agree/i }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "I Agree" }))
+    expect(
+      await screen.findByText("Only the practice owner can accept the BAA."),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("region", { name: "Review practice agreement" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/agreement status is up to date/i),
+    ).not.toBeInTheDocument()
+    expect(practiceApi.getBaaAcceptances).toHaveBeenCalledTimes(1)
+  })
+
+  it("removes an open signing form if support view becomes active", async () => {
+    practiceApi.getPractice.mockResolvedValue(stale())
+    const router = openSettings()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Review current BAA" }),
+    )
+    await screen.findByText("Current synthetic agreement text")
+    await act(async () => {
+      supportView.active = true
+      await router.revalidate()
+    })
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: "I Agree" }),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole("button", { name: "Review current BAA" }),
+    ).not.toBeInTheDocument()
+    expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
   })
 })
