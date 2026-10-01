@@ -49,6 +49,7 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "visit_prep_legal_hold": "visit_prep_legal_hold_guard_mutation",
     "visit_prep_question_response": "visit_prep_response_guard_mutation",
     "visit_prep_contribution_event": "visit_prep_contribution_guard_mutation",
+    "visit_prep_synthesis_artifact": "visit_prep_brief_guard_mutation",
     "scribe_capture_source_version": "scribe_working_source_immutable",
     "scribe_capture_gap_manifest": "scribe_gap_manifest_immutable",
     "scribe_capture_note_edit": "scribe_note_edit_immutable",
@@ -83,6 +84,7 @@ _APPEND_ONLY_TEST_TRIGGERS = {
 }
 
 _TRUNCATE_TEST_TRIGGERS = {
+    "visit_prep_synthesis_artifact": "visit_prep_brief_guard_truncate",
     "visit_prep_question_response": "visit_prep_response_guard_truncate",
     "visit_prep_contribution_event": "visit_prep_contribution_guard_truncate",
 }
