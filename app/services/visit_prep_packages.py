@@ -136,7 +136,13 @@ def _audit(
     prep_id: TypeIDType | None,
     at: datetime,
     source_version: str | None = None,
-    operation: Literal["read", "synthesis_read", "synthesis_published"] = "read",
+    operation: Literal[
+        "read",
+        "synthesis_read",
+        "synthesis_published",
+        "synthesis_requested",
+        "synthesis_sources_selected",
+    ] = "read",
 ) -> None:
     # Existing Core audit store; no new identity binding is fabricated. Locked
     # canonical owner references attribute the provider-authorized operation.
@@ -162,7 +168,7 @@ def _audit(
             ),
             intent=(
                 "provider_previsit_synthesis"
-                if operation == "synthesis_published"
+                if operation in {"synthesis_published", "synthesis_requested"}
                 else "provider_previsit_review"
             ),
             request_digest=source_version,
