@@ -1655,6 +1655,94 @@ def _read_multi_practice_roster_manifest(path_value: str):
     return assignments, slug, domain, hashlib.sha256(raw).hexdigest()
 
 
+@app.command("transfer-practice-owner")
+def transfer_practice_owner_command(
+    practice_id: str = typer.Option(..., help="Exact existing Practice TypeID."),
+    expected_owner_subject: str = typer.Option(
+        ..., help="Exact current owner's Clerk subject."
+    ),
+    new_owner_subject: str = typer.Option(
+        ..., help="Exact existing workforce member's Clerk subject."
+    ),
+    transfer_ref: str = typer.Option(..., help="Unique opaque transfer reference."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Non-sensitive lowercase reason code."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None, help="Exact plan hash from the reviewed dry run; required with --apply."
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply the reviewed ownership transfer."
+    ),
+    recover_orphaned_owner: bool = typer.Option(
+        False,
+        "--recover-orphaned-owner",
+        help="Require current exact not-found proof for the prior owner's sign-in.",
+    ),
+) -> None:
+    """Preview one owner correction; retain the former owner as workforce.
+
+    No member is created, moved, revoked or re-attested. BAA, billing, provider
+    bindings, account roles, clinical records and access grants remain intact.
+    """
+    from app.configuration.clerk import prove_absent_owner_identity
+    from app.services.clerk_identity import verified_primary_email
+    from app.services.practice_owner_transfer import (
+        PracticeOwnerTransferError,
+        transfer_practice_owner,
+    )
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    target = _typeid(practice_id, "practice")
+    # Keep the confirming email out of shell history, process arguments and logs.
+    email = typer.prompt("Exact new owner's verified primary email", hide_input=True)
+    try:
+        with global_session():
+            plan = transfer_practice_owner(
+                practice_id=target,
+                expected_owner_subject=expected_owner_subject,
+                new_owner_subject=new_owner_subject,
+                new_owner_email_confirmation=email,
+                transfer_ref=transfer_ref,
+                operator_ref=operator_ref,
+                reason=reason,
+                verify_primary_email=verified_primary_email,
+                recover_orphaned_owner=recover_orphaned_owner,
+                verify_owner_absence=(
+                    prove_absent_owner_identity if recover_orphaned_owner else None
+                ),
+                apply=apply,
+                confirm_plan_sha256=confirm_plan_sha256,
+            )
+        state = (
+            "already applied"
+            if plan.already_applied
+            else ("applied" if apply else "valid")
+        )
+        prefix = "Ownership transfer" if apply else "DRY RUN: ownership transfer"
+        typer.echo(
+            f"{prefix} {state}; practice_id={plan.practice_id} "
+            f"previous_owner_member_id={plan.previous_owner_member_id} "
+            f"new_owner_member_id={plan.new_owner_member_id} "
+            f"plan_sha256={plan.plan_sha256} audit={plan.audit_id or 'none'}."
+        )
+        typer.echo(
+            "The former owner remains workforce. No legal acceptance or processing grant is created."
+        )
+    except PracticeOwnerTransferError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SQLAlchemyError:
+        message = (
+            "ownership transfer outcome is unconfirmed; inspect the exact transfer "
+            "receipt and current owner before any retry"
+            if apply
+            else "ownership transfer preflight failed; no mutation was requested"
+        )
+        raise typer.BadParameter(message) from None
+
+
 @app.command("bootstrap-provider-practice")
 def bootstrap_provider_practice_command(
     manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),
