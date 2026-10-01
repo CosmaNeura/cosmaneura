@@ -45,6 +45,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Current contribution and correction/review commands | New work using the recovered interview authorization, question validation and encryption primitives | Add one internal current-contribution projection with original wording/source IDs, effective corrections, current applicability and separate completion/review evidence. Add domain commands that reacquire current authority and confirmation evidence, append encrypted corrections, reject stale bases and preserve exact retries. Reviews require every applicable topic to have an answer or explicit skip. Return value-free receipts. No public correction/read route or patient review UI is mounted. |
 | Answers to newly revealed conditional topics | New work for the approved correction/review loop | Generate `fe53eb110e32` after `4ad34f59136c`. Add a nullable exact-version question reference and closed `topic_answer` event shape. Record answer/skip and later revisions in the same immutable contribution sequence, preserving the first additional source separately from the original interview. Keep original response and retention guards unchanged. |
 | Gated patient contribution read and revision API | New work using the contribution domain commands and existing public privacy boundary | Add three POST operations for saved-answer review, correction and confirmation of the exact current contribution. Recheck the current invitation, recipient first name and confirmed role on every operation. Expose only applicable topics and their initial/current wording; omit internal source IDs and retained hidden answers. Corrections and reviews return value-free receipts. All three consume the existing confirmation-attempt limits. |
+| Patient saved-answer review and correction UI | New work using the existing patient public client, branded interview frame and one-topic form | Add an explicit saved-answer review step before or after original completion. Re-enter recipient evidence before disclosure; display current wording, caregiver attribution, skips and retained initial wording. Freeze uncertain requests and retry the exact payload/UUID; reload Core applicability after corrections. Permit newly relevant topics to be answered or skipped and confirm the exact current contribution without clinician-review claims. Clear displayed answers on focus loss and discard them on support-view/current-authority denial. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -159,10 +160,30 @@ confirmation buckets; no release control or limit was relaxed. Independent
 synthetic HTTP journeys have separate transport peers so their legitimate
 network counters do not contaminate one another.
 
-Patient correction/review UI and bounded AI clarification are next.
+The patient review UI passed 168 focused frontend tests across fourteen files,
+including ten new review/recovery cases, eight strict public-client cases and
+one patient-route support-view clearing case. Full frontend typecheck passed
+after generating the existing account SDK with the repository-pinned 0.97.3
+generator; the older locally installed generator output was superseded and no
+generated files changed. Formatting, public-client lint and browser-test
+typechecks passed. The production-bundled test build used invented settings;
+no deployment was performed.
+
+Four built-browser acceptance scenarios passed against the real app and
+disposable PostgreSQL/Redis: original-story correction and adherence correction
+that reveals a previously hidden barrier, each on desktop and mobile. They
+exercise lost acknowledgments and exact retries, original encrypted wording
+preservation, caregiver attribution, a newly relevant explicit skip, current
+review confirmation, no credential/answer persistence, and support-view
+clearing. Synthetic review screenshots were visually inspected at both sizes,
+with no horizontal overflow. These checks qualify deterministic review, not AI,
+a provider package or delivery.
+
+The shared provider package and dashboard are next, alongside bounded AI
+clarification and the approved delivery reuse work.
 Storage, the internal current contribution and correction/review domain commands
-now include answering or skipping newly applicable conditional topics, but the
-patient cannot yet review or correct persisted responses through the browser.
+now include answering or skipping newly applicable conditional topics through
+the patient browser as well as the API.
 Newly revealed answers have their own immutable source; they are not fabricated
 original interview rows. Missing ordinary interview topics still use the original
 ordered capture flow.

@@ -57,6 +57,9 @@ function setup(initial = invited) {
     submit: vi.fn(),
     complete: vi.fn(),
     reportWrongRecipient: vi.fn().mockResolvedValue(undefined),
+    readContribution: vi.fn(),
+    correctContribution: vi.fn(),
+    reviewContribution: vi.fn(),
     dispose: vi.fn(),
   }
   const makeClient = vi.fn(() => client)
@@ -73,6 +76,51 @@ afterEach(() => {
 })
 
 describe("patient journey", () => {
+  it("mounts review only after an explicit choice and clears saved answers on support-view denial", async () => {
+    const { client, makeClient } = setup({
+      ...invited,
+      status: "completed",
+      submitted_questions: 4,
+    })
+    client.readContribution.mockResolvedValue({
+      basis: { original_response_count: 4, event_sequence: 0 },
+      actor_role: "patient",
+      original_interview_completed: true,
+      current_answers_complete: true,
+      current_answers_reviewed: false,
+      topics: [
+        {
+          question: state("story", 5).current_question,
+          response_kind: "answered",
+          answer: "Private saved invented story.",
+          initial_response_kind: "answered",
+          initial_answer: "Private saved invented story.",
+          changed: false,
+          recorded_at: "2099-01-01T12:00:00Z",
+        },
+      ],
+    })
+    render(<PatientInterview makeClient={makeClient} />)
+    await screen.findByRole("heading", { name: "Visit Prep complete" })
+    expect(client.readContribution).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review or change saved answers" }),
+    )
+    fireEvent.change(screen.getByLabelText("Recipient first name"), {
+      target: { value: "José" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Show saved answers" }))
+    await screen.findByText("Private saved invented story.")
+    await act(async () =>
+      window.dispatchEvent(new Event("cosmaneura:view-as-hard-block")),
+    )
+    await screen.findByRole("alert")
+    expect(
+      screen.queryByText("Private saved invented story."),
+    ).not.toBeInTheDocument()
+    expect(client.dispose).toHaveBeenCalledOnce()
+  })
+
   it("clears its draft when support-view state changes, ignoring a late response", async () => {
     const { client, makeClient } = setup(state("story", 5))
     let resolve!: (value: PatientInterviewState) => void

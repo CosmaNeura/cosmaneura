@@ -70,6 +70,105 @@ const mutation = z
   .strict()
 const reported = z.object({ disposition: z.literal("reported") }).strict()
 
+const contributionBasis = z
+  .object({
+    original_response_count: z.number().int().min(0).max(5),
+    event_sequence: z.number().int().min(0),
+  })
+  .strict()
+  .refine(
+    (value) => value.original_response_count > 0 || value.event_sequence === 0,
+  )
+const responseKind = z.enum(["answered", "skipped"])
+const reviewTopic = z
+  .object({
+    question,
+    response_kind: responseKind.nullable(),
+    answer: z.string().min(1).max(2_000).nullable(),
+    initial_response_kind: responseKind.nullable(),
+    initial_answer: z.string().min(1).max(2_000).nullable(),
+    changed: z.boolean(),
+    recorded_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict()
+  .superRefine((topic, context) => {
+    const validAnswer = (kind: string | null, answer: string | null) =>
+      kind === "answered" ? answer !== null : answer === null
+    if (
+      !validAnswer(topic.response_kind, topic.answer) ||
+      !validAnswer(topic.initial_response_kind, topic.initial_answer) ||
+      (topic.question.kind !== "choice" &&
+        topic.question.choices.length !== 0) ||
+      (topic.question.kind === "choice" &&
+        topic.question.choices.length === 0) ||
+      topic.changed !==
+        (topic.response_kind !== topic.initial_response_kind ||
+          topic.answer !== topic.initial_answer)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid Visit Prep topic",
+      })
+  })
+export const visitPrepPatientContribution = z
+  .object({
+    basis: contributionBasis,
+    actor_role: z.enum(["patient", "caregiver"]),
+    original_interview_completed: z.boolean(),
+    current_answers_complete: z.boolean(),
+    current_answers_reviewed: z.boolean(),
+    topics: z.array(reviewTopic).min(1).max(5),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const keys = value.topics.map((topic) => topic.question.key)
+    const complete = value.topics.every((topic) => topic.response_kind !== null)
+    if (
+      new Set(keys).size !== keys.length ||
+      value.topics.some(
+        (topic, index) =>
+          index > 0 &&
+          topic.question.position <= value.topics[index - 1].question.position,
+      ) ||
+      !value.topics.some(
+        (topic) =>
+          topic.question.key === "story" && topic.question.kind === "story",
+      ) ||
+      value.current_answers_complete !== complete ||
+      (value.current_answers_reviewed && !value.current_answers_complete)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid Visit Prep contribution",
+      })
+  })
+const contributionReceipt = z
+  .object({
+    disposition: z.enum(["accepted", "replayed"]),
+    basis: contributionBasis,
+    current_answers_complete: z.boolean(),
+    current_answers_reviewed: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      !value.current_answers_reviewed || value.current_answers_complete,
+  )
+
+export type PatientContribution = z.infer<typeof visitPrepPatientContribution>
+export type PatientContributionReceipt = z.infer<typeof contributionReceipt>
+export type PatientConfirmation = {
+  first_name: string
+  role: "patient" | "caregiver"
+}
+export type PatientContributionChange = PatientConfirmation &
+  PatientResponse & {
+    basis: PatientContribution["basis"]
+  }
+export type PatientContributionReview = PatientConfirmation & {
+  basis: PatientContribution["basis"]
+}
+
 export type PatientInterviewState = z.infer<typeof visitPrepPatientState>
 export type PatientInterviewQuestion = NonNullable<
   PatientInterviewState["current_question"]
@@ -194,6 +293,12 @@ export function createVisitPrepPatientClient(
     reportWrongRecipient: async () => {
       await request("/wrong-recipient", reported)
     },
+    readContribution: (confirmation: PatientConfirmation) =>
+      request("/contribution", visitPrepPatientContribution, confirmation),
+    correctContribution: (payload: PatientContributionChange, key: string) =>
+      request("/contribution/response", contributionReceipt, payload, key),
+    reviewContribution: (payload: PatientContributionReview, key: string) =>
+      request("/contribution/review", contributionReceipt, payload, key),
     dispose: () => {
       bearer = null
       controllers.forEach((controller) => controller.abort())
