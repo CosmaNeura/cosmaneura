@@ -18,6 +18,7 @@ import {
 } from "~/lib/visit-prep-patient-api"
 
 import { InterviewFrame } from "./InterviewFrame"
+import { PatientContributionReview } from "./PatientContributionReview"
 import { QuestionForm } from "./QuestionForm"
 
 const FAILURE_COPY = {
@@ -33,7 +34,7 @@ const FAILURE_COPY = {
 
 type PendingAnswer = { payload: PatientResponse; key: string }
 
-/** Synthetic-ready deterministic journey; corrections and bounded AI follow next. */
+/** Deterministic interview and saved-answer review; bounded AI follows next. */
 export function PatientInterview({
   makeClient = createVisitPrepPatientClient,
 }: {
@@ -54,6 +55,26 @@ export function PatientInterview({
     null,
   )
   const [reported, setReported] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const [contributionComplete, setContributionComplete] = useState<
+    boolean | null
+  >(null)
+
+  function discardPatientState() {
+    generation.current += 1
+    busyRef.current = false
+    client.current?.dispose()
+    client.current = null
+    pendingAnswer.current = null
+    forgetVisitPrepCredential()
+    setState(null)
+    setDraft("")
+    setFirstName("")
+    setReviewing(false)
+    setContributionComplete(null)
+    setError("unavailable")
+    setBusy(false)
+  }
 
   async function run(
     operation: () => Promise<PatientInterviewState | void>,
@@ -76,13 +97,7 @@ export function PatientInterview({
         failure instanceof VisitPrepPatientFailure ? failure.code : "temporary"
       setError(code)
       if (code === "unavailable") {
-        client.current?.dispose()
-        client.current = null
-        pendingAnswer.current = null
-        forgetVisitPrepCredential()
-        setState(null)
-        setDraft("")
-        setFirstName("")
+        discardPatientState()
       }
     } finally {
       if (generation.current === requestGeneration) {
@@ -111,19 +126,7 @@ export function PatientInterview({
       setError("temporary")
       setBusy(false)
     }
-    const forget = () => {
-      generation.current += 1
-      busyRef.current = false
-      client.current?.dispose()
-      client.current = null
-      pendingAnswer.current = null
-      forgetVisitPrepCredential()
-      setState(null)
-      setDraft("")
-      setFirstName("")
-      setError("unavailable")
-      setBusy(false)
-    }
+    const forget = discardPatientState
     window.addEventListener("pagehide", forget)
     window.addEventListener(VIEW_AS_HARD_BLOCK_EVENT, forget)
     const unsubscribe = subscribeToViewAsStateChanges(forget)
@@ -229,6 +232,8 @@ export function PatientInterview({
         setState(null)
         setDraft("")
         setFirstName("")
+        setReviewing(false)
+        setContributionComplete(null)
         setReported(true)
       }
     })
@@ -250,6 +255,13 @@ export function PatientInterview({
             This invitation has been stopped. Do not forward or use the link.
           </p>
         </section>
+      ) : reviewing && client.current ? (
+        <PatientContributionReview
+          client={client.current}
+          onUnavailable={discardPatientState}
+          onClose={() => setReviewing(false)}
+          onStatus={(complete) => setContributionComplete(complete)}
+        />
       ) : state?.status === "confirmation_required" ? (
         <form
           onSubmit={(event) => {
@@ -320,8 +332,16 @@ export function PatientInterview({
             to mark this preparation complete.
           </p>
           <Button
-            className="mt-6"
+            className="mt-6 mr-3"
+            variant="outline"
             disabled={busy}
+            onClick={() => setReviewing(true)}
+          >
+            Review or change saved answers
+          </Button>
+          <Button
+            className="mt-6"
+            disabled={busy || contributionComplete === false}
             onClick={() => void run(() => client.current!.complete())}
           >
             {busy ? "Finishing…" : "Finish Visit Prep"}
@@ -329,21 +349,39 @@ export function PatientInterview({
         </section>
       ) : state?.status === "completed" ? (
         <section role="status">
-          <h1 className="text-2xl font-semibold">Visit Prep complete</h1>
+          <h1 className="text-2xl font-semibold">
+            {contributionComplete === false
+              ? "An updated topic needs a response"
+              : "Visit Prep complete"}
+          </h1>
           <p className="mt-3">
             Your responses have been saved for your care team. This does not
             mean a provider has reviewed them.
           </p>
+          {contributionComplete === false && (
+            <p className="mt-3">
+              A change made another topic relevant. Answer or skip it in your
+              saved-answer review.
+            </p>
+          )}
+          <Button
+            className="mt-6"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setReviewing(true)}
+          >
+            Review or change saved answers
+          </Button>
         </section>
       ) : busy ? (
         <p role="status">Loading your preparation…</p>
       ) : null}
-      {error && (
+      {!reviewing && error && (
         <p role="alert" className="mt-6 text-sm text-red-700">
           {FAILURE_COPY[error]}
         </p>
       )}
-      {error && client.current && !busy && (
+      {!reviewing && error && client.current && !busy && (
         <div className="mt-4 flex flex-wrap gap-3">
           {pendingAnswer.current && error !== "conflict" && (
             <Button onClick={retryAnswer}>Retry same save</Button>
@@ -364,7 +402,7 @@ export function PatientInterview({
           )}
         </div>
       )}
-      {!reported && client.current && (
+      {!reported && !reviewing && client.current && (
         <Button
           variant="ghost"
           className="mt-8 self-start"
