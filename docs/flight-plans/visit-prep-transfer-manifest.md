@@ -57,6 +57,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Patient-source synthesis contract and dormant model adapter | Archived brief behavior at Core `b164ad7a8121ea08794d09f832d8ca7b7ee23f92`; current Session Prep generator/worker patterns at `c5cd21ec2e09758a335c739f339a40c6a2649e99`; new implementation | Preserve the concise headline, reported information and discussion priorities, but replace legacy Intake/chart assumptions with current Visit Prep sources. Add bounded sections, exact supporting quotes, current response/revision references and separate missing/skipped metadata. Use Core's existing Azure client with strict schema, zero automatic retries and bounded timeout. Require a usage-recorder callback before returning generated content. No route, job, artifact persistence or live model call is introduced. |
 | Encrypted immutable synthesis artifacts | Current Visit Prep encryption, aggregate retention and immutable response guards; Session Prep source/profile uniqueness pattern; new implementation | Generate additive revision `1cc41ced28aa` after `fe53eb110e32`. Store the brief and exact selected patient-source snapshot only in an explicit encrypted envelope. Bind metadata to question/schedule/credential lineage, contribution basis and generator/prompt/model profile. Serialize writes on the parent; reject stale basis, duplicate source/profile, mutation, standalone deletion and truncation. Preserve parent retention/legal holds and new-patient support without a fabricated chart. No runtime publication, reader or worker is mounted. |
 | Owner-authorized synthesis publication and read domain | Current locked Visit Prep owner/source package and explicit artifact codec; Session Prep retry/publication pattern; new implementation | Share one transaction-bound package loader. Reacquire current owner authority, exact source hash, complete selected wording, attribution, review and lineage before publishing. Deduplicate the first valid source/profile artifact without overwrite. Read only the current artifact and return value-free missing/stale status for prior output without decrypting it. Commit content-free Core audits before any result. No route, build lease, worker or model call is mounted. |
+| Durable synthesis queue and source-selection leases | Current Session Prep short-lease and bounded-retry pattern; Visit Prep owner/package authorization and encryption | Generate additive revision `2f87498bb9fa` after `1cc41ced28aa`. Keep one build per preparation/profile with an encrypted, context-bound original requester, source version, epoch, three-attempt limit and 90-second lease. Recheck owner access, identity, current answers and the lease before returning model sources. Superseded work is requeued under a new epoch; stale workers cannot release a newer claim. No model caller, publication worker or API is mounted. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -304,9 +305,37 @@ retained owner access after public invitation expiry and expired entitlement at
 the final database clock. These remain synthetic domain results, not clinical
 quality, an operational worker or a dashboard synthesis demonstration.
 
-Build/lease storage, durable usage recording, the recoverable worker and dashboard
-synthesis display remain the next synthesis increments. A worker must enforce
-its current lease and durable central-ledger recording before publication;
+The durable queue now supports authorized same-source requests, bounded attempts,
+short leases and current-source selection without requiring a chart. Request
+retries do not reset attempts, backoff or a running lease. An expired claim can
+be reclaimed, while the old worker cannot select sources or release the new
+claim. Changed answers, patient review or credential rotation before selection
+requeue current sources under a new epoch without returning old answers. Access,
+identity or quarantine denial ends the claim. The requester envelope is encrypted
+and bound to the preparation, owner and generation profile; job records contain
+no patient text or invitation secret. Successful requests/source selections
+require content-free Core audits. Operational job state is mutable and disposable
+through parent cleanup; it is not a clinical artifact or a second usage ledger.
+
+The focused queue, migration and independent-connection selection passed 45
+checks. One populated-expand case requires an explicit prior migration target
+and passed separately: all original sources and the immutable encrypted brief
+were unchanged. Real PostgreSQL races cover concurrent request deduplication,
+one live claim, skip-locked polling and current sources/BAA rechecked after an
+actual owner-lock wait. Other checks cover encrypted requester context, final
+lease expiry, profile changes, all-skipped input and parent legal holds. Scoped
+lint/format and implementation types passed. These are dormant queue results,
+not evidence of model execution, usage accounting or worker publication.
+
+The expanded backend/browser regression passed 804 checks with 52 existing
+framework-deprecation warnings. Its two migration-target cases are skipped in
+the full graph run; the build expand passed separately over the prior populated
+graph, and the artifact expand has its separately recorded rehearsal. No
+frontend source, model adapter, release control or external service changed.
+
+Durable usage recording, lease-checked atomic publication, the recoverable worker
+and dashboard synthesis display remain the next synthesis increments. A worker
+must enforce its current lease and durable central-ledger recording before publication;
 these domain functions do not substitute for those conditions. Bounded patient AI
 clarification and the approved delivery reuse work remain separate work.
 Storage, the internal current contribution and correction/review domain commands
@@ -323,8 +352,8 @@ retention triggers rather than copying obsolete migration ancestry.
 End-to-end synthesis, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan. Only the synthesis contract,
-dormant adapter, artifact expand and owner publication/read domain described
-above are implemented; none of these complete flows
+dormant adapter, artifact expand, owner publication/read domain and durable queue
+described above are implemented; none of these complete flows
 is marked ready. Pin selected external revisions and record each adaptation here.
 
 Deployment, actual patient messages, cohort activation and workspace retirement
