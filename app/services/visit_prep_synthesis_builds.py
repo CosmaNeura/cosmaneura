@@ -1,8 +1,8 @@
-"""Dormant authorized queue/lease recovery; never invokes a model or publishes.
+"""Authorized queue/lease recovery; never invokes a model or publishes itself.
 
 Claiming exposes only an opaque fence. Source selection then reacquires the
 original requester, owner authority and current contribution in canonical lock
-order. A future worker must also record central usage and publish atomically
+order. The gated worker also records central usage and publishes atomically
 with its still-current lease; these functions do not bypass either requirement.
 """
 

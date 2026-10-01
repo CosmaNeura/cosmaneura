@@ -1,4 +1,4 @@
-"""Dormant, content-free batch accounting in Core's single model-usage ledger.
+"""Content-free batch accounting in Core's single model-usage ledger.
 
 An intent commits before model work. A result is a separate immutable fact,
 including unavailable usage after failures. A crash leaves an unmatched intent,
