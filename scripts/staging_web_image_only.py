@@ -314,6 +314,8 @@ def observe(
         "ready_image": image(revision["template"]),
         "identity_sha256": digest(raw.get("identity")),
         "configuration_sha256": digest(app["configuration"]),
+        "raw_template_sha256": digest(template),
+        "raw_ready_template_sha256": digest(revision["template"]),
         "template_sha256": digest(template_projection(template)),
         "template_without_image_sha256": digest(
             template_projection(template, without_image=True)
@@ -523,6 +525,7 @@ def release(
         )["properties"]
         require(retained["provisioningState"] == "Provisioned")
         require(image(retained["template"]) == prior[WEB]["image"])
+        require(digest(retained["template"]) == prior[WEB]["raw_ready_template_sha256"])
         require(
             digest(template_projection(retained["template"], without_image=True))
             == prior[WEB]["ready_template_without_image_sha256"]

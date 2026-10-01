@@ -28,6 +28,8 @@ def proof(name):
         "identity_sha256": "1" * 64,
         "configuration_sha256": "2" * 64,
         "template_sha256": "3" * 64,
+        "raw_template_sha256": "3" * 64,
+        "raw_ready_template_sha256": "3" * 64,
         "template_without_image_sha256": "4" * 64,
         "ready_template_without_image_sha256": "4" * 64,
         "effective_runtime_sha256": "5" * 64,
@@ -283,6 +285,7 @@ def test_recovery_keeps_siblings_and_restores_only_bound_web_image(
     }
     template = {"containers": [{"image": OLD}]}
     template_hash = m["digest"](m["template_projection"](template, without_image=True))
+    baseline["workloads"][WEB]["raw_ready_template_sha256"] = m["digest"](template)
     baseline["workloads"][WEB]["ready_template_without_image_sha256"] = template_hash
     current[WEB]["ready_template_without_image_sha256"] = template_hash
     # Failed candidate is latest while the old revision still serves traffic.
