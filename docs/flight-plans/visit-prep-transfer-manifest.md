@@ -55,6 +55,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Provider source package and preparation list | New work using the current locked contribution projection, owner authorization and Core audit store | Add bounded owner-only pagination and a current-answer package with source version, original and revised wording, skips, missing topics and caregiver attribution. Exclude hidden conditional answers from the wire. Recheck locked identity, workforce authorization, BAA, entitlement, rollout, optional chart links and quarantine. Reject support-view disclosure. Retained provider reads do not depend on the public patient gate or invitation expiry. Record content-free read audits. No model synthesis or bot read capability is introduced. |
 | Provider package dashboard | New `VisitPrepPackages.tsx`, existing current account SDK, support-view change events and dashboard route | Read preparations and answers only on explicit selection. Display patient/caregiver report, current words, missing/skipped topics, original wording and source provenance. Clear content before reload, on focus loss, account/access changes or support-view hard block; discard late replies. Reuse the generated SDK and no-store requests. A local synthetic harness exercises the actual component and real API at desktop/mobile sizes, replacing only account authentication/bootstrap. |
 | Patient-source synthesis contract and dormant model adapter | Archived brief behavior at Core `b164ad7a8121ea08794d09f832d8ca7b7ee23f92`; current Session Prep generator/worker patterns at `c5cd21ec2e09758a335c739f339a40c6a2649e99`; new implementation | Preserve the concise headline, reported information and discussion priorities, but replace legacy Intake/chart assumptions with current Visit Prep sources. Add bounded sections, exact supporting quotes, current response/revision references and separate missing/skipped metadata. Use Core's existing Azure client with strict schema, zero automatic retries and bounded timeout. Require a usage-recorder callback before returning generated content. No route, job, artifact persistence or live model call is introduced. |
+| Encrypted immutable synthesis artifacts | Current Visit Prep encryption, aggregate retention and immutable response guards; Session Prep source/profile uniqueness pattern; new implementation | Generate additive revision `1cc41ced28aa` after `fe53eb110e32`. Store the brief and exact selected patient-source snapshot only in an explicit encrypted envelope. Bind metadata to question/schedule/credential lineage, contribution basis and generator/prompt/model profile. Serialize writes on the parent; reject stale basis, duplicate source/profile, mutation, standalone deletion and truncation. Preserve parent retention/legal holds and new-patient support without a fabricated chart. No runtime publication, reader or worker is mounted. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -255,7 +256,29 @@ One test exercises the actual Azure SDK with a local fake HTTP transport; no
 external request occurs. Scoped Ruff/format and focused Pyright pass. Existing
 frontend source and runtime flags are unchanged.
 
-Immutable encrypted artifact/build storage, source-version revalidation at
+The synthesis contract is published as draft PR 581 at `0d408537`; it remains
+unmerged. The subsequent artifact expand adds immutable encrypted storage and
+an explicit codec. Decoding compares the complete selected-source manifest and
+revalidates the brief; changed source version, wording, attribution or review
+state cannot silently reuse a prior envelope. Ciphertext is excluded from ORM
+serialization/repr; no transparent decryption or plaintext artifact column is
+introduced. Mechanical validation is not clinical verification or authorization.
+
+The expanded synthetic regression passed 720 backend/browser checks with 52
+existing framework warnings. Its one skipped case requires an explicit
+pre-expand migration target and passed separately over a populated disposable
+database at `fe53eb110e32`. All prior aggregate, schedule, credential, original
+response and contribution columns remained unchanged through the expand.
+Real independent-connection races prove one sequential artifact under concurrent
+same-source inserts and stale-publication rejection after a correction or
+quarantine commits. The explicit truncate trigger is tested after a committed
+insert; transaction-level pending-FK rejection is not substituted for it.
+Historical retained-owner storage does not depend on public credential expiry,
+and parent retention/legal holds control aggregate-only cleanup. Scoped lint,
+format and focused implementation types passed. No frontend or release flag
+changed.
+
+Build/lease storage, full source-version and current-authority revalidation at
 publication, durable usage recording, the recoverable worker and dashboard
 synthesis display remain the next synthesis increments. Bounded patient AI
 clarification and the approved delivery reuse work remain separate work.
@@ -272,8 +295,8 @@ retention triggers rather than copying obsolete migration ancestry.
 
 End-to-end synthesis, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
-Their source inventory is in the approved plan. Only the synthesis contract and
-dormant adapter described above are implemented; none of these complete flows
+Their source inventory is in the approved plan. Only the synthesis contract,
+dormant adapter and artifact expand described above are implemented; none of these complete flows
 is marked ready. Pin selected external revisions and record each adaptation here.
 
 Deployment, actual patient messages, cohort activation and workspace retirement
