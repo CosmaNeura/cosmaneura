@@ -1,4 +1,5 @@
 import { ViewAsProtectedErrorGuard } from "~/components/ViewAsRouteGuard"
+import { isVisitPrepPatientBrowser } from "~/lib/visit-prep-browser"
 import {
   environmentName,
   isDevelopment,
@@ -27,7 +28,7 @@ function SentryFallback() {
   )
 }
 
-if (isProduction()) {
+if (isProduction() && !isVisitPrepPatientBrowser()) {
   // TODO fix up react router when rr7 is supported https://docs.sentry.io/platforms/javascript/guides/react/features/react-router/
   Sentry.init({
     dsn: requireEnv("VITE_SENTRY_DSN"),
@@ -38,7 +39,8 @@ if (isProduction()) {
 
     integrations: [
       Sentry.browserTracingIntegration({
-        shouldCreateSpanForRequest: shouldCreateSentryRequestSpan,
+        shouldCreateSpanForRequest: (url) =>
+          !isVisitPrepPatientBrowser() && shouldCreateSentryRequestSpan(url),
       }),
       // TODO(mbianco) we should add react-router 7 integration when it's available
       // Session Replay is intentionally disabled for the clinical app. Its
@@ -58,10 +60,15 @@ if (isProduction()) {
     // Azure upload URLs and public intake paths carry bearer credentials. Keep
     // normal request telemetry, but prevent those credentials from entering
     // any Sentry payload shape even if SDK instrumentation changes.
-    beforeBreadcrumb: scrubSentryBreadcrumb,
-    beforeSend: scrubSentryErrorEvent,
+    // Recheck at collection time as well: a client-side navigation can enter
+    // the patient boundary after the account app initialized Sentry.
+    beforeBreadcrumb: (breadcrumb) =>
+      isVisitPrepPatientBrowser() ? null : scrubSentryBreadcrumb(breadcrumb),
+    beforeSend: (event) =>
+      isVisitPrepPatientBrowser() ? null : scrubSentryErrorEvent(event),
     beforeSendSpan: scrubSentrySpan,
-    beforeSendTransaction: scrubSentryTransaction,
+    beforeSendTransaction: (event) =>
+      isVisitPrepPatientBrowser() ? null : scrubSentryTransaction(event),
 
     // TODO(mbianco) pull domain from ENV, maybe using a python CLI to inject the domain?
     // TODO(mbianco) should pull localias as well

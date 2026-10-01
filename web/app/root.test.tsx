@@ -54,6 +54,24 @@ afterEach(() => {
 })
 
 describe("Root App", () => {
+  it("uses the isolated patient outlet without bootstrapping provider session checks", () => {
+    const router = createMemoryRouter(
+      [
+        {
+          path: "/",
+          element: <App />,
+          children: [
+            { path: "visit-prep", element: <p>Patient-only workflow</p> },
+          ],
+        },
+      ],
+      { initialEntries: ["/visit-prep"] },
+    )
+    render(<RouterProvider router={router} />)
+    expect(screen.getByText("Patient-only workflow")).toBeInTheDocument()
+    expect(checkAuthenticatedViewAsStatus).not.toHaveBeenCalled()
+    expect(checkViewAsStatus).not.toHaveBeenCalled()
+  })
   it("renders without crashing", async () => {
     const router = createMemoryRouter([
       {

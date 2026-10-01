@@ -9,6 +9,7 @@ import React, { createContext, useContext, useRef } from "react"
 
 import { posthog } from "posthog-js"
 
+import { isVisitPrepPatientPath } from "~/lib/visit-prep-browser"
 import { isDevelopment, isTesting, requireEnv } from "~/utils/environment"
 
 type PosthogType = typeof posthog | undefined
@@ -35,6 +36,7 @@ export function isPublicIntakeLocation(
 
   return (
     hostname === configuredDomain ||
+    isVisitPrepPatientPath(pathname) ||
     pathname === "/chat/intake" ||
     pathname.startsWith("/chat/intake/")
   )

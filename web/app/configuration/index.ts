@@ -1,4 +1,6 @@
 // should be imported *first* before any other application logic
+import "~/lib/visit-prep-browser"
+
 import withClerkProvider from "./clerk"
 import "./client"
 import "./logging"

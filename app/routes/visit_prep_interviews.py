@@ -27,6 +27,7 @@ from starlette.routing import Match
 from starlette.types import Receive, Scope, Send
 
 from app import log
+from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services import visit_prep_interviews as interview_service
 from app.services import visit_prep_rate_limits as rate_limits
 from app.services.visit_prep_interview_contract import (
@@ -206,7 +207,11 @@ class _SensitivePublicVisitPrepRoute(APIRoute):
                     429: _RATE_LIMIT_DETAIL,
                     503: _TEMPORARY_DETAIL,
                 }
-                status_code = exc.status_code if exc.status_code in details else 503
+                status_code = (
+                    404
+                    if exc.status_code == 403
+                    else (exc.status_code if exc.status_code in details else 503)
+                )
                 return JSONResponse(
                     status_code=status_code,
                     content={"detail": details[status_code]},
@@ -504,7 +509,7 @@ def require_public_visit_prep_bearer(
 visit_prep_interviews_api_app = APIRouter(
     prefix="/external/v1/visit-prep",
     tags=["visit-prep-public"],
-    dependencies=[Depends(aglobal_session)],
+    dependencies=[Depends(deny_view_as_browser_activity), Depends(aglobal_session)],
     route_class=_SensitivePublicVisitPrepRoute,
     responses=_ERROR_RESPONSES,
 )

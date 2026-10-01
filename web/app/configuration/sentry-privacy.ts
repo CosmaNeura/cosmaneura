@@ -26,6 +26,9 @@ const INVITE_PATH_FRAGMENT_PATTERN =
   /(\/invite\/?(?:\?[^#\s"'<>]*)?)#[^\s"'<>]*/giu
 const BEARER_CREDENTIAL_PATTERN = /\bbearer\s+[a-z0-9._~+/=-]+/giu
 const MOUNT_CONTEXT_TOKEN_PATTERN = /\bmctx_[a-z0-9._~-]+\b/giu
+const VISIT_PREP_TOKEN_PATTERN = /\bvp1_[a-z0-9_-]+\b/giu
+const VISIT_PREP_FRAGMENT_PATTERN =
+  /(\/visit-prep\/?(?:\?[^#\s"'<>]*)?)#[^\s"'<>]*/giu
 const SENSITIVE_NORMALIZED_KEYS = new Set([
   "accesstoken",
   "accesscode",
@@ -179,8 +182,18 @@ function redactSensitiveTelemetryString(value: string): string {
       ),
     ),
   )
+  VISIT_PREP_FRAGMENT_PATTERN.lastIndex = 0
+  const fragmentRedacted = urlRedacted.replace(
+    VISIT_PREP_FRAGMENT_PATTERN,
+    "$1#[Filtered Visit Prep credential]",
+  )
+  VISIT_PREP_TOKEN_PATTERN.lastIndex = 0
+  const credentialRedacted = fragmentRedacted.replace(
+    VISIT_PREP_TOKEN_PATTERN,
+    "[Filtered Visit Prep credential]",
+  )
   BEARER_CREDENTIAL_PATTERN.lastIndex = 0
-  const bearerRedacted = urlRedacted.replace(
+  const bearerRedacted = credentialRedacted.replace(
     BEARER_CREDENTIAL_PATTERN,
     `Bearer ${REDACTED_SENSITIVE_VALUE}`,
   )
@@ -243,7 +256,8 @@ export function shouldCreateSentryRequestSpan(url: string): boolean {
     !containsAzureBlobSasUrl(url) &&
     !containsIntakeBearerCredential(url) &&
     !containsZoomJoinUrl(url) &&
-    !containsLegacyExampleNoteQuery(url)
+    !containsLegacyExampleNoteQuery(url) &&
+    !/\/(?:external\/v1\/)?visit-prep(?:[/?#]|$)/u.test(url)
   )
 }
 

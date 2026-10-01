@@ -1,12 +1,15 @@
 """Real request/session/storage journey with owned PostgreSQL and Redis."""
 
+import base64
+import json
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from itsdangerous import TimestampSigner
 
 import app.routes.visit_prep_interviews as route
-from app.routes.middleware import allowed_hosts
+from app.routes.middleware import SESSION_SECRET_KEY, allowed_hosts
 from app.server import api_app
 from app.services.visit_preps import rotate_visit_prep_credential
 from app.utils.encryption import decrypt_value
@@ -148,3 +151,48 @@ def test_wrong_recipient_http_report_stops_disclosure_and_replays_only_acknowled
         ).one()
         assert prep.revoked_at is not None
         assert prep.lifecycle_state == ("misdirected" if confirmed else "invited")
+
+
+def test_patient_bearer_is_not_usable_from_support_view_browser(
+    monkeypatch, owned_rate_limit_redis
+):
+    fixture = _fixture(monkeypatch, "http-support-view")
+    monkeypatch.setattr(
+        route.rate_limits, "get_rate_limit_redis", lambda: owned_rate_limit_redis
+    )
+    client = TestClient(api_app, base_url=allowed_hosts(with_scheme=True)[0])
+    payload = base64.b64encode(
+        json.dumps(
+            {
+                "view_as_session_id": "synthetic-view",
+                "view_as_browser_nonce": "synthetic-nonce",
+            }
+        ).encode()
+    )
+    cookie = TimestampSigner(str(SESSION_SECRET_KEY)).sign(payload).decode()
+    headers = {
+        "Authorization": f"Bearer {fixture.access_token}",
+        "Cookie": f"session={cookie}",
+    }
+    for path, body in [
+        ("", None),
+        (
+            "/confirm",
+            {"first_name": "Jos\N{LATIN SMALL LETTER E WITH ACUTE}", "role": "patient"},
+        ),
+        ("/wrong-recipient", {}),
+    ]:
+        response = (
+            client.get(f"/external/v1/visit-prep{path}", headers=headers)
+            if body is None
+            else client.post(
+                f"/external/v1/visit-prep{path}", headers=headers, json=body
+            )
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Visit Prep link is unavailable."}
+    with get_session() as session:
+        prep = session.exec(
+            select(VisitPrep).where(VisitPrep.id == fixture.prep_id)
+        ).one()
+        assert prep.confirmed_at is prep.revoked_at is None
