@@ -3,16 +3,19 @@ import { useEffect, useRef, useState } from "react"
 import { Button } from "~/components/ui/button"
 import {
   type VisitPrepCommandStateResponse,
-  type VisitPrepPackageResponse,
-  type VisitPrepPackageTopicResponse,
+  type VisitPrepPatientSourcesResponse,
   type VisitPrepSettingsData,
+  type VisitPrepSynthesisResponse,
   visitPrepList,
-  visitPrepPackage,
+  visitPrepSynthesis,
+  visitPrepSynthesisRequest,
 } from "~/configuration/client"
 import {
   VIEW_AS_HARD_BLOCK_EVENT,
   subscribeToViewAsStateChanges,
 } from "~/lib/view-as-binding"
+
+import { SynthesisView, reportedWords, validSynthesis } from "./SynthesisView"
 
 function appointment(prep: VisitPrepCommandStateResponse): string {
   try {
@@ -26,21 +29,7 @@ function appointment(prep: VisitPrepCommandStateResponse): string {
   }
 }
 
-function words(topic: VisitPrepPackageTopicResponse, initial = false): string {
-  const kind = initial ? topic.initial_response_kind : topic.response_kind
-  const answer = initial ? topic.initial_answer : topic.answer
-  if (kind === "skipped") return "Skipped — not supplied"
-  if (kind === null) return "Not answered"
-  if (topic.kind === "choice") {
-    return (
-      topic.choices.find((choice) => choice.value === answer)?.label ??
-      "Answer unavailable"
-    )
-  }
-  return answer ?? "Answer unavailable"
-}
-
-function PackageView({ value }: { value: VisitPrepPackageResponse }) {
+function PackageView({ value }: { value: VisitPrepPatientSourcesResponse }) {
   return (
     <article
       className="min-w-0 space-y-4"
@@ -71,10 +60,9 @@ function PackageView({ value }: { value: VisitPrepPackageResponse }) {
         </p>
       </div>
       <div className="rounded-md border p-3 text-sm">
-        AI synthesis has not been generated. These are the recipient’s own
-        responses, not chart facts. Skipped or missing information has not been
-        filled in. This snapshot is from your last load; reload to check for
-        changes.
+        These are the recipient’s own responses, not chart facts. Skipped or
+        missing information has not been filled in. This snapshot is from your
+        last load; reload to check for changes.
       </div>
       {value.preparation.patient_id === null && (
         <p className="text-sm">
@@ -96,7 +84,7 @@ function PackageView({ value }: { value: VisitPrepPackageResponse }) {
         >
           <h4 className="font-medium break-words">{topic.prompt}</h4>
           <p className="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-            {words(topic)}
+            {reportedWords(topic)}
           </p>
           {topic.changed && (
             <details className="mt-3 text-sm">
@@ -104,7 +92,7 @@ function PackageView({ value }: { value: VisitPrepPackageResponse }) {
                 Recipient revised this response — original wording
               </summary>
               <p className="mt-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
-                {words(topic, true)}
+                {reportedWords(topic, true)}
               </p>
             </details>
           )}
@@ -168,7 +156,7 @@ export function VisitPrepPackages({
   const [next, setNext] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
-  const [value, setValue] = useState<VisitPrepPackageResponse | null>(null)
+  const [value, setValue] = useState<VisitPrepSynthesisResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [blocked, setBlocked] = useState(false)
@@ -244,19 +232,12 @@ export function VisitPrepPackages({
     setSelected(id)
     setError(null)
     try {
-      const result = await visitPrepPackage({
+      const result = await visitPrepSynthesis({
         path: { prep_id: id },
         cache: "no-store",
       })
       if (generation.current !== requestGeneration) return
-      if (
-        !result.data ||
-        result.error ||
-        result.data.package_id !== id ||
-        result.data.preparation.id !== id ||
-        result.data.contract !== "visit_prep.patient_sources.v1" ||
-        !/^[0-9a-f]{64}$/.test(result.data.source_version)
-      )
+      if (!result.data || result.error || !validSynthesis(result.data, id))
         throw new Error("unavailable")
       setScope(scopeKey)
       setValue(result.data)
@@ -264,6 +245,50 @@ export function VisitPrepPackages({
       if (generation.current === requestGeneration)
         setError(
           "This contribution is unavailable or has changed. Reload to check its current state.",
+        )
+    } finally {
+      if (generation.current === requestGeneration) setBusy(false)
+    }
+  }
+
+  async function requestSynthesis() {
+    if (!allowed || blocked || busy || !value || !selected) return
+    const id = selected
+    const sourceVersion = value.sources.source_version
+    const requestGeneration = ++generation.current
+    setBusy(true)
+    setValue(null)
+    setError(null)
+    try {
+      const result = await visitPrepSynthesisRequest({
+        path: { prep_id: id },
+        body: { expected_source_version: sourceVersion },
+        cache: "no-store",
+      })
+      if (generation.current !== requestGeneration) return
+      if (
+        !result.data ||
+        result.error ||
+        result.data.package_id !== id ||
+        result.data.source_version !== sourceVersion ||
+        !["pending", "running", "ready", "failed"].includes(result.data.state)
+      )
+        throw new Error("unavailable")
+      // Never combine a value-free receipt with an earlier source snapshot.
+      // Re-read one atomic package; no automatic POST retry or model polling.
+      const current = await visitPrepSynthesis({
+        path: { prep_id: id },
+        cache: "no-store",
+      })
+      if (generation.current !== requestGeneration) return
+      if (!current.data || current.error || !validSynthesis(current.data, id))
+        throw new Error("unavailable")
+      setScope(scopeKey)
+      setValue(current.data)
+    } catch {
+      if (generation.current === requestGeneration)
+        setError(
+          "Synthesis request status is unknown or the contribution changed. Reload to check before requesting again.",
         )
     } finally {
       if (generation.current === requestGeneration) setBusy(false)
@@ -281,6 +306,10 @@ export function VisitPrepPackages({
       </section>
     )
   const currentScope = scope === scopeKey
+  const coolingDown =
+    value?.build_status === "failed" &&
+    value.retry_at !== null &&
+    new Date(value.retry_at).getTime() > Date.now()
   return (
     <section
       className="mt-8 min-w-0 space-y-4"
@@ -359,7 +388,23 @@ export function VisitPrepPackages({
           Reload contribution
         </Button>
       )}
-      {currentScope && value && <PackageView value={value} />}
+      {currentScope && value && (
+        <>
+          <SynthesisView value={value} />
+          {value.status !== "ready" &&
+            !["pending", "running"].includes(value.build_status) && (
+              <Button
+                disabled={busy || coolingDown}
+                onClick={() => void requestSynthesis()}
+              >
+                {value.build_status === "failed"
+                  ? "Request synthesis again"
+                  : "Generate synthesis"}
+              </Button>
+            )}
+          <PackageView value={value.sources} />
+        </>
+      )}
     </section>
   )
 }
