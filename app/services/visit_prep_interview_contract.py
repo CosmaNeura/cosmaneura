@@ -170,6 +170,8 @@ def _validated_response_input(value: ResponseInput) -> ResponseInput:
         or _QUESTION_KEY.fullmatch(value.question_key) is None
     ):
         raise VisitPrepInterviewValidation("question is invalid")
+    if not isinstance(value.response_kind, str):
+        raise VisitPrepInterviewValidation("response is invalid")
     if value.response_kind == "answered" and not isinstance(value.answer, str):
         raise VisitPrepInterviewValidation("response is invalid")
     if value.response_kind == "skipped" and value.answer is not None:
