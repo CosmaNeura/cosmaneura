@@ -24,6 +24,7 @@ import {
 } from "~/components/ViewAsRouteGuard"
 import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
 import { APP_LOADING_DELAY_COPY } from "~/lib/channel"
+import { isVisitPrepPatientPath } from "~/lib/visit-prep-browser"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
@@ -121,10 +122,21 @@ const AppWithProviders = withProviders(App)
 // React Router 7.9+ requires route modules to export a function component.
 // Keep the existing provider composition while presenting that stable shape.
 export default function Root() {
+  const { pathname } = useLocation()
+  if (isVisitPrepPatientPath(pathname)) return <Outlet />
   return <AppWithProviders />
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  const pathname = typeof window === "undefined" ? "" : window.location.pathname
+  if (isVisitPrepPatientPath(pathname)) {
+    return (
+      <main className="mx-auto max-w-xl p-6" role="alert">
+        <h1>Preparation unavailable</h1>
+        <p>Reopen your original invitation or contact your care team.</p>
+      </main>
+    )
+  }
   if (isBillingRecoveryRedirectError(error)) {
     return (
       <ViewAsProtectedErrorGuard>

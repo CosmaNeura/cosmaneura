@@ -29,6 +29,26 @@ const legacyExampleNoteUrl =
   "https://api.cosmaneura.test/internal/v1/notes/upload-example?file_name=patient-name.pdf&note_type=Sensitive%20Label"
 
 describe("Sentry Azure SAS privacy", () => {
+  it("redacts Visit Prep token and fragment from all telemetry and suppresses request spans", () => {
+    const token = `vp1_${"A".repeat(43)}`
+    const event = scrubSensitiveSentryPayload({
+      request: {
+        url: `https://chat.example.test/visit-prep#access_token=${token}`,
+      },
+      message: `Bearer ${token}`,
+      data: { access_token: token, cause: `vp1_other-secret` },
+    })
+    expect(JSON.stringify(event)).not.toContain(token)
+    expect(JSON.stringify(event)).not.toContain("other-secret")
+    expect(
+      shouldCreateSentryRequestSpan(
+        "https://api.example.test/external/v1/visit-prep/responses",
+      ),
+    ).toBe(false)
+    expect(
+      shouldCreateSentryRequestSpan("https://app.example.test/visit-preps"),
+    ).toBe(true)
+  })
   it("identifies Azure blob SAS URLs without suppressing normal requests", () => {
     expect(containsAzureBlobSasUrl(azureUploadUrl)).toBe(true)
     expect(

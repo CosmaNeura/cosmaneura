@@ -564,8 +564,8 @@ export function VisitPrepCreator({
         </h2>
         <p className="text-muted-foreground max-w-2xl text-sm">
           Prepare five physician-owned topics, including the patient's
-          open-ended story. This branch is for synthetic testing; patient
-          capture and sending are not enabled yet. Do not send these links to
+          open-ended story. Patient capture is available for local synthetic
+          testing only; messaging is not enabled. Do not send these links to
           patients.
         </p>
       </div>

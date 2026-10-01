@@ -31,6 +31,9 @@ Transfers use committed source and preserve the repository's existing license.
 | Public rate limits and interview concurrency checks | `app/services/visit_prep_rate_limits.py`; rate-limit and interview lock tests at the pinned source | Recover fixed-window network, credential and confirmation limits with HMAC-only Redis keys and bounded store timeouts. Adapt lock tests to the current seat factory. Exercise the real Lua script in a disposable networkless Redis container, without connecting Python to shared Redis. |
 | Public interview API | `app/routes/visit_prep_interviews.py`; public route tests at the pinned source | Mount four bearer-authorized operations outside account authentication. Bound request bodies, forbid extra/coerced fields, reject query credentials and slash redirects, return fixed generic errors, and apply no-store/no-referrer through CORS preflights and failures. Suppress exception causes and arbitrary error headers. Two new full-app HTTP tests exercise patient/caregiver five-topic completion, skips, retries, resume and credential rotation using real PostgreSQL and Redis. This is API evidence, not a patient UI demonstration. |
 | Wrong-recipient reporting | New work using the recovered aggregate's existing revocation and quarantine fields | Add a fifth public operation. Revoke unused invitations, quarantine confirmed or answered preparations for review, and retain original encrypted answers and retention terms. Only the same current credential can replay its own acknowledgment; reads and writes stay denied. Real PostgreSQL races cover simultaneous reports, confirmation and answer submission. Full-app HTTP checks cover reports before and after confirmation. |
+| Patient browser journey | `QuestionForm.tsx` and `InterviewFrame.tsx` at archived Core commit `0d92405fbe1b363d89ed23922de16d6922d7bb10`; new public API client and journey component | Adapt the narrow branded frame and one-topic screen to the current Visit Prep aggregate. Capture the credential in memory and remove its fragment before account SDKs or telemetry evaluate. Mount outside account providers; keep the bearer out of DOM, storage and request URLs. Restore patient/caregiver confirmation, answer/skip, conditional barriers, unconditional story, resume, explicit completion and wrong-recipient reporting. Preserve the original UUID and payload when acknowledgment is lost. Clear sensitive state on page departure, current-authority denial or browser support-context changes. |
+| Patient telemetry and support-view isolation | Current Core telemetry scrubbers and `deny_view_as_browser_activity` | Do not initialize telemetry on the patient page; suppress patient events if Sentry was initialized before client-side navigation. Add credential redaction and prevent public request spans. Reuse signed-session support-view denial before database dispatch; account cookies do not authorize patient access. Real full-app HTTP tests verify nondisclosing denials without confirmation or revocation. |
+| Built desktop and mobile acceptance | New `visit_prep_patient_browser_test.py` using existing Playwright and the owned runner | Route every browser request in process to the real app; block external requests and expose no server. At 1440×1000 and 390×844, verify caregiver confirmation, all five topics, skips, a committed answer with lost acknowledgment and same-key replay, final story, completion and encrypted original storage. Check no horizontal overflow, account bootstrap, telemetry requests, credential in URLs/DOM, or patient text in browser persistence. Synthetic screenshots were visually inspected. This does not qualify corrections, AI, the provider package or external delivery. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -45,10 +48,13 @@ Each must remain
 below the repository's 2,000-line and 50-file change budget. The integration
 branch retains all increments until the feature is ready for the agreed merge.
 
-Local evidence after wrong-recipient reporting: 418 backend tests passed, including eight
-selected current-Core privacy/middleware checks, and 62
-frontend tests passed across ten files, including the new current-BAA settings
-tests. Generated SDK and full frontend typecheck passed. Backend focused
+Local evidence after the patient browser recovery: 421 backend and browser tests
+passed, including eight selected current-Core privacy/middleware checks. The
+selected frontend suite passed 149 tests across thirteen files, including
+current-BAA settings, support view and patient telemetry tests. The creator's
+updated synthetic-only status text passed its twelve tests and a renewed full
+frontend typecheck. Production-bundled test assets built using only invented
+configuration. Generated SDK and full frontend typecheck passed. Backend focused
 typechecks and changed-file lint/format checks passed for the implementation
 increments. Existing deprecation and Downshift warnings do not establish live
 readiness.
@@ -56,8 +62,8 @@ Commit-specific final evidence belongs in the corresponding draft PRs.
 
 ## Remaining recovery and integration
 
-Patient corrections and the patient UI
-are next. The five public operations are wired and tested but remain gated off. Generate additive
+Patient corrections and bounded AI clarification are next. The basic patient UI
+and five public operations are wired and tested but remain gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
