@@ -58,6 +58,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Encrypted immutable synthesis artifacts | Current Visit Prep encryption, aggregate retention and immutable response guards; Session Prep source/profile uniqueness pattern; new implementation | Generate additive revision `1cc41ced28aa` after `fe53eb110e32`. Store the brief and exact selected patient-source snapshot only in an explicit encrypted envelope. Bind metadata to question/schedule/credential lineage, contribution basis and generator/prompt/model profile. Serialize writes on the parent; reject stale basis, duplicate source/profile, mutation, standalone deletion and truncation. Preserve parent retention/legal holds and new-patient support without a fabricated chart. No runtime publication, reader or worker is mounted. |
 | Owner-authorized synthesis publication and read domain | Current locked Visit Prep owner/source package and explicit artifact codec; Session Prep retry/publication pattern; new implementation | Share one transaction-bound package loader. Reacquire current owner authority, exact source hash, complete selected wording, attribution, review and lineage before publishing. Deduplicate the first valid source/profile artifact without overwrite. Read only the current artifact and return value-free missing/stale status for prior output without decrypting it. Commit content-free Core audits before any result. No route, build lease, worker or model call is mounted. |
 | Durable synthesis queue and source-selection leases | Current Session Prep short-lease and bounded-retry pattern; Visit Prep owner/package authorization and encryption | Generate additive revision `2f87498bb9fa` after `1cc41ced28aa`. Keep one build per preparation/profile with an encrypted, context-bound original requester, source version, epoch, three-attempt limit and 90-second lease. Recheck owner access, identity, current answers and the lease before returning model sources. Superseded work is requeued under a new epoch; stale workers cannot release a newer claim. No model caller, publication worker or API is mounted. |
+| Central usage accounting for chart-free synthesis | Existing Core `AgentModelUsageEvent` ledger and locked Visit Prep source/lease loader | Generate revision `54bedaad381a` after `2f87498bb9fa`. Add an explicit batch origin with canonical preparation/owner references, without creating a person, chart, authority identity or conversation. Commit one immutable call intent per fenced attempt before model work and append an exact-replay result afterward. Preserve the old agent-turn authorization and required lineage. No worker or model call is mounted. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -333,8 +334,34 @@ the full graph run; the build expand passed separately over the prior populated
 graph, and the artifact expand has its separately recorded rehearsal. No
 frontend source, model adapter, release control or external service changed.
 
-Durable usage recording, lease-checked atomic publication, the recoverable worker
-and dashboard synthesis display remain the next synthesis increments. A worker
+Central usage recording now uses an explicit batch variant in the existing
+ledger. Original agent writes default to `agent_turn`, retain required
+interaction/tenant/actor/person lineage and use the unchanged authorization and
+conversation-phase service. Batch records instead carry locked Core owner and
+preparation references; they do not fabricate or bind a chart or person.
+Database checks keep the two shapes separate. Existing update/delete guards
+remain, and a populated batch ledger rejects truncation.
+
+One call intent commits before model work, with the current source, epoch,
+attempt and lease. Repeating that intent does not authorize another call.
+Results append without mutating the intent and support only exact replay.
+Failed or unavailable usage is explicit. Results can still record an already
+attempted call after access, source or lease changes, but grant no disclosure or
+publication authority. An unmatched intent indicates uncertainty after a crash,
+not a zero-token success. Operational reconciliation of such intents belongs in
+the forthcoming worker; no new burn-rate dashboard is introduced.
+
+The accounting checks cover chart-free patient and partial-caregiver sources,
+privacy, exact retries, malformed facts, source/authority denial, transaction
+rollback and immutable database guards. Independent PostgreSQL connections
+prove one intent per attempt and one result under concurrent exact retries.
+The populated rehearsal preserves all prior usage columns and original sources,
+artifacts and jobs; the unchanged agent service still records and replays after
+the expand. Final commit-specific test totals are recorded in the draft PR.
+No frontend source, model adapter or release control changes in this increment.
+
+Lease-checked atomic publication, the recoverable worker and dashboard synthesis
+display remain the next synthesis increments. A worker
 must enforce its current lease and durable central-ledger recording before publication;
 these domain functions do not substitute for those conditions. Bounded patient AI
 clarification and the approved delivery reuse work remain separate work.

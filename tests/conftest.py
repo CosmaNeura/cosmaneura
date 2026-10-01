@@ -84,6 +84,7 @@ _APPEND_ONLY_TEST_TRIGGERS = {
 }
 
 _TRUNCATE_TEST_TRIGGERS = {
+    "agent_model_usage_event": "visit_prep_usage_truncate_guard",
     "visit_prep_synthesis_artifact": "visit_prep_brief_guard_truncate",
     "visit_prep_question_response": "visit_prep_response_guard_truncate",
     "visit_prep_contribution_event": "visit_prep_contribution_guard_truncate",

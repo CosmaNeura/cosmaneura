@@ -1,4 +1,4 @@
-"""Append-only, content-free model-usage facts for governed agent turns."""
+"""One content-free ledger for governed agent turns and Core batch calls."""
 
 from datetime import datetime
 from uuid import UUID
@@ -13,7 +13,7 @@ from app.models.authority import (
     AuthorityTenant,
     InteractionLineage,
 )
-from sqlmodel import Field, UniqueConstraint
+from sqlmodel import Column, Field, UniqueConstraint
 
 
 class AgentModelUsageEvent(
@@ -42,7 +42,11 @@ class AgentModelUsageEvent(
             name="ck_agent_model_usage_event_call_kind",
         ),
         sa.CheckConstraint(
-            "status IN ('succeeded', 'failed', 'cancelled')",
+            "(event_origin = 'agent_turn' AND status IN "
+            "('succeeded', 'failed', 'cancelled')) OR "
+            "(event_origin = 'visit_prep_batch' AND "
+            "((batch_phase = 'intent' AND status = 'started') OR "
+            "(batch_phase = 'result' AND status IN ('succeeded', 'failed'))))",
             name="ck_agent_model_usage_event_status",
         ),
         sa.CheckConstraint(
@@ -56,7 +60,8 @@ class AgentModelUsageEvent(
             name="ck_agent_model_usage_event_source",
         ),
         sa.CheckConstraint(
-            "surface = 'provider_assistant'",
+            "(event_origin = 'agent_turn' AND surface = 'provider_assistant') OR "
+            "(event_origin = 'visit_prep_batch' AND surface = 'provider_dashboard')",
             name="ck_agent_model_usage_event_provider_surface",
         ),
         sa.CheckConstraint(
@@ -87,14 +92,102 @@ class AgentModelUsageEvent(
             "reasoning_tokens IS NULL OR reasoning_tokens >= 0",
             name="ck_agent_model_usage_event_reasoning_tokens_nonnegative",
         ),
+        sa.CheckConstraint(
+            "(event_origin = 'agent_turn' AND interaction_id IS NOT NULL AND "
+            "tenant_id IS NOT NULL AND actor_id IS NOT NULL AND person_id IS NOT NULL "
+            "AND batch_phase IS NULL AND call_intent_id IS NULL AND "
+            "core_practice_id IS NULL AND core_doctor_id IS NULL AND "
+            "core_member_id IS NULL AND preparation_ref IS NULL AND "
+            "build_ref IS NULL AND build_epoch IS NULL AND build_attempt IS NULL "
+            "AND source_version IS NULL AND build_lease_until IS NULL) OR "
+            "(event_origin = 'visit_prep_batch' AND interaction_id IS NULL AND "
+            "tenant_id IS NULL AND actor_id IS NULL AND person_id IS NULL AND "
+            "batch_phase IS NOT NULL AND batch_phase IN ('intent', 'result') "
+            "AND core_practice_id IS NOT NULL "
+            "AND core_doctor_id IS NOT NULL AND core_member_id IS NOT NULL AND "
+            "preparation_ref IS NOT NULL AND build_ref IS NOT NULL AND "
+            "build_epoch IS NOT NULL AND build_epoch > 0 AND "
+            "build_attempt IS NOT NULL AND build_attempt BETWEEN 1 AND 3 AND "
+            "source_version IS NOT NULL AND length(source_version) = 64 AND "
+            "build_lease_until IS NOT NULL AND call_sequence = build_attempt AND "
+            "workload_client_id = 'core_visit_prep' AND workstream = 'visit_prep' "
+            "AND purpose = 'previsit_synthesis' AND call_kind = 'drafting' AND "
+            "provider = 'azure_openai' AND model IS NOT NULL AND started_at IS NOT NULL "
+            "AND ((batch_phase = 'intent' AND call_intent_id IS NULL AND "
+            "completed_at IS NULL AND latency_ms IS NULL AND "
+            "provider_request_id IS NULL AND usage_availability = 'unavailable' "
+            "AND usage_source = 'not_available' AND input_tokens IS NULL AND "
+            "output_tokens IS NULL AND cached_input_tokens IS NULL AND "
+            "reasoning_tokens IS NULL) OR (batch_phase = 'result' AND "
+            "call_intent_id IS NOT NULL AND completed_at IS NOT NULL AND "
+            "completed_at >= started_at AND latency_ms IS NOT NULL AND "
+            "cached_input_tokens IS NULL AND reasoning_tokens IS NULL AND "
+            "((usage_availability = 'complete' AND usage_source = 'provider_response' "
+            "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) OR "
+            "(usage_availability = 'unavailable' AND usage_source = 'not_available' "
+            "AND input_tokens IS NULL AND output_tokens IS NULL)))))",
+            name="ck_model_usage_origin_shape",
+        ),
+        UniqueConstraint(
+            "build_ref",
+            "build_epoch",
+            "build_attempt",
+            "batch_phase",
+            name="uq_model_usage_batch_phase",
+        ),
+        UniqueConstraint("call_intent_id", name="uq_model_usage_intent_result"),
     )
 
-    interaction_id: TypeIDType = InteractionLineage.foreign_key(index=True)
+    event_origin: str = Field(
+        default="agent_turn",
+        sa_column=Column(sa.String(32), nullable=False, server_default="agent_turn"),
+    )
+    interaction_id: TypeIDType | None = InteractionLineage.foreign_key(
+        default=None, nullable=True, index=True
+    )
     workload_client_id: str = Field(max_length=64)
     client_event_id: UUID = Field(index=True)
-    tenant_id: TypeIDType = AuthorityTenant.foreign_key()
-    actor_id: TypeIDType = AuthorityActor.foreign_key()
-    person_id: TypeIDType = AuthorityPerson.foreign_key()
+    tenant_id: TypeIDType | None = AuthorityTenant.foreign_key(
+        default=None, nullable=True
+    )
+    actor_id: TypeIDType | None = AuthorityActor.foreign_key(
+        default=None, nullable=True
+    )
+    person_id: TypeIDType | None = AuthorityPerson.foreign_key(
+        default=None, nullable=True
+    )
+    # Observational Core references are NOT authority-spine bindings or chart
+    # creation. No parent FK: content-free usage survives clinical root cleanup.
+    core_practice_id: TypeIDType | None = Field(
+        default=None, sa_column=Column(TypeIDType("practice"), nullable=True)
+    )
+    core_doctor_id: TypeIDType | None = Field(
+        default=None, sa_column=Column(TypeIDType("doctor"), nullable=True)
+    )
+    core_member_id: TypeIDType | None = Field(
+        default=None, sa_column=Column(TypeIDType("practice_member"), nullable=True)
+    )
+    preparation_ref: TypeIDType | None = Field(
+        default=None, sa_column=Column(TypeIDType("visit_prep"), nullable=True)
+    )
+    build_ref: TypeIDType | None = Field(
+        default=None, sa_column=Column(TypeIDType("visit_prep_build"), nullable=True)
+    )
+    build_epoch: int | None = Field(default=None)
+    build_attempt: int | None = Field(default=None)
+    build_lease_until: datetime | None = Field(
+        default=None, sa_column=Column(sa.DateTime(timezone=True), nullable=True)
+    )
+    source_version: str | None = Field(default=None, max_length=64)
+    batch_phase: str | None = Field(default=None, max_length=16)
+    call_intent_id: TypeIDType | None = Field(
+        default=None,
+        sa_column=Column(
+            TypeIDType("model_usage"),
+            sa.ForeignKey("agent_model_usage_event.id"),
+            nullable=True,
+        ),
+    )
     surface: str = Field(max_length=32)
     auth_tier: str = Field(max_length=16)
     call_kind: str = Field(max_length=32)
