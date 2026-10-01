@@ -45,3 +45,14 @@ def require_visit_prep_write(request: Request) -> VisitPrepAccessDecision:
             detail=_VIEW_AS_READ_ONLY_DETAIL,
         )
     return decision
+
+
+def require_visit_prep_package_read(request: Request) -> VisitPrepAccessDecision:
+    """Patient-source disclosure is unavailable in support view, even read-only."""
+
+    decision = require_visit_prep_read(request)
+    if decision.view_as_active or not decision.can_manage:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND_DETAIL
+        )
+    return decision

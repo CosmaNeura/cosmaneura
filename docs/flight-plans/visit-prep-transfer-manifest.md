@@ -46,6 +46,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Answers to newly revealed conditional topics | New work for the approved correction/review loop | Generate `fe53eb110e32` after `4ad34f59136c`. Add a nullable exact-version question reference and closed `topic_answer` event shape. Record answer/skip and later revisions in the same immutable contribution sequence, preserving the first additional source separately from the original interview. Keep original response and retention guards unchanged. |
 | Gated patient contribution read and revision API | New work using the contribution domain commands and existing public privacy boundary | Add three POST operations for saved-answer review, correction and confirmation of the exact current contribution. Recheck the current invitation, recipient first name and confirmed role on every operation. Expose only applicable topics and their initial/current wording; omit internal source IDs and retained hidden answers. Corrections and reviews return value-free receipts. All three consume the existing confirmation-attempt limits. |
 | Patient saved-answer review and correction UI | New work using the existing patient public client, branded interview frame and one-topic form | Add an explicit saved-answer review step before or after original completion. Re-enter recipient evidence before disclosure; display current wording, caregiver attribution, skips and retained initial wording. Freeze uncertain requests and retry the exact payload/UUID; reload Core applicability after corrections. Permit newly relevant topics to be answered or skipped and confirm the exact current contribution without clinician-review claims. Clear displayed answers on focus loss and discard them on support-view/current-authority denial. |
+| Provider source package and preparation list | New work using the current locked contribution projection, owner authorization and Core audit store | Add bounded owner-only pagination and a current-answer package with source version, original and revised wording, skips, missing topics and caregiver attribution. Exclude hidden conditional answers from the wire. Recheck locked identity, workforce authorization, BAA, entitlement, rollout, optional chart links and quarantine. Reject support-view disclosure. Retained provider reads do not depend on the public patient gate or invitation expiry. Record content-free read audits. No model synthesis or bot read capability is introduced. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -179,8 +180,18 @@ clearing. Synthetic review screenshots were visually inspected at both sizes,
 with no horizontal overflow. These checks qualify deterministic review, not AI,
 a provider package or delivery.
 
-The shared provider package and dashboard are next, alongside bounded AI
-clarification and the approved delivery reuse work.
+The authenticated provider source package API now supplies the current patient
+contribution with exact question, response and revision provenance. Its stable
+source version changes on corrections, recipient review, original completion,
+schedule/credential context or canonical links, but never hashes plaintext
+answers. The bounded invitation list contains metadata only. Support view,
+revocation, wrong-recipient quarantine, stale sign-in identity and current
+authority denials prevent disclosure. Database-owned time is rechecked after
+locks and before disclosure; successful reads require a committed Core audit.
+This is a patient-source package, not the planned AI synthesis artifact.
+
+Dashboard presentation, model synthesis, bounded AI clarification and the
+approved delivery reuse work remain separate increments.
 Storage, the internal current contribution and correction/review domain commands
 now include answering or skipping newly applicable conditional topics through
 the patient browser as well as the API.
@@ -192,7 +203,7 @@ gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
-Synthesis, dashboard package, bounded AI clarification, CAB delivery mechanics,
+Synthesis, dashboard presentation, bounded AI clarification, CAB delivery mechanics,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan; this manifest does not mark them
 as transferred. Pin selected external revisions and record each adaptation here.
