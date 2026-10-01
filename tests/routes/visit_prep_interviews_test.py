@@ -157,6 +157,18 @@ def test_router_is_mounted_at_exact_public_paths_without_doctor_auth() -> None:
             "/external/v1/visit-prep/wrong-recipient",
             "POST",
         ),
+        "visit_prep_public_read_contribution": (
+            "/external/v1/visit-prep/contribution",
+            "POST",
+        ),
+        "visit_prep_public_correct_contribution": (
+            "/external/v1/visit-prep/contribution/response",
+            "POST",
+        ),
+        "visit_prep_public_review_contribution": (
+            "/external/v1/visit-prep/contribution/review",
+            "POST",
+        ),
     }
     public_routes = {
         item.route.name: item
@@ -296,19 +308,28 @@ def test_openapi_declares_bearer_security_and_idempotency_header() -> None:
         ("/external/v1/visit-prep/responses", "post"),
         ("/external/v1/visit-prep/complete", "post"),
         ("/external/v1/visit-prep/wrong-recipient", "post"),
+        ("/external/v1/visit-prep/contribution", "post"),
+        ("/external/v1/visit-prep/contribution/response", "post"),
+        ("/external/v1/visit-prep/contribution/review", "post"),
     ):
         assert paths[path][method]["security"] == [{"VisitPrepBearer": []}]
 
-    response_parameters = paths["/external/v1/visit-prep/responses"]["post"][
-        "parameters"
-    ]
-    idempotency = next(
-        parameter
-        for parameter in response_parameters
-        if parameter["name"] == "Idempotency-Key"
-    )
-    assert idempotency["in"] == "header"
-    assert idempotency["required"] is True
+    for path in (
+        "/external/v1/visit-prep/responses",
+        "/external/v1/visit-prep/contribution/response",
+        "/external/v1/visit-prep/contribution/review",
+    ):
+        idempotency = next(
+            parameter
+            for parameter in paths[path]["post"]["parameters"]
+            if parameter["name"] == "Idempotency-Key"
+        )
+        assert idempotency["in"] == "header"
+        assert idempotency["required"] is True
+    for suffix in ("", "/response", "/review"):
+        operation = paths[f"/external/v1/visit-prep/contribution{suffix}"]["post"]
+        assert operation["requestBody"]["required"]
+        assert "get" not in paths[f"/external/v1/visit-prep/contribution{suffix}"]
 
 
 def test_wrong_recipient_has_no_identity_or_incident_response(monkeypatch):
