@@ -20,6 +20,7 @@ from app.services.clerk_cohort import (
     ClerkCohortIdentity,
     canonical_clerk_email_pair_sha256,
 )
+from app.services.doctor_access_row_ownership import DoctorAccessRowOwnership
 from app.services.pilot_access_lock import lock_pilot_access_lineage
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
@@ -30,8 +31,8 @@ from activemodel.session_manager import get_session
 from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
-from sqlalchemy import func, or_
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import and_, func, or_
+from sqlalchemy.exc import IntegrityError, MultipleResultsFound
 from sqlmodel import Session, col, select
 
 PILOT_ACCESS_GRANDFATHER_REQUIRED_ACCOUNT_COUNT = 47
@@ -709,6 +710,8 @@ def revoke_pilot_access_grants(
 
 def revoked_pilot_access_grant(
     clerk_id: str,
+    *,
+    _ownership: DoctorAccessRowOwnership | None = None,
 ) -> PilotAccessGrandfatherGrant | None:
     """Return a durable offboarding tombstone when no active replacement exists."""
 
@@ -717,6 +720,27 @@ def revoked_pilot_access_grant(
     except PilotAccessGrandfatherError:
         return None
     with get_session() as session:
+        if isinstance(
+            _ownership, DoctorAccessRowOwnership
+        ) and _ownership.matches_subject(session, normalized):
+            active = (
+                select(col(PilotAccessGrandfatherGrant.id))
+                .where(
+                    PilotAccessGrandfatherGrant.clerk_id == normalized,
+                    PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
+                )
+                .correlate(None)
+                .exists()
+            )
+            return session.exec(
+                select(PilotAccessGrandfatherGrant)
+                .where(
+                    PilotAccessGrandfatherGrant.clerk_id == normalized,
+                    PilotAccessGrandfatherGrant.revoked_at != None,  # noqa: E711
+                    ~active,
+                )
+                .order_by(col(PilotAccessGrandfatherGrant.revoked_at).desc())
+            ).first()
         active = session.exec(
             select(PilotAccessGrandfatherGrant).where(
                 PilotAccessGrandfatherGrant.clerk_id == normalized,
@@ -742,6 +766,7 @@ def active_pilot_access_grant(
     doctor: Doctor,
     *,
     at: datetime | None = None,
+    _ownership: DoctorAccessRowOwnership | None = None,
 ) -> PilotAccessGrandfatherGrant | None:
     """Return a candidate record while stable subject and email still match.
 
@@ -762,15 +787,39 @@ def active_pilot_access_grant(
         return None
 
     with get_session() as session:
-        persisted_doctor = cast(
-            Doctor | None,
-            session.exec(
-                select(Doctor).where(
-                    Doctor.id == doctor.id,
-                    Doctor.clerk_id == clerk_id,
+        combined = isinstance(
+            _ownership, DoctorAccessRowOwnership
+        ) and _ownership.matches(session, doctor, practice_id=_ownership._practice_id)
+        if combined:
+            # Fresh late-stage query: never reuse the earlier tombstone result.
+            # Limit two preserves ambiguity refusal after Doctor validation.
+            candidates = session.exec(
+                select(Doctor, PilotAccessGrandfatherGrant)
+                .outerjoin(
+                    PilotAccessGrandfatherGrant,
+                    and_(
+                        PilotAccessGrandfatherGrant.clerk_id == clerk_id,
+                        PilotAccessGrandfatherGrant.granted_at <= current,
+                        or_(
+                            PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
+                            PilotAccessGrandfatherGrant.revoked_at > current,
+                        ),
+                    ),
                 )
-            ).one_or_none(),
-        )
+                .where(Doctor.id == doctor.id, Doctor.clerk_id == clerk_id)
+                .limit(2)
+            ).all()
+            persisted_doctor = candidates[0][0] if candidates else None
+        else:
+            persisted_doctor = cast(
+                Doctor | None,
+                session.exec(
+                    select(Doctor).where(
+                        Doctor.id == doctor.id,
+                        Doctor.clerk_id == clerk_id,
+                    )
+                ).one_or_none(),
+            )
         if (
             persisted_doctor is None
             or persisted_doctor.deleted_at is not None
@@ -782,19 +831,26 @@ def active_pilot_access_grant(
         except PilotAccessGrandfatherError:
             return None
         email_sha256 = _email_sha256(normalized_email)
-        grant = cast(
-            PilotAccessGrandfatherGrant | None,
-            session.exec(
-                select(PilotAccessGrandfatherGrant).where(
-                    PilotAccessGrandfatherGrant.clerk_id == clerk_id,
-                    PilotAccessGrandfatherGrant.granted_at <= current,
-                    or_(
-                        PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
-                        PilotAccessGrandfatherGrant.revoked_at > current,
-                    ),
+        if combined:
+            if len(candidates) > 1:
+                raise MultipleResultsFound(
+                    "Multiple rows were found when one or none was required"
                 )
-            ).one_or_none(),
-        )
+            grant = candidates[0][1]
+        else:
+            grant = cast(
+                PilotAccessGrandfatherGrant | None,
+                session.exec(
+                    select(PilotAccessGrandfatherGrant).where(
+                        PilotAccessGrandfatherGrant.clerk_id == clerk_id,
+                        PilotAccessGrandfatherGrant.granted_at <= current,
+                        or_(
+                            PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
+                            PilotAccessGrandfatherGrant.revoked_at > current,
+                        ),
+                    )
+                ).one_or_none(),
+            )
         if grant is None:
             return None
         if (
