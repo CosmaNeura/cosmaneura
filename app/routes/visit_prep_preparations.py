@@ -279,37 +279,40 @@ def _access_url(access_token: str | None) -> str | None:
     return f"https://{INTAKE_CHAT_DOMAIN}/visit-prep#access_token={encoded_token}"
 
 
-def _response(result: VisitPrepMutationResult) -> VisitPrepCommandResponse:
-    visit_prep = result.visit_prep
-    return VisitPrepCommandResponse(
-        visit_prep=VisitPrepCommandStateResponse(
-            id=str(visit_prep.id),
-            question_set_version_id=str(visit_prep.question_set_version_id),
-            patient_id=(
-                str(visit_prep.patient_id)
-                if visit_prep.patient_id is not None
-                else None
-            ),
-            appointment_id=(
-                str(visit_prep.appointment_id)
-                if visit_prep.appointment_id is not None
-                else None
-            ),
-            lifecycle_state=visit_prep.lifecycle_state,
-            has_email_contact=visit_prep.has_email_contact,
-            has_sms_contact=visit_prep.has_sms_contact,
-            physician_display_name=visit_prep.physician_display_name,
-            practice_display_name=visit_prep.practice_display_name,
-            scheduled_at=visit_prep.scheduled_at,
-            timezone_name=visit_prep.timezone_name,
-            schedule_generation=visit_prep.schedule_generation,
-            credential_generation=visit_prep.credential_generation,
-            credential_expires_at=visit_prep.credential_expires_at,
-            credential_active=visit_prep.credential_active,
-            revoked_at=visit_prep.revoked_at,
-            created_at=visit_prep.created_at,
-            updated_at=visit_prep.updated_at,
+def _state_response(
+    visit_prep: visit_prep_service.VisitPrepResult,
+) -> VisitPrepCommandStateResponse:
+    return VisitPrepCommandStateResponse(
+        id=str(visit_prep.id),
+        question_set_version_id=str(visit_prep.question_set_version_id),
+        patient_id=(
+            str(visit_prep.patient_id) if visit_prep.patient_id is not None else None
         ),
+        appointment_id=(
+            str(visit_prep.appointment_id)
+            if visit_prep.appointment_id is not None
+            else None
+        ),
+        lifecycle_state=visit_prep.lifecycle_state,
+        has_email_contact=visit_prep.has_email_contact,
+        has_sms_contact=visit_prep.has_sms_contact,
+        physician_display_name=visit_prep.physician_display_name,
+        practice_display_name=visit_prep.practice_display_name,
+        scheduled_at=visit_prep.scheduled_at,
+        timezone_name=visit_prep.timezone_name,
+        schedule_generation=visit_prep.schedule_generation,
+        credential_generation=visit_prep.credential_generation,
+        credential_expires_at=visit_prep.credential_expires_at,
+        credential_active=visit_prep.credential_active,
+        revoked_at=visit_prep.revoked_at,
+        created_at=visit_prep.created_at,
+        updated_at=visit_prep.updated_at,
+    )
+
+
+def _response(result: VisitPrepMutationResult) -> VisitPrepCommandResponse:
+    return VisitPrepCommandResponse(
+        visit_prep=_state_response(result.visit_prep),
         disposition=result.disposition,
         access_url=_access_url(result.access_token),
     )
