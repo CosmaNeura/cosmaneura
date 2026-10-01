@@ -28,6 +28,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Physician preparation workspace | `VisitPrepCreator.tsx`, schedule helper and tests at the pinned source | Add a server-gated dashboard route using the current SDK. Discard sensitive state on access or identity change. Keep copied links out of rendered DOM and storage; clearly mark the workflow synthetic-only until patient completion is restored. |
 | Immutable patient answer and skip storage | `app/models/visit_prep_response.py`; response migration and model/lock tests at the pinned source | Generate `e161ca7c8448` after the current aggregate migration; reuse its existing lineage key. Preserve encrypted envelopes, keyed request fingerprints, ordering and current-credential guards. Database time is checked after the root lock. Refuse downgrade; test direct truncate rejection and approved synthetic aggregate cleanup. |
 | Patient confirmation and deterministic interview lifecycle | `app/services/visit_prep_interviews.py`; service tests at the pinned source | Split the bounded input/state contract; restore confirmation, conditional topics, answer/skip, resume, replay and explicit completion. Add current seat/organization locks, owner tombstones, strict envelope versions and five-topic revalidation. Keep the independent public gate off and omit public routes until their protections are restored. Corrections and AI clarification are not yet implemented. |
+| Public rate limits and interview concurrency checks | `app/services/visit_prep_rate_limits.py`; rate-limit and interview lock tests at the pinned source | Recover fixed-window network, credential and confirmation limits with HMAC-only Redis keys and bounded store timeouts. Adapt lock tests to the current seat factory. Exercise the real Lua script in a disposable networkless Redis container, without connecting Python to shared Redis. Public route registration remains pending. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -42,7 +43,7 @@ Each must remain
 below the repository's 2,000-line and 50-file change budget. The integration
 branch retains all increments until the feature is ready for the agreed merge.
 
-Local evidence after deterministic interview recovery: 311 backend tests passed and 62
+Local evidence after rate-limit and concurrency recovery: 342 backend tests passed and 62
 frontend tests passed across ten files, including the new current-BAA settings
 tests. Generated SDK and full frontend typecheck passed. Backend focused
 typechecks and changed-file lint/format checks passed for the implementation
@@ -52,8 +53,8 @@ Commit-specific final evidence belongs in the corresponding draft PRs.
 
 ## Remaining recovery and integration
 
-Public rate limits, API boundaries, wrong-recipient reporting and the patient UI
-are next. Generate additive
+Public API boundaries, wrong-recipient reporting and the patient UI
+are next. Rate limits exist but are not yet wired to public routes. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 
