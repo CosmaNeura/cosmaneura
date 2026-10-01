@@ -202,6 +202,7 @@ from .session_prep_review import (
     session_prep_review_api,
 )
 from .view_as import view_as_api_app
+from .visit_prep import visit_prep_api_app
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -240,6 +241,7 @@ internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
 internal_api_app.include_router(session_prep_review_api)
 internal_api_app.include_router(note_template_fields_api)
+internal_api_app.include_router(visit_prep_api_app)
 
 
 class IntakeList(BaseModel, extra="forbid"):
