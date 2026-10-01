@@ -41,6 +41,7 @@ Transfers use committed source and preserve the repository's existing license.
 | Patient telemetry and support-view isolation | Current Core telemetry scrubbers and `deny_view_as_browser_activity` | Do not initialize telemetry on the patient page; suppress patient events if Sentry was initialized before client-side navigation. Add credential redaction and prevent public request spans. Reuse signed-session support-view denial before database dispatch; account cookies do not authorize patient access. Real full-app HTTP tests verify nondisclosing denials without confirmation or revocation. |
 | Built desktop and mobile acceptance | New `visit_prep_patient_browser_test.py` using existing Playwright and the owned runner | Route every browser request in process to the real app; block external requests and expose no server. At 1440×1000 and 390×844, verify caregiver confirmation, all five topics, skips, a committed answer with lost acknowledgment and same-key replay, final story, completion and encrypted original storage. Check no horizontal overflow, account bootstrap, telemetry requests, credential in URLs/DOM, or patient text in browser persistence. Synthetic screenshots were visually inspected. This does not qualify corrections, AI, the provider package or external delivery. |
 | Current Core ownership compatibility | Current `practice_owner_transfer.py` and a new isolated integration test | Exercise the real transfer service against owned PostgreSQL. Verify the previous clinician's preparation lineage is unchanged, the new administrative owner cannot rotate that clinician's invitation, and separate offboarding closes patient access without deleting original records. Refresh PostgreSQL activity snapshots in the expiry race test so an early cached observation cannot mask the real row lock. |
+| Attributable correction and review storage | New work for the approved patient correction/review requirement; current aggregate and response guards | Generate additive migration `4ad34f59136c` after `e161ca7c8448`. Preserve original answers and append encrypted corrections or content-free review events. Bind each event to the confirmed patient/caregiver role, current credential and exact original-response count plus prior event sequence. Recheck expiry after database locks; retain legal-hold and aggregate-cleanup rules. This dormant structure adds no patient read, correction API, UI or model call. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -77,10 +78,33 @@ was used; the runner removed only its owned synthetic PostgreSQL and Redis
 resources. These results are compatibility evidence, not a live transfer or
 deployment rehearsal.
 
+The correction/review expand rung passed 506 selected backend/browser tests,
+including the previous 477 checks and 29 new contribution-storage checks. Its
+focused storage/migration/concurrency selection passed 39 tests. The full
+empty-database graph was applied through `4ad34f59136c`; original response
+guards were not changed. Tests separately verify PostgreSQL's referencing-FK
+truncate rejection, the original response truncate trigger, and aggregate
+truncate rejection. New contribution checks cover exact-basis races, actual
+lock waits during rotation/quarantine/expiry, ciphertext preservation, role and
+lineage denials, and legal-hold-protected synthetic aggregate cleanup. Changed
+Python implementation/test lint, formatting and focused typechecks passed.
+No frontend source changed in this rung; its browser regression used the
+previously built patient assets. All 44 warnings were existing deprecations.
+These are storage and regression results, not a patient correction demonstration.
+
+The committed architecture reference was rechecked at
+`cosmaneura-architecture` revision `2b542addfc6d6d38198b0dedbfd03c45ad73e551`
+(ratified v3.5), including ADRs 0021 and 0026. Core remains the clinical state
+owner; conversational AI belongs in Sovereign. Existing dirty architecture
+files were not used as ratified policy or modified. Counsel and operational
+activation requirements remain separate from synthetic implementation evidence.
+
 ## Remaining recovery and integration
 
-Patient corrections and bounded AI clarification are next. The basic patient UI
-and five public operations are wired and tested but remain gated off. Generate additive
+Patient correction/review services and UI, followed by bounded AI clarification,
+are next. Their storage structure is implemented, but the patient cannot yet
+review or correct persisted responses. The basic patient UI and five public
+operations are wired and tested but remain gated off. Generate additive
 migrations against the current graph; inspect and adapt the old aggregate and
 retention triggers rather than copying obsolete migration ancestry.
 

@@ -65,12 +65,33 @@ def test_truncate_cannot_bypass_response_retention() -> None:
     _response(scope, question_index=0, sequence=1).save()
 
     with get_session() as session:
-        with pytest.raises(DBAPIError, match="responses cannot be truncated"):
+        # PostgreSQL's new referencing FK rejects the single-table command
+        # before BEFORE TRUNCATE runs. Test that fence without losing the
+        # original response-trigger assertion below.
+        with pytest.raises(DBAPIError, match="foreign key constraint") as rejected:
             session.execute(text("TRUNCATE TABLE public.visit_prep_question_response"))
+        assert getattr(rejected.value.orig, "sqlstate", None) == "0A000"
 
     with get_session() as session:
-        with pytest.raises(DBAPIError, match="responses cannot be truncated"):
+        with pytest.raises(
+            DBAPIError, match="responses cannot be truncated"
+        ) as rejected:
+            session.execute(
+                text(
+                    "TRUNCATE TABLE public.visit_prep_question_response, "
+                    "public.visit_prep_contribution_event"
+                )
+            )
+        assert getattr(rejected.value.orig, "sqlstate", None) == "55000"
+
+    with get_session() as session:
+        # Either child guard may run first during aggregate TRUNCATE CASCADE.
+        with pytest.raises(
+            DBAPIError,
+            match="responses cannot be truncated|contribution events cannot be truncated",
+        ) as rejected:
             session.execute(text("TRUNCATE TABLE public.visit_prep CASCADE"))
+        assert getattr(rejected.value.orig, "sqlstate", None) == "55000"
 
 
 def test_response_rechecks_expiry_after_waiting_for_root_lock() -> None:
