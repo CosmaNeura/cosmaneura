@@ -311,6 +311,7 @@ CAPTURE_PATHS = frozenset(
         "capture-operations",
         "capture-notes",
         "encounter-context",
+        "native-capture",
     )
 )
 

@@ -9,24 +9,20 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field
 
-import app.configuration.session_prep as session_prep_configuration
 import app.services.authority
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
 from app.configuration.clerk import CLERK_PRIVATE_KEY
-from app.services.provider_record_authority import (
-    ProviderRecordScopeDenied,
-    lock_provider_record_owner,
-)
+from app.services.provider_context_exchange import provider_exchange_blocked
+from app.services.provider_record_authority import ProviderRecordScopeDenied
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     configured_superadmin_capability_environment,
 )
 from app.services.view_as import (
     ViewAsError,
-    context_token_exchange_blocked_by_view_as,
     context_token_rotation_blocked_by_view_as,
 )
 
@@ -202,36 +198,21 @@ def exchange_context_token(
             retryable=False,
         )
     try:
-        if settings.enabled:
-            environment = configured_superadmin_capability_environment()
-            with get_session() as session:
-                # View-as reconciliation locks Doctor until this request's
-                # transaction ends. Acquire Practice first for real-record
-                # exchanges so offboarding never sees the reverse order.
-                if (
-                    data.requested_surface == "provider_assistant"
-                    and data.record_ref is not None
-                    and session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
-                        clerk_identity.subject
-                    )
-                ):
-                    lock_provider_record_owner(
-                        session=session, clerk_subject=clerk_identity.subject
-                    )
-                if context_token_exchange_blocked_by_view_as(
-                    session,
-                    issuer=clerk_identity.issuer,
-                    subject=clerk_identity.subject,
-                    clerk_session_id=clerk_identity.clerk_session_id,
-                    environment=environment,
-                ):
-                    return token_problem_response(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        code="REQUEST_DENIED",
-                        title="Request denied",
-                        detail="Provider context is unavailable during view-as.",
-                        retryable=False,
-                    )
+        if provider_exchange_blocked(
+            issuer=clerk_identity.issuer,
+            subject=clerk_identity.subject,
+            clerk_session_id=clerk_identity.clerk_session_id,
+            requested_surface=data.requested_surface,
+            record_ref=data.record_ref,
+            settings=settings,
+        ):
+            return token_problem_response(
+                status_code=status.HTTP_403_FORBIDDEN,
+                code="REQUEST_DENIED",
+                title="Request denied",
+                detail="Provider context is unavailable during view-as.",
+                retryable=False,
+            )
         result = app.services.authority.exchange_context_token(
             clerk_issuer=clerk_identity.issuer,
             clerk_subject=clerk_identity.subject,
@@ -254,7 +235,10 @@ def exchange_context_token(
             title="Context service unavailable",
             detail="Context-token exchange is not available.",
         )
-    except (app.services.authority.AuthorityRequestDeniedError, ProviderRecordScopeDenied):
+    except (
+        app.services.authority.AuthorityRequestDeniedError,
+        ProviderRecordScopeDenied,
+    ):
         return token_problem_response(
             status_code=status.HTTP_403_FORBIDDEN,
             code="REQUEST_DENIED",

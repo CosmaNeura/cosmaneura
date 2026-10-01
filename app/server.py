@@ -40,7 +40,6 @@ from .routes.companion_appointment_setup import (
     install as install_companion_appointment_setup,
 )
 from .routes.companion_encounters import install as install_companion_encounters
-from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.companion_records import install as install_companion_records
 from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
 from .routes.companion_session_prep import router as companion_session_prep_router
@@ -49,6 +48,8 @@ from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
 from .routes.scribe_capture_deadline import install_capture_boundaries
+from .routes.scribe_encounters import install as install_scribe_encounters
+from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 
@@ -92,6 +93,9 @@ api_app.include_router(service_api_app, include_in_schema=False)
 # Agent and context-token contracts are workload/host APIs and intentionally stay
 # out of the browser-generated client schema.
 api_app.include_router(agent_api_app, include_in_schema=False)
+# This composition owns a fresh transaction per existing service phase.
+# Do not inherit agent_api_app's request-wide aglobal_session dependency.
+api_app.include_router(native_capture_api_app, include_in_schema=False)
 api_app.include_router(companion_session_prep_router, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
