@@ -217,6 +217,28 @@ Local synthetic signed-token and existing identity/workload regressions and
 implementer review are recorded at the final commit in the stacked draft PR.
 This is not independent review, GitHub approval or operational acceptance.
 
+## Core package receiver implementation October 2 2026
+
+The next increment implements `POST /service/v1/companion/visit-prep/package`.
+The route verifies both signed identities, resolves the current reviewed
+provider connection, and uses the dashboard's same-session package reader.
+Chart-free patient and caregiver preparations require no invented encounter.
+Current answers remain available when the protected brief is missing or stale.
+
+The package read and content-free companion-open audit commit together. The
+receiver rechecks current authority and credential expiry after lock/audit waits;
+failed, uncertain or late operations do not return the staged package. The outer
+HTTP boundary replaces arbitrary errors/headers with the fixed private wire and
+does not expose the endpoint in browser OpenAPI. No model or delivery is invoked.
+
+One focused owned-database run passed the complete signed-JWT HTTP path and
+transaction recovery checks (37 checks). Implementer review, type checks and
+the exact commit are recorded in the stacked draft PR. This is branch-level
+qualification, not activation or live cross-client acceptance. Recovery remains
+flag-off plus revert of this additive increment. Next is the matching CosmaBot
+display adapter and actual shared-client package review; application merges and
+deployment remain outside this increment.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

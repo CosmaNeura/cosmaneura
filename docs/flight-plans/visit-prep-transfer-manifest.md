@@ -1691,3 +1691,20 @@ The existing same-session synthesis reader is the next reuse point; CosmaBot
 display and downstream conversational work follow its receiver qualification.
 The Tier 2 flight plan describes additive recovery and unchanged existing callers.
 No schema, dependency, environment file, live provider or patient data is added.
+
+## Core package receiver
+
+Implemented the explicit read-only Visit Prep endpoint by reusing reviewed
+companion provider correspondence, current Core practice authorization, the
+same-session synthesis/package reader and the dashboard's response projection.
+No source import, duplicate clinical store, chart provisioning or model call was
+added. The new audit contains identifiers/digests, never patient words.
+
+The receiver privately stages the current package until owned transaction commit
+acknowledgment and final authority/deadline checks. Signed dual-JWT HTTP requests
+deliver the exact dashboard package for ready and missing briefs; unavailable
+requests return fixed no-store/no-referrer errors. The focused synthetic run also
+covered current corrections, lock waits, persisted support state, audit failure
+and uncertain commit recovery. This completes the Core receiver in the branch,
+not the CosmaBot display adapter or operational activation. All previous clinical,
+delivery and release acceptance limits remain.
