@@ -497,6 +497,17 @@ Synthetic qualification proves independent readers see no staged changes and bot
 successful commit and failed-handoff rollback preserve expected lineage. Recovery
 is reverting the additive transaction refactor; no database rollback is required.
 
+### Provider source projection
+
+The Acuity adapter now supplies a provider-neutral Visit Prep booking projection
+and a current-source recheck to the shared creation transaction. Raw appointment
+and calendar identifiers, transport and source hashing stay inside the adapter.
+Its digest and snapshot bytes preserve the existing receipt format, so this
+refactor neither duplicates nor rewrites prior preparations. The projection is
+not a patient-roster identity or a new scheduling product. It still handles only
+scheduled notifications; source change/cancel processing is the next increment.
+No schema, invitation, channel or service activation changes here.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

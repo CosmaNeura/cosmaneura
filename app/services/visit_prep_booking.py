@@ -1,25 +1,18 @@
 """Atomically bind one current booking to one chart-free preparation."""
 
 import hmac
-import json
-from dataclasses import asdict, dataclass
-from typing import cast
+from collections.abc import Callable
+from dataclasses import dataclass
 from uuid import uuid4
 
-from typeid import TypeID
-
-from app.configuration import visit_prep, visit_prep_acuity
-from app.configuration.visit_prep_acuity import (
-    AcuityBookingSettings,
-    AcuityCalendarBinding,
-)
+from app.configuration import visit_prep
 from app.services.visit_prep_access import resolve_visit_prep_access
-from app.services.visit_prep_acuity import (
-    AcuityBookingUnavailable,
-    CurrentAcuityBooking,
+from app.services.visit_prep_booking_contract import (
+    BookingSourceScope,
+    BookingSourceUnavailable,
+    NormalizedVisitPrepBooking,
 )
 from app.services.visit_prep_command_contract import (
-    _normalize_recipient,
     _normalized_schedule,
 )
 from app.services.visit_prep_packages import _database_now
@@ -28,9 +21,7 @@ from app.services.visit_preps import (
     _visit_prep_session,
     create_locked_visit_prep,
 )
-from app.utils.encryption import pseudonymous_digest
 
-from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
 from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_booking import VisitPrepBookingReceipt
@@ -46,43 +37,21 @@ class BookingReceipt:
 
 def record_current_booking(
     *,
-    booking: CurrentAcuityBooking,
-    binding: AcuityCalendarBinding,
-    settings: AcuityBookingSettings,
+    booking: NormalizedVisitPrepBooking,
+    source: BookingSourceScope,
+    require_current_source: Callable[[], None],
 ) -> BookingReceipt:
     # Only the trusted provider adapter supplies current booking and mapping.
     # A booking/contact is not a patient chart, identity assertion or consent.
-    if (
-        not settings.enabled
-        or settings.connection_id is None
-        or settings != visit_prep_acuity.SETTINGS
-        or binding not in settings.calendars
-        or booking.calendar_id != binding.calendar_id
-    ):
-        raise AcuityBookingUnavailable()
-    recipient = _normalize_recipient(booking.recipient)
-    key = pseudonymous_digest(
-        json.dumps(
-            {
-                "source": "acuity",
-                "connection": str(settings.connection_id),
-                "appointment": booking.appointment_id,
-            },
-            sort_keys=True,
-        ),
-        context="visit-prep-booking-reference-v1",
-    )
+    require_current_source()
+    key = booking.booking_digest
     with _visit_prep_session() as session:
         now = _database_now(session)
         owner, practice = _lock_owner_scope(
             session,
-            owner_practice_member_id=cast(
-                TypeIDType, TypeID.from_string(binding.owner_practice_member_id)
-            ),
-            owner_doctor_id=cast(
-                TypeIDType, TypeID.from_string(binding.owner_doctor_id)
-            ),
-            practice_id=cast(TypeIDType, TypeID.from_string(binding.practice_id)),
+            owner_practice_member_id=source.owner_practice_member_id,
+            owner_doctor_id=source.owner_doctor_id,
+            practice_id=source.practice_id,
             now=now,
         )
         doctor = session.get(Doctor, owner.doctor_id)
@@ -92,43 +61,26 @@ def record_current_booking(
                 doctor, settings=visit_prep.VISIT_PREP_SETTINGS, at=now
             ).can_manage
         ):
-            raise AcuityBookingUnavailable()
+            raise BookingSourceUnavailable()
 
         def require_current_admission():
             # Recheck after lock waits, including on a read-only replay.
-            if (
-                settings != visit_prep_acuity.SETTINGS
-                or not visit_prep_acuity.SETTINGS.enabled
-                or not resolve_visit_prep_access(
-                    doctor,
-                    settings=visit_prep.VISIT_PREP_SETTINGS,
-                    at=_database_now(session),
-                ).can_manage
-            ):
-                raise AcuityBookingUnavailable()
+            require_current_source()
+            if not resolve_visit_prep_access(
+                doctor,
+                settings=visit_prep.VISIT_PREP_SETTINGS,
+                at=_database_now(session),
+            ).can_manage:
+                raise BookingSourceUnavailable()
 
-        scheduled, timezone = _normalized_schedule(
+        _normalized_schedule(
             booking.scheduled_at, booking.timezone_name, now=now, require_future=False
         )
-        snapshot = pseudonymous_digest(
-            json.dumps(
-                {
-                    "booking": key,
-                    "owner": str(owner.id),
-                    "practice": str(practice.id),
-                    "calendar": booking.calendar_id,
-                    "recipient": asdict(recipient),
-                    "scheduled": scheduled.isoformat(),
-                    "timezone": timezone,
-                },
-                sort_keys=True,
-            ),
-            context="visit-prep-booking-snapshot-v1",
-        )
+        snapshot = booking.source_snapshot_hmac
         existing = session.exec(
             select(VisitPrepBookingReceipt)
             .where(
-                VisitPrepBookingReceipt.connection_id == settings.connection_id,
+                VisitPrepBookingReceipt.connection_id == source.connection_id,
                 VisitPrepBookingReceipt.booking_digest == key,
             )
             .with_for_update()
@@ -143,7 +95,7 @@ def record_current_booking(
                 or not hmac.compare_digest(existing.snapshot_hmac, snapshot)
             ):
                 # Changed booking is not a new preparation or a stale replay.
-                raise AcuityBookingUnavailable()
+                raise BookingSourceUnavailable()
             require_current_admission()
             return BookingReceipt(str(prep.id), "replayed")
         version = session.exec(
@@ -155,7 +107,7 @@ def record_current_booking(
             .with_for_update()
         ).one_or_none()
         if version is None:
-            raise AcuityBookingUnavailable()
+            raise BookingSourceUnavailable()
         result = create_locked_visit_prep(
             session,
             owner_practice_member_id=owner.id,
@@ -163,7 +115,7 @@ def record_current_booking(
             practice_id=practice.id,
             idempotency_key=str(uuid4()),
             recipient=booking.recipient,
-            physician_display_name=binding.physician_display_name,
+            physician_display_name=source.physician_display_name,
             scheduled_at=booking.scheduled_at,
             timezone_name=booking.timezone_name,
             question_set_version_id=version.id,
@@ -172,7 +124,8 @@ def record_current_booking(
         )
         session.add(
             VisitPrepBookingReceipt(
-                connection_id=settings.connection_id,
+                connection_id=source.connection_id,
+                source=source.source,
                 booking_digest=key,
                 snapshot_hmac=snapshot,
                 visit_prep_id=result.visit_prep.id,
