@@ -765,6 +765,30 @@ environment setting or deployment was used. Recovery disables sending, preserves
 the existing expansion and evidence, and runs secret maintenance before retiring
 the worker code; an uncertain claim is never made eligible for resend by rollback.
 
+### SMS status on the provider dashboard
+
+This Tier 2 increment adds an owner-only, audited SMS status read and dashboard
+snapshot for the booking text and both reminders. It shows the latest recorded
+intent per step across invitation generations, marks obsolete contexts and elapsed
+deadlines, and distinguishes acceptance from confirmed delivery. It does not load
+encrypted contact, link or consent payloads, grant sending permission, enqueue,
+reconcile or dispatch work. Current Core owner, practice, workforce and BAA authority
+remain required, even with patient and channel controls disabled.
+
+Qualification uses actual metadata and worker transitions, closed API/SDK parity,
+explicit dashboard reads, desktop/mobile rendering, denied ownership and support
+contexts, and invalidation during pending reads. Recovery reverts this additive
+route and display; existing SMS intent/evidence and submission behavior remain
+unchanged. There is no schema, service, dependency or release-control change.
+Real transport, authenticated callbacks and receipts, initial-contact consent,
+automation and operational acceptance remain open; a status snapshot supplies none.
+
+Final local qualification passed 49 backend, contract and browser checks, including
+the SMS queue/worker and existing email dashboard, plus 80 focused UI checks.
+The complete synthetic app build and frontend typecheck passed. Desktop and mobile
+screenshots were visually inspected. Existing framework deprecation, source-map
+and future-flag warnings remain; no live-provider acceptance is claimed.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

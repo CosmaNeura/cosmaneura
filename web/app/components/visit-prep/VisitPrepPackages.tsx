@@ -17,6 +17,7 @@ import {
 
 import { SynthesisView, reportedWords, validSynthesis } from "./SynthesisView"
 import { VisitPrepEmailStatus } from "./VisitPrepEmailStatus"
+import { VisitPrepSMSStatus } from "./VisitPrepSMSStatus"
 
 function appointment(prep: VisitPrepCommandStateResponse): string {
   try {
@@ -171,6 +172,7 @@ export function VisitPrepPackages({
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
   const [emailSelected, setEmailSelected] = useState<string | null>(null)
+  const [smsSelected, setSMSSelected] = useState<string | null>(null)
   const [value, setValue] = useState<VisitPrepSynthesisResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -185,6 +187,7 @@ export function VisitPrepPackages({
       setLoaded(false)
       setSelected(null)
       setEmailSelected(null)
+      setSMSSelected(null)
       setValue(null)
       setBusy(false)
       setError(null)
@@ -219,6 +222,7 @@ export function VisitPrepPackages({
     setValue(null)
     setSelected(null)
     setEmailSelected(null)
+    setSMSSelected(null)
     setPreps([])
     setError(null)
     setLoaded(false)
@@ -248,6 +252,7 @@ export function VisitPrepPackages({
     setValue(null)
     setSelected(id)
     setEmailSelected(null)
+    setSMSSelected(null)
     setError(null)
     try {
       const result = await visitPrepSynthesis({
@@ -276,6 +281,17 @@ export function VisitPrepPackages({
     setSelected(null)
     setError(null)
     setEmailSelected(id)
+    setSMSSelected(null)
+  }
+
+  function openSMSStatus(id: string) {
+    if (!allowed || blocked || busy) return
+    generation.current += 1
+    setValue(null)
+    setSelected(null)
+    setError(null)
+    setEmailSelected(null)
+    setSMSSelected(id)
   }
 
   async function requestSynthesis() {
@@ -392,6 +408,14 @@ export function VisitPrepPackages({
             </Button>
             <Button
               variant="outline"
+              disabled={busy}
+              onClick={() => openSMSStatus(prep.id)}
+              aria-label={`SMS invitation and reminder status ${prep.id}`}
+            >
+              SMS status
+            </Button>
+            <Button
+              variant="outline"
               disabled={
                 busy ||
                 prep.revoked_at !== null ||
@@ -430,6 +454,14 @@ export function VisitPrepPackages({
         >
           Reload contribution
         </Button>
+      )}
+      {currentScope && smsSelected && (
+        <VisitPrepSMSStatus
+          key={`${scopeKey}:${smsSelected}`}
+          preparationId={smsSelected}
+          access={access}
+          scopeKey={scopeKey}
+        />
       )}
       {currentScope && value && (
         <>
