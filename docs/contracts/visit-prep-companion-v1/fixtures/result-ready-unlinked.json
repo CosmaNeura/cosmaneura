@@ -1,0 +1,153 @@
+{
+  "contract_version": "1",
+  "preparation_ref": "visit_prep_01h45ytscbebyvny4gc8cr8ma2",
+  "connection_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workspace_id": "00000000-0000-4000-8000-000000000001",
+  "request_nonce": "00000000-0000-4000-8000-000000000002",
+  "checked_at": "2026-10-01T12:00:00Z",
+  "package": {
+    "contract": "visit_prep.patient_synthesis.v1",
+    "sources": {
+      "contract": "visit_prep.patient_sources.v1",
+      "package_id": "visit_prep_01h45ytscbebyvny4gc8cr8ma2",
+      "source_version": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "preparation": {
+        "id": "visit_prep_01h45ytscbebyvny4gc8cr8ma2",
+        "question_set_version_id": "visit_prep_question_set_version_01h45ytscbebyvny4gc8cr8ma2",
+        "patient_id": null,
+        "appointment_id": null,
+        "lifecycle_state": "completed",
+        "has_email_contact": true,
+        "has_sms_contact": false,
+        "physician_display_name": "Invented Physician",
+        "practice_display_name": "Invented Practice",
+        "scheduled_at": "2026-10-03T12:00:00Z",
+        "timezone_name": "America/New_York",
+        "schedule_generation": 1,
+        "credential_generation": 1,
+        "credential_expires_at": "2026-10-03T13:00:00Z",
+        "credential_active": true,
+        "revoked_at": null,
+        "created_at": "2026-10-01T10:00:00Z",
+        "updated_at": "2026-10-01T11:00:00Z"
+      },
+      "basis": { "original_response_count": 4, "event_sequence": 1 },
+      "actor_role": "patient",
+      "original_interview_completed": true,
+      "current_answers_complete": true,
+      "current_answers_reviewed": true,
+      "current_review_id": "visit_prep_contribution_01h45ytscbebyvny4gc8cr8ma9",
+      "reviewed_at": "2026-10-01T11:00:00Z",
+      "missing_question_keys": [],
+      "skipped_question_keys": ["medications", "adherence"],
+      "topics": [
+        {
+          "question_key": "reason",
+          "position": 1,
+          "prompt": "What is the main reason for this visit?",
+          "kind": "story",
+          "choices": [],
+          "response_kind": "answered",
+          "answer": "Invented report: I want to discuss my routine.",
+          "initial_response_kind": "answered",
+          "initial_answer": "Invented report: I want to discuss my routine.",
+          "changed": false,
+          "original_response_id": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma3",
+          "additional_answer_source_id": null,
+          "current_revision_id": null,
+          "recorded_at": "2026-10-01T10:30:00Z",
+          "initial_recorded_at": "2026-10-01T10:30:00Z"
+        },
+        {
+          "question_key": "medications",
+          "position": 2,
+          "prompt": "What medications are you prescribed right now?",
+          "kind": "list",
+          "choices": [],
+          "response_kind": "skipped",
+          "answer": null,
+          "initial_response_kind": "skipped",
+          "initial_answer": null,
+          "changed": false,
+          "original_response_id": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma4",
+          "additional_answer_source_id": null,
+          "current_revision_id": null,
+          "recorded_at": "2026-10-01T10:31:00Z",
+          "initial_recorded_at": "2026-10-01T10:31:00Z"
+        },
+        {
+          "question_key": "adherence",
+          "position": 3,
+          "prompt": "Are you taking them as prescribed?",
+          "kind": "choice",
+          "choices": [
+            { "value": "yes", "label": "Yes, as prescribed" },
+            { "value": "no", "label": "Not really" }
+          ],
+          "response_kind": "skipped",
+          "answer": null,
+          "initial_response_kind": "skipped",
+          "initial_answer": null,
+          "changed": false,
+          "original_response_id": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma5",
+          "additional_answer_source_id": null,
+          "current_revision_id": null,
+          "recorded_at": "2026-10-01T10:32:00Z",
+          "initial_recorded_at": "2026-10-01T10:32:00Z"
+        },
+        {
+          "question_key": "story",
+          "position": 5,
+          "prompt": "Tell me what happened since the last time you saw me.",
+          "kind": "story",
+          "choices": [],
+          "response_kind": "answered",
+          "answer": "Invented story: I changed my morning routine. 🙂",
+          "initial_response_kind": "answered",
+          "initial_answer": "Invented story: I changed my morning routine. 🙂",
+          "changed": false,
+          "original_response_id": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma6",
+          "additional_answer_source_id": null,
+          "current_revision_id": null,
+          "recorded_at": "2026-10-01T10:33:00Z",
+          "initial_recorded_at": "2026-10-01T10:33:00Z"
+        }
+      ]
+    },
+    "status": "ready",
+    "build_status": "ready",
+    "retry_at": null,
+    "artifact_id": "visit_prep_brief_01h45ytscbebyvny4gc8cr8ma2",
+    "version": 1,
+    "recorded_at": "2026-10-01T11:30:00Z",
+    "generator_version": "patient_sources_v1",
+    "prompt_version": "patient_report_only_v1",
+    "model_profile": "synthetic_fixture",
+    "brief": {
+      "headline": {
+        "text": "Patient reports a changed morning routine.",
+        "evidence": [
+          {
+            "source_ref": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma6",
+            "quote": "I changed my morning routine."
+          }
+        ]
+      },
+      "summary": [
+        {
+          "text": "Patient wants to discuss their routine.",
+          "evidence": [
+            {
+              "source_ref": "visit_prep_response_01h45ytscbebyvny4gc8cr8ma3",
+              "quote": "I want to discuss my routine."
+            }
+          ]
+        }
+      ],
+      "visit_priorities": [],
+      "medication_and_adherence": [],
+      "barriers": [],
+      "uncertainties": []
+    }
+  }
+}

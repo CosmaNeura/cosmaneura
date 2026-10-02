@@ -1,0 +1,11 @@
+{
+  "contract_version": "1",
+  "action": "visit-prep.open",
+  "purpose": "provider_previsit_review",
+  "preparation_ref": "visit_prep_01h45ytscbebyvny4gc8cr8ma2",
+  "expected_actor_ref": "authority_actor_01h45ytscbebyvny4gc8cr8ma2",
+  "expected_tenant_ref": "authority_tenant_01h45ytscbebyvny4gc8cr8ma2",
+  "connection_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workspace_id": "00000000-0000-4000-8000-000000000001",
+  "request_nonce": "00000000-0000-4000-8000-000000000002"
+}
