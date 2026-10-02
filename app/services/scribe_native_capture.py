@@ -21,6 +21,7 @@ from app.services.scribe_capture_gateway import execute_capture_operation
 from app.services.scribe_capture_protocol import CaptureOperation, ReadOperation
 from app.services.scribe_encounter_contract import LookupRequest
 from app.services.scribe_workflow import ScribeWorkflowClient
+from app.utils.native_request_timing import phase
 
 from activemodel.session_manager import global_session
 
@@ -90,23 +91,24 @@ async def execute_native_capture(
         remaining = check_capture_deadline()
         if remaining is None:
             raise ValueError("native_capture_deadline_required")
-        result = scribe_encounters.encounter_workflow(
-            issuer=issuer,
-            subject=subject,
-            session_id=clerk_session_id,
-            request=LookupRequest(
-                action="lookup",
-                workspace_id=data.workspace_id,
-                request_nonce=uuid4(),
-                expected_actor_ref=data.expected_actor_ref,
-                expected_tenant_ref=data.expected_tenant_ref,
-            ),
-            settings_provider=lambda: encounter_settings,
-            authority_settings=authority_settings,
-            # This shorter SQL budget supplements the unchanged capture budget.
-            deadline=time.monotonic() + min(15, remaining),
-            include_lookup_status=include_status,
-        )
+        with phase("policy_lookup"):
+            result = scribe_encounters.encounter_workflow(
+                issuer=issuer,
+                subject=subject,
+                session_id=clerk_session_id,
+                request=LookupRequest(
+                    action="lookup",
+                    workspace_id=data.workspace_id,
+                    request_nonce=uuid4(),
+                    expected_actor_ref=data.expected_actor_ref,
+                    expected_tenant_ref=data.expected_tenant_ref,
+                ),
+                settings_provider=lambda: encounter_settings,
+                authority_settings=authority_settings,
+                # This shorter SQL budget supplements the unchanged capture budget.
+                deadline=time.monotonic() + min(15, remaining),
+                include_lookup_status=include_status,
+            )
         check_async_capture_deadline()
         row = result["encounter"]
         if row["workspace_id"] != str(data.workspace_id):
@@ -126,31 +128,33 @@ async def execute_native_capture(
 
     # Retain the exchange route's guard/issuance transaction and lock ordering.
     # Close it before the next lookup or any downstream await.
-    with global_session():
-        if provider_exchange_blocked(
-            issuer=issuer,
-            subject=subject,
-            clerk_session_id=clerk_session_id,
-            requested_surface="provider_assistant",
-            record_ref=first["appointment_ref"],
-            settings=authority_settings,
-        ):
-            raise authority.AuthorityRequestDeniedError
-        issued = authority.exchange_context_token(
-            clerk_issuer=issuer,
-            clerk_subject=subject,
-            requested_surface="provider_assistant",
-            record_ref=first["appointment_ref"],
-            settings=authority_settings,
-        )
+    with phase("policy_exchange"):
+        with global_session():
+            if provider_exchange_blocked(
+                issuer=issuer,
+                subject=subject,
+                clerk_session_id=clerk_session_id,
+                requested_surface="provider_assistant",
+                record_ref=first["appointment_ref"],
+                settings=authority_settings,
+            ):
+                raise authority.AuthorityRequestDeniedError
+            issued = authority.exchange_context_token(
+                clerk_issuer=issuer,
+                clerk_subject=subject,
+                requested_surface="provider_assistant",
+                record_ref=first["appointment_ref"],
+                settings=authority_settings,
+            )
     current()
     turn = uuid4()
-    resolved = authority.resolve_mount_context(
-        workload_client_id=workload_client_id,
-        mount_context_token=issued.context_token,
-        client_turn_id=turn,
-        settings=authority_settings,
-    )
+    with phase("policy_mount"):
+        resolved = authority.resolve_mount_context(
+            workload_client_id=workload_client_id,
+            mount_context_token=issued.context_token,
+            client_turn_id=turn,
+            settings=authority_settings,
+        )
     context = resolved.context
     if (
         context.surface,
@@ -175,17 +179,18 @@ async def execute_native_capture(
     )
     binding = data.binding_ref
     if data.action == "mount":
-        snapshot = scribe_capture_scope.resolve_capture_binding(
-            workload_client_id=caller.workload_client_id,
-            mount_context_token=caller.mount_context_token,
-            interaction_ref=caller.interaction_ref,
-            client_turn_id=caller.client_turn_id,
-            settings=caller.settings,
-            capture_settings=caller.capture_settings,
-            workspace_id=data.workspace_id,
-            appointment_ref=first["appointment_ref"],
-            request_nonce=data.request_nonce,
-        )
+        with phase("policy_binding"):
+            snapshot = scribe_capture_scope.resolve_capture_binding(
+                workload_client_id=caller.workload_client_id,
+                mount_context_token=caller.mount_context_token,
+                interaction_ref=caller.interaction_ref,
+                client_turn_id=caller.client_turn_id,
+                settings=caller.settings,
+                capture_settings=caller.capture_settings,
+                workspace_id=data.workspace_id,
+                appointment_ref=first["appointment_ref"],
+                request_nonce=data.request_nonce,
+            )
         binding = snapshot.binding_ref
         current()
     if binding is None:
@@ -195,15 +200,16 @@ async def execute_native_capture(
     )
     receipt = None
     if operation is not None:
-        receipt = await execute_capture_operation(
-            caller=caller,
-            binding_ref=binding,
-            workspace_id=data.workspace_id,
-            operation=operation,
-            client_request_key=key,
-            client=client,
-            upload_origins=capture_settings.upload_origins,
-        )
+        with phase("operation"):
+            receipt = await execute_capture_operation(
+                caller=caller,
+                binding_ref=binding,
+                workspace_id=data.workspace_id,
+                operation=operation,
+                client_request_key=key,
+                client=client,
+                upload_origins=capture_settings.upload_origins,
+            )
         check_async_capture_deadline()
     # Only the final mount row is published. All other lookups still execute
     # their full fresh authority checks without unused saved-note display reads.
