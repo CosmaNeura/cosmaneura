@@ -371,7 +371,7 @@ def _existing_event(
     return True
 
 
-def _append_event(
+def _append_event_in_session(
     session: Session,
     *,
     authorized: _AuthorizedInterview,
@@ -414,13 +414,10 @@ def _append_event(
     try:
         session.flush()
     except IntegrityError:
-        session.rollback()
         raise VisitPrepInterviewConflict(
             "Visit Prep contribution state changed"
         ) from None
-    current = _load_contribution(session, visit_prep=prep)
-    _commit(session)
-    return current
+    return _load_contribution(session, visit_prep=prep)
 
 
 def correct_contribution(
@@ -432,60 +429,91 @@ def correct_contribution(
     idempotency_key: str,
     response: ResponseInput,
 ) -> ContributionMutationReceipt:
-    """Append a patient-owned revision; exact replay returns no answer plaintext.
+    """Commit a patient-owned revision; exact replay returns no answer plaintext."""
+    with _visit_prep_session() as session:
+        try:
+            receipt = correct_contribution_in_session(
+                session,
+                access_token=access_token,
+                first_name=first_name,
+                role=role,
+                expected_basis=expected_basis,
+                idempotency_key=idempotency_key,
+                response=response,
+            )
+        except VisitPrepInterviewConflict:
+            session.rollback()
+            raise
+        _commit(session)
+        return receipt
 
-    No route is wired yet. Newly revealed conditional topics use their own
-    immutable contribution source, not a fabricated original interview row.
+
+def correct_contribution_in_session(
+    session: Session,
+    *,
+    access_token: str,
+    first_name: str,
+    role: ContributionRole,
+    expected_basis: ContributionBasis,
+    idempotency_key: str,
+    response: ResponseInput,
+) -> ContributionMutationReceipt:
+    """Stage the existing patient correction in a caller-owned transaction.
+
+    Reacquire ordinary public/recipient authority, preserve original sources and
+    exact replay, and recheck time-dependent authority after the flush. Never
+    open a session, commit or roll back. A receipt is staged, not a saved answer.
+    The caller must atomically bind its own qualified action evidence, recheck
+    all authority after later work, and acknowledge commit before disclosure.
+    Any denial or uncertain commit must discard the receipt. This grants no AI,
+    bot, model, provider, consent or identity capability.
     """
-
     if not isinstance(expected_basis, ContributionBasis):
         raise VisitPrepInterviewValidation("contribution basis is invalid")
     key = _canonical_idempotency_key(idempotency_key)
     submitted = _validated_response_input(response)
-    with _visit_prep_session() as session:
-        authorized = _lock_authorized_interview(session, access_token=access_token)
-        _require_recipient(authorized, first_name=first_name, role=role)
-        prep = authorized.visit_prep
-        current = _load_contribution(session, visit_prep=prep)
-        topic = next(
-            (
-                item
-                for item in current.topics
-                if item.question.key == submitted.question_key
-            ),
-            None,
+    authorized = _lock_authorized_interview(session, access_token=access_token)
+    _require_recipient(authorized, first_name=first_name, role=role)
+    prep = authorized.visit_prep
+    current = _load_contribution(session, visit_prep=prep)
+    topic = next(
+        (
+            item
+            for item in current.topics
+            if item.question.key == submitted.question_key
+        ),
+        None,
+    )
+    if topic is None:
+        raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
+    questions = _questions(session, visit_prep=prep)
+    question = next(
+        row for row in questions if row.question_key == submitted.question_key
+    )
+    additional = topic.original_response_id is None
+    if additional and (
+        question.show_if_question_id is None
+        or _question_is_visible(
+            question,
+            questions_by_id={row.id: row for row in questions},
+            responses_by_question={
+                row.question_id: row for row in _responses(session, visit_prep=prep)
+            },
         )
-        if topic is None:
-            raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
-        questions = _questions(session, visit_prep=prep)
-        question = next(
-            row for row in questions if row.question_key == submitted.question_key
-        )
-        additional = topic.original_response_id is None
-        if additional and (
-            question.show_if_question_id is None
-            or _question_is_visible(
-                question,
-                questions_by_id={row.id: row for row in questions},
-                responses_by_question={
-                    row.question_id: row for row in _responses(session, visit_prep=prep)
-                },
-            )
-        ):
-            raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
-        canonical = _canonical_response(submitted, question=question)
-        fingerprint = contribution_payload_hmac(
-            visit_prep_id=prep.id,
-            actor_role=role,
-            event_kind="topic_answer" if additional else "correction",
-            basis=expected_basis,
-            original_response_id=topic.original_response_id,
-            question_id=question.id if additional else None,
-            response=canonical,
-        )
-        if _existing_event(session, prep=prep, key=key, fingerprint=fingerprint):
-            _commit(session)
-            return _receipt(current, replayed=True)
+    ):
+        raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
+    canonical = _canonical_response(submitted, question=question)
+    fingerprint = contribution_payload_hmac(
+        visit_prep_id=prep.id,
+        actor_role=role,
+        event_kind="topic_answer" if additional else "correction",
+        basis=expected_basis,
+        original_response_id=topic.original_response_id,
+        question_id=question.id if additional else None,
+        response=canonical,
+    )
+    replayed = _existing_event(session, prep=prep, key=key, fingerprint=fingerprint)
+    if not replayed:
         if current.basis != expected_basis or not topic.applicable:
             raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
         try:
@@ -498,7 +526,7 @@ def correct_contribution(
             )
         except EncryptionError:
             raise _unavailable() from None
-        updated = _append_event(
+        current = _append_event_in_session(
             session,
             authorized=authorized,
             role=role,
@@ -510,7 +538,9 @@ def correct_contribution(
             response_kind=canonical.response_kind,
             ciphertext=ciphertext,
         )
-        return _receipt(updated)
+    final = _lock_authorized_interview(session, access_token=access_token)
+    _require_recipient(final, first_name=first_name, role=role)
+    return _receipt(current, replayed=replayed)
 
 
 def review_contribution(
@@ -542,14 +572,19 @@ def review_contribution(
             return _receipt(current, replayed=True)
         if current.basis != expected_basis or not current.current_answers_complete:
             raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
-        updated = _append_event(
-            session,
-            authorized=authorized,
-            role=role,
-            basis=expected_basis,
-            key=key,
-            fingerprint=fingerprint,
-        )
+        try:
+            updated = _append_event_in_session(
+                session,
+                authorized=authorized,
+                role=role,
+                basis=expected_basis,
+                key=key,
+                fingerprint=fingerprint,
+            )
+        except VisitPrepInterviewConflict:
+            session.rollback()
+            raise
+        _commit(session)
         return _receipt(updated)
 
 

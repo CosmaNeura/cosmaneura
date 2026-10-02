@@ -1011,3 +1011,36 @@ control is added. Conversational ownership remains with the existing service;
 Core does not acquire a second chatbot runtime. Durable clarification/action
 evidence, patient UI, the ratified patient service boundary, clinical quality,
 CosmaBot, booking/email/SMS/reminders and release qualification remain open.
+
+## Patient correction within a caller transaction
+
+`correct_contribution_in_session` stages the existing patient-owned correction
+without opening another session, committing or rolling back. It reacquires the
+ordinary current public-interview and recipient authority, preserves original
+wording and exact correction replay, and rechecks current authority and database
+time after the write. The existing patient correction API delegates to it and
+still acknowledges only its own successful commit. Newly revealed conditional
+answers and patient/caregiver attribution retain their existing behavior.
+
+This permits a future clarification writer to store its exact presented proposal,
+actual patient decision and correction together. A staged receipt is not a saved
+answer or qualified confirmation evidence. The enclosing writer must perform its
+own final authority checks after later work and discard the receipt on denial or
+uncertain commit. This change does not grant conversational, bot or consent
+authority or supply that writer.
+
+Independent connections to owned synthetic PostgreSQL verify that the correction
+and a synthetic transaction marker remain invisible until the caller commits,
+and that later denial rolls both back. The marker is deliberately not represented
+as real AI confirmation evidence. Checks cover caregiver attribution, exact
+replay, final rollout/entitlement denial, competing edits held behind the caller's
+locks, and stale sources or withdrawn BAA after actual lock waits. An acknowledged
+commit lost to the caller produces no saved receipt and permits only exact replay.
+Final revision-specific regression and implementer review belong in the draft PR.
+
+Reuse stays within the existing Core contribution, authority and encrypted-source
+domain. No schema, route, wire contract, dependency, model/provider call, release
+control or cross-repository change occurs. Durable clarification/action evidence,
+choice supplemental sources, patient UI, the ratified conversational boundary,
+clinical quality, CosmaBot, qualified booking/email/SMS/reminders, retention,
+monitoring and clinical/operational release acceptance remain required.
