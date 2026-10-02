@@ -8801,6 +8801,55 @@
         ],
         "title": "VisitAudioUploadRequest"
       },
+      "VisitPrepBriefEvidence": {
+        "properties": {
+          "source_ref": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Source Ref"
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Quote"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_ref",
+          "quote"
+        ],
+        "title": "VisitPrepBriefEvidence"
+      },
+      "VisitPrepBriefItem": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 700,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefEvidence"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "evidence"
+        ],
+        "title": "VisitPrepBriefItem"
+      },
       "VisitPrepCommandErrorResponse": {
         "properties": {
           "detail": {
@@ -9067,6 +9116,484 @@
         ],
         "title": "VisitPrepCreateRequest"
       },
+      "VisitPrepEmailInvitationRequest": {
+        "properties": {
+          "expected_credential_generation": {
+            "type": "integer",
+            "maximum": 2147483647,
+            "exclusiveMinimum": 0,
+            "title": "Expected Credential Generation"
+          },
+          "access_token": {
+            "type": "string",
+            "maxLength": 47,
+            "minLength": 47,
+            "title": "Access Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_credential_generation",
+          "access_token"
+        ],
+        "title": "VisitPrepEmailInvitationRequest"
+      },
+      "VisitPrepEmailInvitationResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.email_invitation.v1",
+            "title": "Contract",
+            "default": "visit_prep.email_invitation.v1"
+          },
+          "preparation_id": {
+            "type": "string",
+            "title": "Preparation Id"
+          },
+          "credential_generation": {
+            "type": "integer",
+            "title": "Credential Generation"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "submitting",
+              "accepted",
+              "failed",
+              "suppressed",
+              "uncertain"
+            ],
+            "title": "State"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "replayed"
+            ],
+            "title": "Disposition"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Requested At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "dispatch_integration": {
+            "type": "string",
+            "const": "default_off_worker",
+            "title": "Dispatch Integration",
+            "default": "default_off_worker"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preparation_id",
+          "credential_generation",
+          "state",
+          "disposition",
+          "requested_at",
+          "expires_at"
+        ],
+        "title": "VisitPrepEmailInvitationResponse"
+      },
+      "VisitPrepEmailPolicyDecisionRequest": {
+        "properties": {
+          "expected_event_sequence": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483647,
+            "minimum": 0,
+            "title": "Expected Event Sequence"
+          },
+          "event_kind": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "withdrawn"
+            ],
+            "title": "Event Kind"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Policy Fingerprint"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_event_sequence",
+          "event_kind",
+          "policy_fingerprint",
+          "expires_at"
+        ],
+        "title": "VisitPrepEmailPolicyDecisionRequest"
+      },
+      "VisitPrepEmailPolicyDecisionResponse": {
+        "properties": {
+          "event_sequence": {
+            "type": "integer",
+            "title": "Event Sequence"
+          },
+          "current_event_sequence": {
+            "type": "integer",
+            "title": "Current Event Sequence"
+          },
+          "event_kind": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "withdrawn"
+            ],
+            "title": "Event Kind"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "title": "Policy Fingerprint"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "replayed"
+            ],
+            "title": "Disposition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_sequence",
+          "current_event_sequence",
+          "event_kind",
+          "policy_fingerprint",
+          "expires_at",
+          "recorded_at",
+          "disposition"
+        ],
+        "title": "VisitPrepEmailPolicyDecisionResponse"
+      },
+      "VisitPrepEmailPolicyResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.email_policy.v1",
+            "title": "Contract",
+            "default": "visit_prep.email_policy.v1"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "title": "Policy Fingerprint"
+          },
+          "template_version": {
+            "type": "string",
+            "title": "Template Version"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "template_text": {
+            "type": "string",
+            "title": "Template Text"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_approved",
+              "approved",
+              "withdrawn",
+              "expired",
+              "policy_changed"
+            ],
+            "title": "Status"
+          },
+          "event_sequence": {
+            "type": "integer",
+            "title": "Event Sequence"
+          },
+          "decision_policy_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Policy Fingerprint"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "delivery_status": {
+            "type": "string",
+            "const": "not_connected",
+            "title": "Delivery Status",
+            "default": "not_connected"
+          },
+          "standard_cadence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepStandardCadenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policy_fingerprint",
+          "template_version",
+          "subject",
+          "template_text",
+          "status",
+          "event_sequence",
+          "decision_policy_fingerprint",
+          "recorded_at",
+          "expires_at",
+          "checked_at"
+        ],
+        "title": "VisitPrepEmailPolicyResponse"
+      },
+      "VisitPrepEmailStatusResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.email_status.v1",
+            "title": "Contract",
+            "default": "visit_prep.email_status.v1"
+          },
+          "preparation_id": {
+            "type": "string",
+            "title": "Preparation Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_requested",
+              "queued",
+              "submitting",
+              "accepted",
+              "failed",
+              "suppressed",
+              "uncertain"
+            ],
+            "title": "Status"
+          },
+          "outcome_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "transport_unavailable",
+                  "message_invalid",
+                  "scope_unavailable",
+                  "obsolete_context",
+                  "consent_withdrawn",
+                  "expired",
+                  "submission_uncertain"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Code"
+          },
+          "current_credential_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Current Credential Generation"
+          },
+          "credential_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Generation"
+          },
+          "context_current": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Current"
+          },
+          "invitation_expired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitation Expired"
+          },
+          "submission_window_elapsed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submission Window Elapsed"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          },
+          "finalized_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalized At"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "dispatch_integration": {
+            "type": "string",
+            "const": "default_off_worker",
+            "title": "Dispatch Integration",
+            "default": "default_off_worker"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preparation_id",
+          "status",
+          "outcome_code",
+          "current_credential_generation",
+          "credential_generation",
+          "context_current",
+          "invitation_expired",
+          "submission_window_elapsed",
+          "requested_at",
+          "expires_at",
+          "submitted_at",
+          "finalized_at",
+          "checked_at"
+        ],
+        "title": "VisitPrepEmailStatusResponse"
+      },
       "VisitPrepListResponse": {
         "properties": {
           "preparations": {
@@ -9095,6 +9622,534 @@
           "next_before_id"
         ],
         "title": "VisitPrepListResponse"
+      },
+      "VisitPrepPackageBasisResponse": {
+        "properties": {
+          "original_response_count": {
+            "type": "integer",
+            "maximum": 5,
+            "minimum": 0,
+            "title": "Original Response Count"
+          },
+          "event_sequence": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "Event Sequence"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "original_response_count",
+          "event_sequence"
+        ],
+        "title": "VisitPrepPackageBasisResponse"
+      },
+      "VisitPrepPackageChoiceResponse": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "VisitPrepPackageChoiceResponse"
+      },
+      "VisitPrepPackageResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.patient_sources.v1",
+            "title": "Contract",
+            "default": "visit_prep.patient_sources.v1"
+          },
+          "package_id": {
+            "type": "string",
+            "title": "Package Id"
+          },
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Version"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/VisitPrepCommandStateResponse"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/VisitPrepPackageBasisResponse"
+          },
+          "actor_role": {
+            "type": "string",
+            "enum": [
+              "patient",
+              "caregiver"
+            ],
+            "title": "Actor Role"
+          },
+          "original_interview_completed": {
+            "type": "boolean",
+            "title": "Original Interview Completed"
+          },
+          "current_answers_complete": {
+            "type": "boolean",
+            "title": "Current Answers Complete"
+          },
+          "current_answers_reviewed": {
+            "type": "boolean",
+            "title": "Current Answers Reviewed"
+          },
+          "current_review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Review Id"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "missing_question_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Question Keys"
+          },
+          "skipped_question_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped Question Keys"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepPackageTopicResponse"
+            },
+            "type": "array",
+            "title": "Topics"
+          },
+          "synthesis_status": {
+            "type": "string",
+            "const": "not_generated",
+            "title": "Synthesis Status",
+            "default": "not_generated"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "package_id",
+          "source_version",
+          "preparation",
+          "basis",
+          "actor_role",
+          "original_interview_completed",
+          "current_answers_complete",
+          "current_answers_reviewed",
+          "current_review_id",
+          "reviewed_at",
+          "missing_question_keys",
+          "skipped_question_keys",
+          "topics"
+        ],
+        "title": "VisitPrepPackageResponse"
+      },
+      "VisitPrepPackageTopicResponse": {
+        "properties": {
+          "question_key": {
+            "type": "string",
+            "title": "Question Key"
+          },
+          "position": {
+            "type": "integer",
+            "maximum": 5,
+            "minimum": 1,
+            "title": "Position"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "story",
+              "list",
+              "choice"
+            ],
+            "title": "Kind"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepPackageChoiceResponse"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "response_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "skipped"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Kind"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "initial_response_kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "answered",
+                  "skipped"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Response Kind"
+          },
+          "initial_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Answer"
+          },
+          "changed": {
+            "type": "boolean",
+            "title": "Changed"
+          },
+          "original_response_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Response Id"
+          },
+          "additional_answer_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Additional Answer Source Id"
+          },
+          "current_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Revision Id"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
+          },
+          "initial_recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Recorded At"
+          },
+          "explanation_words": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation Words"
+          },
+          "explanation_source_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation Source Id"
+          },
+          "explanation_recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explanation Recorded At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_key",
+          "position",
+          "prompt",
+          "kind",
+          "choices",
+          "response_kind",
+          "answer",
+          "initial_response_kind",
+          "initial_answer",
+          "changed",
+          "original_response_id",
+          "additional_answer_source_id",
+          "current_revision_id",
+          "recorded_at",
+          "initial_recorded_at"
+        ],
+        "title": "VisitPrepPackageTopicResponse"
+      },
+      "VisitPrepPatientSourcesResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.patient_sources.v1",
+            "title": "Contract",
+            "default": "visit_prep.patient_sources.v1"
+          },
+          "package_id": {
+            "type": "string",
+            "title": "Package Id"
+          },
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Version"
+          },
+          "preparation": {
+            "$ref": "#/components/schemas/VisitPrepCommandStateResponse"
+          },
+          "basis": {
+            "$ref": "#/components/schemas/VisitPrepPackageBasisResponse"
+          },
+          "actor_role": {
+            "type": "string",
+            "enum": [
+              "patient",
+              "caregiver"
+            ],
+            "title": "Actor Role"
+          },
+          "original_interview_completed": {
+            "type": "boolean",
+            "title": "Original Interview Completed"
+          },
+          "current_answers_complete": {
+            "type": "boolean",
+            "title": "Current Answers Complete"
+          },
+          "current_answers_reviewed": {
+            "type": "boolean",
+            "title": "Current Answers Reviewed"
+          },
+          "current_review_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Review Id"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "missing_question_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Question Keys"
+          },
+          "skipped_question_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped Question Keys"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepPackageTopicResponse"
+            },
+            "type": "array",
+            "title": "Topics"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "package_id",
+          "source_version",
+          "preparation",
+          "basis",
+          "actor_role",
+          "original_interview_completed",
+          "current_answers_complete",
+          "current_answers_reviewed",
+          "current_review_id",
+          "reviewed_at",
+          "missing_question_keys",
+          "skipped_question_keys",
+          "topics"
+        ],
+        "title": "VisitPrepPatientSourcesResponse"
+      },
+      "VisitPrepPreparedBrief": {
+        "properties": {
+          "headline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepBriefItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefItem"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Summary"
+          },
+          "visit_priorities": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefItem"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Visit Priorities"
+          },
+          "medication_and_adherence": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefItem"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Medication And Adherence"
+          },
+          "barriers": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefItem"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "title": "Barriers"
+          },
+          "uncertainties": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepBriefItem"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Uncertainties"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "headline",
+          "summary",
+          "visit_priorities",
+          "medication_and_adherence",
+          "barriers",
+          "uncertainties"
+        ],
+        "title": "VisitPrepPreparedBrief",
+        "description": "Model interpretation, always displayed alongside the patient's sources.\n\nEmpty sections are meaningful. Missing/skipped topics and completion/review\nflags come from Core; the model cannot invent or change those declarations."
       },
       "VisitPrepQuestionChoiceRequest": {
         "properties": {
@@ -9806,6 +10861,239 @@
           "can_send_sms"
         ],
         "title": "VisitPrepSettingsData"
+      },
+      "VisitPrepStandardCadenceResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.standard_cadence.v1",
+            "title": "Contract",
+            "default": "visit_prep.standard_cadence.v1"
+          },
+          "managed_by": {
+            "type": "string",
+            "const": "cosmaneura",
+            "title": "Managed By",
+            "default": "cosmaneura"
+          },
+          "provider_editable": {
+            "type": "boolean",
+            "const": false,
+            "title": "Provider Editable",
+            "default": false
+          },
+          "timezone_basis": {
+            "type": "string",
+            "const": "current_appointment",
+            "title": "Timezone Basis",
+            "default": "current_appointment"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "quiet_start_hour": {
+            "type": "integer",
+            "title": "Quiet Start Hour"
+          },
+          "quiet_end_hour": {
+            "type": "integer",
+            "title": "Quiet End Hour"
+          },
+          "minimum_channel_spacing_hours": {
+            "type": "integer",
+            "title": "Minimum Channel Spacing Hours"
+          },
+          "unopened_reminder_hours_before_visit": {
+            "type": "integer",
+            "const": 48,
+            "title": "Unopened Reminder Hours Before Visit",
+            "default": 48
+          },
+          "unfinished_reminder_hours_before_visit": {
+            "type": "integer",
+            "const": 12,
+            "title": "Unfinished Reminder Hours Before Visit",
+            "default": 12
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "version",
+          "fingerprint",
+          "quiet_start_hour",
+          "quiet_end_hour",
+          "minimum_channel_spacing_hours"
+        ],
+        "title": "VisitPrepStandardCadenceResponse"
+      },
+      "VisitPrepSynthesisRequest": {
+        "properties": {
+          "expected_source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Source Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_source_version"
+        ],
+        "title": "VisitPrepSynthesisRequest"
+      },
+      "VisitPrepSynthesisRequestResponse": {
+        "properties": {
+          "package_id": {
+            "type": "string",
+            "title": "Package Id"
+          },
+          "source_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Version"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "ready",
+              "failed"
+            ],
+            "title": "State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "package_id",
+          "source_version",
+          "state"
+        ],
+        "title": "VisitPrepSynthesisRequestResponse"
+      },
+      "VisitPrepSynthesisResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.patient_synthesis.v1",
+            "title": "Contract",
+            "default": "visit_prep.patient_synthesis.v1"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/VisitPrepPatientSourcesResponse"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "missing",
+              "stale",
+              "ready"
+            ],
+            "title": "Status"
+          },
+          "build_status": {
+            "type": "string",
+            "enum": [
+              "not_requested",
+              "pending",
+              "running",
+              "failed",
+              "ready"
+            ],
+            "title": "Build Status"
+          },
+          "retry_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry At"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
+          },
+          "generator_version": {
+            "type": "string",
+            "title": "Generator Version"
+          },
+          "prompt_version": {
+            "type": "string",
+            "title": "Prompt Version"
+          },
+          "model_profile": {
+            "type": "string",
+            "title": "Model Profile"
+          },
+          "brief": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepPreparedBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "sources",
+          "status",
+          "build_status",
+          "retry_at",
+          "artifact_id",
+          "version",
+          "recorded_at",
+          "generator_version",
+          "prompt_version",
+          "model_profile",
+          "brief"
+        ],
+        "title": "VisitPrepSynthesisResponse"
       },
       "ZoomAuthUrlResponse": {
         "properties": {
