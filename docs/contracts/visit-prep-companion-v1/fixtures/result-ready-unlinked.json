@@ -56,7 +56,10 @@
           "additional_answer_source_id": null,
           "current_revision_id": null,
           "recorded_at": "2026-10-01T10:30:00Z",
-          "initial_recorded_at": "2026-10-01T10:30:00Z"
+          "initial_recorded_at": "2026-10-01T10:30:00Z",
+          "explanation_words": null,
+          "explanation_source_id": null,
+          "explanation_recorded_at": null
         },
         {
           "question_key": "medications",
@@ -73,7 +76,10 @@
           "additional_answer_source_id": null,
           "current_revision_id": null,
           "recorded_at": "2026-10-01T10:31:00Z",
-          "initial_recorded_at": "2026-10-01T10:31:00Z"
+          "initial_recorded_at": "2026-10-01T10:31:00Z",
+          "explanation_words": null,
+          "explanation_source_id": null,
+          "explanation_recorded_at": null
         },
         {
           "question_key": "adherence",
@@ -93,7 +99,10 @@
           "additional_answer_source_id": null,
           "current_revision_id": null,
           "recorded_at": "2026-10-01T10:32:00Z",
-          "initial_recorded_at": "2026-10-01T10:32:00Z"
+          "initial_recorded_at": "2026-10-01T10:32:00Z",
+          "explanation_words": null,
+          "explanation_source_id": null,
+          "explanation_recorded_at": null
         },
         {
           "question_key": "story",
@@ -110,7 +119,10 @@
           "additional_answer_source_id": null,
           "current_revision_id": null,
           "recorded_at": "2026-10-01T10:33:00Z",
-          "initial_recorded_at": "2026-10-01T10:33:00Z"
+          "initial_recorded_at": "2026-10-01T10:33:00Z",
+          "explanation_words": null,
+          "explanation_source_id": null,
+          "explanation_recorded_at": null
         }
       ]
     },

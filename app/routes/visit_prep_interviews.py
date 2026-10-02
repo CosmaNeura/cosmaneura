@@ -93,6 +93,7 @@ _CONFIRMATION_PATHS = frozenset(
         "/wrong-recipient",
         "/contribution",
         "/contribution/response",
+        "/contribution/explanation",
         "/contribution/review",
         "/clarification",
         "/clarification/decision",
@@ -434,6 +435,11 @@ class VisitPrepContributionReviewRequest(VisitPrepConfirmationRequest):
     basis: VisitPrepContributionBasis
 
 
+class VisitPrepExplanationRequest(VisitPrepContributionReviewRequest):
+    question_key: str = Field(min_length=1, max_length=64)
+    patient_words: str | None = Field(max_length=2000, repr=False)
+
+
 class VisitPrepPatientReviewTopic(_StrictModel):
     question: VisitPrepPublicQuestionResponse
     response_kind: Literal["answered", "skipped"] | None
@@ -442,6 +448,9 @@ class VisitPrepPatientReviewTopic(_StrictModel):
     initial_answer: str | None = Field(repr=False)
     changed: bool
     recorded_at: datetime | None
+
+    explanation_words: str | None = Field(default=None, repr=False)
+    explanation_recorded_at: datetime | None = None
 
 
 class VisitPrepPatientContributionResponse(_StrictModel):
@@ -1036,6 +1045,8 @@ def _patient_contribution_response(
                 changed=topic.response_kind != initial_kind
                 or topic.answer != initial_answer,
                 recorded_at=topic.recorded_at,
+                explanation_words=topic.explanation_words,
+                explanation_recorded_at=topic.explanation_recorded_at,
             )
         )
     return VisitPrepPatientContributionResponse(
@@ -1206,6 +1217,37 @@ def visit_prep_public_correct_contribution(
                 response=ResponseInput(
                     data.question_key, data.response_kind, data.answer
                 ),
+            )
+        )
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/contribution/explanation",
+    name="visit_prep_public_explain_contribution",
+    response_model=VisitPrepContributionReceiptResponse,
+)
+def visit_prep_public_explain_contribution(
+    request: Request,
+    data: VisitPrepExplanationRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
+) -> VisitPrepContributionReceiptResponse:
+    del documented_idempotency_key
+    return _contribution_receipt(
+        _invoke(
+            lambda: contributions.explain_contribution(
+                access_token=access_token,
+                first_name=_recipient_name(data, access_token),
+                role=data.role,
+                expected_basis=ContributionBasis(
+                    data.basis.original_response_count, data.basis.event_sequence
+                ),
+                idempotency_key=_contribution_key(request),
+                question_key=data.question_key,
+                patient_words=data.patient_words,
             )
         )
     )

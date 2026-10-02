@@ -126,6 +126,7 @@ class VisitPrepSynthesisSource:
     recorded_at: datetime
     answer: str = field(repr=False)
     choice_label: str | None = field(default=None, repr=False)
+    explains_source_ref: str | None = None
 
     @property
     def reported_text(self) -> str:
@@ -182,6 +183,25 @@ def select_patient_sources(
                 choice_label=label,
             )
         )
+        if topic.explanation_words is not None:
+            if (
+                topic.question.kind != "choice"
+                or topic.explanation_id is None
+                or topic.explanation_recorded_at is None
+            ):
+                raise VisitPrepSynthesisInvalid()
+            sources.append(
+                VisitPrepSynthesisSource(
+                    question_key=topic.question.key,
+                    position=topic.question.position,
+                    prompt=topic.question.prompt,
+                    kind="story",
+                    source_ref=str(topic.explanation_id),
+                    recorded_at=topic.explanation_recorded_at,
+                    answer=topic.explanation_words,
+                    explains_source_ref=str(ref),
+                )
+            )
     selection = VisitPrepSynthesisSelection(
         package_id=str(package.preparation.id),
         source_version=package.source_version,
@@ -206,7 +226,11 @@ def select_patient_sources(
 
 def validate_selection(selection: VisitPrepSynthesisSelection) -> None:
     keys = selection.applicable_question_keys
-    answered = tuple(source.question_key for source in selection.sources)
+    answered = tuple(
+        source.question_key
+        for source in selection.sources
+        if source.explains_source_ref is None
+    )
     statuses = (
         *answered,
         *selection.missing_question_keys,
@@ -228,8 +252,15 @@ def validate_selection(selection: VisitPrepSynthesisSelection) -> None:
         or set(statuses) != set(keys)
         or len({source.source_ref for source in selection.sources})
         != len(selection.sources)
-        or len({source.position for source in selection.sources})
-        != len(selection.sources)
+        or len(
+            {
+                source.position
+                for source in selection.sources
+                if source.explains_source_ref is None
+            }
+        )
+        != len(answered)
+        or len(selection.sources) > 10
         or tuple(sorted(selection.sources, key=lambda source: source.position))
         != selection.sources
         or selection.current_answers_complete != (not selection.missing_question_keys)
@@ -266,6 +297,27 @@ def validate_selection(selection: VisitPrepSynthesisSelection) -> None:
             )
         ):
             raise VisitPrepSynthesisInvalid()
+        if source.explains_source_ref is not None:
+            parents = [
+                s
+                for s in selection.sources
+                if s.source_ref == source.explains_source_ref
+            ]
+            if (
+                len(parents) != 1
+                or parents[0].kind != "choice"
+                or parents[0].explains_source_ref is not None
+                or source.kind != "story"
+                or parents[0].question_key != source.question_key
+                or parents[0].position != source.position
+                or parents[0].recorded_at > source.recorded_at
+                or sum(
+                    s.explains_source_ref == source.explains_source_ref
+                    for s in selection.sources
+                )
+                != 1
+            ):
+                raise VisitPrepSynthesisInvalid()
 
 
 def validate_generated_brief(

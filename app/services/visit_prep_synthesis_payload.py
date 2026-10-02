@@ -57,6 +57,11 @@ def _manifest(selection: VisitPrepSynthesisSelection) -> dict:
                 "recorded_at": source.recorded_at.isoformat(),
                 "answer": source.answer,
                 "choice_label": source.choice_label,
+                **(
+                    {"explains_source_ref": source.explains_source_ref}
+                    if source.explains_source_ref is not None
+                    else {}
+                ),
             }
             for source in selection.sources
         ],

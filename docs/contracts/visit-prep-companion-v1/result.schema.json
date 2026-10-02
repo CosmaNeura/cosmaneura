@@ -71,7 +71,10 @@
         "additional_answer_source_id",
         "current_revision_id",
         "recorded_at",
-        "initial_recorded_at"
+        "initial_recorded_at",
+        "explanation_words",
+        "explanation_source_id",
+        "explanation_recorded_at"
       ],
       "properties": {
         "question_key": { "$ref": "#/$defs/key" },
@@ -95,8 +98,31 @@
         "additional_answer_source_id": { "$ref": "#/$defs/reviewRef" },
         "current_revision_id": { "$ref": "#/$defs/reviewRef" },
         "recorded_at": { "$ref": "#/$defs/nullableTime" },
-        "initial_recorded_at": { "$ref": "#/$defs/nullableTime" }
-      }
+        "initial_recorded_at": { "$ref": "#/$defs/nullableTime" },
+        "explanation_words": { "$ref": "#/$defs/answer" },
+        "explanation_source_id": { "$ref": "#/$defs/reviewRef" },
+        "explanation_recorded_at": { "$ref": "#/$defs/nullableTime" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "explanation_words": { "type": "string" } },
+            "required": ["explanation_words"]
+          },
+          "then": {
+            "properties": {
+              "kind": { "const": "choice" },
+              "response_kind": { "const": "answered" },
+              "answer": { "type": "string" },
+              "explanation_source_id": { "type": "string" },
+              "explanation_recorded_at": { "type": "string" }
+            }
+          },
+          "else": {
+            "properties": { "explanation_source_id": { "type": "null" } }
+          }
+        }
+      ]
     },
     "preparation": {
       "type": "object",

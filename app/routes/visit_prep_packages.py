@@ -57,6 +57,9 @@ class VisitPrepPackageTopicResponse(_StrictModel):
     current_revision_id: str | None
     recorded_at: datetime | None
     initial_recorded_at: datetime | None
+    explanation_words: str | None = Field(default=None, repr=False)
+    explanation_source_id: str | None = None
+    explanation_recorded_at: datetime | None = None
 
 
 class VisitPrepPatientSourcesResponse(_StrictModel):
@@ -280,6 +283,11 @@ def _source_response(
                 initial_recorded_at=topic.original_recorded_at
                 if topic.original_response_id
                 else topic.additional_recorded_at,
+                explanation_words=topic.explanation_words,
+                explanation_source_id=str(topic.explanation_id)
+                if topic.explanation_words is not None
+                else None,
+                explanation_recorded_at=topic.explanation_recorded_at,
             )
             for topic in topics
         ],

@@ -90,6 +90,12 @@ const reviewTopic = z
     initial_answer: z.string().min(1).max(2_000).nullable(),
     changed: z.boolean(),
     recorded_at: z.string().datetime({ offset: true }).nullable(),
+    explanation_words: z.string().min(1).max(2_000).nullable().optional(),
+    explanation_recorded_at: z
+      .string()
+      .datetime({ offset: true })
+      .nullable()
+      .optional(),
   })
   .strict()
   .superRefine((topic, context) => {
@@ -104,7 +110,11 @@ const reviewTopic = z
         topic.question.choices.length === 0) ||
       topic.changed !==
         (topic.response_kind !== topic.initial_response_kind ||
-          topic.answer !== topic.initial_answer)
+          topic.answer !== topic.initial_answer) ||
+      (topic.explanation_words != null &&
+        (topic.question.kind !== "choice" ||
+          topic.response_kind !== "answered" ||
+          !topic.explanation_recorded_at))
     )
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -161,6 +171,12 @@ export type PatientContributionReceipt = z.infer<typeof contributionReceipt>
 export type PatientConfirmation = {
   first_name?: string
   role: "patient" | "caregiver"
+}
+
+export type PatientExplanation = PatientConfirmation & {
+  basis: PatientContribution["basis"]
+  question_key: string
+  patient_words: string | null
 }
 
 const consentTime = z.string().datetime({ offset: true })
@@ -483,6 +499,8 @@ export function createVisitPrepPatientClient(
       request("/contribution", visitPrepPatientContribution, confirmation),
     correctContribution: (payload: PatientContributionChange, key: string) =>
       request("/contribution/response", contributionReceipt, payload, key),
+    explainContribution: (payload: PatientExplanation, key: string) =>
+      request("/contribution/explanation", contributionReceipt, payload, key),
     reviewContribution: (payload: PatientContributionReview, key: string) =>
       request("/contribution/review", contributionReceipt, payload, key),
     readClarification: async (

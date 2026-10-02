@@ -97,6 +97,19 @@ function PackageView({ value }: { value: VisitPrepPatientSourcesResponse }) {
               </p>
             </details>
           )}
+          {topic.explanation_words && (
+            <div className="mt-3 text-sm">
+              <h5 className="font-medium">
+                Recipient explanation for this selected answer
+              </h5>
+              <p className="mt-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
+                {topic.explanation_words}
+              </p>
+              <p className="text-muted-foreground mt-2 text-xs break-all">
+                Explanation source: {topic.explanation_source_id}
+              </p>
+            </div>
+          )}
           <details className="text-muted-foreground mt-3 text-xs">
             <summary>Response provenance</summary>
             <dl className="mt-2 space-y-1 break-all">

@@ -7,6 +7,7 @@ import {
   type PatientConfirmation,
   type PatientContribution,
   type PatientContributionChange,
+  type PatientExplanation,
   type PatientFollowupAnswer,
   type PatientFollowupView,
   type PatientContributionReview as ReviewPayload,
@@ -19,6 +20,7 @@ import { QuestionForm } from "./QuestionForm"
 type Pending =
   | { kind: "change"; payload: PatientContributionChange; key: string }
   | { kind: "review"; payload: ReviewPayload; key: string }
+  | { kind: "explanation"; payload: PatientExplanation; key: string }
   | {
       kind: "clarification"
       payload: PatientClarificationChoice
@@ -61,6 +63,7 @@ export function PatientContributionReview({
   const [role, setRole] = useState<PatientConfirmation["role"]>("patient")
   const [current, setCurrent] = useState<PatientContribution | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
+  const [explaining, setExplaining] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
   const [proposal, setProposal] = useState<PatientClarificationView | null>(
     null,
@@ -90,6 +93,7 @@ export function PatientContributionReview({
       setBusy(false)
       setCurrent(null)
       setEditing(null)
+      setExplaining(null)
       setDraft("")
       setProposal(null)
       setFollowup(null)
@@ -138,6 +142,7 @@ export function PatientContributionReview({
         setFollowup(null)
         setEditingProposal(false)
         setEditing(null)
+        setExplaining(null)
         setDraft("")
       }
       if (code === "unavailable") {
@@ -168,6 +173,7 @@ export function PatientContributionReview({
     onStatus(next.current_answers_complete, next.current_answers_reviewed)
     setFirstName("")
     setEditing(null)
+    setExplaining(null)
     setDraft("")
     setProposal(null)
     setFollowup(null)
@@ -216,9 +222,11 @@ export function PatientContributionReview({
       const receipt =
         save.kind === "change"
           ? await client.correctContribution(save.payload, save.key)
-          : save.kind === "clarification"
-            ? await client.decideClarification(save.payload, save.key)
-            : await client.reviewContribution(save.payload, save.key)
+          : save.kind === "explanation"
+            ? await client.explainContribution(save.payload, save.key)
+            : save.kind === "clarification"
+              ? await client.decideClarification(save.payload, save.key)
+              : await client.reviewContribution(save.payload, save.key)
       if (!mounted.current || generation.current !== requestGeneration) return
       if (
         save.kind === "clarification" &&
@@ -236,6 +244,7 @@ export function PatientContributionReview({
       pending.current = null
       refreshRequired.current = true
       setEditing(null)
+      setExplaining(null)
       setDraft("")
       setProposal(null)
       setEditingProposal(false)
@@ -306,6 +315,42 @@ export function PatientContributionReview({
         payload: {
           ...confirmation.current,
           basis: current.basis,
+        },
+      }
+      retrySave()
+    } catch {
+      setError("temporary")
+    }
+  }
+
+  function saveExplanation(withdraw = false) {
+    if (
+      busyRef.current ||
+      pending.current ||
+      !current ||
+      !confirmation.current ||
+      !explaining
+    )
+      return
+    const words = draft.normalize("NFC").replace(/\r\n?/g, "\n").trim()
+    if (
+      !withdraw &&
+      (!words ||
+        words.length > 2000 ||
+        /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/u.test(words.replace(/\n/g, "")))
+    ) {
+      setError("invalid")
+      return
+    }
+    try {
+      pending.current = {
+        kind: "explanation",
+        key: crypto.randomUUID(),
+        payload: {
+          ...confirmation.current,
+          basis: current.basis,
+          question_key: explaining,
+          patient_words: withdraw ? null : words,
         },
       }
       retrySave()
@@ -453,6 +498,9 @@ export function PatientContributionReview({
   }
 
   const topic = current?.topics.find((row) => row.question.key === editing)
+  const explanationTopic = current?.topics.find(
+    (row) => row.question.key === explaining,
+  )
   const blocked = busy || pending.current !== null || refreshRequired.current
   function wording(
     kind: string | null,
@@ -694,6 +742,69 @@ export function PatientContributionReview({
             </Button>
           </div>
         </>
+      ) : explanationTopic ? (
+        <>
+          <h1 className="text-2xl font-semibold">
+            Explain your selected answer
+          </h1>
+          <h2 className="mt-4 font-semibold">
+            {explanationTopic.question.prompt}
+          </h2>
+          <p className="mt-2">
+            {wording(
+              explanationTopic.response_kind,
+              explanationTopic.answer,
+              explanationTopic,
+            )}
+          </p>
+          <p className="mt-4">
+            Your explanation is saved separately for this selected answer. It
+            does not replace your choice. Changing the answer will require a new
+            explanation.
+          </p>
+          <label
+            htmlFor="choice-explanation"
+            className="mt-6 block font-semibold"
+          >
+            What would you like your provider to understand?
+          </label>
+          <textarea
+            id="choice-explanation"
+            value={draft}
+            maxLength={2000}
+            disabled={blocked}
+            autoComplete="off"
+            className="mt-2 min-h-36 w-full rounded border bg-white p-3 text-base"
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              disabled={blocked || !draft.trim()}
+              onClick={() => saveExplanation()}
+            >
+              Save my explanation
+            </Button>
+            {explanationTopic.explanation_words && (
+              <Button
+                variant="outline"
+                disabled={blocked}
+                onClick={() => saveExplanation(true)}
+              >
+                Withdraw my explanation
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              disabled={blocked}
+              onClick={() => {
+                setExplaining(null)
+                setDraft("")
+              }}
+            >
+              Cancel explanation
+            </Button>
+          </div>
+        </>
       ) : topic ? (
         <>
           <p className="mb-4 text-sm">
@@ -751,6 +862,16 @@ export function PatientContributionReview({
                 <p className="mt-3 break-words whitespace-pre-wrap">
                   {wording(row.response_kind, row.answer, row)}
                 </p>
+                {row.explanation_words && (
+                  <div className="mt-3 text-sm">
+                    <h3 className="font-semibold">
+                      Your explanation for this selected answer
+                    </h3>
+                    <p className="mt-2 break-words whitespace-pre-wrap">
+                      {row.explanation_words}
+                    </p>
+                  </div>
+                )}
                 {row.changed && (
                   <details className="mt-3 text-sm">
                     <summary>Earlier wording retained</summary>
@@ -770,6 +891,7 @@ export function PatientContributionReview({
                   disabled={blocked}
                   onClick={() => {
                     setEditing(row.question.key)
+                    setExplaining(null)
                     setFollowup(null)
                     setProposal(null)
                     setDraft(row.answer ?? "")
@@ -780,6 +902,27 @@ export function PatientContributionReview({
                     ? "Answer topic"
                     : "Change response"}
                 </Button>
+                {row.response_kind === "answered" &&
+                  row.question.kind === "choice" && (
+                    <Button
+                      variant="outline"
+                      className="mt-4"
+                      disabled={blocked}
+                      aria-label={`Explain: ${row.question.prompt}`}
+                      onClick={() => {
+                        setEditing(null)
+                        setExplaining(row.question.key)
+                        setFollowup(null)
+                        setProposal(null)
+                        setDraft(row.explanation_words ?? "")
+                        setError(null)
+                      }}
+                    >
+                      {row.explanation_words
+                        ? "Edit explanation"
+                        : "Explain my answer"}
+                    </Button>
+                  )}
                 {row.response_kind === "answered" && (
                   <Button
                     variant="ghost"
@@ -876,19 +1019,22 @@ export function PatientContributionReview({
             Reload saved answers
           </Button>
         )}
-      {!busy && pending.current?.kind === "change" && error === "invalid" && (
-        <Button
-          variant="outline"
-          className="mt-4"
-          onClick={() => {
-            pending.current = null
-            refreshRequired.current = false
-            setError(null)
-          }}
-        >
-          Edit my response
-        </Button>
-      )}
+      {!busy &&
+        (pending.current?.kind === "change" ||
+          pending.current?.kind === "explanation") &&
+        error === "invalid" && (
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => {
+              pending.current = null
+              refreshRequired.current = false
+              setError(null)
+            }}
+          >
+            Edit my response
+          </Button>
+        )}
       <Button
         variant="ghost"
         className="mt-6"

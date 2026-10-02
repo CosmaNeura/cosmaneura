@@ -59,6 +59,7 @@ function setup(initial = invited) {
     reportWrongRecipient: vi.fn().mockResolvedValue(undefined),
     readContribution: vi.fn(),
     correctContribution: vi.fn(),
+    explainContribution: vi.fn(),
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
     decideClarification: vi.fn(),

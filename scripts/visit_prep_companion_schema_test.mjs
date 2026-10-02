@@ -247,7 +247,33 @@ test("schemas are not mistaken for semantic authority validation", () => {
   value.preparation_ref = "visit_prep_01h45ytscbebyvny4gc8cr8ma3";
   assert.equal(result(value), true);
   const draft = readFileSync(join(directory, "draft.md"), "utf8");
-  assert.match(draft, /Draft for owner review; not ratified/);
+  assert.match(draft, /Owner approved for branch implementation; governing architecture ratification pending/);
   assert.match(draft, /package IDs match/);
-  assert.match(draft, /Ratification precedes receiver implementation/);
+  assert.match(draft, /reconcile the governing architecture/);
+});
+
+test("coded explanations use bounded separate source fields and withdrawals", () => {
+  const value = ready();
+  const topic = value.package.sources.topics[2];
+  Object.assign(topic, {
+    response_kind: "answered", answer: "yes",
+    initial_response_kind: "answered", initial_answer: "yes",
+    explanation_words: "Invented explanation for this selected answer.",
+    explanation_source_id: "visit_prep_contribution_01h45ytscbebyvny4gc8cr8mab",
+    explanation_recorded_at: "2026-10-01T10:45:00Z",
+  });
+  value.package.sources.skipped_question_keys = ["medications"];
+  assert.equal(result(value), true, ajv.errorsText(result.errors));
+  for (const changes of [
+    { kind: "story" }, { response_kind: "skipped" },
+    { explanation_source_id: null }, { explanation_recorded_at: null },
+    { explanation_words: "x".repeat(2001) },
+  ]) {
+    const invalid = structuredClone(value);
+    Object.assign(invalid.package.sources.topics[2], changes);
+    assert.equal(result(invalid), false);
+  }
+  topic.explanation_words = null;
+  topic.explanation_source_id = null;
+  assert.equal(result(value), true, ajv.errorsText(result.errors));
 });

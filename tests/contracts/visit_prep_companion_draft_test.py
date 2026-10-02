@@ -54,6 +54,21 @@ def _selection(value):
                 else None,
             )
         )
+        if topic.get("explanation_words") is not None:
+            selected.append(
+                VisitPrepSynthesisSource(
+                    question_key=topic["question_key"],
+                    position=topic["position"],
+                    prompt=topic["prompt"],
+                    kind="story",
+                    source_ref=topic["explanation_source_id"],
+                    recorded_at=datetime.fromisoformat(
+                        topic["explanation_recorded_at"]
+                    ),
+                    answer=topic["explanation_words"],
+                    explains_source_ref=selected[-1].source_ref,
+                )
+            )
     return VisitPrepSynthesisSelection(
         package_id=sources["package_id"],
         source_version=sources["source_version"],
@@ -153,6 +168,40 @@ def test_closed_schema_fields_follow_actual_route_and_brief_models():
         assert schema[name]["additionalProperties"] is False
         assert set(schema[name]["required"]) == expected
         assert set(schema[name]["properties"]) == expected
+
+
+def test_companion_explanation_preserves_choice_and_requires_its_own_quote_source():
+    value = _read("fixtures/result-ready-unlinked.json")
+    topic = value["package"]["sources"]["topics"][2]
+    topic.update(
+        response_kind="answered",
+        answer="yes",
+        initial_response_kind="answered",
+        initial_answer="yes",
+        explanation_words="Invented context for my selected answer.",
+        explanation_source_id="visit_prep_contribution_01h45ytscbebyvny4gc8cr8mab",
+        explanation_recorded_at="2026-10-01T10:45:00Z",
+    )
+    value["package"]["sources"]["skipped_question_keys"] = ["medications"]
+    item = {
+        "text": "Patient reports context for their selected answer.",
+        "evidence": [
+            {
+                "source_ref": topic["explanation_source_id"],
+                "quote": "context for my selected answer",
+            }
+        ],
+    }
+    value["package"]["brief"]["medication_and_adherence"] = [item]
+    parsed = VisitPrepSynthesisResponse.model_validate(value["package"])
+    selection = _selection(value)
+    assert parsed.sources.topics[2].answer == "yes" and len(parsed.sources.topics) == 4
+    validate_generated_brief(parsed.brief, selection)
+    item["evidence"][0]["source_ref"] = topic["original_response_id"]
+    with pytest.raises(VisitPrepSynthesisInvalid):
+        validate_generated_brief(
+            VisitPrepPreparedBrief.model_validate(value["package"]["brief"]), selection
+        )
 
 
 def test_all_skipped_ready_report_has_empty_brief_not_invented_content():
