@@ -1579,3 +1579,44 @@ retention/aggregate purge, durable cadence policy, booking/email/SMS/STOP/remind
 automation, usable patient session continuation, Sovereign/CosmaBot integration
 and clinical/operational acceptance remain full-goal work. All release controls
 remain off; no merge, deployment, live message or workspace retirement occurs.
+
+## Value free retention health observations
+
+Core now has an internal `visit_prep_retention_operations.runtime_health` read
+for aggregate retention and incident-review observations. It reports unused
+invitations with expired but unrevoked current credentials, cleanup deadlines
+reached, the ninety-day ceiling reached, and overdue unused records under active
+legal hold. Confirmation establishes clinical retention even without answers or
+after all-skipped completion. Quarantine is excluded from ordinary clinical
+retention counts and uses its separate recorded incident disposition. Elapsed
+clinical or incident deadlines are review evidence, not purge authorization.
+
+The read uses one PostgreSQL statement and one materialized database clock. It
+selects the greatest schedule and credential generations without multiplying
+roots by historical generations or legal holds. Missing current lineage remains
+visible rather than disappearing from counts. Results contain only fixed keys,
+counts and bounded status values; no identities, incident references, contacts,
+tokens, answers, briefs or encrypted envelopes are returned or selected. An
+ambient transaction is refused without flushing or changing it. Storage failure
+returns only `storage_unavailable`, never invented healthy zeroes or diagnostics.
+
+Owned tests cover actual confirmation, partial and all-skipped contributions,
+wrong-recipient reports, revocation reasons, rescheduling and guarded incident
+dispositions. Exact thirty-day, ninety-day, credential, clinical and disposition
+boundaries use explicitly labeled diagnostic clocks over real immutable metadata;
+they do not age records or prove cleanup. A short incident deadline also crosses
+under the actual PostgreSQL clock without erasure. Independent connections
+verify nonblocking committed-only visibility during confirmation, hold placement
+and the actual quarantine command. A real later transaction releases a hold
+before another is placed. Completed answers, corrections, review, brief, email
+consent/approval evidence and legal holds remain unchanged with release controls
+off and BAA authority withdrawn. Revision-specific checks belong in the draft PR.
+
+This implements an operations requirement using existing Core metadata. It adds
+no schema, policy duration, deletion path, service grant, route, scheduler,
+provider or monitor registration and copies no new cross-repository code.
+`retention_qualification` remains `not_qualified`; an `ok` snapshot proves neither
+cleanup execution nor operational readiness. Aggregate and consent-evidence purge
+qualification, installed monitoring/cleanup, usable patient session continuation,
+Sovereign/CosmaBot, booking/email/SMS/STOP/reminder automation and clinical/release
+acceptance remain incomplete. Nothing is merged, deployed, sent or retired.
