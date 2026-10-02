@@ -1160,11 +1160,56 @@ without clipping or horizontal overflow. Exact final regression, build, type and
 implementer-review evidence belongs in the draft PR.
 
 This completes review and saving of already retained wording proposals, not the
-end-to-end patient AI interface. Proposal creation, durable turn capture, choice
-supplements, the ratified Sovereign connection and clinical quality remain open.
+end-to-end patient AI interface. The initial proposal save operation is described
+below. Durable turn capture, choice supplements, the ratified Sovereign connection
+and clinical quality remain open.
 The read audit is server access evidence, not proof that the browser displayed
 the words or that the patient understood them. First-name confirmation is not
 verified identity or consent. No new schema, dependency, runtime control, model
 call, message, deployment or retirement is introduced. CosmaBot, qualified prior
 consent, Acuity/email/SMS/reminders, retention/cleanup, monitoring and clinical
 and operational acceptance remain full-goal requirements.
+
+## Initial clarification proposal persistence
+
+Core now saves an initial bounded reply against the exact current answered
+physician topic. The private domain operation accepts no claimed patient turns
+and makes no model call. It checks current public, practice and recipient
+authority before loading encrypted source words, and compares the complete
+source context after acquiring the normal authority and preparation locks.
+An answer correction, review event, role or version change invalidates a reply
+prepared from an older source.
+
+The proposal and its exact source, reply and model-profile provenance are stored
+in the existing encrypted immutable evidence structure. A content-free authority
+audit commits with the proposal before Core returns a value-free receipt.
+The profile records provenance; it is not conversational-service qualification.
+An identical operation retries the same proposal without a second audit. A
+divergent operation reuse, superseded proposal or already decided proposal cannot
+return an acknowledgment implying that it is still available for current review.
+A new explicit request can retain a new proposal without mutating the earlier
+evidence. The existing patient decision command now also rejects a superseded
+proposal from an older review screen, even when its underlying answer is unchanged.
+
+Initial text organization connects to the existing patient read and explicit
+confirm, edit, keep or dismiss API. The original patient answer is retained and
+any accepted wording is an attributable correction. A bounded clarification
+request or unavailable reply can be retained without modifying the answer, but
+the current review screen does not yet present a follow-up question. Organization
+cannot turn a coded choice into narrative text.
+
+Owned synthetic PostgreSQL checks cover patient and caregiver roles, exact
+replay, substitutions, current original or corrected sources, declined and
+superseded proposals, commit visibility, rollback in an enclosing request,
+lost acknowledgment and concurrent identical requests. Real lock waits exercise
+correction, wrong-recipient quarantine, BAA withdrawal, token rotation and link
+expiry. A final database-time check exercises entitlement expiry during a save.
+The real public API verifies initial-proposal review and all four decisions.
+Exact final commands, results and implementer review are recorded in the draft PR.
+
+No new schema, route, model runtime, transport, dependency, release control or
+live service is introduced. Durable patient turns, choice supplements, the
+ratified Sovereign boundary and clinical quality remain required before this is
+an end-to-end patient AI interaction. CosmaBot, qualified prior consent,
+Acuity/email/SMS/reminders, retention/cleanup, monitoring and clinical and
+operational acceptance remain the full approved goal.
