@@ -310,13 +310,50 @@ fragments inside changed words are rejected. An invented-source check exercises
 protection, mapping, saved proposal and explicit patient confirmation through
 the existing correction command. Existing batch protection remains supported.
 
-The authenticated Core to Sovereign request path, dedicated patient context and
-usage lineage contract, browser generation action and controlled service
-acceptance are not implemented by these private functions. The existing display
-contract grants none of those capabilities. No route is installed and no live
-switch, model call, deployment or message was activated. Recovery is to leave
-the feature off and revert the paired additive increments; no schema changes
-or data deletion are involved.
+Those private functions are now connected by the branch increment described
+below. The companion display contract itself still grants no analysis permission.
+
+## Patient requested AI action October 2 2026
+
+The patient review screen now has a default-hidden “Help me clarify this answer”
+action for answered text topics. Core selects that current topic, applies its
+clinical protection, commits a one-use analysis request and central usage intent,
+and sends only the protected words to Sovereign. A separate signed Core workload
+must hold `VisitPrep.Clarify`; a provider token or generic anonymous chat cannot
+enter this receiver. Sovereign claims the request back in Core before inference.
+The claim rechecks current patient confirmation, contribution and expiry and
+binds the exact protected payload. It creates no provider session or patient chart.
+
+Sovereign reuses its actual model client. Core accepts content-free usage facts
+only from the configured Sovereign workload. The returned suggestion must refer
+to that committed successful usage result. Core freshly checks the answer again,
+grounds exact excerpts and saves the encrypted proposal before the browser can
+read it. Patients accept, edit, keep or dismiss through the existing explicit
+decision flow. Saved follow-up answers can request another bounded suggestion;
+they remain separate words until patient acceptance. Coded-answer AI explanation
+acceptance remains unfinished; its deterministic explanation editor still works.
+
+Exact retries recover a saved proposal without another model call. An uncertain
+attempt is not automatically retried; the patient can continue with the saved
+answers. Current-source changes and unrecorded usage block proposal publication.
+The new Core `VISIT_PREP_PATIENT_AI_ENABLED`, browser
+`VITE_VISIT_PREP_PATIENT_AI_ENABLED` and existing Sovereign clarification control
+all default off. Branch development has provisioned no workload identity, role,
+model service, environment setting or deployment.
+
+Generated migration `dd93e7a689f1` expands the existing ledger and adds a
+preparation-owned request fence after `6c5c8f775016`. It retains original answers
+and old ledger origins. Its recovery is forward-only: leave the schema dormant,
+turn off the actions and revert application code if necessary. The flag is not
+a schema rollback. The new wire/capability needs canonical architecture
+reconciliation and controlled model/service/privacy qualification before release;
+the accepted read-only companion ADR is not that qualification.
+
+Focused local evidence uses real Core storage and signed receiver admission with
+invented de-id/model transports. Live model quality, actual service coverage,
+cross-device/contact continuation, Acuity/SMS/reminder completion, broader
+CosmaBot actions and operational acceptance remain unfinished. No live patient
+data, message, merge, deployment or retirement is part of this increment.
 
 ## Source references
 

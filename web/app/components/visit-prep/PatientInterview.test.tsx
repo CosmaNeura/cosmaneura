@@ -62,6 +62,7 @@ function setup(initial = invited) {
     explainContribution: vi.fn(),
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
+    generateClarification: vi.fn(),
     decideClarification: vi.fn(),
     readFollowup: vi.fn(),
     answerFollowup: vi.fn(),

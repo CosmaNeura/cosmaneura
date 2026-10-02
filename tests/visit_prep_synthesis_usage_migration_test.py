@@ -29,7 +29,17 @@ def test_generated_usage_expand_retains_exact_parent_and_one_ledger():
     # Compare the declared contract, not their transformed test table objects.
     model_path = MIGRATION_PATH.parents[2] / "app/models/authority_usage.py"
     constraints = {}
-    for node in ast.walk(ast.parse(model_path.read_text())):
+    model_ast = ast.parse(model_path.read_text())
+    patient_shape = next(
+        ast.literal_eval(node.value)
+        for node in model_ast.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "PATIENT_USAGE_SHAPE"
+            for target in node.targets
+        )
+    )
+    for node in ast.walk(model_ast):
         if (
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
@@ -38,12 +48,33 @@ def test_generated_usage_expand_retains_exact_parent_and_one_ledger():
             name = next(
                 keyword.value for keyword in node.keywords if keyword.arg == "name"
             )
-            constraints[ast.literal_eval(name)] = ast.literal_eval(node.args[0])
+            value = node.args[0]
+            constraints[ast.literal_eval(name)] = (
+                ast.literal_eval(value.left) + patient_shape
+                if isinstance(value, ast.BinOp)
+                else ast.literal_eval(value)
+            )
     for name, expression in (
         ("ck_model_usage_origin_shape", migration._SHAPE),
         ("ck_agent_model_usage_event_status", migration._STATUS),
         ("ck_agent_model_usage_event_provider_surface", migration._SURFACE),
     ):
-        assert "".join(constraints[name].split()) == "".join(expression.split())
+        current = constraints[name]
+        if name == "ck_model_usage_origin_shape":
+            current = current.removesuffix(" OR " + patient_shape).replace(
+                "patient_analysis_ref IS NULL AND ", ""
+            )
+        elif name == "ck_agent_model_usage_event_status":
+            current = current.replace(
+                "event_origin IN ('visit_prep_batch', 'visit_prep_patient')",
+                "event_origin = 'visit_prep_batch'",
+            ).replace(
+                "('succeeded', 'failed', 'cancelled'))))", "('succeeded', 'failed'))))"
+            )
+        elif name == "ck_agent_model_usage_event_provider_surface":
+            current = current.removesuffix(
+                " OR (event_origin = 'visit_prep_patient' AND surface = 'visit_prep_patient')"
+            )
+        assert "".join(current.split()) == "".join(expression.split())
     with pytest.raises(RuntimeError, match="forward fix"):
         migration.downgrade()

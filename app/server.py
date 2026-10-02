@@ -57,6 +57,9 @@ from .routes.visit_prep_interviews import (
     visit_prep_interviews_api_app,
     visit_prep_public_network_boundary,
 )
+from .routes.visit_prep_patient_analysis import (
+    router as visit_prep_patient_analysis_router,
+)
 
 fast_api_args = {}
 
@@ -141,6 +144,7 @@ install_companion_appointment_setup(api_app)
 install_scribe_encounters(api_app)
 install_capture_boundaries(api_app)
 install_companion_visit_prep(api_app)
+api_app.include_router(visit_prep_patient_analysis_router, include_in_schema=False)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 

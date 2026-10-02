@@ -61,6 +61,7 @@ class PatientClarificationView:
     organized_words: str | None = field(default=None, repr=False)
     turns: tuple[PatientClarificationTurnView, ...] = field(default=(), repr=False)
     pending_prompt: str | None = field(default=None, repr=False)
+    source_turn_id: str | None = None
 
 
 def get_patient_clarification_view(
@@ -240,6 +241,7 @@ def _get_patient_clarification_view(
                                     for t in context.turns
                                 ),
                                 pending_prompt=PROMPTS[evidence.reply.prompt_code],
+                                source_turn_id=str(turn.id) if turn is not None else None,
                             )
             refs = [
                 ("doctor", prep.owner_doctor_id),
