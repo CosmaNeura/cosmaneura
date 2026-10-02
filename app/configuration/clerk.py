@@ -160,3 +160,34 @@ def prove_absent_owner_identity(subject: str) -> OwnerIdentityAbsence | None:
         )
     except Exception:
         return None
+
+
+@dataclass(frozen=True)
+class VerifiedProviderSession:
+    issuer: str
+    subject: str
+    session_sha256: str
+
+
+def verified_provider_session(
+    auth_state, *, expected_issuer: str = ""
+) -> VerifiedProviderSession:
+    """Normalize an already-verified SDK state; never parse caller headers here."""
+    payload = getattr(auth_state, "payload", None)
+    if not getattr(auth_state, "is_signed_in", False) or not isinstance(payload, dict):
+        raise ValueError("provider_session_invalid")
+    issuer, subject, sid = (payload.get(k) for k in ("iss", "sub", "sid"))
+    if (
+        not all(
+            isinstance(v, str)
+            and 1 <= len(v) <= 512
+            and not any(ord(c) < 32 or ord(c) == 127 for c in v)
+            for v in (issuer, subject, sid)
+        )
+        or not subject.startswith("user_")
+        or (expected_issuer and issuer != expected_issuer)
+    ):
+        raise ValueError("provider_session_invalid")
+    return VerifiedProviderSession(
+        issuer, subject, hashlib.sha256(sid.encode()).hexdigest()
+    )
