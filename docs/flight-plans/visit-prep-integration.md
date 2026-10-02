@@ -883,6 +883,43 @@ release setting is changed. Real transport, sender/source qualification, initial
 booking permission, automatic invitations and reminders, callbacks, cleanup and
 operational acceptance remain required before activation.
 
+### Scheduled SMS secret maintenance and health
+
+An argument-free Core maintenance task now runs every minute to clear expired or
+obsolete SMS link/contact ciphertext, then sample aggregate queue metadata. It
+has no SMS transport, claim, send or callback path. Sending, public access and
+patient consent-capture controls do not stop required cleanup. Retained consent,
+approval, patient responses, prepared packages and submission evidence remain.
+Queued work following a durable physician withdrawal is now a cleanup candidate,
+including when source qualification is missing or current BAA authority is lost.
+
+The health read uses an owned transaction and one materialized database clock.
+It selects only metadata and returns counts for queued and terminal states,
+expired or obsolete queued work, overdue submissions, recent failures and queue
+age. Counts may overlap. Provider acceptance remains distinct from delivery;
+uncertain submissions remain attention-worthy and cannot be resent automatically.
+Timing is explicitly unqualified, and a healthy snapshot does not establish that
+the scheduler, provider or cleanup consumer is alive. Storage failure is not
+reported as an empty queue. The job logs only validated counts and fixed statuses,
+not private envelopes, identifiers, contact values or exception detail.
+
+Final local qualification passed 79 owned PostgreSQL, worker, physician-policy,
+task-privacy and migration-graph checks. These include concurrent cleaners,
+disabled messaging, sender-wide STOP, physician withdrawal after BAA loss,
+overdue uncertain claims, expired payloads behind healthy work, an uncommitted
+ambient transition, and preservation of a completed five-topic response set and
+published package. Changed Python passed lint, formatting and typecheck. Existing
+framework deprecation warnings remain; no live scheduler or monitoring acceptance
+is claimed. This increment changes no schema, provider service or release setting.
+
+Recovery retains the outbox and evidence. Keep secret maintenance running while
+sending is disabled; if reverting this task, run the retained cleanup service
+through an approved operator path before removing runtime coverage. Do not return
+uncertain submissions to the send lane. Actual transport/source adapters, initial
+booking permission, automatic invitation and reminder creation, authenticated
+callbacks and receipts, secure link recovery, alert routing and live operational
+qualification remain unfinished.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
