@@ -953,7 +953,7 @@ milestones remain open.
 
 The [proposed companion read](../contracts/visit-prep-companion-v1/draft.md) and
 closed request/result schemas live on this Core branch for owner review. They
-are not ratified policy or an implemented receiver. The proposed read verifies
+now track the ratified design, not an implemented receiver. The read verifies
 the companion workload and physician Core session independently on every call,
 uses preparation-scoped ownership without requiring a chart/encounter, and wraps
 the existing dashboard source/artifact projection. It grants no generation,
@@ -968,9 +968,10 @@ The AJV runtime is explicitly supplied from existing local test dependencies;
 no dependency is added or installed. Exact reviewed revision and test totals
 belong in the draft PR.
 
-Architecture v3.5 and the current Session Prep contract remain unchanged. Owner
-ratification of the companion/preparation boundary is required before receiver
-implementation. This draft does not qualify live authentication, transactional
+Architecture v3.6 and ADR 0028 ratify the narrow companion/preparation boundary
+at `6b879150205f275612d1a3fd2318530dfa331857`; the Session Prep contract remains
+unchanged. The architecture gate for receiver implementation is cleared. These
+schemas do not qualify live authentication, transactional
 receiver authorization or actual dashboard/CosmaBot parity. The receiver, adapter,
 bot actions, patient AI, delivery/booking/SMS/reminders, retention qualification
 and clinical/operational release milestones remain open. All runtime controls
@@ -1661,3 +1662,32 @@ continuation, confirmed coded explanations, protected Sovereign analysis,
 CosmaBot receiver/adapter, retention qualification and clinical/release acceptance
 remain incomplete. Settings availability is not sending authorization. Runtime
 controls stay off; nothing is merged, deployed, sent to a real recipient or retired.
+
+## CosmaBot package authentication foundation
+
+The architecture approval is recorded in ADR 0028 and governing contract v1.0.1,
+merged through architecture PR 21. Existing dirty architecture checkout edits were
+preserved; only the dedicated contract worktree was changed. No Core application
+work was merged or deployed.
+
+The receiver foundation selectively reuses Core's existing companion identity,
+Entra tenant/audience/role policy and configured Clerk issuer. Vendor verification
+and claim normalization stay in the designated configuration adapters. A new
+default-off Visit Prep policy grants only the companion, with no Scribe or
+Sovereign fallback and no generic tool permission. Verified app and physician
+principals retain token time bounds, but not credentials or raw claims.
+
+The new public-key transport is deliberately separate from the general Clerk
+SDK's redirect/retry behavior. It fetches only configured key URLs with bounded
+bytes, no redirects/retries/proxy environment and no credential headers. Signature,
+issuer, tenant/audience, app-only role/caller, strict time bounds and current-session
+shape are tested using invented signed RSA tokens. Expired, malformed, wrong-key,
+test-bypass, impersonation and pending sessions fail closed with value-free errors.
+
+This increment contains no receiver route or patient read. The transaction must
+still check persisted support state, reviewed account connection, current practice
+and preparation authority, final credential expiry and commit acknowledgment.
+The existing same-session synthesis reader is the next reuse point; CosmaBot
+display and downstream conversational work follow its receiver qualification.
+The Tier 2 flight plan describes additive recovery and unchanged existing callers.
+No schema, dependency, environment file, live provider or patient data is added.
