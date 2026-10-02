@@ -22,8 +22,8 @@ from app.services.visit_prep_contribution_contract import ContributionBasis
 from app.services.visit_prep_packages import VisitPrepSourcePackage
 from app.services.visit_prep_question_definitions import QuestionKind
 
-GENERATOR_VERSION = "patient_sources_v1"
-PROMPT_VERSION = "patient_report_only_v1"
+GENERATOR_VERSION = "protected_patient_sources_v2"
+PROMPT_VERSION = "protected_patient_report_only_v2"
 MAX_SOURCE_CHARACTERS = 20_000
 MAX_OUTPUT_CHARACTERS = 16_000
 MAX_BRIEF_WORDS = 220

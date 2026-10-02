@@ -13,6 +13,10 @@ import app.services.visit_prep_synthesis_generator as generator
 from app.services.visit_prep_contributions import correct_contribution
 from app.services.visit_prep_interview_contract import ResponseInput
 from app.services.visit_prep_interviews import complete_interview, confirm_interview
+from app.services.visit_prep_protected_analysis import (
+    PROTECTION_PROFILE,
+    VisitPrepProtectedAnalysis,
+)
 from app.services.visit_prep_synthesis_contract import (
     MAX_BRIEF_WORDS,
     VisitPrepBriefEvidence,
@@ -73,6 +77,11 @@ def _brief(selection):
     )
 
 
+def _protected(selection):
+    """Explicit invented-text protection proof for offline downstream tests."""
+    return VisitPrepProtectedAnalysis(PROTECTION_PROFILE, selection)
+
+
 def _fake(
     monkeypatch, content, *, finish_reason="stop", refusal=None, usage=True, error=None
 ):
@@ -102,6 +111,10 @@ def _fake(
         )
 
     monkeypatch.setattr(generator, "should_use_test_openai_fallback", lambda: False)
+    monkeypatch.setattr(generator, "protect_patient_analysis", _protected)
+    import app.services.visit_prep_synthesis_worker as worker
+
+    monkeypatch.setattr(worker, "protect_patient_analysis", _protected)
     monkeypatch.setattr(generator, "openai", SimpleNamespace(with_options=options))
     return captured
 
@@ -613,7 +626,12 @@ def test_actual_azure_sdk_serializes_strict_request_with_local_transport_only(
     ) as client:
         monkeypatch.setattr(generator, "openai", client)
         usage = []
-        assert generate_patient_brief(selection, record_usage=usage.append) == expected
+        assert (
+            generate_patient_brief(
+                selection, record_usage=usage.append, protected=_protected(selection)
+            )
+            == expected
+        )
     assert len(captured) == 1
     request = captured[0]
     assert request.url.host == "synthetic-model.example.test"

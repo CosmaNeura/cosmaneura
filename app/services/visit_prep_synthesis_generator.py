@@ -19,13 +19,18 @@ import httpx
 
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
+from app.services.visit_prep_protected_analysis import (
+    VisitPrepProtectedAnalysis,
+    protect_patient_analysis,
+    validate_protected_analysis,
+    validate_protected_brief,
+)
 from app.services.visit_prep_synthesis_contract import (
     MAX_OUTPUT_CHARACTERS,
     MAX_SOURCE_CHARACTERS,
     VisitPrepPreparedBrief,
     VisitPrepSynthesisInvalid,
     VisitPrepSynthesisSelection,
-    validate_generated_brief,
     validate_selection,
 )
 
@@ -47,7 +52,10 @@ one or more supplied source_ref values and a short exact quote from that source'
 reported_text. Quote only the current answer, never the physician prompt. Choice
 labels describe the selected answer, not a clinical interpretation. A quotation
 is evidence of what was reported, not proof of clinical truth. Do not infer a
-missing dose or diagnosis. Empty input requires an entirely empty brief with a
+missing dose or diagnosis. This text has passed Core de-identification; replaced
+names and dates are not clinical facts. Do not report surrogate identities or
+dates. Cite only unchanged clinical wording, not substituted values. Empty input
+requires an entirely empty brief with a
 null headline. Return only JSON matching the supplied strict schema."""
 
 
@@ -117,6 +125,7 @@ def generate_patient_brief(
     selection: VisitPrepSynthesisSelection,
     *,
     record_usage: Callable[[VisitPrepGenerationUsage], None],
+    protected: VisitPrepProtectedAnalysis | None = None,
 ) -> VisitPrepPreparedBrief:
     """Never return generated content unless the usage recorder succeeds.
 
@@ -126,7 +135,7 @@ def generate_patient_brief(
     """
     if not callable(record_usage):
         raise VisitPrepGenerationFailed()
-    payload = source_payload(selection)
+    validate_selection(selection)
     if not selection.sources:
         return VisitPrepPreparedBrief(
             headline=None,
@@ -138,6 +147,11 @@ def generate_patient_brief(
         )
     if should_use_test_openai_fallback():
         raise VisitPrepGenerationFailed()
+    protected = (
+        protected if protected is not None else protect_patient_analysis(selection)
+    )
+    validate_protected_analysis(protected, selection)
+    payload = source_payload(protected.selection)
     started_at, started = datetime.now(UTC), time.monotonic()
     response = None
     prepared = None
@@ -176,7 +190,7 @@ def generate_patient_brief(
         ):
             raise VisitPrepGenerationFailed()
         prepared = VisitPrepPreparedBrief.model_validate_json(content)
-        validate_generated_brief(prepared, selection)
+        validate_protected_brief(prepared, protected, selection)
     except Exception:
         prepared = None
     request_id, incoming, outgoing = _usage(response)

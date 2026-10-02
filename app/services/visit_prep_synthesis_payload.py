@@ -8,9 +8,15 @@ version, attribution and completion/review basis. No transparent ORM decryption.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from pydantic import ValidationError
 
+from app.services.visit_prep_protected_analysis import (
+    PROTECTION_PROFILE,
+    VisitPrepProtectedAnalysis,
+    validate_protected_brief,
+)
 from app.services.visit_prep_synthesis_contract import (
     VisitPrepPreparedBrief,
     VisitPrepSynthesisInvalid,
@@ -73,10 +79,34 @@ def _json(value: object) -> str:
 
 
 def encrypt_synthesis_payload(
-    prepared: VisitPrepPreparedBrief, selection: VisitPrepSynthesisSelection
+    prepared: VisitPrepPreparedBrief,
+    selection: VisitPrepSynthesisSelection,
+    *,
+    protected: VisitPrepProtectedAnalysis | None = None,
 ) -> str:
     validate_generated_brief(prepared, selection)
-    payload = _json({"manifest": _manifest(selection), "brief": prepared.model_dump()})
+    if protected is None:
+        if selection.sources:
+            raise VisitPrepSynthesisInvalid()
+        protected = VisitPrepProtectedAnalysis(PROTECTION_PROFILE, selection)
+    validate_protected_brief(prepared, protected, selection)
+    payload = _json(
+        {
+            "manifest": _manifest(selection),
+            "brief": prepared.model_dump(),
+            "protection": {
+                "profile": protected.profile,
+                "sources": [
+                    {
+                        "source_ref": source.source_ref,
+                        "prompt": source.prompt,
+                        "reported_text": source.reported_text,
+                    }
+                    for source in protected.selection.sources
+                ],
+            },
+        }
+    )
     if len(payload.encode("utf-8")) > MAX_PAYLOAD_BYTES:
         raise VisitPrepSynthesisInvalid()
     try:
@@ -104,12 +134,46 @@ def decrypt_synthesis_payload(
         payload = json.loads(plaintext)
         if (
             not isinstance(payload, dict)
-            or set(payload) != {"manifest", "brief"}
+            or set(payload) != {"manifest", "brief", "protection"}
             or _json(payload["manifest"]) != _json(expected_manifest)
         ):
             raise VisitPrepSynthesisInvalid()
+        protection = payload["protection"]
+        if (
+            not isinstance(protection, dict)
+            or set(protection) != {"profile", "sources"}
+            or protection["profile"] != PROTECTION_PROFILE
+            or not isinstance(protection["sources"], list)
+            or len(protection["sources"]) != len(selection.sources)
+        ):
+            raise VisitPrepSynthesisInvalid()
+        sources = []
+        for entry, source in zip(protection["sources"], selection.sources, strict=True):
+            if (
+                not isinstance(entry, dict)
+                or set(entry) != {"source_ref", "prompt", "reported_text"}
+                or entry["source_ref"] != source.source_ref
+                or not isinstance(entry["prompt"], str)
+                or not isinstance(entry["reported_text"], str)
+            ):
+                raise VisitPrepSynthesisInvalid()
+            sources.append(
+                replace(
+                    source,
+                    prompt=entry["prompt"],
+                    answer=source.answer
+                    if source.kind == "choice"
+                    else entry["reported_text"],
+                    choice_label=entry["reported_text"]
+                    if source.kind == "choice"
+                    else None,
+                )
+            )
+        protected = VisitPrepProtectedAnalysis(
+            PROTECTION_PROFILE, replace(selection, sources=tuple(sources))
+        )
         prepared = VisitPrepPreparedBrief.model_validate_json(_json(payload["brief"]))
-        validate_generated_brief(prepared, selection)
+        validate_protected_brief(prepared, protected, selection)
         return prepared
     except (DecryptionError, ValueError, TypeError, RecursionError, ValidationError):
         raise VisitPrepSynthesisInvalid() from None

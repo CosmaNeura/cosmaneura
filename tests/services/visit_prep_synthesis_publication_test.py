@@ -41,7 +41,7 @@ from tests.services.visit_prep_contribution_projection_test import _prepared
 from tests.services.visit_prep_interviews_test import _fixture, _respond
 from tests.services.visit_prep_packages_test import _read, _scope
 from tests.services.visit_prep_synthesis_artifact_test import _artifact
-from tests.services.visit_prep_synthesis_test import _brief
+from tests.services.visit_prep_synthesis_test import _brief, _protected
 from tests.services.visit_preps_test import _withdraw_seat
 
 
@@ -56,6 +56,7 @@ def _publish(fixture, selection=None, brief=None):
         visit_prep_id=fixture.prep_id,
         expected_selection=selection,
         prepared=brief or _brief(selection),
+        protected=_protected(selection),
     )
 
 

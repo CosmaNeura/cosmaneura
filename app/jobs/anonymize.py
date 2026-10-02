@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from math import isfinite
 
 from azure.health.deidentification import DeidentificationClient
 from azure.health.deidentification.models import (
@@ -83,7 +84,22 @@ def queue(transcript_id: str | TypeIDType) -> None:
 
 
 # https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/healthdataaiservices/azure-health-deidentification/samples/sample_realtime_deidentification.py
-def deidentify(phi_text: str) -> str:
+def deidentify(phi_text: str, *, timeout_seconds: float | None = None) -> str:
+    options = {}
+    if timeout_seconds is not None:
+        if (
+            type(timeout_seconds) not in {float, int}
+            or not isfinite(timeout_seconds)
+            or not 0 < timeout_seconds <= 15
+        ):
+            raise ValueError("Invalid deidentification timeout")
+        options = {
+            "retry_total": 0,
+            "connection_timeout": min(3.0, timeout_seconds),
+            "read_timeout": timeout_seconds,
+            "timeout": timeout_seconds,
+            "logging_enable": False,
+        }
     text = phi_text.strip()
     if not text:
         return text
@@ -112,13 +128,13 @@ def deidentify(phi_text: str) -> str:
     # The supported API versions are: 2024-11-15, 2025-07-15-preview
     # Using the stable version 2024-11-15
     client = DeidentificationClient(
-        AZURE_DEID_ENDPOINT, credential, api_version="2024-11-15"
+        AZURE_DEID_ENDPOINT, credential, api_version="2024-11-15", **options
     )
     body = DeidentificationContent(input_text=text, operation="Surrogate")
 
     result: DeidentificationResult
     try:
-        result = client.deidentify(body)
+        result = client.deidentify(body, **options)
         assert result.output_text
     except Exception:
         # Exception messages from provider SDKs can contain request bodies or

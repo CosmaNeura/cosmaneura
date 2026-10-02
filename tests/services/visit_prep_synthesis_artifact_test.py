@@ -18,7 +18,9 @@ from app.services.visit_prep_synthesis_contract import (
 from app.services.visit_prep_synthesis_generator import MODEL_PROFILE
 from app.services.visit_prep_synthesis_payload import (
     decrypt_synthesis_payload,
-    encrypt_synthesis_payload,
+)
+from app.services.visit_prep_synthesis_payload import (
+    encrypt_synthesis_payload as _encrypt_synthesis_payload,
 )
 from app.services.visit_preps import rotate_visit_prep_credential
 from app.utils.encryption import (
@@ -44,7 +46,13 @@ from tests.services.visit_prep_contribution_commands_test import _correct, _revi
 from tests.services.visit_prep_contribution_projection_test import _prepared
 from tests.services.visit_prep_model_test import _change, _credential, _prep, _schedule
 from tests.services.visit_prep_packages_test import _read
-from tests.services.visit_prep_synthesis_test import _brief
+from tests.services.visit_prep_synthesis_test import _brief, _protected
+
+
+def encrypt_synthesis_payload(prepared, selection):
+    return _encrypt_synthesis_payload(
+        prepared, selection, protected=_protected(selection)
+    )
 
 
 def _artifact(fixture, *, version=1, profile=MODEL_PROFILE):

@@ -19,6 +19,10 @@ from app.services.visit_prep_packages import (
     _load_authorized_package,
     _LockedPackage,
 )
+from app.services.visit_prep_protected_analysis import (
+    VisitPrepProtectedAnalysis,
+    validate_protected_brief,
+)
 from app.services.visit_prep_synthesis_contract import (
     GENERATOR_VERSION,
     PROMPT_VERSION,
@@ -159,6 +163,7 @@ def publish_visit_prep_synthesis(
     visit_prep_id: TypeIDType,
     expected_selection: VisitPrepSynthesisSelection,
     prepared: VisitPrepPreparedBrief,
+    protected: VisitPrepProtectedAnalysis | None = None,
 ) -> VisitPrepPublicationReceipt:
     """Publish against exact current sources, or replay without overwriting.
 
@@ -175,7 +180,9 @@ def publish_visit_prep_synthesis(
             expected_clerk_subject=expected_clerk_subject,
             visit_prep_id=visit_prep_id,
         )
-        receipt = _publish_locked(session, locked, expected_selection, prepared)
+        receipt = _publish_locked(
+            session, locked, expected_selection, prepared, protected=protected
+        )
         _finish_audit(session, locked, "synthesis_published")
         return receipt
 
@@ -185,6 +192,8 @@ def _publish_locked(
     locked: _LockedPackage,
     expected_selection: VisitPrepSynthesisSelection,
     prepared: VisitPrepPreparedBrief,
+    *,
+    protected: VisitPrepProtectedAnalysis | None = None,
 ) -> VisitPrepPublicationReceipt:
     """Stage an artifact without committing; the caller owns the final fence.
 
@@ -197,6 +206,10 @@ def _publish_locked(
     if current != expected_selection:
         raise VisitPrepSynthesisStale()
     validate_generated_brief(prepared, current)
+    if current.sources and protected is None:
+        raise VisitPrepSynthesisInvalid()
+    if protected is not None:
+        validate_protected_brief(prepared, protected, current)
     prep_id = locked.preparation.id
     existing = _current_artifact(
         session, prep_id=prep_id, source_version=current.source_version
@@ -229,7 +242,9 @@ def _publish_locked(
         generator_version=GENERATOR_VERSION,
         prompt_version=PROMPT_VERSION,
         model_profile=MODEL_PROFILE,
-        payload_ciphertext=encrypt_synthesis_payload(prepared, current),
+        payload_ciphertext=encrypt_synthesis_payload(
+            prepared, current, protected=protected
+        ),
         payload_format_version=1,
     )
     session.add(artifact)
