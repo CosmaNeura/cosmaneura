@@ -37,9 +37,16 @@ def _queued(label="email-worker", *, expiry=None):
 
 
 def _options(fixture):
+    # Explicit TEST ONLY policy, stable across claim/dispatch and thread copies.
+    # Fixtures use UTC schedules; put quiet hours well beyond this short test.
+    hour = fixture[1].created_at.astimezone(UTC).hour
     return {
-        key: fixture[3][key]
-        for key in ("patient_origin", "source_verifier", "settings")
+        "quiet_hours": ((hour + 8) % 24, (hour + 9) % 24),
+        "minimum_channel_spacing": timedelta(hours=4),
+        **{
+            key: fixture[3][key]
+            for key in ("patient_origin", "source_verifier", "settings")
+        },
     }
 
 
