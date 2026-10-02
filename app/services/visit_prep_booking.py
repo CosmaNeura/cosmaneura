@@ -3,10 +3,12 @@
 import hmac
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from uuid import uuid4
 
 from app.configuration import visit_prep
 from app.services.visit_prep_access import resolve_visit_prep_access
+from app.services.visit_prep_booking_cancellation import check_booking_observation
 from app.services.visit_prep_booking_contract import (
     BookingSourceScope,
     BookingSourceUnavailable,
@@ -39,6 +41,7 @@ def record_current_booking(
     *,
     booking: NormalizedVisitPrepBooking,
     source: BookingSourceScope,
+    observed_at: datetime,
     require_current_source: Callable[[], None],
 ) -> BookingReceipt:
     # Only the trusted provider adapter supplies current booking and mapping.
@@ -75,6 +78,9 @@ def record_current_booking(
 
         _normalized_schedule(
             booking.scheduled_at, booking.timezone_name, now=now, require_future=False
+        )
+        check_booking_observation(
+            session, source=source, booking_digest=key, observed_at=observed_at
         )
         snapshot = booking.source_snapshot_hmac
         existing = session.exec(

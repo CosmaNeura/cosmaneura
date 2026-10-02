@@ -8,6 +8,7 @@ from typing import Any, cast
 from app.configuration import visit_prep
 from app.services.visit_prep_access import resolve_visit_prep_access
 from app.services.visit_prep_booking import BookingReceipt, record_current_booking
+from app.services.visit_prep_booking_cancellation import stage_unmatched_cancellation
 from app.services.visit_prep_booking_contract import (
     BookingSourceScope,
     BookingSourceUnavailable,
@@ -92,6 +93,9 @@ def record_current_booking_state(
         if receipt is None:
             require_admission()
             if state.active_booking is None:
+                stage_unmatched_cancellation(session, source=source, state=state)
+                require_admission()
+                session.commit()
                 return BookingReceipt("", "not_found")
             # Release these read-only locks before the existing creator owns its
             # transaction. A concurrent creation is fenced by the source key.
@@ -99,6 +103,7 @@ def record_current_booking_state(
             return record_current_booking(
                 booking=state.active_booking,
                 source=source,
+                observed_at=state.observed_at,
                 require_current_source=require_current_source,
             )
         if receipt.owner_practice_member_id != owner.id:
