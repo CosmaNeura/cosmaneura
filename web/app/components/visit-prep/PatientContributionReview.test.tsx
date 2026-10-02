@@ -54,6 +54,8 @@ function setup() {
     readContribution: vi.fn().mockResolvedValue(initial),
     correctContribution: vi.fn(),
     reviewContribution: vi.fn(),
+    readEmailConsent: vi.fn(),
+    decideEmailConsent: vi.fn(),
   }
   const props = {
     client,

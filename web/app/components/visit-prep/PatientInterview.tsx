@@ -19,6 +19,7 @@ import {
 
 import { InterviewFrame } from "./InterviewFrame"
 import { PatientContributionReview } from "./PatientContributionReview"
+import { PatientEmailConsent } from "./PatientEmailConsent"
 import { QuestionForm } from "./QuestionForm"
 
 const FAILURE_COPY = {
@@ -56,6 +57,8 @@ export function PatientInterview({
   )
   const [reported, setReported] = useState(false)
   const [reviewing, setReviewing] = useState(false)
+  const [emailChoices, setEmailChoices] = useState(false)
+  const emailChoicesRef = useRef(false)
   const [contributionComplete, setContributionComplete] = useState<
     boolean | null
   >(null)
@@ -71,6 +74,8 @@ export function PatientInterview({
     setDraft("")
     setFirstName("")
     setReviewing(false)
+    setEmailChoices(false)
+    emailChoicesRef.current = false
     setContributionComplete(null)
     setError("unavailable")
     setBusy(false)
@@ -134,6 +139,7 @@ export function PatientInterview({
       if (
         document.visibilityState !== "visible" ||
         !client.current ||
+        emailChoicesRef.current ||
         busyRef.current ||
         pendingAnswer.current
       )
@@ -255,6 +261,16 @@ export function PatientInterview({
             This invitation has been stopped. Do not forward or use the link.
           </p>
         </section>
+      ) : emailChoices && client.current ? (
+        <PatientEmailConsent
+          client={client.current}
+          onUnavailable={discardPatientState}
+          onClose={() => {
+            emailChoicesRef.current = false
+            setEmailChoices(false)
+            reloadProgress()
+          }}
+        />
       ) : reviewing && client.current ? (
         <PatientContributionReview
           client={client.current}
@@ -376,12 +392,12 @@ export function PatientInterview({
       ) : busy ? (
         <p role="status">Loading your preparation…</p>
       ) : null}
-      {!reviewing && error && (
+      {!emailChoices && !reviewing && error && (
         <p role="alert" className="mt-6 text-sm text-red-700">
           {FAILURE_COPY[error]}
         </p>
       )}
-      {!reviewing && error && client.current && !busy && (
+      {!emailChoices && !reviewing && error && client.current && !busy && (
         <div className="mt-4 flex flex-wrap gap-3">
           {pendingAnswer.current && error !== "conflict" && (
             <Button onClick={retryAnswer}>Retry same save</Button>
@@ -402,7 +418,25 @@ export function PatientInterview({
           )}
         </div>
       )}
-      {!reported && !reviewing && client.current && (
+      {!reported &&
+        !reviewing &&
+        !emailChoices &&
+        client.current &&
+        state &&
+        state.status !== "confirmation_required" && (
+          <Button
+            variant="outline"
+            className="mt-6 self-start"
+            disabled={busy || pendingAnswer.current !== null}
+            onClick={() => {
+              emailChoicesRef.current = true
+              setEmailChoices(true)
+            }}
+          >
+            Optional email choices
+          </Button>
+        )}
+      {!reported && !reviewing && !emailChoices && client.current && (
         <Button
           variant="ghost"
           className="mt-8 self-start"

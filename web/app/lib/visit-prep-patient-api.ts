@@ -161,6 +161,85 @@ export type PatientConfirmation = {
   first_name: string
   role: "patient" | "caregiver"
 }
+
+const consentTime = z.string().datetime({ offset: true })
+const consentSequence = z.number().int().min(0).max(2_147_483_647)
+export const visitPrepPatientEmailConsent = z
+  .object({
+    contract: z.literal("visit_prep.patient_email_consent.v1"),
+    actor_role: z.enum(["patient", "caregiver"]),
+    disclosure_version: z.literal("visit_prep_email_consent_v1"),
+    grant_disclosure: z.string().min(1).max(8_000),
+    grant_disclosure_fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    withdrawal_disclosure: z.string().min(1).max(8_000),
+    withdrawal_disclosure_fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    status: z.enum(["not_recorded", "grant_recorded", "withdrawn", "expired"]),
+    event_sequence: consentSequence,
+    recorded_at: consentTime.nullable(),
+    expires_at: consentTime.nullable(),
+    maximum_expires_at: consentTime,
+    can_grant: z.boolean(),
+    checked_at: consentTime,
+    identity_assurance: z.literal("invitation_bearer"),
+    sending_authority: z.literal("not_qualified"),
+    delivery_status: z.literal("not_connected"),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    const checked = Date.parse(value.checked_at)
+    const maximum = Date.parse(value.maximum_expires_at)
+    const expiry =
+      value.expires_at === null ? null : Date.parse(value.expires_at)
+    if (
+      value.grant_disclosure_fingerprint ===
+        value.withdrawal_disclosure_fingerprint ||
+      (value.event_sequence === 0
+        ? value.status !== "not_recorded" ||
+          value.recorded_at !== null ||
+          expiry !== null
+        : value.status === "not_recorded" || value.recorded_at === null) ||
+      (value.recorded_at !== null && Date.parse(value.recorded_at) > checked) ||
+      (value.status === "withdrawn" && expiry !== null) ||
+      (["grant_recorded", "expired"].includes(value.status) &&
+        expiry === null) ||
+      (value.status === "grant_recorded" &&
+        Math.min(expiry!, maximum) <= checked) ||
+      (value.status === "expired" && Math.min(expiry!, maximum) > checked) ||
+      (value.can_grant && maximum <= checked)
+    )
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid email choice",
+      })
+  })
+export const visitPrepPatientEmailConsentReceipt = z
+  .object({
+    event_sequence: consentSequence.min(1),
+    current_event_sequence: consentSequence.min(1),
+    event_kind: z.enum(["granted", "withdrawn"]),
+    expires_at: consentTime.nullable(),
+    recorded_at: consentTime,
+    disposition: z.enum(["recorded", "replayed"]),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.current_event_sequence >= value.event_sequence &&
+      (value.event_kind === "withdrawn"
+        ? value.expires_at === null
+        : value.expires_at !== null) &&
+      (value.disposition !== "recorded" ||
+        value.current_event_sequence === value.event_sequence),
+  )
+export type PatientEmailConsent = z.infer<typeof visitPrepPatientEmailConsent>
+export type PatientEmailConsentDecision = PatientConfirmation & {
+  expected_event_sequence: number
+  event_kind: "granted" | "withdrawn"
+  disclosure_fingerprint: string
+  expires_at: string | null
+  recipient_control_attested: boolean
+  caregiver_authority_attested: boolean
+}
 export type PatientContributionChange = PatientConfirmation &
   PatientResponse & {
     basis: PatientContribution["basis"]
@@ -299,6 +378,15 @@ export function createVisitPrepPatientClient(
       request("/contribution/response", contributionReceipt, payload, key),
     reviewContribution: (payload: PatientContributionReview, key: string) =>
       request("/contribution/review", contributionReceipt, payload, key),
+    readEmailConsent: (confirmation: PatientConfirmation) =>
+      request("/email-consent", visitPrepPatientEmailConsent, confirmation),
+    decideEmailConsent: (payload: PatientEmailConsentDecision, key: string) =>
+      request(
+        "/email-consent/decision",
+        visitPrepPatientEmailConsentReceipt,
+        payload,
+        key,
+      ),
     dispose: () => {
       bearer = null
       controllers.forEach((controller) => controller.abort())

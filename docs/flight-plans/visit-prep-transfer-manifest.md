@@ -741,3 +741,44 @@ screen. Disclosure and evidence retention qualification, prior-consent intake,
 enqueue/dispatch, cleanup and delivery status remain open. It cannot authorize
 the first booking email from consent captured after opening the link. No schema,
 external dependency, deployment, real message or cohort activation was changed.
+
+The patient email-choice screen now uses the real public choice API from the
+existing interview page. It is optional, mounts only after an explicit choice,
+and performs no automatic consent read or decision. Returning without deciding
+preserves the unsaved interview draft and reloads current interview progress.
+The five physician topics, including the unconditional free-form story, remain
+independent of email permission.
+
+Before showing choices, the screen requests the recipient first name and role
+again. Granting requires the displayed disclosure, explicit recipient control
+attestation, a separate caregiver attestation when applicable, and a future UTC
+expiry within Core's current limit. Declining or withdrawing requires neither
+grant attestation nor expiry; withdrawal remains available after completion
+through a valid invitation. The client rejects overbroad responses, invented
+identity or sending authority, inconsistent sequence/status/deadline states,
+and malformed receipts.
+
+A decision uses a frozen payload and one UUID. The screen clears its displayed
+snapshot before sending and does not retry the decision automatically. After a
+receipt or uncertain acknowledgment, the patient must explicitly confirm again
+to read current state. Focus loss and concealment clear choice state and
+attestations; late replies are discarded. Parent support-view or access denial
+clears the entire patient page and its private credential. No choice, recipient
+name or credential is written to browser storage.
+
+Built desktop/mobile acceptance covers patient and caregiver choices, returning
+without choosing, an actual committed grant with its acknowledgment discarded,
+read-only recovery, interview completion, withdrawal and current BAA denial.
+Owned PostgreSQL and network-isolated Redis preserve real confirmation counters.
+This demonstrates the screen and API integration, not qualified consent or
+operational delivery. Final revision-specific validation belongs in its draft PR.
+The shared SPA index still links a Google Fonts stylesheet. Browser tests abort
+that exact inherited public URL before networking and reject every other
+external URL; they do not establish that the release page has no third-party
+font request. That public-page dependency remains a release-qualification item.
+
+The capture, email/SMS and public release controls remain unchanged and default
+off. Qualified disclosure, evidence retention/hold/cleanup, prior-consent intake,
+invitation enqueue/dispatch/status, bounded patient AI clarification, CosmaBot,
+Acuity and SMS/reminders remain open. Consent collected through an already-opened
+link cannot authorize that first invitation email.
