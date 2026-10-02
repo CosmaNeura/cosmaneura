@@ -576,6 +576,683 @@
         }
       }
     },
+    "/internal/v1/visit-prep/question-sets": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set List",
+        "operationId": "visit_prep_question_set_list",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Create",
+        "operationId": "visit_prep_question_set_create",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepQuestionSetCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An idempotent replay of the original creation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/question-set-versions/{version_id}": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Version",
+        "operationId": "visit_prep_question_set_version",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetVersionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Replace",
+        "operationId": "visit_prep_question_set_replace",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepQuestionSetReplaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/question-set-versions/{version_id}/successor": {
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Successor",
+        "operationId": "visit_prep_question_set_successor",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VisitPrepQuestionSetSuccessorRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "An idempotent replay of the existing successor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/question-set-versions/{version_id}/publish": {
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Publish",
+        "operationId": "visit_prep_question_set_publish",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/VisitPrepQuestionSetPublishRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Data"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/question-set-versions/{version_id}/default": {
+      "put": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Question Set Default",
+        "operationId": "visit_prep_question_set_default",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Version Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetMutationResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the owner-scoped resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The operation conflicts with the current question-set state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request or question-set definition is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Question-set persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepQuestionSetErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
