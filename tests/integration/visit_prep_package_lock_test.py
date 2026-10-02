@@ -56,7 +56,8 @@ def test_revocation_committed_before_waiting_provider_read_prevents_disclosure(
     with get_session() as session:
         assert not session.exec(
             select(AuthorityAuditEvent).where(
-                AuthorityAuditEvent.resource_ref == str(fixture.prep_id)
+                AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                AuthorityAuditEvent.event_type == "visit_prep.package_read",
             )
         ).all()
 
