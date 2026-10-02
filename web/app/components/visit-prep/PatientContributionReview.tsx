@@ -49,11 +49,13 @@ export function PatientContributionReview({
   onUnavailable,
   onClose,
   onStatus,
+  continuedRole = null,
 }: {
   client: VisitPrepPatientClient
   onUnavailable: () => void
   onClose: () => void
   onStatus: (complete: boolean, reviewed: boolean) => void
+  continuedRole?: PatientConfirmation["role"] | null
 }) {
   const [firstName, setFirstName] = useState("")
   const [role, setRole] = useState<PatientConfirmation["role"]>("patient")
@@ -79,6 +81,7 @@ export function PatientContributionReview({
   useEffect(() => {
     mounted.current = true
     generation.current += 1
+    busyRef.current = false
     const conceal = () => {
       // Do not leave saved answers visible when returning from another surface.
       // A pending exact save survives in memory, but its wording is concealed.
@@ -110,6 +113,10 @@ export function PatientContributionReview({
       document.removeEventListener("visibilitychange", visibility)
     }
   }, [])
+
+  useEffect(() => {
+    if (continuedRole) void run(() => load({ role: continuedRole }))
+  }, [continuedRole])
 
   async function run(operation: () => Promise<void>) {
     if (busyRef.current) return
@@ -466,54 +473,72 @@ export function PatientContributionReview({
         <>
           <h1 className="text-2xl font-semibold">Review your saved answers</h1>
           <p className="mt-3">
-            Before displaying saved answers, enter the recipient first name and
-            role again. This check is not identity verification.
+            {continuedRole ? (
+              "Your initial confirmation is remembered for this invitation."
+            ) : (
+              <>
+                Before displaying saved answers, enter the recipient first name
+                and role again. This check is not identity verification.
+              </>
+            )}
           </p>
-          {!pending.current && !refreshRequired.current && (
-            <form
-              onSubmit={(event) => {
-                event.preventDefault()
-                const confirmed = { first_name: firstName, role }
-                void run(() => load(confirmed))
-              }}
+          {continuedRole && !pending.current && !refreshRequired.current ? (
+            <Button
+              className="mt-6"
+              disabled={busy}
+              onClick={() => void run(() => load({ role: continuedRole }))}
             >
-              <label htmlFor="review-recipient-name" className="mt-6 block">
-                Recipient first name
-              </label>
-              <input
-                id="review-recipient-name"
-                value={firstName}
-                maxLength={120}
-                autoComplete="off"
-                disabled={busy}
-                onChange={(event) => setFirstName(event.target.value)}
-                className="mt-2 w-full rounded border bg-white p-3 text-base"
-              />
-              <label htmlFor="review-recipient-role" className="mt-4 block">
-                This invitation was sent to
-              </label>
-              <select
-                id="review-recipient-role"
-                value={role}
-                disabled={busy}
-                onChange={(event) =>
-                  setRole(event.target.value as PatientConfirmation["role"])
-                }
-                className="mt-2 w-full rounded border bg-white p-3 text-base"
+              {busy ? "Loading…" : "Show saved answers"}
+            </Button>
+          ) : (
+            !continuedRole &&
+            !pending.current &&
+            !refreshRequired.current && (
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const confirmed = { first_name: firstName, role }
+                  void run(() => load(confirmed))
+                }}
               >
-                <option value="patient">The patient</option>
-                <option value="caregiver">
-                  A caregiver answering for the patient
-                </option>
-              </select>
-              <Button
-                type="submit"
-                className="mt-6"
-                disabled={busy || !firstName.trim()}
-              >
-                {busy ? "Checking…" : "Show saved answers"}
-              </Button>
-            </form>
+                <label htmlFor="review-recipient-name" className="mt-6 block">
+                  Recipient first name
+                </label>
+                <input
+                  id="review-recipient-name"
+                  value={firstName}
+                  maxLength={120}
+                  autoComplete="off"
+                  disabled={busy}
+                  onChange={(event) => setFirstName(event.target.value)}
+                  className="mt-2 w-full rounded border bg-white p-3 text-base"
+                />
+                <label htmlFor="review-recipient-role" className="mt-4 block">
+                  This invitation was sent to
+                </label>
+                <select
+                  id="review-recipient-role"
+                  value={role}
+                  disabled={busy}
+                  onChange={(event) =>
+                    setRole(event.target.value as PatientConfirmation["role"])
+                  }
+                  className="mt-2 w-full rounded border bg-white p-3 text-base"
+                >
+                  <option value="patient">The patient</option>
+                  <option value="caregiver">
+                    A caregiver answering for the patient
+                  </option>
+                </select>
+                <Button
+                  type="submit"
+                  className="mt-6"
+                  disabled={busy || !firstName.trim()}
+                >
+                  {busy ? "Checking…" : "Show saved answers"}
+                </Button>
+              </form>
+            )
           )}
         </>
       ) : followup && followup.status !== "not_available" ? (

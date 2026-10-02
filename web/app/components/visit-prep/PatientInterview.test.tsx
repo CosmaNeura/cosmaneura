@@ -82,6 +82,34 @@ afterEach(() => {
 })
 
 describe("patient journey", () => {
+  it("consumes a newly opened same-tab invitation without retaining the previous draft", async () => {
+    const { client, makeClient } = setup(state("story", 5))
+    render(<PatientInterview makeClient={makeClient} />)
+    await screen.findByRole("heading", { name: "Tell me your story" })
+    fireEvent.change(screen.getByLabelText("Tell me your story"), {
+      target: { value: "Must not follow another invitation" },
+    })
+    const otherToken = `vp1_${"B".repeat(42)}A`
+    client.resume.mockResolvedValue(invited)
+    await act(async () => {
+      window.history.replaceState(
+        null,
+        "",
+        `/visit-prep#access_token=${otherToken}`,
+      )
+      window.dispatchEvent(new Event("hashchange"))
+    })
+    await screen.findByRole("heading", { name: "Before we begin" })
+    expect(makeClient).toHaveBeenLastCalledWith(
+      "https://api.example.test",
+      otherToken,
+    )
+    expect(window.location.hash).toBe("")
+    expect(client.dispose).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByDisplayValue("Must not follow another invitation"),
+    ).not.toBeInTheDocument()
+  })
   it("opens optional email choices explicitly, skips parent focus reload and clears on support-view denial", async () => {
     const { client, makeClient } = setup(state("story", 5))
     render(<PatientInterview makeClient={makeClient} />)
@@ -329,12 +357,18 @@ describe("patient journey", () => {
     expect(document.body.innerHTML).not.toContain("Dr. Synthetic")
   })
 
-  it("rejects missing tokens before making any request", async () => {
+  it("attempts remembered cookie-only access without a fragment token", async () => {
     forgetVisitPrepCredential()
-    const { makeClient } = setup()
+    window.history.replaceState(null, "", "/visit-prep")
+    captureVisitPrepCredential(window)
+    const { makeClient, client } = setup()
+    client.resume.mockRejectedValueOnce(
+      new VisitPrepPatientFailure("unavailable"),
+    )
     render(<PatientInterview makeClient={makeClient} />)
     await screen.findByRole("alert")
-    expect(makeClient).not.toHaveBeenCalled()
+    expect(makeClient).toHaveBeenCalledWith("https://api.example.test", null)
+    expect(client.resume).toHaveBeenCalledOnce()
   })
 
   it("survives StrictMode without accepting the disposed initialization", async () => {

@@ -47,6 +47,7 @@ from app.services.visit_prep_interview_contract import (
     VisitPrepInterviewValidation,
 )
 from app.services.visit_prep_interviews import _AuthorizedInterview, _commit
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 
 from activemodel.types import TypeIDType
 from app.models.authority import AuthorityAuditEvent
@@ -200,7 +201,7 @@ def _verified_context(
 
 def record_patient_clarification_turn(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     proposal_id: str,

@@ -247,7 +247,10 @@ def test_decision_shape_is_strict_and_never_echoes_private_validation(
         headers=_headers(fixture, key=str(uuid4())),
         json=_payload(fixture) | changes,
     )
-    assert response.status_code in {409, 422}
+    if changes == {"first_name": None}:
+        assert response.status_code == 404
+    else:
+        assert response.status_code in {409, 422}
     assert set(response.json()) == {"detail"}
     _private(response, fixture)
     assert not _rows(fixture)
@@ -409,10 +412,15 @@ def test_new_read_recovers_latest_external_withdrawal_and_has_closed_openapi(
     ]
     assert component["additionalProperties"] is False
     assert {
-        "first_name",
         "role",
         "expected_event_sequence",
         "expires_at",
         "recipient_control_attested",
         "caregiver_authority_attested",
     } <= set(component["required"])
+    # Name can be omitted only when the adapter validates a remembered cookie.
+    # This legacy raw-bearer journey above still supplies its matching name.
+    assert "first_name" in component["properties"]
+    assert "first_name" not in component["required"]
+    initial = schema["components"]["schemas"]["VisitPrepInitialConfirmationRequest"]
+    assert set(initial["required"]) == {"first_name", "role"}

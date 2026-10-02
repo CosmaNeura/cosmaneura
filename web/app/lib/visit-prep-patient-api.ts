@@ -37,6 +37,7 @@ export const visitPrepPatientState = z
     submitted_questions: z.number().int().min(0).max(5),
     maximum_questions: z.literal(5),
     current_question: question.nullable(),
+    continued_role: z.enum(["patient", "caregiver"]).nullable().optional(),
   })
   .strict()
   .superRefine((state, context) => {
@@ -158,7 +159,7 @@ const contributionReceipt = z
 export type PatientContribution = z.infer<typeof visitPrepPatientContribution>
 export type PatientContributionReceipt = z.infer<typeof contributionReceipt>
 export type PatientConfirmation = {
-  first_name: string
+  first_name?: string
   role: "patient" | "caregiver"
 }
 
@@ -401,13 +402,14 @@ function safeBaseUrl(value: string): URL {
 /** Holds its credential privately; methods return only validated public state. */
 export function createVisitPrepPatientClient(
   baseUrl: string,
-  accessToken: string,
+  accessToken: string | null,
   fetcher: typeof fetch = fetch,
 ) {
-  if (!isCanonicalVisitPrepToken(accessToken))
+  if (accessToken !== null && !isCanonicalVisitPrepToken(accessToken))
     throw new VisitPrepPatientFailure("unavailable")
   const base = safeBaseUrl(baseUrl)
   let bearer: string | null = accessToken
+  let disposed = false
   const controllers = new Set<AbortController>()
 
   async function request<T>(
@@ -416,7 +418,7 @@ export function createVisitPrepPatientClient(
     body?: object,
     key?: string,
   ): Promise<T> {
-    if (bearer === null) throw new VisitPrepPatientFailure("unavailable")
+    if (disposed) throw new VisitPrepPatientFailure("unavailable")
     const controller = new AbortController()
     controllers.add(controller)
     const timeout = window.setTimeout(() => controller.abort(), 15_000)
@@ -426,7 +428,8 @@ export function createVisitPrepPatientClient(
         {
           method: path === "" ? "GET" : "POST",
           headers: {
-            Authorization: `Bearer ${bearer}`,
+            ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+            "X-Visit-Prep-Continuation": "1",
             ...(body ? { "Content-Type": "application/json" } : {}),
             ...(key ? { "Idempotency-Key": key } : {}),
           },
@@ -454,7 +457,7 @@ export function createVisitPrepPatientClient(
         throw new VisitPrepPatientFailure(code)
       }
       const parsed = schema.safeParse(await response.json())
-      if (!parsed.success || bearer === null)
+      if (!parsed.success || disposed)
         throw new VisitPrepPatientFailure("temporary")
       return parsed.data
     } catch (error) {
@@ -552,6 +555,7 @@ export function createVisitPrepPatientClient(
         key,
       ),
     dispose: () => {
+      disposed = true
       bearer = null
       controllers.forEach((controller) => controller.abort())
       controllers.clear()

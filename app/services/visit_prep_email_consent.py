@@ -43,6 +43,10 @@ from app.services.visit_prep_interviews import (
     _lock_authorized_interview,
 )
 from app.services.visit_prep_packages import _database_now
+from app.services.visit_prep_patient_continuation import (
+    ConfirmedVisitPrepAccess,
+    valid_confirmation_name,
+)
 from app.services.visit_preps import (
     VisitPrepError,
     _lock_owner_scope,
@@ -355,7 +359,7 @@ def read_patient_email_consent_source(
 
 
 def _capture_context(
-    session: Session, *, access_token: str, role: str
+    session: Session, *, access_token: str | ConfirmedVisitPrepAccess, role: str
 ) -> _AuthorizedInterview:
     settings = visit_prep_access.VISIT_PREP_SETTINGS
     if (
@@ -389,7 +393,7 @@ def _capture_context(
 def _record(
     session: Session,
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     decision: PatientEmailConsentInput,
     first_name: str | None = None,
 ) -> PatientEmailConsentReceipt:
@@ -549,7 +553,7 @@ def _record(
 
 def record_patient_email_consent(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     decision: PatientEmailConsentInput,
     view_as_active: bool = False,
     first_name: str | None = None,
@@ -569,7 +573,7 @@ def record_patient_email_consent(
             or view_as_active is not False
             or (
                 first_name is not None
-                and (type(first_name) is not str or not 1 <= len(first_name) <= 120)
+                and not valid_confirmation_name(first_name, access_token)
             )
             or not _uuid(decision.operation_id)
             or type(decision.expected_event_sequence) is not int
@@ -616,7 +620,7 @@ def record_patient_email_consent(
 
 def record_confirmed_patient_email_consent(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     decision: PatientEmailConsentInput,
     view_as_active: bool = False,
@@ -627,7 +631,7 @@ def record_confirmed_patient_email_consent(
     The internal bearer command remains available to its existing callers;
     the public adapter must use this required-confirmation entry point.
     """
-    if type(first_name) is not str or not 1 <= len(first_name) <= 120:
+    if not valid_confirmation_name(first_name, access_token):
         raise VisitPrepEmailInvalid()
     require_patient_email_consent_control()
     return record_patient_email_consent(

@@ -6,6 +6,8 @@ import {
   subscribeToViewAsStateChanges,
 } from "~/lib/view-as-binding"
 import {
+  VISIT_PREP_CREDENTIAL_CHANGE_EVENT,
+  canResumeVisitPrepConfirmation,
   forgetVisitPrepCredential,
   readVisitPrepCredential,
 } from "~/lib/visit-prep-browser"
@@ -63,13 +65,12 @@ export function PatientInterview({
     boolean | null
   >(null)
 
-  function discardPatientState() {
+  function clearPatientState() {
     generation.current += 1
     busyRef.current = false
     client.current?.dispose()
     client.current = null
     pendingAnswer.current = null
-    forgetVisitPrepCredential()
     setState(null)
     setDraft("")
     setFirstName("")
@@ -79,6 +80,11 @@ export function PatientInterview({
     setContributionComplete(null)
     setError("unavailable")
     setBusy(false)
+  }
+
+  function discardPatientState() {
+    clearPatientState()
+    forgetVisitPrepCredential()
   }
 
   async function run(
@@ -117,7 +123,7 @@ export function PatientInterview({
     generation.current += 1
     busyRef.current = false
     const token = readVisitPrepCredential()
-    if (!token) {
+    if (!token && !canResumeVisitPrepConfirmation()) {
       setError("unavailable")
       setBusy(false)
       return () => {
@@ -131,6 +137,25 @@ export function PatientInterview({
       setError("temporary")
       setBusy(false)
     }
+    const reopen = () => {
+      const nextToken = readVisitPrepCredential()
+      const allowed = canResumeVisitPrepConfirmation()
+      clearPatientState()
+      setReported(false)
+      setRole("patient")
+      lastQuestionKey.current = undefined
+      if (!nextToken && !allowed) return
+      try {
+        client.current = makeClient(
+          import.meta.env.VITE_PYTHON_URL ?? "",
+          nextToken,
+        )
+        void run(() => client.current!.resume())
+      } catch {
+        setError("temporary")
+      }
+    }
+    window.addEventListener(VISIT_PREP_CREDENTIAL_CHANGE_EVENT, reopen)
     const forget = discardPatientState
     window.addEventListener("pagehide", forget)
     window.addEventListener(VIEW_AS_HARD_BLOCK_EVENT, forget)
@@ -171,6 +196,7 @@ export function PatientInterview({
       window.removeEventListener("focus", recheck)
       document.removeEventListener("visibilitychange", recheck)
       unsubscribe()
+      window.removeEventListener(VISIT_PREP_CREDENTIAL_CHANGE_EVENT, reopen)
       // Preserve React StrictMode's immediate setup/cleanup/setup cycle, but
       // discard the module credential on actual route departure.
       queueMicrotask(() => {
@@ -263,6 +289,7 @@ export function PatientInterview({
         </section>
       ) : emailChoices && client.current ? (
         <PatientEmailConsent
+          continuedRole={state?.continued_role ?? null}
           client={client.current}
           onUnavailable={discardPatientState}
           onClose={() => {
@@ -273,6 +300,7 @@ export function PatientInterview({
         />
       ) : reviewing && client.current ? (
         <PatientContributionReview
+          continuedRole={state?.continued_role ?? null}
           client={client.current}
           onUnavailable={discardPatientState}
           onClose={() => setReviewing(false)}

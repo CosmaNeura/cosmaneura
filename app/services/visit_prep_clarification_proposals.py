@@ -44,6 +44,7 @@ from app.services.visit_prep_interview_contract import (
 )
 from app.services.visit_prep_interviews import _AuthorizedInterview, _commit, _questions
 from app.services.visit_prep_packages import _source_package_from_locked_state
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 
 from activemodel.types import TypeIDType
 from app.models.authority import AuthorityAuditEvent
@@ -146,7 +147,7 @@ def _audit_valid(
 
 def _record_clarification_proposal(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     operation_id: str,
@@ -402,7 +403,7 @@ def _proposal_context(
 
 def record_initial_clarification_proposal(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     operation_id: str,
@@ -424,7 +425,7 @@ def record_initial_clarification_proposal(
 
 def record_followup_clarification_proposal(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     operation_id: str,

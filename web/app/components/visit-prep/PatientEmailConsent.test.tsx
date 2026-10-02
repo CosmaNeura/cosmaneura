@@ -29,7 +29,10 @@ const consent: EmailConsentState = {
   sending_authority: "not_qualified",
   delivery_status: "not_connected",
 }
-function setup(value = consent) {
+function setup(
+  value = consent,
+  continuedRole: "patient" | "caregiver" | null = null,
+) {
   const client = {
     resume: vi.fn(),
     confirm: vi.fn(),
@@ -48,7 +51,7 @@ function setup(value = consent) {
     decideEmailConsent: vi.fn(),
   }
   const props = { client, onClose: vi.fn(), onUnavailable: vi.fn() }
-  render(<PatientEmailConsent {...props} />)
+  render(<PatientEmailConsent {...props} continuedRole={continuedRole} />)
   return props
 }
 async function load(role = "caregiver") {
@@ -79,6 +82,14 @@ function receipt(extra = {}) {
   }
 }
 describe("optional patient email choice", () => {
+  it("loads with remembered confirmation without repeating the identity check", async () => {
+    const { client } = setup(consent, "caregiver")
+    await screen.findByText(/No email choice recorded at last load/)
+    expect(client.readEmailConsent).toHaveBeenCalledWith({ role: "caregiver" })
+    expect(
+      screen.queryByLabelText("Recipient first name"),
+    ).not.toBeInTheDocument()
+  })
   it("leaves the interview accessible when the independent capture control is unavailable", async () => {
     const { client, onClose } = setup()
     client.readEmailConsent.mockRejectedValueOnce(

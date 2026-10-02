@@ -45,6 +45,7 @@ from app.services.visit_prep_interviews import (
     _validate_stored_response,
     _visit_prep_session,
 )
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 from app.utils.encryption import EncryptionError, encrypt_value
 
 from activemodel.types import TypeIDType
@@ -331,6 +332,11 @@ def _require_recipient(
 ) -> None:
     """Recheck the same confirmation evidence; never claim verified identity."""
 
+    if authorized.continued_role is not None:
+        if role != authorized.continued_role:
+            raise _unavailable()
+        if first_name == "":
+            return
     name = _normalized_confirmation_name(first_name)
     if not isinstance(role, str) or role not in {"patient", "caregiver"}:
         raise VisitPrepInterviewValidation("confirmation is invalid")
@@ -422,7 +428,7 @@ def _append_event_in_session(
 
 def correct_contribution(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     expected_basis: ContributionBasis,
@@ -451,7 +457,7 @@ def correct_contribution(
 def correct_contribution_in_session(
     session: Session,
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     expected_basis: ContributionBasis,
@@ -545,7 +551,7 @@ def correct_contribution_in_session(
 
 def review_contribution(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     expected_basis: ContributionBasis,
@@ -589,7 +595,10 @@ def review_contribution(
 
 
 def get_patient_contribution(
-    *, access_token: str, first_name: str, role: ContributionRole
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
 ) -> PatientContribution:
     """Read this patient's current contribution after fresh confirmation evidence.
 

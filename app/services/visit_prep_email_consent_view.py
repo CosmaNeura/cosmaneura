@@ -18,6 +18,10 @@ from app.services.visit_prep_email_consent import (
 from app.services.visit_prep_email_contract import VisitPrepEmailInvalid
 from app.services.visit_prep_email_evidence import read_email_consent
 from app.services.visit_prep_packages import _database_now
+from app.services.visit_prep_patient_continuation import (
+    ConfirmedVisitPrepAccess,
+    valid_confirmation_name,
+)
 from app.services.visit_preps import _visit_prep_session
 
 from app.models.authority import AuthorityAuditEvent
@@ -49,7 +53,11 @@ class PatientEmailConsentView:
 
 
 def _read(
-    session: Session, *, access_token: str, first_name: str, role: RecipientRole
+    session: Session,
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: RecipientRole,
 ) -> PatientEmailConsentView:
     require_patient_email_consent_control()
     authorized = _capture_context(session, access_token=access_token, role=role)
@@ -145,7 +153,7 @@ def _read(
 
 def get_patient_email_consent_view(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: RecipientRole,
     view_as_active: bool = False,
@@ -158,8 +166,7 @@ def get_patient_email_consent_view(
     result = None
     try:
         if (
-            type(first_name) is not str
-            or not 1 <= len(first_name) <= 120
+            not valid_confirmation_name(first_name, access_token)
             or role not in {"patient", "caregiver"}
             or view_as_active is not False
         ):

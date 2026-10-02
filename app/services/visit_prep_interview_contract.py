@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
 
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 from app.utils.encryption import EncryptionError, pseudonymous_digest
 
 from activemodel.types import TypeIDType
@@ -59,12 +60,14 @@ class InterviewState:
     submitted_questions: int
     maximum_questions: int
     current_question: InterviewQuestion | None
+    continued_role: Literal["patient", "caregiver"] | None = None
 
 
 @dataclass(frozen=True)
 class InterviewMutationResult:
     interview: InterviewState
     disposition: InterviewDisposition
+    continuation: ConfirmedVisitPrepAccess | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True)

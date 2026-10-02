@@ -59,6 +59,7 @@ from app.services.visit_prep_interviews import (
     _visit_prep_session,
 )
 from app.services.visit_prep_packages import _source_package_from_locked_state
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 
 from activemodel.types import TypeIDType
 from app.models.authority import AuthorityAuditEvent
@@ -110,7 +111,11 @@ def _operation(value: object) -> str:
 
 
 def _authorized(
-    session: Session, *, access_token: str, first_name: str, role: ContributionRole
+    session: Session,
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
 ) -> _AuthorizedInterview:
     authorized = _lock_authorized_interview(session, access_token=access_token)
     _require_recipient(authorized, first_name=first_name, role=role)
@@ -347,7 +352,7 @@ def _check_result(
 
 def record_patient_clarification_decision(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     proposal_id: str,

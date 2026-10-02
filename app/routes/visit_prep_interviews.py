@@ -59,6 +59,15 @@ from app.services.visit_prep_interview_contract import (
     VisitPrepInterviewUnavailable,
     VisitPrepInterviewValidation,
 )
+from app.services.visit_prep_patient_continuation import (
+    COOKIE_NAME,
+    REQUEST_HEADER,
+    ConfirmedVisitPrepAccess,
+    PatientContinuationInvalid,
+    open_confirmation,
+    seal_confirmation,
+)
+from app.services.visit_preps import access_token_hash
 
 from activemodel.session_manager import aglobal_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -327,6 +336,7 @@ class VisitPrepPublicStateResponse(_StrictModel):
     submitted_questions: int
     maximum_questions: int
     current_question: VisitPrepPublicQuestionResponse | None
+    continued_role: Literal["patient", "caregiver"] | None = None
 
 
 class VisitPrepPublicMutationResponse(_StrictModel):
@@ -339,6 +349,13 @@ class VisitPrepWrongRecipientResponse(_StrictModel):
 
 
 class VisitPrepConfirmationRequest(_StrictModel):
+    first_name: str | None = Field(
+        default=None, min_length=1, max_length=120, repr=False
+    )
+    role: Literal["patient", "caregiver"]
+
+
+class VisitPrepInitialConfirmationRequest(_StrictModel):
     first_name: str = Field(min_length=1, max_length=120, repr=False)
     role: Literal["patient", "caregiver"]
 
@@ -645,8 +662,8 @@ def require_public_visit_prep_bearer(
         HTTPAuthorizationCredentials | None,
         Security(_DOCUMENTED_BEARER),
     ],
-) -> str:
-    """Rate-limit, validate, then return one header-only canonical bearer."""
+) -> str | ConfirmedVisitPrepAccess:
+    """Rate-limit and validate a bearer or an opt-in sealed confirmation."""
 
     del documented_bearer
     try:
@@ -666,6 +683,55 @@ def require_public_visit_prep_bearer(
 
     network_signal = _network_signal(request)
     access_token = _bearer_from_request(request)
+    continued = None
+    continuation_headers = request.headers.getlist(REQUEST_HEADER)
+    if continuation_headers and continuation_headers != ["1"]:
+        raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+    continuation_requested = continuation_headers == ["1"]
+    if continuation_requested:
+        if request.headers.getlist("authorization") and access_token is None:
+            raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+        origins = request.headers.getlist("origin")
+        allowed = getattr(request.app.state, "visit_prep_allowed_origins", frozenset())
+        if (
+            len(origins) > 1
+            or (
+                origins
+                and origins[0] not in allowed
+                and origins[0] != str(request.base_url).rstrip("/")
+            )
+            or request.headers.get("sec-fetch-site") == "cross-site"
+        ):
+            raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+        # Non-simple header plus strict Origin/CORS prevents cross-site cookie use.
+        cookie_count = sum(
+            part.strip().split("=", 1)[0] == COOKIE_NAME
+            for header in request.headers.getlist("cookie")
+            for part in header.split(";")
+        )
+        if cookie_count > 1:
+            raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+        cookie = request.cookies.get(COOKIE_NAME)
+        if cookie:
+            try:
+                candidate = open_confirmation(cookie)
+                if access_token is None or candidate.token_hash == access_token_hash(
+                    access_token
+                ):
+                    continued = candidate
+            except (PatientContinuationInvalid, ValueError):
+                pass
+    if continued is not None and request.url.path != f"{_PUBLIC_PREFIX}/confirm":
+        try:
+            rate_limits.enforce_credential_rate_limits(
+                network_signal=network_signal,
+                access_token=continued,
+                confirmation=False,
+            )
+        except (rate_limits.RateLimited, rate_limits.RateLimitUnavailable) as exc:
+            _record_rate_limit_failure(exc, stage="credential")
+            raise _rate_limit_error(exc) from None
+        return continued
     if access_token is None:
         try:
             rate_limits.enforce_credential_rate_limits(
@@ -696,6 +762,13 @@ def require_public_visit_prep_bearer(
     ) as exc:
         _record_rate_limit_failure(exc, stage="credential")
         raise _rate_limit_error(exc) from None
+    if (
+        continuation_requested
+        and request.method != "GET"
+        and request.url.path
+        not in {f"{_PUBLIC_PREFIX}/confirm", f"{_PUBLIC_PREFIX}/wrong-recipient"}
+    ):
+        raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
     return access_token
 
 
@@ -725,6 +798,11 @@ def _invoke(operation: Callable[[], _ResultT]) -> _ResultT:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_CONFLICT_DETAIL,
+        ) from None
+    except PatientContinuationInvalid:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_TEMPORARY_DETAIL,
         ) from None
     except SQLAlchemyError:
         log.warning(
@@ -766,6 +844,7 @@ def _state_response(state: InterviewState) -> VisitPrepPublicStateResponse:
         current_question=(
             _question_response(question) if question is not None else None
         ),
+        continued_role=state.continued_role,
     )
 
 
@@ -778,17 +857,46 @@ def _mutation_response(
     )
 
 
+def _recipient_name(
+    data: VisitPrepConfirmationRequest,
+    access: str | ConfirmedVisitPrepAccess,
+) -> str:
+    if data.first_name is None:
+        if (
+            isinstance(access, ConfirmedVisitPrepAccess)
+            and access.actor_role == data.role
+        ):
+            return ""
+        raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+    return data.first_name
+
+
 @visit_prep_interviews_api_app.get(
     "",
     name="visit_prep_public_resume",
     response_model=VisitPrepPublicStateResponse,
 )
 def visit_prep_public_resume(
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    request: Request,
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPublicStateResponse:
-    return _state_response(
-        _invoke(lambda: interview_service.get_interview(access_token=access_token))
-    )
+    state = _invoke(lambda: interview_service.get_interview(access_token=access_token))
+    if request.headers.getlist(REQUEST_HEADER) == ["1"] and not isinstance(
+        access_token, ConfirmedVisitPrepAccess
+    ):
+        return VisitPrepPublicStateResponse(
+            status="confirmation_required",
+            physician_display_name=None,
+            practice_display_name=None,
+            scheduled_at=None,
+            timezone_name=None,
+            submitted_questions=0,
+            maximum_questions=5,
+            current_question=None,
+        )
+    return _state_response(state)
 
 
 @visit_prep_interviews_api_app.post(
@@ -797,18 +905,37 @@ def visit_prep_public_resume(
     response_model=VisitPrepPublicMutationResponse,
 )
 def visit_prep_public_confirm(
-    data: VisitPrepConfirmationRequest,
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    request: Request,
+    response: Response,
+    data: VisitPrepInitialConfirmationRequest,
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPublicMutationResponse:
-    return _mutation_response(
-        _invoke(
-            lambda: interview_service.confirm_interview(
-                access_token=access_token,
-                first_name=data.first_name,
-                role=data.role,
-            )
+    if not isinstance(access_token, str):
+        raise HTTPException(status_code=404, detail=_UNAVAILABLE_DETAIL)
+    result = _invoke(
+        lambda: interview_service.confirm_interview(
+            access_token=access_token,
+            first_name=data.first_name,
+            role=data.role,
         )
     )
+    if request.headers.getlist(REQUEST_HEADER) == ["1"]:
+        continuation = result.continuation
+        if continuation is None:
+            raise HTTPException(status_code=503, detail=_TEMPORARY_DETAIL)
+        cookie = _invoke(lambda: seal_confirmation(continuation))
+        response.set_cookie(
+            COOKIE_NAME,
+            cookie,
+            expires=continuation.expires_at,
+            secure=True,
+            httponly=True,
+            samesite="strict",
+            path="/",
+        )
+    return _mutation_response(result)
 
 
 @visit_prep_interviews_api_app.post(
@@ -823,7 +950,9 @@ def visit_prep_public_submit_response(
         str,
         Header(alias="Idempotency-Key"),
     ],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPublicMutationResponse:
     del documented_idempotency_key
     idempotency_headers = request.headers.getlist("idempotency-key")
@@ -853,7 +982,9 @@ def visit_prep_public_submit_response(
     response_model=VisitPrepPublicMutationResponse,
 )
 def visit_prep_public_complete(
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPublicMutationResponse:
     return _mutation_response(
         _invoke(lambda: interview_service.complete_interview(access_token=access_token))
@@ -866,7 +997,9 @@ def visit_prep_public_complete(
     response_model=VisitPrepWrongRecipientResponse,
 )
 def visit_prep_public_wrong_recipient(
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepWrongRecipientResponse:
     _invoke(lambda: interview_service.report_wrong_recipient(access_token=access_token))
     return VisitPrepWrongRecipientResponse(disposition="reported")
@@ -953,11 +1086,15 @@ def _email_consent_invoke(operation: Callable[[], _ResultT]) -> _ResultT:
 )
 def visit_prep_public_read_email_consent(
     data: VisitPrepConfirmationRequest,
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPatientEmailConsentResponse:
     value = _email_consent_invoke(
         lambda: get_patient_email_consent_view(
-            access_token=access_token, first_name=data.first_name, role=data.role
+            access_token=access_token,
+            first_name=_recipient_name(data, access_token),
+            role=data.role,
         )
     )
     return VisitPrepPatientEmailConsentResponse(
@@ -988,13 +1125,15 @@ def visit_prep_public_decide_email_consent(
     documented_idempotency_key: Annotated[
         str, Header(alias="Idempotency-Key", min_length=36, max_length=36)
     ],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPatientEmailConsentDecisionResponse:
     del documented_idempotency_key
     value = _email_consent_invoke(
         lambda: email_consent.record_confirmed_patient_email_consent(
             access_token=access_token,
-            first_name=data.first_name,
+            first_name=_recipient_name(data, access_token),
             decision=email_consent.PatientEmailConsentInput(
                 operation_id=_contribution_key(request),
                 expected_event_sequence=data.expected_event_sequence,
@@ -1024,13 +1163,15 @@ def visit_prep_public_decide_email_consent(
 )
 def visit_prep_public_read_contribution(
     data: VisitPrepConfirmationRequest,
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPatientContributionResponse:
     return _patient_contribution_response(
         _invoke(
             lambda: contributions.get_patient_contribution(
                 access_token=access_token,
-                first_name=data.first_name,
+                first_name=_recipient_name(data, access_token),
                 role=data.role,
             )
         )
@@ -1046,7 +1187,9 @@ def visit_prep_public_correct_contribution(
     request: Request,
     data: VisitPrepContributionChangeRequest,
     documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepContributionReceiptResponse:
     del documented_idempotency_key
     key = _contribution_key(request)
@@ -1054,7 +1197,7 @@ def visit_prep_public_correct_contribution(
         _invoke(
             lambda: contributions.correct_contribution(
                 access_token=access_token,
-                first_name=data.first_name,
+                first_name=_recipient_name(data, access_token),
                 role=data.role,
                 expected_basis=ContributionBasis(
                     data.basis.original_response_count, data.basis.event_sequence
@@ -1077,7 +1220,9 @@ def visit_prep_public_review_contribution(
     request: Request,
     data: VisitPrepContributionReviewRequest,
     documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepContributionReceiptResponse:
     del documented_idempotency_key
     key = _contribution_key(request)
@@ -1085,7 +1230,7 @@ def visit_prep_public_review_contribution(
         _invoke(
             lambda: contributions.review_contribution(
                 access_token=access_token,
-                first_name=data.first_name,
+                first_name=_recipient_name(data, access_token),
                 role=data.role,
                 expected_basis=ContributionBasis(
                     data.basis.original_response_count, data.basis.event_sequence
@@ -1103,12 +1248,14 @@ def visit_prep_public_review_contribution(
 )
 def visit_prep_public_read_clarification(
     data: VisitPrepClarificationReadRequest,
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepClarificationViewResponse:
     view = _invoke(
         lambda: get_patient_clarification_view(
             access_token=access_token,
-            first_name=data.first_name,
+            first_name=_recipient_name(data, access_token),
             role=data.role,
             question_key=data.question_key,
         )
@@ -1140,12 +1287,14 @@ def visit_prep_public_read_clarification(
 )
 def visit_prep_public_read_followup(
     data: VisitPrepClarificationReadRequest,
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepFollowupViewResponse:
     view = _invoke(
         lambda: get_patient_followup_view(
             access_token=access_token,
-            first_name=data.first_name,
+            first_name=_recipient_name(data, access_token),
             role=data.role,
             question_key=data.question_key,
         )
@@ -1179,13 +1328,15 @@ def visit_prep_public_record_clarification_turn(
     request: Request,
     data: VisitPrepClarificationTurnRequest,
     documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepPatientTurnReceiptResponse:
     del documented_idempotency_key
     receipt = _invoke(
         lambda: clarification_turns.record_patient_clarification_turn(
             access_token=access_token,
-            first_name=data.first_name,
+            first_name=_recipient_name(data, access_token),
             role=data.role,
             proposal_id=data.proposal_id,
             operation_id=_contribution_key(request),
@@ -1213,13 +1364,15 @@ def visit_prep_public_decide_clarification(
     request: Request,
     data: VisitPrepClarificationDecisionRequest,
     documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
-    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
 ) -> VisitPrepClarificationReceiptResponse:
     del documented_idempotency_key
     receipt = _invoke(
         lambda: clarification_decisions.record_patient_clarification_decision(
             access_token=access_token,
-            first_name=data.first_name,
+            first_name=_recipient_name(data, access_token),
             role=data.role,
             proposal_id=data.proposal_id,
             operation_id=_contribution_key(request),

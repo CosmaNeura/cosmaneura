@@ -13,7 +13,7 @@ import hmac
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -62,6 +62,7 @@ from app.services.visit_prep_open_evidence import (
     InvitationOpenEvidenceInvalid,
     stage_first_flow_open,
 )
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 from app.services.visit_prep_question_definitions import VisitPrepQuestionSetValidation
 from app.services.visit_prep_question_sets import _definition_from_rows
 from app.services.visit_preps import (
@@ -146,9 +147,12 @@ class _AuthorizedInterview:
     schedule: VisitPrepScheduleGeneration
     credential: VisitPrepCredentialGeneration
     event_at: datetime
+    continued_role: Literal["patient", "caregiver"] | None = None
 
 
-def _canonical_token_hash(access_token: str) -> str:
+def _canonical_token_hash(access_token: str | ConfirmedVisitPrepAccess) -> str:
+    if isinstance(access_token, ConfirmedVisitPrepAccess):
+        return access_token.token_hash
     try:
         return access_token_hash(access_token)
     except VisitPrepCredentialValidation:
@@ -183,7 +187,7 @@ def _credential_locator(session: Session, *, token_hash: str) -> _CredentialLoca
 def _lock_authorized_interview(
     session: Session,
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     allow_wrong_recipient_replay: bool = False,
 ) -> _AuthorizedInterview:
     """Resolve and recheck a bearer using the canonical public lock order."""
@@ -333,11 +337,26 @@ def _lock_authorized_interview(
     ):
         raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
 
+    continued_role = None
+    if isinstance(access_token, ConfirmedVisitPrepAccess):
+        if (
+            visit_prep.confirmed_at != access_token.confirmed_at
+            or visit_prep.confirmed_by_role != access_token.actor_role
+            or visit_prep.lifecycle_state
+            not in {"confirmed", "in_progress", "completed"}
+            or access_token.expires_at != credential.expires_at
+            or access_token.confirmed_at > event_at
+            or access_token.expires_at <= event_at
+        ):
+            raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+        continued_role = access_token.actor_role
+
     return _AuthorizedInterview(
         visit_prep=visit_prep,
         schedule=schedule,
         credential=credential,
         event_at=event_at,
+        continued_role=continued_role,
     )
 
 
@@ -523,6 +542,17 @@ def _interview_state(
     *,
     authorized: _AuthorizedInterview,
 ) -> InterviewState:
+    return replace(
+        _unmarked_interview_state(session, authorized=authorized),
+        continued_role=authorized.continued_role,
+    )
+
+
+def _unmarked_interview_state(
+    session: Session,
+    *,
+    authorized: _AuthorizedInterview,
+) -> InterviewState:
     visit_prep = authorized.visit_prep
     if visit_prep.lifecycle_state == "invited":
         return InterviewState(
@@ -672,7 +702,7 @@ def _commit(session: Session) -> None:
         raise VisitPrepInterviewConflict("Visit Prep state changed") from None
 
 
-def get_interview(*, access_token: str) -> InterviewState:
+def get_interview(*, access_token: str | ConfirmedVisitPrepAccess) -> InterviewState:
     """Resume one currently authorized Visit Prep without returning prior answers."""
 
     with _visit_prep_session() as session:
@@ -693,7 +723,7 @@ def get_interview(*, access_token: str) -> InterviewState:
         # before committing an observation or disclosing the resolved snapshot.
         _lock_authorized_interview(session, access_token=access_token)
         _commit(session)
-        return state
+        return replace(state, continued_role=authorized.continued_role)
 
 
 def _wrong_recipient_actor(token_hash: str) -> str:
@@ -702,7 +732,7 @@ def _wrong_recipient_actor(token_hash: str) -> str:
     return f"visit-prep-recipient-report:{token_hash}"
 
 
-def report_wrong_recipient(*, access_token: str) -> None:
+def report_wrong_recipient(*, access_token: str | ConfirmedVisitPrepAccess) -> None:
     """Stop an invitation; quarantine interacted content without deleting it.
 
     A holder may report misdelivery without passing intended-name confirmation.
@@ -792,13 +822,26 @@ def confirm_interview(
             raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
 
         state = _interview_state(session, authorized=authorized)
+        if visit_prep.confirmed_at is None:
+            raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+        continuation = ConfirmedVisitPrepAccess(
+            token_hash=authorized.credential.token_hash,
+            actor_role=role,
+            confirmed_at=visit_prep.confirmed_at,
+            expires_at=authorized.credential.expires_at,
+        )
+        _lock_authorized_interview(session, access_token=access_token)
         _commit(session)
-        return InterviewMutationResult(interview=state, disposition="confirmed")
+        return InterviewMutationResult(
+            interview=replace(state, continued_role=role),
+            disposition="confirmed",
+            continuation=continuation,
+        )
 
 
 def submit_response(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     idempotency_key: str,
     response: ResponseInput,
 ) -> InterviewMutationResult:
@@ -907,7 +950,9 @@ def submit_response(
         return InterviewMutationResult(interview=state, disposition="accepted")
 
 
-def complete_interview(*, access_token: str) -> InterviewMutationResult:
+def complete_interview(
+    *, access_token: str | ConfirmedVisitPrepAccess
+) -> InterviewMutationResult:
     """Explicitly complete an interview only after all applicable questions."""
 
     with _visit_prep_session() as session:
