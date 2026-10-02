@@ -10,6 +10,8 @@ from app.configuration import visit_prep, visit_prep_acuity
 from app.services.visit_prep_access import resolve_visit_prep_access
 from app.services.visit_prep_acuity import (
     fetch_current_booking,
+    project_current_booking,
+    require_current_booking_source,
     verify_scheduled_notification,
 )
 from app.services.visit_prep_booking import record_current_booking
@@ -79,8 +81,15 @@ async def scheduled_booking(request: Request):
         booking = fetch_current_booking(
             appointment_id=appointment_id, binding=binding, settings=settings
         )
-        return record_current_booking(
+        source, projected = project_current_booking(
             booking=booking, binding=binding, settings=settings
+        )
+        return record_current_booking(
+            booking=projected,
+            source=source,
+            require_current_source=lambda: require_current_booking_source(
+                binding, settings
+            ),
         )
 
     try:

@@ -9,29 +9,36 @@ import base64
 import hashlib
 import hmac
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
+from typing import cast
 from urllib.parse import parse_qsl
 from zoneinfo import ZoneInfo
 
 import httpx
+from typeid import TypeID
 
 from app.configuration import visit_prep_acuity
 from app.configuration.visit_prep_acuity import (
     AcuityBookingSettings,
     AcuityCalendarBinding,
 )
+from app.services.visit_prep_booking_contract import (
+    BookingSourceScope,
+    NormalizedVisitPrepBooking,
+)
+from app.services.visit_prep_booking_contract import (
+    BookingSourceUnavailable as AcuityBookingUnavailable,
+)
 from app.services.visit_prep_command_contract import (
     RecipientInput,
     _normalize_recipient,
     _normalized_schedule,
 )
+from app.utils.encryption import pseudonymous_digest
 
-
-class AcuityBookingUnavailable(ValueError):
-    def __init__(self):
-        super().__init__("Visit Prep booking is unavailable.")
+from activemodel.types import TypeIDType
 
 
 @dataclass(frozen=True, repr=False)
@@ -44,6 +51,78 @@ class CurrentAcuityBooking:
 
     def __repr__(self):
         return "CurrentAcuityBooking(<redacted>)"
+
+
+def require_current_booking_source(
+    binding: AcuityCalendarBinding, settings: AcuityBookingSettings
+) -> None:
+    if (
+        not settings.enabled
+        or settings.connection_id is None
+        or settings != visit_prep_acuity.SETTINGS
+        or binding not in settings.calendars
+    ):
+        raise AcuityBookingUnavailable()
+
+
+def project_current_booking(
+    *,
+    booking: CurrentAcuityBooking,
+    binding: AcuityCalendarBinding,
+    settings: AcuityBookingSettings,
+) -> tuple[BookingSourceScope, NormalizedVisitPrepBooking]:
+    """Keep Acuity identifiers and compatible source hashing inside its adapter."""
+    require_current_booking_source(binding, settings)
+    if booking.calendar_id != binding.calendar_id:
+        raise AcuityBookingUnavailable()
+    assert settings.connection_id is not None
+    source = BookingSourceScope(
+        source="acuity",
+        connection_id=settings.connection_id,
+        practice_id=cast(TypeIDType, TypeID.from_string(binding.practice_id)),
+        owner_practice_member_id=cast(
+            TypeIDType, TypeID.from_string(binding.owner_practice_member_id)
+        ),
+        owner_doctor_id=cast(TypeIDType, TypeID.from_string(binding.owner_doctor_id)),
+        physician_display_name=binding.physician_display_name,
+    )
+    recipient = _normalize_recipient(booking.recipient)
+    scheduled, timezone = _normalized_schedule(
+        booking.scheduled_at,
+        booking.timezone_name,
+        now=datetime.now(UTC),
+        require_future=False,
+    )
+    # Preserve the already-published receipt format; do not re-key old bookings.
+    key = pseudonymous_digest(
+        json.dumps(
+            {
+                "source": source.source,
+                "connection": str(source.connection_id),
+                "appointment": booking.appointment_id,
+            },
+            sort_keys=True,
+        ),
+        context="visit-prep-booking-reference-v1",
+    )
+    snapshot = pseudonymous_digest(
+        json.dumps(
+            {
+                "booking": key,
+                "owner": str(source.owner_practice_member_id),
+                "practice": str(source.practice_id),
+                "calendar": booking.calendar_id,
+                "recipient": asdict(recipient),
+                "scheduled": scheduled.isoformat(),
+                "timezone": timezone,
+            },
+            sort_keys=True,
+        ),
+        context="visit-prep-booking-snapshot-v1",
+    )
+    return source, NormalizedVisitPrepBooking(
+        key, snapshot, booking.recipient, booking.scheduled_at, booking.timezone_name
+    )
 
 
 def verify_scheduled_notification(
