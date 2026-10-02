@@ -1,8 +1,7 @@
 """Acuity boundary: verify bytes, fetch current booking, discard clinical fields.
 
 Native notifications have no unique event version. Never treat their body hash
-as the identity of all future changes. This first increment handles scheduled
-notifications only; changed/rescheduled/canceled require the later lifecycle lane.
+or action as authoritative current state; re-fetch the appointment instead.
 """
 
 import base64
@@ -26,6 +25,7 @@ from app.configuration.visit_prep_acuity import (
 )
 from app.services.visit_prep_booking_contract import (
     BookingSourceScope,
+    CurrentVisitPrepBookingState,
     NormalizedVisitPrepBooking,
 )
 from app.services.visit_prep_booking_contract import (
@@ -53,6 +53,15 @@ class CurrentAcuityBooking:
         return "CurrentAcuityBooking(<redacted>)"
 
 
+@dataclass(frozen=True, repr=False)
+class CurrentAcuityCancellation:
+    appointment_id: int
+    calendar_id: int
+
+    def __repr__(self):
+        return "CurrentAcuityCancellation(<redacted>)"
+
+
 def require_current_booking_source(
     binding: AcuityCalendarBinding, settings: AcuityBookingSettings
 ) -> None:
@@ -72,20 +81,9 @@ def project_current_booking(
     settings: AcuityBookingSettings,
 ) -> tuple[BookingSourceScope, NormalizedVisitPrepBooking]:
     """Keep Acuity identifiers and compatible source hashing inside its adapter."""
-    require_current_booking_source(binding, settings)
     if booking.calendar_id != binding.calendar_id:
         raise AcuityBookingUnavailable()
-    assert settings.connection_id is not None
-    source = BookingSourceScope(
-        source="acuity",
-        connection_id=settings.connection_id,
-        practice_id=cast(TypeIDType, TypeID.from_string(binding.practice_id)),
-        owner_practice_member_id=cast(
-            TypeIDType, TypeID.from_string(binding.owner_practice_member_id)
-        ),
-        owner_doctor_id=cast(TypeIDType, TypeID.from_string(binding.owner_doctor_id)),
-        physician_display_name=binding.physician_display_name,
-    )
+    source, key = _source_reference(booking.appointment_id, binding, settings)
     recipient = _normalize_recipient(booking.recipient)
     scheduled, timezone = _normalized_schedule(
         booking.scheduled_at,
@@ -94,17 +92,6 @@ def project_current_booking(
         require_future=False,
     )
     # Preserve the already-published receipt format; do not re-key old bookings.
-    key = pseudonymous_digest(
-        json.dumps(
-            {
-                "source": source.source,
-                "connection": str(source.connection_id),
-                "appointment": booking.appointment_id,
-            },
-            sort_keys=True,
-        ),
-        context="visit-prep-booking-reference-v1",
-    )
     snapshot = pseudonymous_digest(
         json.dumps(
             {
@@ -125,8 +112,80 @@ def project_current_booking(
     )
 
 
+def _source_reference(
+    appointment_id: int, binding: AcuityCalendarBinding, settings: AcuityBookingSettings
+) -> tuple[BookingSourceScope, str]:
+    require_current_booking_source(binding, settings)
+    assert settings.connection_id is not None
+    source = BookingSourceScope(
+        source="acuity",
+        connection_id=settings.connection_id,
+        practice_id=cast(TypeIDType, TypeID.from_string(binding.practice_id)),
+        owner_practice_member_id=cast(
+            TypeIDType, TypeID.from_string(binding.owner_practice_member_id)
+        ),
+        owner_doctor_id=cast(TypeIDType, TypeID.from_string(binding.owner_doctor_id)),
+        physician_display_name=binding.physician_display_name,
+    )
+    key = pseudonymous_digest(
+        json.dumps(
+            {
+                "source": source.source,
+                "connection": str(source.connection_id),
+                "appointment": appointment_id,
+            },
+            sort_keys=True,
+        ),
+        context="visit-prep-booking-reference-v1",
+    )
+    return source, key
+
+
+def project_current_booking_state(
+    *,
+    booking: CurrentAcuityBooking | CurrentAcuityCancellation,
+    binding: AcuityCalendarBinding,
+    settings: AcuityBookingSettings,
+    observed_at: datetime,
+) -> tuple[BookingSourceScope, CurrentVisitPrepBookingState]:
+    if isinstance(booking, CurrentAcuityBooking):
+        source, active = project_current_booking(
+            booking=booking, binding=binding, settings=settings
+        )
+        return source, CurrentVisitPrepBookingState(
+            active.booking_digest, active.source_snapshot_hmac, observed_at, active
+        )
+    if booking.calendar_id != binding.calendar_id:
+        raise AcuityBookingUnavailable()
+    source, key = _source_reference(booking.appointment_id, binding, settings)
+    snapshot = pseudonymous_digest(
+        json.dumps(
+            {
+                "booking": key,
+                "owner": str(source.owner_practice_member_id),
+                "practice": str(source.practice_id),
+                "calendar": binding.calendar_id,
+                "canceled": True,
+            },
+            sort_keys=True,
+        ),
+        context="visit-prep-booking-snapshot-v1",
+    )
+    return source, CurrentVisitPrepBookingState(key, snapshot, observed_at, None)
+
+
 def verify_scheduled_notification(
     body: bytes, signature: str, settings: AcuityBookingSettings
+):
+    return verify_booking_notification(body, signature, settings, scheduled_only=True)
+
+
+def verify_booking_notification(
+    body: bytes,
+    signature: str,
+    settings: AcuityBookingSettings,
+    *,
+    scheduled_only: bool = False,
 ):
     if (
         not settings.enabled
@@ -156,7 +215,12 @@ def verify_scheduled_notification(
         if (
             len(fields) != len(pairs)
             or set(fields) != {"action", "id", "calendarID", "appointmentTypeID"}
-            or fields["action"] != "scheduled"
+            or fields["action"]
+            not in (
+                {"scheduled"}
+                if scheduled_only
+                else {"changed", "rescheduled", "canceled"}
+            )
         ):
             raise ValueError
         numbers = []
@@ -190,6 +254,20 @@ def fetch_current_booking(
     binding: AcuityCalendarBinding,
     settings: AcuityBookingSettings,
 ) -> CurrentAcuityBooking:
+    booking = fetch_current_booking_state(
+        appointment_id=appointment_id, binding=binding, settings=settings
+    )
+    if not isinstance(booking, CurrentAcuityBooking):
+        raise AcuityBookingUnavailable()
+    return booking
+
+
+def fetch_current_booking_state(
+    *,
+    appointment_id: int,
+    binding: AcuityCalendarBinding,
+    settings: AcuityBookingSettings,
+) -> CurrentAcuityBooking | CurrentAcuityCancellation:
     # Fixed origin/path, no redirects, SDK logging, caller URL, transport retry,
     # forms history, patient chart lookup or raw exception propagation.
     try:
@@ -231,8 +309,12 @@ def fetch_current_booking(
             or value["calendarID"] != binding.calendar_id
         ):
             raise ValueError
-        if value.get("canceled", False) is not False:
+        canceled = value.get("canceled", False)
+        if type(canceled) is not bool:
             raise ValueError
+        if canceled:
+            # An identity-only tombstone is enough; never require or copy PHI.
+            return CurrentAcuityCancellation(appointment_id, binding.calendar_id)
         scheduled = datetime.fromisoformat(value["datetime"])
         scheduled, timezone = _normalized_schedule(
             scheduled,

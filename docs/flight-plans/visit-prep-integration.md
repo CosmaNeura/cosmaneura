@@ -520,6 +520,34 @@ Existing preparation, booking and patient records are not rewritten or backfille
 Recovery retains the additive schema and evidence and uses a forward fix. This
 storage rung alone activates no notification, message or scheduling source.
 
+### Current booking change handler
+
+The signed `/external/v1/visit-prep/acuity/changed` lane now accepts Acuity's
+changed, rescheduled and canceled notifications. It fetches the current appointment
+rather than treating the action or request hash as current state. A database-time
+observation taken before provider I/O rejects a late response behind a newer
+committed change; Acuity must retry and re-fetch. Current snapshots are compared
+with the latest retained event, so duplicate delivery is a replay and a genuine
+return to an earlier schedule remains a new change.
+
+An eligible reschedule uses the existing schedule and credential rotation and
+updates the dashboard's current timing. Current cancellation accepts an
+identity-only tombstone and revokes access. A changed recipient revokes the original
+preparation without transferring its answers or changing its contact snapshot.
+Each applied change and its event commit together, with current source and provider
+authority checked after writes. No bearer is returned and no message is queued.
+Synthetic checks preserve an in-progress patient's original encrypted answer and
+initial confirmation, and cover current-state action mismatch, replay, late source
+responses, malformed sources and rollback. Exact evidence belongs in the draft PR.
+
+This does not complete booking automation. Completed or expired interview
+reschedules, continuity across rotated links, replacement invitation recovery,
+changed-recipient recovery and calendar reassignment remain open. An unknown
+cancellation is a no-op; durable unknown-booking cancellation ordering still needs
+implementation. The existing scheduled-only endpoint is retained. No source,
+release or channel control is activated; recovery disables the source and reverts
+the additive handler while retaining booking events and schemas.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
