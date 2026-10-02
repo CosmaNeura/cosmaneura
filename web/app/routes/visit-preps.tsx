@@ -33,6 +33,7 @@ export default function VisitPrepsPage() {
           <VisitPrepCreator
             access={access}
             physicianDisplayName={user?.fullName ?? ""}
+            scopeKey={user?.id ?? ""}
           />
           <VisitPrepPackages access={access} scopeKey={user?.id ?? ""} />
           <VisitPrepEmailPolicy access={access} scopeKey={user?.id ?? ""} />

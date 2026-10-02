@@ -35,7 +35,7 @@ def test_status_http_has_closed_contract_no_private_content_and_no_channel_gate(
         value["contract"] == "visit_prep.email_status.v1"
         and value["status"] == "queued"
     )
-    assert value["dispatch_integration"] == "not_connected"
+    assert value["dispatch_integration"] == "default_off_worker"
     assert set(value) == {
         "contract",
         "preparation_id",

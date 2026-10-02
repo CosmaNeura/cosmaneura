@@ -105,7 +105,7 @@ class VisitPrepEmailStatusResponse(_StrictModel):
     submitted_at: datetime | None
     finalized_at: datetime | None
     checked_at: datetime
-    dispatch_integration: Literal["not_connected"] = "not_connected"
+    dispatch_integration: Literal["default_off_worker"] = "default_off_worker"
 
 
 visit_prep_packages_api_app = APIRouter(

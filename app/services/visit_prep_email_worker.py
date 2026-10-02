@@ -2,8 +2,8 @@
 
 Commit the irreversible claim before calling a transport. Reacquire current
 authority and hold its fences through the bounded submission. A crash or lost
-acknowledgment never reopens the send lane. No job/route is registered and no
-transport or qualified consent-source adapter is selected by default.
+acknowledgment never reopens the send lane. The scheduled job and provider route
+remain default off; the job selects Core SMTP only after source qualification.
 The standard entrypoints resolve centrally managed practice timing and fence its
 version through dispatch. Explicit-policy domain calls remain compatible for
 isolated tests. Neither path is a scheduler or new sending authorization.

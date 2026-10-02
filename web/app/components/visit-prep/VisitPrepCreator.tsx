@@ -19,6 +19,8 @@ import {
 import { toast } from "~/hooks/use-toast"
 import { visitPrepScheduleFromLocal } from "~/lib/visit-prep-schedule"
 
+import { VisitPrepEmailInvitation } from "./VisitPrepEmailInvitation"
+
 type RecipientRole = "patient" | "caregiver"
 type RevokeReason =
   | "physician_revoked"
@@ -252,9 +254,11 @@ function CreatorUnavailable({
 export function VisitPrepCreator({
   access,
   physicianDisplayName = "",
+  scopeKey = "",
 }: {
   access: VisitPrepSettingsData
   physicianDisplayName?: string
+  scopeKey?: string
 }) {
   const [form, setForm] = useState(() => initialForm(physicianDisplayName))
   const [versions, setVersions] = useState<
@@ -268,6 +272,7 @@ export function VisitPrepCreator({
     useState<VisitPrepCommandStateResponse | null>(null)
   const [linkAvailable, setLinkAvailable] = useState(false)
   const [linkWasCopied, setLinkWasCopied] = useState(false)
+  const [linkHandedOff, setLinkHandedOff] = useState(false)
   const [revoked, setRevoked] = useState(false)
   const [revokeReason, setRevokeReason] =
     useState<RevokeReason>("physician_revoked")
@@ -278,31 +283,25 @@ export function VisitPrepCreator({
 
   useEffect(() => {
     operationEpochRef.current += 1
+    accessUrlRef.current = null
+    idempotencyKeyRef.current = null
+    setLinkAvailable(false)
+    setLinkWasCopied(false)
+    setLinkHandedOff(false)
+    setCreatedPrep(null)
+    setBusyAction(null)
+    setActionError(null)
+    setForm(initialForm(physicianDisplayName))
     if (!access.eligible || !access.can_manage) {
-      accessUrlRef.current = null
-      idempotencyKeyRef.current = null
-      setLinkAvailable(false)
-      setLinkWasCopied(false)
-      setCreatedPrep(null)
-      setBusyAction(null)
-      setActionError(null)
       setVersions([])
       setRevokeReason("physician_revoked")
-      setForm((current) => ({
-        ...current,
-        firstName: "",
-        email: "",
-        phone: "",
-        scheduledLocal: "",
-        questionSetVersionId: "",
-      }))
     }
     return () => {
       operationEpochRef.current += 1
       accessUrlRef.current = null
       idempotencyKeyRef.current = null
     }
-  }, [access.can_manage, access.eligible])
+  }, [access.can_manage, access.eligible, scopeKey])
 
   useEffect(() => {
     if (!physicianDisplayName) return
@@ -351,7 +350,7 @@ export function VisitPrepCreator({
       active = false
       accessUrlRef.current = null
     }
-  }, [access.can_manage, access.eligible])
+  }, [access.can_manage, access.eligible, scopeKey])
 
   function updateForm<Key extends keyof FormState>(
     key: Key,
@@ -393,6 +392,7 @@ export function VisitPrepCreator({
       accessUrlRef.current = accessUrl
       setLinkAvailable(accessUrl !== null)
       setLinkWasCopied(false)
+      setLinkHandedOff(false)
       setCreatedPrep(data.visit_prep)
       setRevoked(!data.visit_prep.credential_active)
       setForm((current) => ({
@@ -491,6 +491,7 @@ export function VisitPrepCreator({
       accessUrlRef.current = accessUrl
       setLinkAvailable(true)
       setLinkWasCopied(false)
+      setLinkHandedOff(false)
       toast({ title: "Replacement Visit Prep link ready" })
     } catch {
       if (operationEpoch === operationEpochRef.current) {
@@ -565,8 +566,8 @@ export function VisitPrepCreator({
         <p className="text-muted-foreground max-w-2xl text-sm">
           Prepare five physician-owned topics, including the patient's
           open-ended story. Patient capture is available for local synthetic
-          testing only; messaging is not enabled. Do not send these links to
-          patients.
+          testing only; live messaging is not enabled. Do not send these links
+          to patients.
         </p>
       </div>
 
@@ -635,9 +636,11 @@ export function VisitPrepCreator({
               ) : (
                 <div className="space-y-2">
                   <p className="text-muted-foreground text-sm">
-                    {linkWasCopied
-                      ? "The link was copied and is no longer held in this tab. Create a replacement only if you need to invalidate it."
-                      : "The one-time link is not available in this tab. Create a replacement to invalidate the prior link."}
+                    {linkHandedOff
+                      ? "Core holds the invitation handoff; this tab no longer holds the private link. Check email status below. Replacing the link invalidates the queued or sent invitation; it is not a delivery retry."
+                      : linkWasCopied
+                        ? "The link was copied and is no longer held in this tab. Create a replacement only if you need to invalidate it."
+                        : "The one-time link is not available in this tab. Create a replacement to invalidate the prior link."}
                   </p>
                   <Button
                     type="button"
@@ -683,12 +686,29 @@ export function VisitPrepCreator({
             </>
           ) : null}
 
-          <Button type="button" variant="outline" disabled>
-            Send unavailable
-          </Button>
+          {!revoked &&
+          import.meta.env.VITE_VISIT_PREP_EMAIL_WORKFLOW_ENABLED === "true" &&
+          access.can_send_email ? (
+            <VisitPrepEmailInvitation
+              key={`${scopeKey}:${createdPrep.id}:${createdPrep.credential_generation}`}
+              preparation={createdPrep}
+              access={access}
+              scopeKey={scopeKey}
+              getAccessUrl={() => accessUrlRef.current}
+              onQueued={() => {
+                accessUrlRef.current = null
+                setLinkAvailable(false)
+                setLinkHandedOff(true)
+              }}
+            />
+          ) : (
+            <Button type="button" variant="outline" disabled>
+              Send unavailable
+            </Button>
+          )}
           <p className="text-muted-foreground text-xs">
-            For this dark-release layer, these controls remain available only in
-            this tab. Visit Prep history arrives with the dashboard layer.
+            These controls manage this preparation in the current tab. Open
+            dashboard history for other preparations and their current status.
           </p>
         </div>
       ) : (

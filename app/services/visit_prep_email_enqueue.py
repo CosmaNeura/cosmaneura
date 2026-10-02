@@ -3,7 +3,8 @@
 The owner command and future creation/booking transaction use the same locked
 helper. Qualified consent-source verification is required for new work and is
 absent by default. Replaying an old receipt does not refresh evidence, restore
-the secret, or enqueue another submission. No route or worker is registered.
+the secret, or enqueue another submission. The explicit provider route and
+scheduled worker are separately registered and default off; booking is not wired.
 """
 
 from __future__ import annotations

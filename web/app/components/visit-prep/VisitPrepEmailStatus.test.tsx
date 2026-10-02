@@ -33,7 +33,7 @@ const base = {
   submitted_at: null,
   finalized_at: null,
   checked_at: "2026-10-01T12:01:00Z",
-  dispatch_integration: "not_connected",
+  dispatch_integration: "default_off_worker",
 }
 function value(status: string) {
   if (status === "not_requested")
