@@ -454,27 +454,28 @@ notifications provide no unique version for all future changes. Reschedule,
 cancellation, reassignment and changed-contact handling still need an authoritative
 lifecycle lane; invitation recovery, initial consent, ingress operational limits,
 and actual source/service qualification remain activation gates. This branch is
-stacked on the completed email workflow. Current `master` was fetched at
-`49895cb66a305558393a0862a590ee313b60c194`. Its newer CAB changes overlap application
-registration and add a separate migration branch. Reconciliation is still pending
-and must preserve both features and restore a single migration head, with affected
-checks, before the stack is ready.
+stacked on the completed email workflow. The synchronization increments below
+retain the subsequent Core/CAB history through fetched `master`
+`49895cb66a305558393a0862a590ee313b60c194`, including its separate migration branch.
 No merge, deployment, live patient data or real message is part of this increment.
 
 ## Current Core synchronization October 2 2026
 
-The first two synchronization increments preserve the already-merged Core billing
-source and billing-button histories alongside Visit Prep. Generated no-op merge
-revision `e47551a9d77e` joins the booking and billing-source heads without changing
-either published parent. The combined application applies the real graph in owned
-synthetic PostgreSQL. Existing Visit Prep booking, email and provider checks pass;
-the CAB button and Visit Prep dashboard coexist in local component checks.
+Six bounded, stacked synchronization increments preserve the already-merged Core
+billing source, button, CAB bridge, display contract, inline panel and runtime
+wiring alongside Visit Prep. They retain Git ancestry through fetched `master`
+`49895cb66a305558393a0862a590ee313b60c194`; no shared history is rewritten.
+Generated no-op merge revisions `e47551a9d77e` and `c3aa7a31f3ae` join both published
+migration branches without changing their parents. The latter is the single head.
+The real graph and affected routes run in owned synthetic PostgreSQL; populated
+expansion checks preserve both Visit Prep and CAB evidence. CAB and Visit Prep
+provider components coexist, and the locally regenerated browser client typechecks.
 
 The browser client is generated locally from the actual combined internal schema,
 not Core's older snapshot that omits Visit Prep. Publishing the reconciled schema
-snapshot remains a follow-up. Additional CAB changes through fetched `master`
-`49895cb66a305558393a0862a590ee313b60c194` still need assimilation, including the next
-migration branch. Exact commits and validation are recorded in the stacked drafts.
+snapshot remains a follow-up. Runtime configuration tests use fake vault and cloud
+commands; neither environment template nor deployment script was run against a
+service. Exact commits and scoped validation are recorded in the stacked drafts.
 No feature activation or default-branch merge follows from this synchronization.
 Retain additive schemas and evidence on recovery; use forward fixes, not drops.
 
