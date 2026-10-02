@@ -1395,3 +1395,46 @@ backfill is a rollback. Durable scheduling/dispatch, qualified prior consent,
 SMS/STOP, Acuity, session continuation, Sovereign/CosmaBot, cleanup, monitoring and
 clinical/operational qualification remain full-goal requirements. All controls
 stay off and no external message is sent.
+
+## Current cadence evidence and timed email handoff
+
+The new Core planner loads the current owner, preparation, schedule and
+credential under the established transaction locks. It reads actual first-party
+flow evidence and all retained email intent metadata, including older pending,
+accepted and uncertain submissions. It checks canonical appointment/patient
+links when present and supports an unlinked preparation without inventing a
+chart. The history query selects no private envelopes; no contact, answer,
+bearer or consent is decrypted by the planner. Missing lineage, a mismatched
+schedule or excessive history denies planning rather than hiding records.
+
+The timed email command connects that plan to the existing atomic outbox
+handoff in the same transaction. Quiet hours and spacing return a wait without
+creating an intent. New due work still requires the existing qualified consent
+source, current scope and channel controls. Original exact-key replay checks
+remain in force after rotation, revocation, quiet-hour changes or a lost commit
+acknowledgment. Encryption and audit persistence can cross a time boundary, so
+new work receives a final database-clock cadence check before commit; a failed
+check rolls back the intent and its audit. No recurring job or route is added.
+
+This connection reuses Core's existing authority, lineage, email outbox and
+handoff code, together with the already-adapted CAB timing rules. No new
+cross-repository copy, dependency, patient-record schema, security/session
+change, provider adapter, environment setting or release control is introduced.
+The planner returns timing advice, not transferable permission. SMS history is
+explicitly unavailable because no authoritative SMS outbox exists yet; the
+email table cannot establish that no SMS was submitted.
+
+Owned synthetic checks cover the actual lifecycle, all six email states,
+rotation/rescheduling, prior submission spacing and uncertainty, quiet-hour
+waits, exact replay, competing handoffs, lost commit acknowledgment, rollback,
+canonical schedule mismatch and real BAA/worker lock waits. Time-dependent
+authority is rechecked after evidence reads. Bounded malformed-history and
+quiet-boundary diagnostics supplement real database tests; they are not proof
+of operational storage repair or real-provider qualification. Revision-specific
+commands, results and implementer review belong in the stacked draft PR.
+
+The full goal still requires durable scheduler/dispatch timing, booking-event
+integration, qualified prior consent, SMS/STOP and reminder storage, callbacks,
+monitoring, cleanup, session continuation, Sovereign/CosmaBot integration and
+clinical/operational qualification. All runtime controls remain off. No merge,
+deployment, patient message or workspace retirement occurs.
