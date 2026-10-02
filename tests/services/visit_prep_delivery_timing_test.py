@@ -157,6 +157,19 @@ def test_quiet_hours_are_real_instants_never_before_due_or_now(
     assert result >= max(instant(due), instant(now))
 
 
+def test_flow_review_after_completion_never_restarts_delivery():
+    completed = snapshot(
+        lifecycle_state="completed",
+        completed_at=BOOKED,
+        first_party_open_state="opened",
+        opened_at=BOOKED + timedelta(minutes=1),
+    )
+    assert {
+        d.reason
+        for d in plan(prep=completed, now=BOOKED + timedelta(minutes=2)).values()
+    } == {"completed"}
+
+
 def test_second_fold_inside_quiet_selects_second_end_not_past_first_end():
     current = instant("2026-11-01T01:30-05:00")
     result = next_outside_quiet_hours(

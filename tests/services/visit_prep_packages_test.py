@@ -62,7 +62,8 @@ def test_package_is_a_stable_unlinked_patient_source_and_audited(monkeypatch):
     with get_session() as session:
         audits = session.exec(
             select(AuthorityAuditEvent).where(
-                AuthorityAuditEvent.resource_ref == str(fixture.prep_id)
+                AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                AuthorityAuditEvent.event_type == "visit_prep.package_read",
             )
         ).all()
     assert len(audits) == 2
@@ -207,7 +208,8 @@ def test_current_authority_and_quarantine_deny_before_disclosure(monkeypatch, de
     with get_session() as session:
         assert not session.exec(
             select(AuthorityAuditEvent).where(
-                AuthorityAuditEvent.resource_ref == str(fixture.prep_id)
+                AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                AuthorityAuditEvent.event_type == "visit_prep.package_read",
             )
         ).all()
 

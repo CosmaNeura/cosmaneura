@@ -15,6 +15,7 @@ from app.services.visit_preps import rotate_visit_prep_credential
 from app.utils.encryption import decrypt_value
 
 from activemodel.session_manager import get_session
+from app.models.authority import AuthorityAuditEvent
 from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_response import VisitPrepQuestionResponse
 from sqlmodel import select
@@ -37,6 +38,15 @@ def test_patient_http_journey_uses_real_domain_sessions_and_rate_limits(
     assert invited.status_code == 200
     assert invited.json()["status"] == "confirmation_required"
     assert invited.json()["physician_display_name"] is None
+    with get_session() as session:
+        open_audits = session.exec(
+            select(AuthorityAuditEvent).where(
+                AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                AuthorityAuditEvent.event_type == "visit_prep.invitation_flow_opened",
+            )
+        ).all()
+        assert len(open_audits) == 1
+        assert open_audits[0].actor_id is open_audits[0].person_id is None
     confirmed = client.post(
         "/external/v1/visit-prep/confirm",
         headers=headers,
@@ -114,6 +124,19 @@ def test_patient_http_journey_uses_real_domain_sessions_and_rate_limits(
     assert "My original synthetic story, in my own words." in decrypt_value(
         story.answer_ciphertext
     )
+    with get_session() as session:
+        assert (
+            len(
+                session.exec(
+                    select(AuthorityAuditEvent).where(
+                        AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                        AuthorityAuditEvent.event_type
+                        == "visit_prep.invitation_flow_opened",
+                    )
+                ).all()
+            )
+            == 1
+        )
 
 
 @pytest.mark.parametrize("confirmed", [False, True])

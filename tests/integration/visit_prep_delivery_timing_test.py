@@ -18,6 +18,7 @@ from app.services.visit_prep_interviews import (
     get_interview,
     submit_response,
 )
+from app.services.visit_prep_open_evidence import read_invitation_open_evidence
 from app.services.visit_preps import (
     reschedule_visit_prep,
     revoke_visit_prep,
@@ -31,6 +32,7 @@ from app.models.visit_prep import (
     VisitPrepCredentialGeneration,
     VisitPrepScheduleGeneration,
 )
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from tests.services.visit_prep_interviews_test import _fixture
@@ -40,7 +42,9 @@ def _snapshot(fixture):
     # Independent connection: do not infer current lifecycle from a previously
     # returned command receipt or a cached ORM object. Never decrypt contacts.
     with Session(SessionManager.get_instance().get_engine()) as session:
-        root = session.get(VisitPrep, fixture.prep_id)
+        root = session.exec(
+            select(VisitPrep).where(VisitPrep.id == fixture.prep_id).with_for_update()
+        ).one()
         assert root is not None
         schedules = session.exec(
             select(VisitPrepScheduleGeneration).where(
@@ -55,6 +59,9 @@ def _snapshot(fixture):
         schedule = max(schedules, key=lambda row: row.generation)
         credential = max(credentials, key=lambda row: row.generation)
         assert credential.schedule_generation_id == schedule.id
+        open_evidence = read_invitation_open_evidence(
+            session, prep=root, at=session.exec(select(func.clock_timestamp())).one()
+        )
         return TimingSnapshot(
             booked_at=credential.issued_at,
             scheduled_at=schedule.scheduled_at,
@@ -68,9 +75,8 @@ def _snapshot(fixture):
                 ],
                 root.lifecycle_state,
             ),
-            # Core currently records confirmation, NOT every first-party open.
-            # Neither get_interview nor a missing confirmation proves unopened.
-            first_party_open_state="unknown",
+            first_party_open_state=open_evidence.state,
+            opened_at=open_evidence.opened_at,
             completed_at=root.completed_at,
             revoked=root.revoked_at is not None or credential.revoked_at is not None,
         )
@@ -107,15 +113,17 @@ def _command(fixture, generation=1) -> _Command:
 
 
 @pytest.mark.parametrize("role", ["patient", "caregiver"])
-def test_real_create_read_confirm_complete_never_invents_unopened_evidence(
-    monkeypatch, role
-):
+def test_real_create_read_confirm_complete_observes_first_party_flow(monkeypatch, role):
     fixture = _fixture(monkeypatch, "timing-lifecycle", recipient_role=role)
     before = _snapshot(fixture)
     assert before.lifecycle_state == "invited"
-    assert _plan(fixture)["unopened_48h_sms"].reason == "open_evidence_unknown"
+    assert before.first_party_open_state == "unopened"
     get_interview(access_token=fixture.access_token)
-    assert _snapshot(fixture) == before
+    opened = _snapshot(fixture)
+    assert opened.first_party_open_state == "opened"
+    assert opened.lifecycle_state == "invited"
+    assert opened.opened_at is not None
+    assert _plan(fixture)["unopened_48h_sms"].reason == "already_opened"
     confirm_interview(access_token=fixture.access_token, first_name="José", role=role)
     assert _snapshot(fixture).lifecycle_state == "confirmed"
     assert _plan(fixture)["unopened_48h_sms"].reason == "already_opened"
