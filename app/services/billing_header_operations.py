@@ -155,7 +155,10 @@ def _admission(scope, actor):
 
 
 def _receipt(row, source, *, replayed):
+    from app.services.cab_bridge_client import configured
+
     return BillingHeaderOperation(
+        transport={"state": "configured" if configured() else "not_configured"},
         operationId=str(row.operation_id),
         sourceRevision=row.source_revision,
         source=source,
