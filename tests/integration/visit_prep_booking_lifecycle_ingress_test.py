@@ -161,7 +161,7 @@ def test_contact_change_revokes_original_without_reassigning_content(
     assert len(events) == 1 and events[0].action == "recipient_changed"
 
 
-def test_catchall_initial_booking_creates_once_and_unknown_cancellation_is_noop(
+def test_catchall_initial_booking_creates_once_after_retaining_unknown_cancellation(
     monkeypatch,
 ):
     scope, _, settings, response, _, client = _ready(monkeypatch)

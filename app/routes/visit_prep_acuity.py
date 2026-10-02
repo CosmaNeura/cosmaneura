@@ -97,11 +97,11 @@ async def _handle_booking(request: Request, *, lifecycle: bool):
             ).can_manage
         ):
             raise ValueError
+        # Capture database time before either source fetch. A prior unmatched
+        # cancellation must also fence a delayed scheduled-only response.
+        with _visit_prep_session() as session:
+            observed_at = _database_now(session)
         if lifecycle:
-            # Short read-only transaction ends before network I/O. Its DB clock
-            # fences a late response behind any newer committed reconciliation.
-            with _visit_prep_session() as session:
-                observed_at = _database_now(session)
             current = fetch_current_booking_state(
                 appointment_id=appointment_id, binding=binding, settings=settings
             )
@@ -127,6 +127,7 @@ async def _handle_booking(request: Request, *, lifecycle: bool):
         return record_current_booking(
             booking=projected,
             source=source,
+            observed_at=observed_at,
             require_current_source=lambda: require_current_booking_source(
                 binding, settings
             ),

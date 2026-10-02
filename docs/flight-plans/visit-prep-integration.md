@@ -542,9 +542,9 @@ responses, malformed sources and rollback. Exact evidence belongs in the draft P
 
 This does not complete booking automation. Returning-patient continuity for
 unchanged-recipient reschedules is implemented below; replacement invitation
-recovery, changed-recipient recovery and calendar reassignment remain open. An unknown
-cancellation is a no-op; durable unknown-booking cancellation ordering still needs
-implementation. The existing scheduled-only endpoint is retained. No source,
+recovery, changed-recipient recovery and calendar reassignment remain open.
+Unknown-booking cancellation ordering is implemented below. The existing
+scheduled-only endpoint is retained. No source,
 release or channel control is activated; recovery disables the source and reverts
 the additive handler while retaining booking events and schemas.
 
@@ -610,6 +610,37 @@ not grant outreach consent or queue a message. Recovery reverts this additive
 application change while retaining the existing credentials and evidence.
 Release controls remain off; no service account, environment configuration,
 live model, patient message, deployment or retirement is changed.
+
+### Cancellation before preparation creation
+
+An authenticated current booking cancellation is now retained even when no
+preparation exists yet. Both the scheduled-only creator and current-change
+creator capture database time before fetching the source and check the latest
+unmatched cancellation under the current practice and owner locks. A delayed
+active response cannot create an invitation after a newer cancellation; the
+source must be fetched again. A genuinely fresh restored appointment can create
+one preparation, so the cancellation is not a permanent ban on that booking.
+
+Repeated current cancellation observations append a new fence rather than
+reusing an older timestamp. Evidence contains only the connection, pseudonymous
+booking and snapshot digests, owner scope, sequence and observation times. It
+contains no patient name, contact, answers, invitation bearer or chart link.
+Once a preparation exists, its existing booking-event and revocation lane remains
+authoritative. A source or authority failure rolls back the new evidence.
+
+Generated expansion `0b78b19b8d6e`, following `3a7854eb39e0`, adds only this
+append-only evidence table and its own guard. The populated predecessor rehearsal
+preserves retained patient, package, booking and audit rows plus existing guard
+definitions. Signed synthetic checks cover delayed responses through both entry
+points, repeated cancellation, fresh restoration, scope separation, immutability
+and rollback. Exact final results and reviewed commit belong in the draft PR.
+
+Recovery retains the evidence and expansion, disables the booking source, and
+uses a forward fix for schema faults. Reverting to an older creator removes this
+ordering protection, so the source must stay disabled during such a rollback.
+Evidence cleanup must be qualified before operational activation. This increment
+does not provide messaging consent, replacement invitations, SMS or reminders.
+No account, environment control, live source, message or deployment is changed.
 
 ## Source references
 
