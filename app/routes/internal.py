@@ -208,6 +208,7 @@ from .view_as import view_as_api_app
 from .visit_prep import visit_prep_api_app
 from .visit_prep_email_invitation import visit_prep_email_invitation_api_app
 from .visit_prep_email_policy import visit_prep_email_policy_api_app
+from .visit_prep_sms_policy import visit_prep_sms_policy_api_app
 from .visit_prep_packages import visit_prep_packages_api_app
 from .visit_prep_preparations import visit_prep_preparations_api_app
 from .visit_prep_synthesis import visit_prep_synthesis_api_app
@@ -256,6 +257,7 @@ internal_api_app.include_router(visit_prep_preparations_api_app)
 internal_api_app.include_router(visit_prep_packages_api_app)
 internal_api_app.include_router(visit_prep_synthesis_api_app)
 internal_api_app.include_router(visit_prep_email_policy_api_app)
+internal_api_app.include_router(visit_prep_sms_policy_api_app)
 internal_api_app.include_router(visit_prep_email_invitation_api_app)
 
 

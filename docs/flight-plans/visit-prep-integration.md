@@ -824,6 +824,34 @@ application code and use a forward schema fix. Approval-evidence retention and
 legal-hold cleanup must be qualified before activation. No live service, message,
 model, environment or deployment is changed.
 
+### Physician SMS policy API
+
+The authenticated owner API now reads the fixed SMS policy and records approval
+or withdrawal through the durable decision service. The three previews come from
+the actual templates, replacing the invitation with a non-working private-link
+placeholder. It selects no patient or contact. Central timing remains read-only;
+unset sender routing or timing is explicit and supplies no dispatch authority.
+
+The decision contains an expected sender digest as a review binding, not an
+authorization claim. The locked service compares fresh approvals with current
+routing, while withdrawals and exact retries bind the original retained decision.
+A stale tab cannot approve a replacement sender. Both operations require current
+Core owner authority, deny support view-as, reject extra fields and queries, bound
+request bytes and return no-store, no-referrer responses with fixed errors. A read
+and its content-free audit commit together; an unavailable read reveals no snapshot.
+
+Final local qualification passed 97 backend, authority, registration and contract
+checks. The actual internal OpenAPI export adds only the SMS policy path and four
+closed schemas; existing paths and schemas are semantically unchanged. The cached
+frontend generator consumed that export and full frontend typecheck passed.
+Changed production Python passed lint, formatting and typecheck. These checks use
+invented owners and isolated PostgreSQL, not live identity or messaging services.
+Dashboard decision controls are a separate consumer increment. Real transport,
+source qualification, initial-contact permission, automation and operational
+acceptance remain required. No schema or release control changes in this API step.
+Recovery reverts its additive route, registration and display service while
+retaining policy evidence and the existing expansion. No send is enabled.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
