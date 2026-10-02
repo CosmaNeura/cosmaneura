@@ -14,7 +14,8 @@ from tests.services.visit_preps_test import _create, _scope
 
 
 @pytest.mark.skipif(
-    os.environ.get("VISIT_PREP_MIGRATION_TARGET") != "b3f91f1acb40",
+    os.environ.get("VISIT_PREP_MIGRATION_TARGET")
+    not in {"b3f91f1acb40", "e47551a9d77e"},
     reason="Owned populated Visit Prep predecessor rehearsal only",
 )
 def test_populated_billing_merge_preserves_both_branches(monkeypatch):
@@ -40,7 +41,8 @@ def test_populated_billing_merge_preserves_both_branches(monkeypatch):
 
     before = snapshot(tables)
     cfg = Config("alembic.ini")
-    command.upgrade(cfg, "f5efcbb27acd")
+    bridge_expand = os.environ.get("VISIT_PREP_MIGRATION_TARGET") == "e47551a9d77e"
+    command.upgrade(cfg, "211aefdf709b" if bridge_expand else "f5efcbb27acd")
     # Populate the real upstream billing operation using its existing fixture.
     from app.services.billing_header_operations import prepare_operation
 
@@ -50,7 +52,13 @@ def test_populated_billing_merge_preserves_both_branches(monkeypatch):
 
     billing = case.__wrapped__(get_engine(), monkeypatch)
     prepare_operation(billing.actor, billing.note_id, command_for(billing))
-    both = snapshot((*tables, "billing_header_prepared_operation"))
+    names = (*tables, "billing_header_prepared_operation")
+    if bridge_expand:
+        from tests.billing_header.bridge_authority_test import setup_action
+
+        setup_action(billing)
+        names = (*names, "billing_header_action")
+    both = snapshot(names)
     assert {name: both[name] for name in tables} == before and all(both.values())
-    command.upgrade(cfg, "e47551a9d77e")
+    command.upgrade(cfg, "c3aa7a31f3ae" if bridge_expand else "e47551a9d77e")
     assert snapshot(tuple(both)) == both

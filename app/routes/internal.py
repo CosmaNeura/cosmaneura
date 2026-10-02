@@ -191,6 +191,7 @@ from sqlmodel import col, select
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
 from .billing_header import billing_header_api, note_billing_sources
+from .cab_bff import router as cab_bff_router
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
@@ -248,6 +249,7 @@ internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
 internal_api_app.include_router(session_prep_review_api)
 internal_api_app.include_router(billing_header_api)
+internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
 internal_api_app.include_router(visit_prep_api_app)
 internal_api_app.include_router(visit_prep_preparations_api_app)

@@ -197,7 +197,7 @@ def test_actual_expand_prepare_exact_replay_and_immutable_source(
     for sql in [
         "UPDATE billing_header_prepared_operation SET source_revision=source_revision",
         "DELETE FROM billing_header_prepared_operation",
-        "TRUNCATE billing_header_prepared_operation",
+        "TRUNCATE billing_header_prepared_operation CASCADE",
     ]:
         with pytest.raises(Exception, match="immutable"):
             with billing_database.begin() as c:
