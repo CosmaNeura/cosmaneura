@@ -871,3 +871,44 @@ No schema, dependency, deployment, real messaging or release control changed.
 Bounded patient AI clarification, matching Core/CosmaBot packages, Acuity,
 SMS/STOP/reminders and clinical/operational release acceptance remain full-goal
 requirements. The original workspace has not been retired.
+
+## Invitation status on the provider dashboard
+
+The authenticated owner can now explicitly read the latest invitation intent,
+including before the patient opens the interview. The closed internal GET
+contract supplies recorded state and bounded timestamps, flags an obsolete
+credential or inactive preparation context, and distinguishes expired sending
+and submission windows from a recorded terminal outcome. It exposes no mailbox,
+bearer, ciphertext, consent evidence, answers or provider operation identifier.
+No decryption, enqueue, maintenance, retry or transport call occurs on a read.
+
+Current normalized owner, subject, practice, BAA, seat and cohort authority is
+checked under the existing locks and again after the content-free read audit.
+An audit or acknowledgment failure returns no snapshot. Public and channel
+controls do not prevent an otherwise authorized owner from reading the retained
+record. Support view and withdrawn owner authority deny the read.
+
+The dashboard loads status only on explicit request. Selecting it clears a
+previous clinical package; selecting a clinical package closes status. Scope,
+preparation, access and visibility changes discard old and late snapshots.
+Provider acceptance is not delivery, an uncertain attempt must not be resent,
+and a failed read does not establish a failed email. The panel explicitly states
+that delivery automation is not connected. No browser persistence or polling
+is introduced.
+
+Focused synthetic verification passed 34 backend/API/browser checks and 50
+frontend checks. Actual PostgreSQL waits cover BAA withdrawal, rotation,
+expiry and a worker's committed acceptance; final seat expiry rolls back the
+read audit. Desktop and mobile browser cases use the built actual components,
+real API and fake transport, without real messages. Screenshots were inspected
+with no horizontal overflow. Read-only integration fixtures close only their own
+invented pending outbox rows between tests. Exact final regression and revision
+evidence belongs in the draft PR.
+
+This reuses current Core authority, outbox, audit, generated SDK and dashboard
+patterns; no new cross-repository code is copied. No schema, dependency, worker
+registration or release control changes. Qualified prior-consent intake,
+evidence retention, creation/booking composition, dispatch registration,
+monitoring and controlled provider acceptance still remain. The full goal also
+retains patient AI clarification, shared Core/CosmaBot packages, Acuity,
+SMS/STOP/reminders and clinical/operational release acceptance.

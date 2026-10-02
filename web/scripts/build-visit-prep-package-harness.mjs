@@ -53,6 +53,7 @@ await build({
         export const visitPrepSynthesis = ({path}) => read(synthesisPath(path));
         export const visitPrepSynthesisRequest = ({path,body}) => read(synthesisPath(path), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
         export const visitPrepEmailPolicyRead = () => read("/internal/v1/visit-prep/email-policy");
+        export const visitPrepEmailStatus = ({path}) => read("/internal/v1/visit-prep/preps/" + encodeURIComponent(path.prep_id) + "/email-status");
         export const visitPrepEmailPolicyDecide = ({body,headers}) => read("/internal/v1/visit-prep/email-policy", {method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)});`,
             loader: "js",
           }

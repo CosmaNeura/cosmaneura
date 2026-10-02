@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -19,8 +20,15 @@ from app.routes.visit_prep_preparations import (
     _StrictModel,
     _type_id,
 )
+from app.services import visit_prep_access
 from app.services import visit_prep_packages as packages
 from app.services.visit_prep_access import VisitPrepAccessDecision
+from app.services.visit_prep_email_contract import VisitPrepEmailInvalid
+from app.services.visit_prep_email_status import (
+    EmailOutcomeCode,
+    EmailStatus,
+    get_email_status,
+)
 
 
 class VisitPrepPackageBasisResponse(_StrictModel):
@@ -79,6 +87,24 @@ class VisitPrepListResponse(_StrictModel):
     next_before_id: str | None
 
 
+class VisitPrepEmailStatusResponse(_StrictModel):
+    contract: Literal["visit_prep.email_status.v1"] = "visit_prep.email_status.v1"
+    preparation_id: str
+    status: EmailStatus
+    outcome_code: EmailOutcomeCode | None
+    current_credential_generation: int = Field(gt=0, strict=True)
+    credential_generation: int | None
+    context_current: bool | None
+    invitation_expired: bool | None
+    submission_window_elapsed: bool | None
+    requested_at: datetime | None
+    expires_at: datetime | None
+    submitted_at: datetime | None
+    finalized_at: datetime | None
+    checked_at: datetime
+    dispatch_integration: Literal["not_connected"] = "not_connected"
+
+
 visit_prep_packages_api_app = APIRouter(
     prefix="/visit-prep/preps",
     tags=["visit-prep"],
@@ -97,6 +123,39 @@ def _query_keys(request: Request, allowed: frozenset[str]) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Visit Prep request is invalid.",
         )
+
+
+@visit_prep_packages_api_app.get(
+    "/{prep_id}/email-status",
+    name="visit_prep_email_status",
+    response_model=VisitPrepEmailStatusResponse,
+)
+def visit_prep_email_status(
+    request: Request,
+    prep_id: Annotated[str, Path(max_length=80)],
+    decision: Annotated[
+        VisitPrepAccessDecision, Depends(require_visit_prep_package_read)
+    ],
+) -> VisitPrepEmailStatusResponse:
+    _query_keys(request, frozenset())
+    owner, doctor, practice = _scope(decision)
+    identifier = _type_id(prep_id, prefix="visit_prep", path=True)
+    value = None
+    try:
+        value = get_email_status(
+            owner_practice_member_id=owner,
+            owner_doctor_id=doctor,
+            practice_id=practice,
+            expected_clerk_subject=request.state.doctor.clerk_id,
+            visit_prep_id=identifier,
+            settings=visit_prep_access.VISIT_PREP_SETTINGS,
+            view_as_active=getattr(request.state, "view_as", None) is not None,
+        )
+    except VisitPrepEmailInvalid:
+        pass
+    if value is None:
+        raise HTTPException(404, "Not found")
+    return VisitPrepEmailStatusResponse(**asdict(value))
 
 
 @visit_prep_packages_api_app.get(
