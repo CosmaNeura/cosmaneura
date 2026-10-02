@@ -56,6 +56,10 @@ from app.services.visit_prep_command_contract import (
 from app.services.visit_prep_command_contract import (
     access_token_hash as access_token_hash,
 )
+from app.services.visit_prep_open_evidence import (
+    InvitationOpenEvidenceInvalid,
+    stage_creation_coverage,
+)
 from app.services.visit_prep_question_definitions import VisitPrepQuestionSetValidation
 from app.services.visit_prep_question_sets import _definition_from_rows
 from app.utils.encryption import EncryptionError, encrypt_value
@@ -689,6 +693,10 @@ def create_visit_prep(
             credential=credential,
             at=effective_at,
         )
+        try:
+            stage_creation_coverage(session, prep=visit_prep, credential=credential)
+        except InvitationOpenEvidenceInvalid:
+            raise VisitPrepUnavailable("Visit Prep is unavailable") from None
         _commit(session)
         return VisitPrepMutationResult(
             visit_prep=snapshot,

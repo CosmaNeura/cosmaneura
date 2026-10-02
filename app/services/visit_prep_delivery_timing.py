@@ -275,12 +275,8 @@ def _validate(
         raise _invalid()
     if snapshot.completed_at is not None and _instant(snapshot.completed_at) > now:
         raise _invalid()
-    if (
-        snapshot.opened_at is not None
-        and snapshot.completed_at is not None
-        and _instant(snapshot.completed_at) < _instant(snapshot.opened_at)
-    ):
-        raise _invalid()
+    # A direct API confirmation/completion may precede the first recorded
+    # resume request. Later review does not reset completion or permit sends.
     identities = set()
     for touch in history:
         if (

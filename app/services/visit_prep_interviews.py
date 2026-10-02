@@ -58,6 +58,10 @@ from app.services.visit_prep_interview_contract import (
 from app.services.visit_prep_interview_contract import (
     VisitPrepInterviewValidation as VisitPrepInterviewValidation,
 )
+from app.services.visit_prep_open_evidence import (
+    InvitationOpenEvidenceInvalid,
+    stage_first_flow_open,
+)
 from app.services.visit_prep_question_definitions import VisitPrepQuestionSetValidation
 from app.services.visit_prep_question_sets import _definition_from_rows
 from app.services.visit_preps import (
@@ -674,6 +678,20 @@ def get_interview(*, access_token: str) -> InterviewState:
     with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         state = _interview_state(session, authorized=authorized)
+        try:
+            stage_first_flow_open(
+                session,
+                prep=authorized.visit_prep,
+                credential=authorized.credential,
+                at=authorized.event_at,
+            )
+        except InvitationOpenEvidenceInvalid:
+            raise VisitPrepInterviewUnavailable(
+                "Visit Prep link is unavailable"
+            ) from None
+        # Audit insertion may wait. Recheck current database time and authority
+        # before committing an observation or disclosing the resolved snapshot.
+        _lock_authorized_interview(session, access_token=access_token)
         _commit(session)
         return state
 

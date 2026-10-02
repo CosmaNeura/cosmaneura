@@ -1352,3 +1352,46 @@ current-evidence loader, durable scheduling/dispatch and race checks, prior
 consent, SMS/STOP, Acuity integration, first-party open instrumentation,
 monitoring and operational acceptance remain implementation requirements.
 Exact tested revision, commands and implementer review belong in the draft PR.
+
+## First party invitation open evidence
+
+Core now records creation coverage and the first successful first-party interview
+resume in its existing append-only authority audit store. The creation marker
+commits with the new aggregate and credential, never on a creation replay or a
+historical backfill. The resume event commits with the actual resolved interview
+snapshot, after current bearer, owner, practice, legal, entitlement, rollout and
+expiry checks. Authority is rechecked after audit persistence, which may wait.
+No patient-data table, route, frontend request, identity/session change or release
+control is introduced.
+
+The bounded reader distinguishes an instrumented invitation with no flow event,
+a retained first open, and unknown historical evidence. Direct confirmation or
+completion proves interaction but does not manufacture a resume event. The
+original flow event survives rotation and rescheduling; a later review can occur
+after direct completion without restarting delivery. Invalid or duplicate
+evidence cannot prove an invitation unopened. Readers must already hold current
+Core scope and preparation/lineage locks; this projection grants no authority.
+
+The event records only fixed labels, database timestamps and canonical opaque
+owner, preparation, schedule and credential references. It contains no names,
+contacts, answers, bearer, bearer hash, request content, invented person identity
+or consent. A successful bearer request is not evidence that the intended patient
+read the screen, and neither tracking pixels nor analytics are used.
+
+Owned synthetic PostgreSQL checks cover patient/caregiver visits, actual creation
+replay, historical unknown evidence, direct confirmation/completion, exact
+retries, concurrent opens, lost acknowledgment, enclosing rollback, malformed
+evidence, rotation and rescheduling. Actual lock waits exercise BAA withdrawal,
+rotation and wrong-recipient reporting; expiry after a real audit flush rolls
+back the observation. Real HTTP and production-bundled desktop/mobile patient
+journeys assert the retained first flow event. Exact revision-specific results
+and implementer review belong in the stacked draft PR.
+
+Recovery leaves existing audit evidence retained. Removing the writer must also
+disable any future unopened-reminder consumer. After an uninstrumented interval,
+old coverage cannot be reused as proof of continuous observation; keep affected
+invitations unknown until explicitly reconciled. No audit deletion or fabricated
+backfill is a rollback. Durable scheduling/dispatch, qualified prior consent,
+SMS/STOP, Acuity, session continuation, Sovereign/CosmaBot, cleanup, monitoring and
+clinical/operational qualification remain full-goal requirements. All controls
+stay off and no external message is sent.

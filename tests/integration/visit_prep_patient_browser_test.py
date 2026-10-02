@@ -17,6 +17,7 @@ from app.server import api_app
 from app.utils.encryption import decrypt_value
 
 from activemodel.session_manager import get_session
+from app.models.authority import AuthorityAuditEvent
 from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_contribution import VisitPrepContributionEvent
 from app.models.visit_prep_response import VisitPrepQuestionResponse
@@ -138,6 +139,16 @@ def test_built_patient_journey_is_private_and_stores_the_original_story(
                 f"https://testserver/visit-prep#access_token={fixture.access_token}"
             )
             expect(page.get_by_role("heading", name="Before we begin")).to_be_visible()
+            with get_session() as session:
+                opens = session.exec(
+                    select(AuthorityAuditEvent).where(
+                        AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
+                        AuthorityAuditEvent.event_type
+                        == "visit_prep.invitation_flow_opened",
+                    )
+                ).all()
+                assert len(opens) == 1
+                assert opens[0].actor_id is opens[0].person_id is None
             assert page.url == "https://testserver/visit-prep"
             expect(page.get_by_text("Dr. Synthetic", exact=False)).to_have_count(0)
             page.get_by_label("Recipient first name").fill(
