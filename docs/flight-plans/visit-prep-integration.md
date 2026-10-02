@@ -789,6 +789,41 @@ The complete synthetic app build and frontend typecheck passed. Desktop and mobi
 screenshots were visually inspected. Existing framework deprecation, source-map
 and future-flag warnings remain; no live-provider acceptance is claimed.
 
+### Durable physician SMS policy decisions
+
+This Tier 2 additive expansion captures explicit physician approval or withdrawal
+of the fixed SMS invitation and reminder policy for the current canonical sender.
+It reuses Core's email policy authorization, encrypted evidence and exact-retry
+patterns without importing email consent or granting patient permission. The
+append-only stream and content-free audit share a transaction. Renewed approval
+is required after sender or template change; withdrawal and historical replay
+do not restore sending authority.
+
+The queue and worker can compare their standing-approval snapshot with the latest
+durable decision under current owner locks. A separate trusted SMS sender-source
+verifier is still required; policy capture does not qualify a provider account,
+patient consent, first booking outreach or actual delivery. No accepting default
+verifier, public API, dashboard decision control or runtime job is installed by
+this storage/domain increment. Those remaining composition paths are separate
+work, not demonstrated by a successful synthetic verifier.
+
+Generated expansion `85d330017454` follows `950a65bbfa96` and adds only the
+approval stream and its own guard. The populated predecessor rehearsal preserved
+every existing table's rows and Visit Prep guard definitions, including completed
+patient answers, the published package and accepted SMS evidence. The new durable
+choice was then consumed by the actual queue and worker with synthetic source
+qualification. Final local qualification passed 88 backend checks, plus that
+separate migration rehearsal. Checks cover withdrawal before dispatch, exact
+retry, concurrent decisions, real owner-lock waits followed by BAA withdrawal or
+expiry, private-evidence rejection, atomic rollback and raw SQL guards. Changed
+production Python passed lint, formatting and typecheck. Existing framework
+deprecation warnings remain; these results are not live-provider acceptance.
+
+Recovery keeps sends disabled and retains decisions and schema; revert additive
+application code and use a forward schema fix. Approval-evidence retention and
+legal-hold cleanup must be qualified before activation. No live service, message,
+model, environment or deployment is changed.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
