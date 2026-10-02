@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { AiVisitNote } from "~/configuration/client"
 
 import VisitNoteViewer from "./VisitNoteViewer"
 import { fireEvent, render, screen } from "@testing-library/react"
+
+vi.mock("~/configuration/client", () => ({
+  prepareBillingHeaderOperation: vi.fn(),
+  reviewNoteForSessionPrep: vi.fn(),
+}))
 
 describe("VisitNoteViewer", () => {
   it("copies every visible note section as plain text", async () => {
@@ -54,6 +59,10 @@ describe("VisitNoteViewer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy to Clipboard" }))
 
     await screen.findByRole("button", { name: "Copied!" })
+
+    expect(
+      screen.queryByRole("button", { name: "Billing header" }),
+    ).not.toBeInTheDocument()
 
     const [clipboardItem] = await navigator.clipboard.read()
     const plainText = await (await clipboardItem.getType("text/plain")).text()

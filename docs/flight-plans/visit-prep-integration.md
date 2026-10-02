@@ -461,6 +461,23 @@ and must preserve both features and restore a single migration head, with affect
 checks, before the stack is ready.
 No merge, deployment, live patient data or real message is part of this increment.
 
+## Current Core synchronization October 2 2026
+
+The first two synchronization increments preserve the already-merged Core billing
+source and billing-button histories alongside Visit Prep. Generated no-op merge
+revision `e47551a9d77e` joins the booking and billing-source heads without changing
+either published parent. The combined application applies the real graph in owned
+synthetic PostgreSQL. Existing Visit Prep booking, email and provider checks pass;
+the CAB button and Visit Prep dashboard coexist in local component checks.
+
+The browser client is generated locally from the actual combined internal schema,
+not Core's older snapshot that omits Visit Prep. Publishing the reconciled schema
+snapshot remains a follow-up. Additional CAB changes through fetched `master`
+`49895cb66a305558393a0862a590ee313b60c194` still need assimilation, including the next
+migration branch. Exact commits and validation are recorded in the stacked drafts.
+No feature activation or default-branch merge follows from this synchronization.
+Retain additive schemas and evidence on recovery; use forward fixes, not drops.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
