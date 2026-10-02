@@ -148,9 +148,7 @@ def _get_patient_clarification_view(
                 "not_available", question_key, role, current.basis
             )
             proposal_row = None
-            if topic.response_kind == "answered" and (
-                followup_only or topic.question.kind != "choice"
-            ):
+            if topic.response_kind == "answered":
                 row = session.exec(
                     select(VisitPrepClarificationProposal)
                     .where(
@@ -194,6 +192,13 @@ def _get_patient_clarification_view(
                             not followup_only
                             and evidence.reply.kind == "organize"
                             and words is not None
+                            and not (
+                                evidence.context.kind == "choice"
+                                and any(
+                                    span.source == "answer"
+                                    for span in evidence.reply.statements
+                                )
+                            )
                         ):
                             view = PatientClarificationView(
                                 "available",
@@ -201,7 +206,9 @@ def _get_patient_clarification_view(
                                 role,
                                 current.basis,
                                 str(row.id),
-                                evidence.context.reported_words,
+                                evidence.context.answer
+                                if evidence.context.kind == "choice"
+                                else evidence.context.reported_words,
                                 words,
                                 tuple(
                                     PatientClarificationTurnView(
@@ -241,7 +248,9 @@ def _get_patient_clarification_view(
                                     for t in context.turns
                                 ),
                                 pending_prompt=PROMPTS[evidence.reply.prompt_code],
-                                source_turn_id=str(turn.id) if turn is not None else None,
+                                source_turn_id=str(turn.id)
+                                if turn is not None
+                                else None,
                             )
             refs = [
                 ("doctor", prep.owner_doctor_id),

@@ -746,9 +746,21 @@ export function PatientContributionReview({
             review. Accept it only if it reflects what you want to share. Your
             original wording is retained.
           </p>
+          {current.topics.find(
+            (row) => row.question.key === proposal.question_key,
+          )?.question.kind === "choice" && (
+            <p className="mt-3">
+              This proposal is an explanation alongside your selected answer.
+              Accepting or editing it will not change your selected option.
+            </p>
+          )}
           <h2 className="mt-6 font-semibold">Current answer</h2>
           <p className="mt-2 break-words whitespace-pre-wrap">
-            {proposal.current_words}
+            {current.topics
+              .find((row) => row.question.key === proposal.question_key)
+              ?.question.choices.find(
+                (choice) => choice.value === proposal.current_words,
+              )?.label ?? proposal.current_words}
           </p>
           {proposal.turns.map((turn, index) => (
             <div key={index} className="mt-4">
@@ -758,6 +770,20 @@ export function PatientContributionReview({
               </p>
             </div>
           ))}
+          {current.topics.find(
+            (row) => row.question.key === proposal.question_key,
+          )?.explanation_words && (
+            <div className="mt-4">
+              <h2 className="font-semibold">Your current explanation</h2>
+              <p className="mt-2 break-words whitespace-pre-wrap">
+                {
+                  current.topics.find(
+                    (row) => row.question.key === proposal.question_key,
+                  )?.explanation_words
+                }
+              </p>
+            </div>
+          )}
           <h2 className="mt-6 font-semibold">Proposed wording</h2>
           <p className="mt-2 break-words whitespace-pre-wrap">
             {proposal.organized_words}
@@ -804,7 +830,11 @@ export function PatientContributionReview({
               disabled={blocked}
               onClick={() => chooseProposal("keep_original")}
             >
-              Keep my current answer
+              {current.topics.find(
+                (row) => row.question.key === proposal.question_key,
+              )?.question.kind === "choice"
+                ? "Keep my current explanation"
+                : "Keep my current answer"}
             </Button>
             <Button
               variant="ghost"
@@ -1009,8 +1039,7 @@ export function PatientContributionReview({
                 )}
                 {import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED ===
                   "true" &&
-                  row.response_kind === "answered" &&
-                  row.question.kind !== "choice" && (
+                  row.response_kind === "answered" && (
                     <Button
                       variant="outline"
                       className="mt-4"
@@ -1021,18 +1050,17 @@ export function PatientContributionReview({
                       Help me clarify this answer
                     </Button>
                   )}
-                {row.response_kind === "answered" &&
-                  row.question.kind !== "choice" && (
-                    <Button
-                      variant="ghost"
-                      className="mt-4"
-                      disabled={blocked}
-                      aria-label={`Review wording proposal: ${row.question.prompt}`}
-                      onClick={() => readProposal(row.question.key)}
-                    >
-                      Review wording proposal
-                    </Button>
-                  )}
+                {row.response_kind === "answered" && (
+                  <Button
+                    variant="ghost"
+                    className="mt-4"
+                    disabled={blocked}
+                    aria-label={`Review wording proposal: ${row.question.prompt}`}
+                    onClick={() => readProposal(row.question.key)}
+                  >
+                    Review wording proposal
+                  </Button>
+                )}
               </article>
             ))}
           </div>

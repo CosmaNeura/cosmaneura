@@ -529,90 +529,111 @@ def explain_contribution(
     revision invalidates the explanation even if the selected code is unchanged.
     No AI, provider verification, consent or clinical-record write is implied.
     """
+    with _visit_prep_session() as session:
+        try:
+            receipt = explain_contribution_in_session(
+                session,
+                access_token=access_token,
+                first_name=first_name,
+                role=role,
+                expected_basis=expected_basis,
+                question_key=question_key,
+                patient_words=patient_words,
+                idempotency_key=idempotency_key,
+            )
+            _commit(session)
+            return receipt
+        except BaseException:
+            session.rollback()
+            raise
+
+
+def explain_contribution_in_session(
+    session: Session,
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
+    expected_basis: ContributionBasis,
+    question_key: str,
+    patient_words: str | None,
+    idempotency_key: str,
+) -> ContributionMutationReceipt:
+    """Stage the same explicit explanation; caller owns commit and rollback.
+
+    AI acceptance uses this to bind the explanation, decision and audit in one
+    transaction. There is no model-selected code or alternate explanation store.
+    """
     if type(expected_basis) is not ContributionBasis or type(question_key) is not str:
         raise VisitPrepInterviewValidation("contribution basis is invalid")
     words = _normalized_answer(patient_words) if patient_words is not None else None
     key = _canonical_idempotency_key(idempotency_key)
-    with _visit_prep_session() as session:
+    authorized = _lock_authorized_interview(session, access_token=access_token)
+    _require_recipient(authorized, first_name=first_name, role=role)
+    prep = authorized.visit_prep
+    current = _load_contribution(session, visit_prep=prep)
+    topic = next((t for t in current.topics if t.question.key == question_key), None)
+    if topic is None or topic.question.kind != "choice":
+        raise VisitPrepInterviewValidation("explanation topic is invalid")
+    question = next(
+        q
+        for q in _questions(session, visit_prep=prep)
+        if q.question_key == question_key
+    )
+    # Replay binds the historical target, not today's possibly revised choice.
+    existing = session.exec(
+        select(VisitPrepContributionEvent).where(
+            VisitPrepContributionEvent.visit_prep_id == prep.id,
+            VisitPrepContributionEvent.idempotency_key == key,
+        )
+    ).one_or_none()
+    target = existing.target_revision_id if existing else topic.current_correction_id
+    original = existing.response_id if existing else topic.original_response_id
+    fingerprint = contribution_payload_hmac(
+        visit_prep_id=prep.id,
+        actor_role=role,
+        event_kind="explanation",
+        basis=expected_basis,
+        original_response_id=original,
+        question_id=question.id,
+        target_revision_id=target,
+        response=_CanonicalResponse(
+            question_key, "answered" if words is not None else "skipped", words
+        ),
+    )
+    replayed = _existing_event(session, prep=prep, key=key, fingerprint=fingerprint)
+    if not replayed:
+        if (
+            current.basis != expected_basis
+            or not topic.applicable
+            or topic.response_kind != "answered"
+        ):
+            raise VisitPrepInterviewConflict("Visit Prep contribution state changed")
         try:
-            authorized = _lock_authorized_interview(session, access_token=access_token)
-            _require_recipient(authorized, first_name=first_name, role=role)
-            prep = authorized.visit_prep
-            current = _load_contribution(session, visit_prep=prep)
-            topic = next(
-                (t for t in current.topics if t.question.key == question_key), None
+            ciphertext = (
+                encrypt_value(_answer_envelope(kind="story", value=words))
+                if words is not None
+                else None
             )
-            if topic is None or topic.question.kind != "choice":
-                raise VisitPrepInterviewValidation("explanation topic is invalid")
-            question = next(
-                q
-                for q in _questions(session, visit_prep=prep)
-                if q.question_key == question_key
-            )
-            # Replay binds the historical target, not today's possibly revised choice.
-            existing = session.exec(
-                select(VisitPrepContributionEvent).where(
-                    VisitPrepContributionEvent.visit_prep_id == prep.id,
-                    VisitPrepContributionEvent.idempotency_key == key,
-                )
-            ).one_or_none()
-            target = (
-                existing.target_revision_id if existing else topic.current_correction_id
-            )
-            original = existing.response_id if existing else topic.original_response_id
-            fingerprint = contribution_payload_hmac(
-                visit_prep_id=prep.id,
-                actor_role=role,
-                event_kind="explanation",
-                basis=expected_basis,
-                original_response_id=original,
-                question_id=question.id,
-                target_revision_id=target,
-                response=_CanonicalResponse(
-                    question_key, "answered" if words is not None else "skipped", words
-                ),
-            )
-            replayed = _existing_event(
-                session, prep=prep, key=key, fingerprint=fingerprint
-            )
-            if not replayed:
-                if (
-                    current.basis != expected_basis
-                    or not topic.applicable
-                    or topic.response_kind != "answered"
-                ):
-                    raise VisitPrepInterviewConflict(
-                        "Visit Prep contribution state changed"
-                    )
-                try:
-                    ciphertext = (
-                        encrypt_value(_answer_envelope(kind="story", value=words))
-                        if words is not None
-                        else None
-                    )
-                except EncryptionError:
-                    raise _unavailable() from None
-                current = _append_event_in_session(
-                    session,
-                    authorized=authorized,
-                    role=role,
-                    basis=expected_basis,
-                    key=key,
-                    fingerprint=fingerprint,
-                    response_id=original,
-                    question_id=question.id,
-                    explanation=True,
-                    target_revision_id=target,
-                    response_kind="answered" if words is not None else "skipped",
-                    ciphertext=ciphertext,
-                )
-            final = _lock_authorized_interview(session, access_token=access_token)
-            _require_recipient(final, first_name=first_name, role=role)
-            _commit(session)
-            return _receipt(current, replayed=replayed)
-        except BaseException:
-            session.rollback()
-            raise
+        except EncryptionError:
+            raise _unavailable() from None
+        current = _append_event_in_session(
+            session,
+            authorized=authorized,
+            role=role,
+            basis=expected_basis,
+            key=key,
+            fingerprint=fingerprint,
+            response_id=original,
+            question_id=question.id,
+            explanation=True,
+            target_revision_id=target,
+            response_kind="answered" if words is not None else "skipped",
+            ciphertext=ciphertext,
+        )
+    final = _lock_authorized_interview(session, access_token=access_token)
+    _require_recipient(final, first_name=first_name, role=role)
+    return _receipt(current, replayed=replayed)
 
 
 def correct_contribution(

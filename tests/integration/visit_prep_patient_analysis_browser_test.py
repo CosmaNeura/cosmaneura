@@ -10,6 +10,8 @@ from app import root
 from app.routes import visit_prep_interviews as route
 from app.server import api_app
 
+from tests.integration.visit_prep_choice_ai_test import choice_reply
+from tests.integration.visit_prep_explanations_test import _explain, _package
 from tests.integration.visit_prep_patient_analysis_test import _enable
 from tests.services.visit_prep_contribution_commands_test import _correct
 from tests.services.visit_prep_contribution_projection_test import (
@@ -20,14 +22,19 @@ from tests.services.visit_prep_contribution_projection_test import (
 
 
 @pytest.mark.parametrize("width,height", [(1440, 1000), (390, 844)])
+@pytest.mark.parametrize("question_key", ["story", "adherence"])
 def test_patient_requests_reviews_and_accepts_suggestion(
-    monkeypatch, owned_rate_limit_redis, width, height
+    monkeypatch, owned_rate_limit_redis, width, height, question_key
 ):
     fixture = _prepared(monkeypatch, "patient-ai-browser")
-    _correct(
-        fixture, answer="Fictional_Name_Alpha: my invented sleep concern comes first."
+    words = "my invented sleep concern comes first."
+    if question_key == "adherence":
+        _explain(fixture, words="Fictional_Name_Alpha: " + words)
+    else:
+        _correct(fixture, answer="Fictional_Name_Alpha: " + words)
+    calls = _enable(
+        monkeypatch, reply_factory=choice_reply if question_key == "adherence" else None
     )
-    calls = _enable(monkeypatch)
     monkeypatch.setattr(
         route.rate_limits, "get_rate_limit_redis", lambda: owned_rate_limit_redis
     )
@@ -36,7 +43,6 @@ def test_patient_requests_reviews_and_accepts_suggestion(
         base_url="https://testserver",
         client=(f"198.19.1.{10 + (width == 390)}", 50000),
     )
-    words = "my invented sleep concern comes first."
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             args=[
@@ -88,9 +94,10 @@ def test_patient_requests_reviews_and_accepts_suggestion(
             expect(
                 page.get_by_role("heading", name="Your saved answers")
             ).to_be_visible()
+            prompt = _topic(_projection(fixture), question_key).question.prompt
             page.get_by_role(
                 "button",
-                name="Help me clarify: Tell me your health story — whatever feels relevant.",
+                name="Help me clarify: " + prompt,
                 exact=True,
             ).click()
             expect(
@@ -99,12 +106,21 @@ def test_patient_requests_reviews_and_accepts_suggestion(
             expect(page.get_by_text(words, exact=True)).to_be_visible()
             assert (
                 len(calls) == 1
-                and _topic(_projection(fixture), "story").answer != words
+                and _topic(_projection(fixture), question_key).answer != words
             )
+            if question_key == "adherence":
+                expect(
+                    page.get_by_text(
+                        "Accepting or editing it will not change your selected option.",
+                        exact=False,
+                    )
+                ).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             (root / "tmp").mkdir(exist_ok=True)
             page.screenshot(
-                path=str(root / "tmp" / f"visit-prep-patient-ai-{width}.png"),
+                path=str(
+                    root / "tmp" / f"visit-prep-patient-ai-{question_key}-{width}.png"
+                ),
                 full_page=True,
             )
             page.get_by_role(
@@ -114,7 +130,21 @@ def test_patient_requests_reviews_and_accepts_suggestion(
                 page.get_by_role("heading", name="Your saved answers")
             ).to_be_visible()
             expect(page.get_by_text(words, exact=True)).to_be_visible()
-            assert _topic(_projection(fixture), "story").answer == words
+            topic = _topic(_projection(fixture), question_key)
+            if question_key == "adherence":
+                assert topic.answer == topic.original_answer == "yes"
+                assert (
+                    topic.explanation_words == words
+                    and topic.current_correction_id is None
+                )
+                assert (
+                    _topic(
+                        _package(fixture).contribution, question_key
+                    ).explanation_words
+                    == words
+                )
+            else:
+                assert topic.answer == words
             assert fixture.access_token not in page.content()
         finally:
             browser.close()
