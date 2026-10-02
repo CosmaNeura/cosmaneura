@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react"
 import { Button } from "~/components/ui/button"
 import {
   type PatientClarificationChoice,
+  type PatientClarificationRequest,
   type PatientClarificationView,
   type PatientConfirmation,
   type PatientContribution,
@@ -18,6 +19,7 @@ import {
 import { QuestionForm } from "./QuestionForm"
 
 type Pending =
+  | { kind: "generate"; payload: PatientClarificationRequest; key: string }
   | { kind: "change"; payload: PatientContributionChange; key: string }
   | { kind: "review"; payload: ReviewPayload; key: string }
   | { kind: "explanation"; payload: PatientExplanation; key: string }
@@ -186,6 +188,43 @@ export function PatientContributionReview({
     if (!save || !confirmed) return
     const requestGeneration = generation.current
     void run(async () => {
+      if (save.kind === "generate") {
+        const receipt = await client.generateClarification(
+          save.payload,
+          save.key,
+        )
+        if (!mounted.current || generation.current !== requestGeneration) return
+        if (
+          receipt.basis.original_response_count !==
+            save.payload.basis.original_response_count ||
+          receipt.basis.event_sequence !== save.payload.basis.event_sequence
+        )
+          throw new VisitPrepPatientFailure("conflict")
+        pending.current = null
+        const view = await client.readClarification(
+          confirmed,
+          save.payload.question_key,
+        )
+        if (!mounted.current || generation.current !== requestGeneration) return
+        if (
+          view.basis.original_response_count !==
+            receipt.basis.original_response_count ||
+          view.basis.event_sequence !== receipt.basis.event_sequence
+        )
+          throw new VisitPrepPatientFailure("conflict")
+        if (view.status === "available") {
+          if (view.proposal_id !== receipt.proposal_id)
+            throw new VisitPrepPatientFailure("conflict")
+          setFollowup(null)
+          setProposal(view)
+        } else {
+          await loadFollowup(confirmed, save.payload.question_key)
+          if (!mounted.current || generation.current !== requestGeneration)
+            return
+          setProposal(view)
+        }
+        return
+      }
       if (save.kind === "followup") {
         const receipt = await client.answerFollowup(save.payload, save.key)
         if (!mounted.current || generation.current !== requestGeneration) return
@@ -204,6 +243,7 @@ export function PatientContributionReview({
           setFollowup({
             ...save.view,
             status: "answered",
+            source_turn_id: receipt.turn_id,
             turns: [
               ...save.view.turns,
               {
@@ -382,6 +422,27 @@ export function PatientContributionReview({
         throw new VisitPrepPatientFailure("conflict")
       setProposal(view)
     })
+  }
+
+  function requestHelp(questionKey: string, sourceTurnId?: string | null) {
+    if (!confirmation.current || !current || pending.current || busyRef.current)
+      return
+    try {
+      pending.current = {
+        kind: "generate",
+        key: crypto.randomUUID(),
+        payload: {
+          ...confirmation.current,
+          question_key: questionKey,
+          basis: current.basis,
+          source_turn_id: sourceTurnId ?? null,
+        },
+      }
+      setDraft("")
+      retrySave()
+    } catch {
+      setError("temporary")
+    }
   }
 
   async function loadFollowup(
@@ -653,6 +714,18 @@ export function PatientContributionReview({
             >
               Check saved follow-up
             </Button>
+            {import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED === "true" &&
+              followup.status === "answered" &&
+              followup.source_turn_id && (
+                <Button
+                  disabled={blocked}
+                  onClick={() =>
+                    requestHelp(followup.question_key, followup.source_turn_id)
+                  }
+                >
+                  Organize my answer and follow-up
+                </Button>
+              )}
             <Button
               variant="outline"
               disabled={blocked}
@@ -934,6 +1007,20 @@ export function PatientContributionReview({
                     Check follow-up
                   </Button>
                 )}
+                {import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED ===
+                  "true" &&
+                  row.response_kind === "answered" &&
+                  row.question.kind !== "choice" && (
+                    <Button
+                      variant="outline"
+                      className="mt-4"
+                      disabled={blocked}
+                      aria-label={`Help me clarify: ${row.question.prompt}`}
+                      onClick={() => requestHelp(row.question.key)}
+                    >
+                      Help me clarify this answer
+                    </Button>
+                  )}
                 {row.response_kind === "answered" &&
                   row.question.kind !== "choice" && (
                     <Button
@@ -980,6 +1067,22 @@ export function PatientContributionReview({
       {!busy && pending.current && error !== "conflict" && (
         <Button className="mt-4" onClick={retrySave}>
           Retry same save
+        </Button>
+      )}
+      {!busy && pending.current?.kind === "generate" && (
+        <Button
+          variant="outline"
+          className="mt-4"
+          onClick={() => {
+            pending.current = null
+            setProposal(null)
+            setFollowup(null)
+            setError(null)
+            const confirmed = confirmation.current
+            if (confirmed) void run(() => load(confirmed))
+          }}
+        >
+          Continue with my saved answers
         </Button>
       )}
       {!busy && pending.current?.kind === "followup" && (

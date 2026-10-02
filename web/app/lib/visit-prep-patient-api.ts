@@ -358,6 +358,11 @@ export const visitPrepPatientFollowup = z
     proposal_id: clarificationId.nullable(),
     current_words: z.string().min(1).max(2_000).nullable(),
     pending_prompt: z.string().min(1).max(200).nullable(),
+    source_turn_id: z
+      .string()
+      .regex(/^visit_prep_clarification_turn_[0-7][0-9a-hjkmnp-tv-z]{25}$/)
+      .nullable()
+      .optional(),
     turns: z.array(clarificationTurn).max(2),
   })
   .strict()
@@ -390,6 +395,19 @@ export type PatientFollowupView = z.infer<typeof visitPrepPatientFollowup>
 export type PatientFollowupAnswer = PatientConfirmation & {
   proposal_id: string
   patient_words: string
+}
+
+const generationReceipt = z
+  .object({
+    proposal_id: clarificationId,
+    disposition: z.enum(["accepted", "replayed"]),
+    basis: contributionBasis,
+  })
+  .strict()
+export type PatientClarificationRequest = PatientConfirmation & {
+  question_key: string
+  basis: PatientContribution["basis"]
+  source_turn_id?: string | null
 }
 
 function safeBaseUrl(value: string): URL {
@@ -437,7 +455,10 @@ export function createVisitPrepPatientClient(
     if (disposed) throw new VisitPrepPatientFailure("unavailable")
     const controller = new AbortController()
     controllers.add(controller)
-    const timeout = window.setTimeout(() => controller.abort(), 15_000)
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      path === "/clarification/generate" ? 40_000 : 15_000,
+    )
     try {
       const response = await fetcher(
         new URL(`/external/v1/visit-prep${path}`, base),
@@ -536,6 +557,10 @@ export function createVisitPrepPatientClient(
         throw new VisitPrepPatientFailure("temporary")
       return receipt
     },
+    generateClarification: (
+      payload: PatientClarificationRequest,
+      key: string,
+    ) => request("/clarification/generate", generationReceipt, payload, key),
     readFollowup: async (
       confirmation: PatientConfirmation,
       question_key: string,

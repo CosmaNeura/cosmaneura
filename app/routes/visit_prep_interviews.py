@@ -33,6 +33,7 @@ from app.services import visit_prep_clarification_turns as clarification_turns
 from app.services import visit_prep_contributions as contributions
 from app.services import visit_prep_email_consent as email_consent
 from app.services import visit_prep_interviews as interview_service
+from app.services import visit_prep_patient_analysis as patient_analysis
 from app.services import visit_prep_rate_limits as rate_limits
 from app.services.visit_prep_clarification_contract import (
     PatientClarificationDecision,
@@ -99,6 +100,7 @@ _CONFIRMATION_PATHS = frozenset(
         "/clarification/decision",
         "/clarification/follow-up",
         "/clarification/turn",
+        "/clarification/generate",
         "/email-consent",
         "/email-consent/decision",
     )
@@ -511,6 +513,7 @@ class VisitPrepFollowupViewResponse(_StrictModel):
     proposal_id: str | None
     current_words: str | None = Field(max_length=2000, repr=False)
     pending_prompt: str | None = Field(max_length=200, repr=False)
+    source_turn_id: str | None = None
     turns: list[VisitPrepClarificationTurnResponse] = Field(max_length=2, repr=False)
 
 
@@ -813,6 +816,8 @@ def _invoke(operation: Callable[[], _ResultT]) -> _ResultT:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_TEMPORARY_DETAIL,
         ) from None
+    except patient_analysis.PatientAnalysisUnavailable:
+        raise HTTPException(status_code=503, detail=_TEMPORARY_DETAIL) from None
     except SQLAlchemyError:
         log.warning(
             "Visit Prep public persistence unavailable",
@@ -1352,12 +1357,58 @@ def visit_prep_public_read_followup(
         proposal_id=view.proposal_id,
         current_words=view.current_words,
         pending_prompt=view.pending_prompt,
+        source_turn_id=view.source_turn_id,
         turns=[
             VisitPrepClarificationTurnResponse(
                 prompt=t.prompt, patient_words=t.patient_words
             )
             for t in view.turns
         ],
+    )
+
+
+class VisitPrepClarificationGenerateRequest(VisitPrepClarificationReadRequest):
+    basis: VisitPrepContributionBasis
+    source_turn_id: str | None = Field(default=None, max_length=100)
+
+
+class VisitPrepClarificationGenerateReceipt(BaseModel):
+    proposal_id: str
+    basis: VisitPrepContributionBasis
+    disposition: Literal["accepted", "replayed"]
+
+
+@visit_prep_interviews_api_app.post(
+    "/clarification/generate",
+    name="visit_prep_public_generate_clarification",
+    response_model=VisitPrepClarificationGenerateReceipt,
+)
+def visit_prep_public_generate_clarification(
+    request: Request,
+    data: VisitPrepClarificationGenerateRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
+):
+    del documented_idempotency_key
+    receipt = _invoke(
+        lambda: patient_analysis.request_patient_clarification(
+            access_token=access_token,
+            first_name=_recipient_name(data, access_token),
+            role=data.role,
+            question_key=data.question_key,
+            expected_basis=ContributionBasis(
+                data.basis.original_response_count, data.basis.event_sequence
+            ),
+            operation_id=_contribution_key(request),
+            source_turn_id=data.source_turn_id,
+        )
+    )
+    return VisitPrepClarificationGenerateReceipt(
+        proposal_id=receipt.proposal_id,
+        basis=VisitPrepContributionBasis(**vars(receipt.basis)),
+        disposition=receipt.disposition,
     )
 
 

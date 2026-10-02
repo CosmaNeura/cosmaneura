@@ -56,6 +56,7 @@ function setup(continuedRole: "patient" | "caregiver" | null = null) {
     explainContribution: vi.fn(),
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
+    generateClarification: vi.fn(),
     decideClarification: vi.fn(),
     readFollowup: vi.fn(),
     answerFollowup: vi.fn(),
@@ -89,6 +90,51 @@ const receipt = (sequence: number, complete = true, reviewed = false) => ({
 })
 
 describe("saved patient contribution review", () => {
+  it("requests a saved suggestion without changing the answer until accepted", async () => {
+    vi.stubEnv("VITE_VISIT_PREP_PATIENT_AI_ENABLED", "true")
+    try {
+      const { client } = setup("caregiver")
+      await screen.findByRole("heading", { name: "Your saved answers" })
+      const proposalId = "visit_prep_clarification_01j00000000000000000000000"
+      client.generateClarification.mockResolvedValue({
+        proposal_id: proposalId,
+        basis: initial.basis,
+        disposition: "accepted",
+      })
+      client.readClarification.mockResolvedValue({
+        status: "available",
+        proposal_id: proposalId,
+        basis: initial.basis,
+        actor_role: "caregiver",
+        question_key: "story",
+        current_words: initial.topics[1].answer,
+        organized_words: "invented story.",
+        turns: [],
+      })
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Help me clarify: Tell me your story",
+        }),
+      )
+      await screen.findByRole("heading", { name: "Review proposed wording" })
+      expect(client.generateClarification).toHaveBeenCalledWith(
+        {
+          role: "caregiver",
+          question_key: "story",
+          basis: initial.basis,
+          source_turn_id: null,
+        },
+        expect.any(String),
+      )
+      expect(client.correctContribution).not.toHaveBeenCalled()
+      expect(client.decideClarification).not.toHaveBeenCalled()
+      expect(
+        screen.getByRole("button", { name: "Accept proposed wording" }),
+      ).toBeEnabled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
   it("saves and withdraws an explanation separately without changing the selected code", async () => {
     const { client } = setup("caregiver")
     const choice = {

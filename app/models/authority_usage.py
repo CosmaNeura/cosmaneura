@@ -15,6 +15,28 @@ from app.models.authority import (
 )
 from sqlmodel import Column, Field, UniqueConstraint
 
+PATIENT_USAGE_SHAPE = """
+(event_origin = 'visit_prep_patient' AND interaction_id IS NULL AND
+tenant_id IS NULL AND actor_id IS NULL AND person_id IS NULL AND
+patient_analysis_ref IS NOT NULL AND core_practice_id IS NOT NULL AND
+core_doctor_id IS NOT NULL AND core_member_id IS NOT NULL AND preparation_ref IS NOT NULL AND
+source_version IS NOT NULL AND source_version ~ '^[0-9a-f]{64}$' AND build_ref IS NULL AND build_epoch IS NULL AND
+build_attempt IS NULL AND build_lease_until IS NULL AND call_sequence = 1 AND
+workstream = 'visit_prep' AND purpose = 'visit_prep_patient_clarification' AND
+call_kind = 'drafting' AND provider = 'azure_openai' AND model IS NOT NULL AND
+started_at IS NOT NULL AND batch_phase IS NOT NULL AND
+((batch_phase = 'intent' AND status = 'started' AND call_intent_id IS NULL AND
+completed_at IS NULL AND latency_ms IS NULL AND provider_request_id IS NULL AND
+usage_availability = 'unavailable' AND usage_source = 'not_available' AND
+input_tokens IS NULL AND output_tokens IS NULL AND cached_input_tokens IS NULL AND reasoning_tokens IS NULL) OR
+(batch_phase = 'result' AND status IN ('succeeded', 'failed', 'cancelled') AND
+call_intent_id IS NOT NULL AND completed_at IS NOT NULL AND completed_at >= started_at AND
+latency_ms IS NOT NULL AND
+((usage_availability IN ('complete', 'partial') AND usage_source = 'provider_response') OR
+(usage_availability = 'unavailable' AND usage_source = 'not_available' AND
+input_tokens IS NULL AND output_tokens IS NULL AND cached_input_tokens IS NULL AND reasoning_tokens IS NULL)))))
+"""
+
 
 class AgentModelUsageEvent(
     BaseModel,
@@ -44,9 +66,9 @@ class AgentModelUsageEvent(
         sa.CheckConstraint(
             "(event_origin = 'agent_turn' AND status IN "
             "('succeeded', 'failed', 'cancelled')) OR "
-            "(event_origin = 'visit_prep_batch' AND "
+            "(event_origin IN ('visit_prep_batch', 'visit_prep_patient') AND "
             "((batch_phase = 'intent' AND status = 'started') OR "
-            "(batch_phase = 'result' AND status IN ('succeeded', 'failed'))))",
+            "(batch_phase = 'result' AND status IN ('succeeded', 'failed', 'cancelled'))))",
             name="ck_agent_model_usage_event_status",
         ),
         sa.CheckConstraint(
@@ -61,11 +83,13 @@ class AgentModelUsageEvent(
         ),
         sa.CheckConstraint(
             "(event_origin = 'agent_turn' AND surface = 'provider_assistant') OR "
-            "(event_origin = 'visit_prep_batch' AND surface = 'provider_dashboard')",
+            "(event_origin = 'visit_prep_batch' AND surface = 'provider_dashboard') OR "
+            "(event_origin = 'visit_prep_patient' AND surface = 'visit_prep_patient')",
             name="ck_agent_model_usage_event_provider_surface",
         ),
         sa.CheckConstraint(
-            "auth_tier = 'provider'",
+            "(event_origin IN ('agent_turn', 'visit_prep_batch') AND auth_tier = 'provider') OR "
+            "(event_origin = 'visit_prep_patient' AND auth_tier = 'recipient')",
             name="ck_agent_model_usage_event_provider_auth_tier",
         ),
         sa.CheckConstraint(
@@ -93,14 +117,14 @@ class AgentModelUsageEvent(
             name="ck_agent_model_usage_event_reasoning_tokens_nonnegative",
         ),
         sa.CheckConstraint(
-            "(event_origin = 'agent_turn' AND interaction_id IS NOT NULL AND "
+            "(event_origin = 'agent_turn' AND patient_analysis_ref IS NULL AND interaction_id IS NOT NULL AND "
             "tenant_id IS NOT NULL AND actor_id IS NOT NULL AND person_id IS NOT NULL "
             "AND batch_phase IS NULL AND call_intent_id IS NULL AND "
             "core_practice_id IS NULL AND core_doctor_id IS NULL AND "
             "core_member_id IS NULL AND preparation_ref IS NULL AND "
             "build_ref IS NULL AND build_epoch IS NULL AND build_attempt IS NULL "
             "AND source_version IS NULL AND build_lease_until IS NULL) OR "
-            "(event_origin = 'visit_prep_batch' AND interaction_id IS NULL AND "
+            "(event_origin = 'visit_prep_batch' AND patient_analysis_ref IS NULL AND interaction_id IS NULL AND "
             "tenant_id IS NULL AND actor_id IS NULL AND person_id IS NULL AND "
             "batch_phase IS NOT NULL AND batch_phase IN ('intent', 'result') "
             "AND core_practice_id IS NOT NULL "
@@ -125,7 +149,8 @@ class AgentModelUsageEvent(
             "((usage_availability = 'complete' AND usage_source = 'provider_response' "
             "AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL) OR "
             "(usage_availability = 'unavailable' AND usage_source = 'not_available' "
-            "AND input_tokens IS NULL AND output_tokens IS NULL)))))",
+            "AND input_tokens IS NULL AND output_tokens IS NULL))))) OR "
+            + PATIENT_USAGE_SHAPE,
             name="ck_model_usage_origin_shape",
         ),
         UniqueConstraint(
@@ -136,12 +161,16 @@ class AgentModelUsageEvent(
             name="uq_model_usage_batch_phase",
         ),
         UniqueConstraint("call_intent_id", name="uq_model_usage_intent_result"),
+        UniqueConstraint(
+            "patient_analysis_ref", "batch_phase", name="uq_model_usage_patient_phase"
+        ),
     )
 
     event_origin: str = Field(
         default="agent_turn",
         sa_column=Column(sa.String(32), nullable=False, server_default="agent_turn"),
     )
+    patient_analysis_ref: UUID | None = Field(default=None, nullable=True)
     interaction_id: TypeIDType | None = InteractionLineage.foreign_key(
         default=None, nullable=True, index=True
     )
