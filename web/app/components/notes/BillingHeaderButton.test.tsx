@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
+  type AiVisitNote,
   type BillingHeaderSource,
+  billingHeaderOperation,
   prepareBillingHeaderOperation,
 } from "~/configuration/client"
 
+import VisitNoteViewer from "../VisitNoteViewer"
 import { BillingHeaderButton } from "./BillingHeaderButton"
 import {
   fireEvent,
@@ -16,6 +19,8 @@ import {
 
 vi.mock("~/configuration/client", () => ({
   prepareBillingHeaderOperation: vi.fn(),
+  billingHeaderOperation: vi.fn(),
+  billingHeaderCab: vi.fn(),
 }))
 
 const source: BillingHeaderSource = {
@@ -83,7 +88,12 @@ function success(options: unknown, overrides = {}) {
 }
 
 describe("BillingHeaderButton", () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(billingHeaderOperation).mockImplementation(async (options) =>
+      success({ body: { operationId: options.path.operation_id } }),
+    )
+  })
 
   it("requires explicit visit details and confirmation, with no request on open", () => {
     open()
@@ -106,7 +116,8 @@ describe("BillingHeaderButton", () => {
     open()
     fill()
     fireEvent.click(screen.getByRole("button", { name: "Confirm for billing" }))
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect(await screen.findByText("Billing confirmation saved")).toBeVisible()
+    expect(screen.getByRole("status")).toHaveTextContent(
       "A header has not been generated",
     )
     const request = vi.mocked(prepareBillingHeaderOperation).mock.calls[0][0]!
@@ -150,7 +161,8 @@ describe("BillingHeaderButton", () => {
     )
     expect(screen.getByRole("dialog")).toBeVisible()
     fireEvent.click(retry)
-    expect(await screen.findByRole("status")).toHaveTextContent(
+    expect(await screen.findByText("Billing confirmation saved")).toBeVisible()
+    expect(screen.getByRole("status")).toHaveTextContent(
       "Billing confirmation saved",
     )
     const calls = vi.mocked(prepareBillingHeaderOperation).mock.calls
@@ -203,7 +215,9 @@ describe("BillingHeaderButton", () => {
     fireEvent.click(confirm)
     expect(prepareBillingHeaderOperation).toHaveBeenCalledTimes(1)
     finish(success(vi.mocked(prepareBillingHeaderOperation).mock.calls[0][0]))
-    await waitFor(() => expect(screen.getByRole("status")).toBeVisible())
+    await waitFor(() =>
+      expect(screen.getByText("Billing confirmation saved")).toBeVisible(),
+    )
   })
 
   it("requires renewed confirmation when visit details change", () => {
@@ -216,5 +230,95 @@ describe("BillingHeaderButton", () => {
     expect(
       screen.getByRole("button", { name: "Confirm for billing" }),
     ).toBeDisabled()
+  })
+})
+
+describe("billing source loader refresh", () => {
+  const note: AiVisitNote = {
+    id: "note_synthetic",
+    doctor_id: "doctor_synthetic",
+    appointment_id: source.source.appointmentId,
+    ai_transcript_id: "transcript_synthetic",
+    doctor_note_schema_id: source.source.noteSchemaId,
+    note_type: "SOAP",
+    note: { Assessment: "Authored synthetic note" },
+  }
+  function viewer(value: BillingHeaderSource | undefined) {
+    return <VisitNoteViewer note={note} defaultOpen billingSource={value} />
+  }
+  it("keeps the open confirmation through its own operation acknowledgement", async () => {
+    vi.mocked(prepareBillingHeaderOperation).mockImplementation(
+      async (options) => success(options),
+    )
+    vi.mocked(billingHeaderOperation).mockImplementation(async (options) =>
+      success({ body: { operationId: options.path.operation_id } }),
+    )
+    const page = render(viewer(source))
+    fireEvent.click(screen.getByRole("button", { name: "Billing header" }))
+    fill()
+    fireEvent.click(screen.getByRole("button", { name: "Confirm for billing" }))
+    await screen.findByText("Billing confirmation saved")
+    const operationId = vi
+      .mocked(prepareBillingHeaderOperation)
+      .mock.calls.at(-1)![0]!.body.operationId
+    page.rerender(
+      viewer({
+        ...source,
+        source: { ...source.source },
+        latestOperation: {
+          operationId,
+          state: "prepared",
+          sourceRevision: 1,
+          createdAt: "2026-10-02T17:00:00Z",
+        },
+      }),
+    )
+    expect(screen.getByRole("dialog")).toBeVisible()
+    expect(screen.getByText("Billing confirmation saved")).toBeVisible()
+  })
+  it("retains an uncertain confirmation when a loader acknowledges the same operation", async () => {
+    vi.mocked(prepareBillingHeaderOperation).mockRejectedValue(
+      new Error("lost response"),
+    )
+    const page = render(viewer(source))
+    fireEvent.click(screen.getByRole("button", { name: "Billing header" }))
+    fill()
+    fireEvent.click(screen.getByRole("button", { name: "Confirm for billing" }))
+    await screen.findByRole("button", { name: "Retry same confirmation" })
+    const exact = vi
+      .mocked(prepareBillingHeaderOperation)
+      .mock.calls.at(-1)![0]!.body
+    page.rerender(
+      viewer({
+        ...source,
+        latestOperation: {
+          operationId: exact.operationId,
+          state: "prepared",
+          sourceRevision: 1,
+          createdAt: "2026-10-02T17:00:00Z",
+        },
+      }),
+    )
+    expect(screen.getByLabelText("Age at visit")).toHaveValue("34")
+    fireEvent.click(
+      screen.getByRole("button", { name: "Retry same confirmation" }),
+    )
+    await waitFor(() =>
+      expect(
+        vi.mocked(prepareBillingHeaderOperation).mock.calls.at(-1)![0]!.body,
+      ).toEqual(exact),
+    )
+  })
+  it("keeps entered context visible if the capability disappears", () => {
+    const page = render(viewer(source))
+    fireEvent.click(screen.getByRole("button", { name: "Billing header" }))
+    fill()
+    page.rerender(viewer(undefined))
+    expect(screen.getByRole("dialog")).toBeVisible()
+    expect(screen.getByLabelText("Age at visit")).toHaveValue("34")
+    expect(
+      screen.getByRole("button", { name: "Confirm for billing" }),
+    ).toBeDisabled()
+    expect(screen.getByRole("alert")).toHaveTextContent("inputs are retained")
   })
 })
