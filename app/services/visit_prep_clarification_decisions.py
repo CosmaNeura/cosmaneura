@@ -13,7 +13,7 @@ import hmac
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Iterator, Literal, cast
+from typing import Any, Iterator, Literal, cast
 from uuid import UUID
 
 from typeid import TypeID
@@ -145,6 +145,27 @@ def _proposal(
         or question.kind != evidence.context.kind
         or _public_question(question).prompt != evidence.context.prompt
     ):
+        raise VisitPrepClarificationChanged()
+    latest = session.exec(
+        select(VisitPrepClarificationProposal)
+        .where(
+            VisitPrepClarificationProposal.visit_prep_id == prep.id,
+            VisitPrepClarificationProposal.question_id == row.question_id,
+            VisitPrepClarificationProposal.credential_generation
+            == row.credential_generation,
+            VisitPrepClarificationProposal.source_version == row.source_version,
+            VisitPrepClarificationProposal.basis_response_count
+            == row.basis_response_count,
+            VisitPrepClarificationProposal.basis_event_sequence
+            == row.basis_event_sequence,
+        )
+        .order_by(
+            cast(Any, VisitPrepClarificationProposal.recorded_at).desc(),
+            cast(Any, VisitPrepClarificationProposal.id).desc(),
+        )
+        .limit(1)
+    ).one()
+    if latest.id != row.id:
         raise VisitPrepClarificationChanged()
     return row, evidence
 
