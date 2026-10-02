@@ -1,6 +1,7 @@
 // Complete app build for isolated acceptance; never load local environment files.
 // Run the React Router build from web/, with COSMANEURA_BUILD_TARGET=test.
 import { resolve } from "node:path"
+import process from "node:process"
 import { pathToFileURL } from "node:url"
 
 const web = resolve(process.cwd())
