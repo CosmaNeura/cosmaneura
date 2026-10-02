@@ -973,10 +973,13 @@ def stage_visit_prep_reschedule(
     scheduled_at: datetime,
     timezone_name: str,
     now: datetime | None = None,
+    allow_expired: bool = False,
 ) -> VisitPrepMutationResult:
     """Stage rescheduling in the caller transaction; bearer is unusable until commit."""
 
     effective_at = _aware_utc(now, message="reschedule time is invalid")
+    if type(allow_expired) is not bool:
+        raise VisitPrepValidation("reschedule recovery is invalid")
     normalized_scheduled_at, normalized_timezone = _normalized_schedule(
         scheduled_at,
         timezone_name,
@@ -994,11 +997,14 @@ def stage_visit_prep_reschedule(
         owner_practice_member_id=owner_practice_member_id,
         visit_prep_id=visit_prep_id,
     )
-    if visit_prep.revoked_at is not None or visit_prep.lifecycle_state in {
-        "completed",
-        "misdirected",
-    }:
+    if visit_prep.revoked_at is not None or visit_prep.lifecycle_state == "misdirected":
         raise VisitPrepConflict("inactive Visit Prep cannot be rescheduled")
+    if visit_prep.confirmed_at is not None and (
+        visit_prep.retain_until is None
+        or visit_prep.retain_until <= effective_at
+        or normalized_scheduled_at >= visit_prep.retain_until
+    ):
+        raise VisitPrepConflict("reschedule exceeds retained Visit Prep window")
     schedule, credential = _lock_current_lineage(
         session,
         visit_prep=visit_prep,
@@ -1013,8 +1019,13 @@ def stage_visit_prep_reschedule(
     )
     if credential.issued_at > effective_at:
         raise VisitPrepValidation("reschedule time is invalid")
-    if credential.expires_at <= effective_at:
+    if credential.expires_at <= effective_at and not allow_expired:
         raise VisitPrepConflict("Visit Prep credential has already expired")
+    if (
+        visit_prep.confirmed_at is None
+        and schedule.unused_hard_purge_at <= effective_at
+    ):
+        raise VisitPrepConflict("unused Visit Prep retention window has ended")
 
     if visit_prep.appointment_id is not None:
         appointment = _owned_appointment(

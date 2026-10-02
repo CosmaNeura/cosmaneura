@@ -540,13 +540,42 @@ Synthetic checks preserve an in-progress patient's original encrypted answer and
 initial confirmation, and cover current-state action mismatch, replay, late source
 responses, malformed sources and rollback. Exact evidence belongs in the draft PR.
 
-This does not complete booking automation. Completed or expired interview
-reschedules, continuity across rotated links, replacement invitation recovery,
+This does not complete booking automation. Continuity across rotated links, replacement invitation recovery,
 changed-recipient recovery and calendar reassignment remain open. An unknown
 cancellation is a no-op; durable unknown-booking cancellation ordering still needs
 implementation. The existing scheduled-only endpoint is retained. No source,
 release or channel control is activated; recovery disables the source and reverts
 the additive handler while retaining booking events and schemas.
+
+### Completed booking rescheduling
+
+The booking lifecycle lane can now reschedule a completed preparation without
+changing the original answers, contribution history, initial confirmation,
+completion timestamp or retention deadline. It appends a schedule and credential
+generation and retains the prior credential's reschedule revocation. Only the
+internal booking lane may recover an expired invitation; the public provider
+command still rejects expiry. Retention limits, wrong-recipient quarantine and
+revocation remain enforced.
+
+When automatic synthesis is enabled, the same transaction queues a refreshed
+package from already-confirmed completed answers. Unreviewed corrections do not
+trigger analysis. The existing worker protects model inputs and publishes the
+current source version. A late gate or storage failure rolls back the schedule,
+credential, booking event, synthesis job and queue audit together.
+
+Generated forward migration `3a7854eb39e0` changes only the completed-state
+clauses of two lineage guards. An owned, populated predecessor rehearsal proves
+retained patient and booking rows are unchanged and the other guard clauses are
+preserved. Synthetic qualification also covers package refresh, replay, expiry,
+invalid lineage, immutability and matching refreshed packages through the actual
+signed Companion endpoint and dashboard projection. Exact reviewed commit and local results belong
+in the stacked PR. This does not yet restore returning-patient access across
+rotated links or deliver replacement invitations.
+
+Recovery retains schemas and evidence: disable automatic synthesis and the
+booking source, revert the additive application increment if necessary, and use
+a forward fix for a schema fault. No environment control, live source account,
+message transport, deployment or real patient data was used or activated.
 
 ## Source references
 
