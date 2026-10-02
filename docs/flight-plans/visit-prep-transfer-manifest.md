@@ -1305,3 +1305,50 @@ message, deployment or release-control change is introduced. Choice supplements,
 the Sovereign connection, clinical quality, CosmaBot receiver/adapter, qualified
 prior consent, Acuity/email/SMS/reminders, retention/cleanup operations,
 monitoring and clinical/operational acceptance remain full-goal requirements.
+
+## Appointment relative delivery timing
+
+The new pure timing module evaluates the agreed booking email and SMS,
+T−48-hour unopened SMS and T−12-hour unfinished SMS. The quiet-hours and
+daylight-saving helpers and test concepts are adapted from CAB
+`01ad97536c4f6730e30cd8a03dd31cdb07a918fb`,
+`cosmaneura_billing/cosmaneura_billing/chase/scheduling.py` and
+`cosmaneura_billing/tests/test_chase_scheduling.py`. Modified-source notices
+and the retained Apache-2.0 license remain with the implementation. No CAB
+application, insurance policy, dependency, credentials or database is imported.
+
+Visit Prep thresholds use elapsed UTC hours before the appointment rather than
+CAB's 0/1/3/5 local-calendar-day cadence. Quiet hours and minimum channel spacing
+are explicit inputs; no enabled default policy is introduced. Retries check
+current local quiet hours, with real instants through repeated hours, spring
+gaps, non-hour transitions and skipped calendar days. The timing function never
+returns a moment before the due/current instant or permits work at or after the
+appointment or credential deadline.
+
+Short-notice invitations omit thresholds already past when the current
+invitation became effective. On outage recovery, booking comes first and the
+later reminder replaces an obsolete T−48 reminder; quiet-hour delays cannot
+release both together. Existing current-generation intents prevent new intents
+for the same step, including failed and uncertain outcomes. Pending and uncertain
+submissions hold subsequent work on that channel. Potential submissions from
+prior generations still impose spacing after rotation; obsolete queued work
+does not become current. The future durable scheduler must independently cancel
+that obsolete work and serialize intent creation.
+
+Tests cover the timing boundaries and hourly recovery invariants, plus real
+Core creation, patient/caregiver confirmation and all-skipped completion,
+rotation, reschedule and cancellation observed from an independent PostgreSQL
+connection. Those lifecycle checks found that Core does not currently retain
+every first-party open: `get_interview` does not prove an invitation unopened.
+The test-only projection therefore supplies unknown open evidence. Unknown
+evidence omits the unopened reminder; actual confirmation/progress prevents it.
+An authoritative first-party open event remains required for the full cadence.
+Rotation preserves prior aggregate interaction history rather than resetting it.
+
+The result is timing advice, not a send capability, consent grant or dispatch
+authorization. No schema, API, worker, job registration, provider adapter,
+environment setting or release control changes. The separately reviewed
+current-evidence loader, durable scheduling/dispatch and race checks, prior
+consent, SMS/STOP, Acuity integration, first-party open instrumentation,
+monitoring and operational acceptance remain implementation requirements.
+Exact tested revision, commands and implementer review belong in the draft PR.
