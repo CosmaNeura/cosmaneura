@@ -137,12 +137,19 @@ def test_current_cancellation_accepts_tombstone_and_does_not_copy_patient_fields
     assert schedule.generation == credential.generation == len(events) == 1
 
 
-def test_contact_change_revokes_original_without_reassigning_content(monkeypatch):
+@pytest.mark.parametrize("also_rescheduled", [False, True])
+def test_contact_change_revokes_original_without_reassigning_content(
+    monkeypatch, also_rescheduled
+):
     scope, _, settings, response, _, client = _ready(monkeypatch)
     with client:
         assert _post(client, settings).status_code == 200
         original = _current(scope)[0]
         response["email"] = "different@example.com"
+        if also_rescheduled:
+            response["datetime"] = (
+                datetime.fromisoformat(response["datetime"]) + timedelta(days=1)
+            ).isoformat()
         changed = _changed(client, settings)
         assert changed.status_code == 200, changed.text
         assert changed.json()["disposition"] == "recipient_changed"

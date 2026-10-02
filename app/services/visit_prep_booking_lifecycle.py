@@ -126,7 +126,16 @@ def record_current_booking_state(
         if state.observed_at < prior_time:
             raise BookingSourceUnavailable()
         if hmac.compare_digest(state.source_snapshot_hmac, prior_snapshot):
-            if state.active_booking is not None:
+            if prior is not None and prior.action == "recipient_changed":
+                if (
+                    prep.revoked_at is None
+                    or prep.revocation_reason != "physician_revoked"
+                    or credential.revoked_at is None
+                    or schedule.id != prior.schedule_generation_id
+                    or credential.id != prior.credential_generation_id
+                ):
+                    raise BookingSourceUnavailable()
+            elif state.active_booking is not None:
                 current_at, current_zone = _normalized_schedule(
                     state.active_booking.scheduled_at,
                     state.active_booking.timezone_name,
