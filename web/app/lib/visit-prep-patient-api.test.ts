@@ -47,6 +47,25 @@ const contribution = {
 }
 
 describe("patient public API boundary", () => {
+  it("uses cookie-only continuation after reload and never puts a cookie in JavaScript", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ...invited, continued_role: null })),
+      )
+    const client = createVisitPrepPatientClient(
+      "https://api.example.test",
+      null,
+      fetcher,
+    )
+    await client.resume()
+    const options = fetcher.mock.calls[0][1]
+    expect(options.credentials).toBe("include")
+    expect(options.headers).toEqual({ "X-Visit-Prep-Continuation": "1" })
+    client.dispose()
+    await expect(client.resume()).rejects.toMatchObject({ code: "unavailable" })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
   const followup = {
     contract: "visit_prep.patient_followup.v1",
     status: "prompt",

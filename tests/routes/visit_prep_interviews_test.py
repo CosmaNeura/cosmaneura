@@ -695,6 +695,7 @@ def test_public_state_shape_contains_no_ids_or_prior_answers(
     assert response.status_code == 200
     assert response.json() == {
         "status": "in_progress",
+        "continued_role": None,
         "physician_display_name": "Dr. Example",
         "practice_display_name": "Example Practice",
         "scheduled_at": "2026-09-25T14:30:00Z",

@@ -106,15 +106,17 @@ def test_built_followup_exact_retry_then_explicit_wording_and_review(
             page.goto(
                 f"https://testserver/visit-prep#access_token={fixture.access_token}"
             )
-            expect(
-                page.get_by_role("heading", name="Visit Prep complete")
-            ).to_be_visible()
-            page.get_by_role("button", name="Review or change saved answers").click()
+            expect(page.get_by_role("heading", name="Before we begin")).to_be_visible()
             page.get_by_label("Recipient first name").fill("José")
             page.get_by_label("This invitation was sent to", exact=True).select_option(
                 role
             )
-            page.get_by_role("button", name="Show saved answers").click()
+            page.get_by_role("button", name="Begin Visit Prep").click()
+            expect(
+                page.get_by_role("heading", name="Visit Prep complete")
+            ).to_be_visible()
+            page.get_by_role("button", name="Review or change saved answers").click()
+            expect(page.get_by_label("Recipient first name")).to_have_count(0)
             expect(
                 page.get_by_role("heading", name="Your saved answers")
             ).to_be_visible()

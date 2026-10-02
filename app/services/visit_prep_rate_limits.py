@@ -18,6 +18,7 @@ from collections.abc import Sequence
 import redis
 
 from app.configuration.redis import redis_url
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 from app.utils.encryption import pseudonymous_digest
 
 WINDOW_SECONDS = 15 * 60
@@ -187,7 +188,7 @@ def enforce_network_rate_limit(*, network_signal: str | None) -> None:
 def enforce_credential_rate_limits(
     *,
     network_signal: str | None,
-    access_token: str | None,
+    access_token: str | ConfirmedVisitPrepAccess | None,
     confirmation: bool = False,
 ) -> None:
     """Enforce credential buckets without consulting durable token state.
@@ -209,10 +210,13 @@ def enforce_credential_rate_limits(
     keys = [_redis_key("credential-network", credential_network_ref)]
     limits = [TOKEN_LIMIT]
 
-    canonical_token = _canonical_access_token(access_token)
+    continued = isinstance(access_token, ConfirmedVisitPrepAccess)
+    canonical_token = continued or _canonical_access_token(access_token)
+    token_value = access_token.token_hash if continued else access_token
     if canonical_token:
         assert access_token is not None
-        token_ref = _reference(access_token, context=_TOKEN_CONTEXT)
+        assert isinstance(token_value, str)
+        token_ref = _reference(token_value, context=_TOKEN_CONTEXT)
         keys.append(_redis_key("token", token_ref))
         limits.append(TOKEN_LIMIT)
 
@@ -225,8 +229,9 @@ def enforce_credential_rate_limits(
         limits.append(CONFIRMATION_LIMIT)
         if canonical_token:
             assert access_token is not None
+            assert isinstance(token_value, str)
             confirmation_ref = _reference(
-                access_token,
+                token_value,
                 context=_TOKEN_CONFIRMATION_CONTEXT,
             )
             keys.append(_redis_key("confirmation", confirmation_ref))

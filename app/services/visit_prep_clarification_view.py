@@ -32,6 +32,7 @@ from app.services.visit_prep_interview_contract import (
 )
 from app.services.visit_prep_interviews import _commit, _questions
 from app.services.visit_prep_packages import _source_package_from_locked_state
+from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 
 from app.models.authority import AuthorityAuditEvent
 from app.models.visit_prep_clarification import (
@@ -63,7 +64,11 @@ class PatientClarificationView:
 
 
 def get_patient_clarification_view(
-    *, access_token: str, first_name: str, role: ContributionRole, question_key: str
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
+    question_key: str,
 ) -> PatientClarificationView:
     return _get_patient_clarification_view(
         access_token=access_token,
@@ -75,7 +80,11 @@ def get_patient_clarification_view(
 
 
 def get_patient_followup_view(
-    *, access_token: str, first_name: str, role: ContributionRole, question_key: str
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
+    question_key: str,
 ) -> PatientClarificationView:
     """Read a current saved neutral prompt or its actual patient response.
 
@@ -94,7 +103,7 @@ def get_patient_followup_view(
 
 def _get_patient_clarification_view(
     *,
-    access_token: str,
+    access_token: str | ConfirmedVisitPrepAccess,
     first_name: str,
     role: ContributionRole,
     question_key: str,

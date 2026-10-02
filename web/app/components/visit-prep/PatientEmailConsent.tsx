@@ -33,10 +33,12 @@ export function PatientEmailConsent({
   client,
   onClose,
   onUnavailable,
+  continuedRole = null,
 }: {
   client: VisitPrepPatientClient
   onClose: () => void
   onUnavailable: () => void
+  continuedRole?: PatientConfirmation["role"] | null
 }) {
   const generation = useRef(0)
   const mounted = useRef(false)
@@ -68,6 +70,7 @@ export function PatientEmailConsent({
   useEffect(() => {
     mounted.current = true
     generation.current += 1
+    pending.current = false
     function conceal() {
       if (document.visibilityState !== "visible") clear()
     }
@@ -81,6 +84,10 @@ export function PatientEmailConsent({
       document.removeEventListener("visibilitychange", conceal)
     }
   }, [])
+
+  useEffect(() => {
+    if (continuedRole) load()
+  }, [continuedRole])
 
   async function run(operation: (version: number) => Promise<void>) {
     if (pending.current) return
@@ -106,8 +113,10 @@ export function PatientEmailConsent({
   }
 
   function load() {
-    if (pending.current || !firstName.trim()) return
-    const confirmed = { first_name: firstName, role }
+    if (pending.current || (!continuedRole && !firstName.trim())) return
+    const confirmed: PatientConfirmation = continuedRole
+      ? { role: continuedRole }
+      : { first_name: firstName, role }
     void run(async (version) => {
       const next = await client.readEmailConsent(confirmed)
       if (!mounted.current || generation.current !== version) return
@@ -200,7 +209,11 @@ export function PatientEmailConsent({
         recorded permission is not yet qualified for sending. This does not
         permit SMS or marketing.
       </p>
-      {!value ? (
+      {!value && continuedRole ? (
+        <Button className="mt-6" disabled={busy} onClick={load}>
+          {busy ? "Loading…" : "Load current email choices"}
+        </Button>
+      ) : !value ? (
         <form
           onSubmit={(event) => {
             event.preventDefault()

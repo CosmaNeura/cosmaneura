@@ -137,11 +137,14 @@ def test_built_optional_choice_grant_uncertainty_completion_and_withdrawal(
             expect(
                 page.get_by_role("heading", name="Optional email choices")
             ).to_be_visible()
+            expect(
+                page.get_by_text("No email choice recorded at last load", exact=True)
+            ).to_be_visible()
             page.get_by_role("button", name="Back to preparation").click()
             expect(page.get_by_role("textbox")).to_have_value(
                 "An unsaved synthetic reason."
             )
-            assert reads == 0 and not decisions
+            assert reads == 1 and not decisions
 
             def open_choices():
                 page.get_by_role(
@@ -149,11 +152,10 @@ def test_built_optional_choice_grant_uncertainty_completion_and_withdrawal(
                 ).click()
 
             def load_choices():
-                page.get_by_label("Recipient first name").fill("José")
-                page.get_by_label(
-                    "This invitation was sent to", exact=True
-                ).select_option(role)
-                page.get_by_role("button", name="Load current email choices").click()
+                expect(page.get_by_label("Recipient first name")).to_have_count(0)
+                button = page.get_by_role("button", name="Load current email choices")
+                if button.count():
+                    button.click()
 
             def attest():
                 page.get_by_label("I reviewed these disclosures", exact=False).check()
@@ -195,7 +197,7 @@ def test_built_optional_choice_grant_uncertainty_completion_and_withdrawal(
                     exact=True,
                 )
             ).to_be_visible()
-            assert len(decisions) == 1 and reads == 2
+            assert len(decisions) == 1 and reads == 3
             page.get_by_role("button", name="Back to preparation").click()
             for prompt in (
                 "What is the main reason for this visit?",
@@ -230,14 +232,14 @@ def test_built_optional_choice_grant_uncertainty_completion_and_withdrawal(
             expect(
                 page.get_by_text("Email permission withdrawn at last load", exact=True)
             ).to_be_visible()
-            assert len(decisions) == 2 and reads == 4
+            assert len(decisions) == 2 and reads == 5
             assert decisions[0][0] != decisions[1][0]
             page.screenshot(
                 path=str(directory / f"visit-prep-email-withdrawn-{role}-{width}.png"),
                 full_page=True,
             )
             page.evaluate("window.dispatchEvent(new Event('blur'))")
-            expect(page.get_by_label("Recipient first name")).to_have_value("")
+            expect(page.get_by_label("Recipient first name")).to_have_count(0)
             expect(
                 page.get_by_text("Email permission withdrawn at last load", exact=True)
             ).to_have_count(0)

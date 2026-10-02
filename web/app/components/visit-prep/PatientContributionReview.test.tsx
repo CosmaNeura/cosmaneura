@@ -43,7 +43,7 @@ const initial: PatientContribution = {
     },
   ],
 }
-function setup() {
+function setup(continuedRole: "patient" | "caregiver" | null = null) {
   const client = {
     resume: vi.fn(),
     confirm: vi.fn(),
@@ -67,7 +67,7 @@ function setup() {
     onClose: vi.fn(),
     onStatus: vi.fn(),
   }
-  render(<PatientContributionReview {...props} />)
+  render(<PatientContributionReview {...props} continuedRole={continuedRole} />)
   return props
 }
 async function open() {
@@ -88,6 +88,21 @@ const receipt = (sequence: number, complete = true, reviewed = false) => ({
 })
 
 describe("saved patient contribution review", () => {
+  it("uses remembered confirmation without asking for names again, including after concealment", async () => {
+    const { client } = setup("caregiver")
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.readContribution).toHaveBeenCalledWith({ role: "caregiver" })
+    expect(
+      screen.queryByLabelText("Recipient first name"),
+    ).not.toBeInTheDocument()
+    fireEvent(window, new Event("blur"))
+    expect(
+      screen.queryByText("Original invented story."),
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Show saved answers" }))
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.readContribution).toHaveBeenCalledTimes(2)
+  })
   const followup = {
     contract: "visit_prep.patient_followup.v1",
     status: "prompt",

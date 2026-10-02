@@ -235,15 +235,7 @@ def test_built_patient_journey_is_private_and_stores_the_original_story(
                 full_page=True,
             )
             page.get_by_role("button", name="Review or change saved answers").click()
-            expect(
-                page.get_by_role("heading", name="Review your saved answers")
-            ).to_be_visible()
-            expect(page.get_by_text(story, exact=True)).to_have_count(0)
-            page.get_by_label("Recipient first name").fill("José")
-            page.get_by_label("This invitation was sent to", exact=True).select_option(
-                "caregiver"
-            )
-            page.get_by_role("button", name="Show saved answers").click()
+            expect(page.get_by_label("Recipient first name")).to_have_count(0)
             expect(
                 page.get_by_role("heading", name="Your saved answers")
             ).to_be_visible()

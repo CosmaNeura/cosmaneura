@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  canResumeVisitPrepConfirmation,
   captureVisitPrepCredential,
   forgetVisitPrepCredential,
   isCanonicalVisitPrepToken,
@@ -26,6 +27,7 @@ describe("patient invitation memory boundary", () => {
     const replace = capture("/visit-prep", `#access_token=${token}`)
     expect(replace).toHaveBeenCalledWith({ preserved: true }, "", "/visit-prep")
     expect(readVisitPrepCredential()).toBe(token)
+    expect(canResumeVisitPrepConfirmation()).toBe(true)
     expect(storage).not.toHaveBeenCalled()
     storage.mockRestore()
     forgetVisitPrepCredential()
@@ -53,5 +55,18 @@ describe("patient invitation memory boundary", () => {
     expect(isVisitPrepPatientPath("/visit-prep/unsupported")).toBe(true)
     expect(isVisitPrepPatientPath("/visit-preps")).toBe(false)
     expect(isCanonicalVisitPrepToken(token)).toBe(true)
+  })
+
+  it("allows a clean reload but not a malformed or ambiguous invitation to use a remembered cookie", () => {
+    capture("/visit-prep", "")
+    expect(canResumeVisitPrepConfirmation()).toBe(true)
+    for (const [hash, search] of [
+      ["#malformed", ""],
+      ["", "?tracking=1"],
+      [`#access_token=${token}&tracking=1`, ""],
+    ]) {
+      capture("/visit-prep", hash, search)
+      expect(canResumeVisitPrepConfirmation()).toBe(false)
+    }
   })
 })
