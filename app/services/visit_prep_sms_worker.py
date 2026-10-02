@@ -34,6 +34,7 @@ from activemodel.session_manager import get_engine
 from activemodel.types import TypeIDType
 from app.models.practice import Practice
 from app.models.visit_prep import VisitPrep, VisitPrepCredentialGeneration
+from app.models.visit_prep_sms_approval import VisitPrepSMSApprovalEvent
 from app.models.visit_prep_sms_consent import VisitPrepSMSConsentEvent
 from app.models.visit_prep_sms_delivery import VisitPrepSMSDelivery
 from app.models.visit_prep_sms_stop import VisitPrepSMSStopEvent
@@ -349,6 +350,17 @@ def maintain_sms_secrets(*, limit: int = 25) -> dict[str, int | str]:
                 .correlate(VisitPrepSMSDelivery)
                 .scalar_subquery()
             )
+            latest_approval = (
+                select(col(VisitPrepSMSApprovalEvent.event_kind))
+                .where(
+                    VisitPrepSMSApprovalEvent.owner_practice_member_id
+                    == VisitPrepSMSDelivery.owner_practice_member_id
+                )
+                .order_by(col(VisitPrepSMSApprovalEvent.event_sequence).desc())
+                .limit(1)
+                .correlate(VisitPrepSMSDelivery)
+                .scalar_subquery()
+            )
             stopped = (
                 select(col(VisitPrepSMSStopEvent.id))
                 .where(
@@ -383,6 +395,7 @@ def maintain_sms_secrets(*, limit: int = 25) -> dict[str, int | str]:
                                 != latest_credential,
                                 col(VisitPrepSMSDelivery.consent_event_id)
                                 != latest_consent,
+                                latest_approval == "withdrawn",
                                 stopped,
                             ),
                         ),
@@ -421,6 +434,15 @@ def maintain_sms_secrets(*, limit: int = 25) -> dict[str, int | str]:
                         sender_digest=row.sender_digest,
                         recipient_digest=row.recipient_digest,
                     )
+                    approval = session.exec(
+                        select(col(VisitPrepSMSApprovalEvent.event_kind))
+                        .where(
+                            VisitPrepSMSApprovalEvent.owner_practice_member_id
+                            == row.owner_practice_member_id
+                        )
+                        .order_by(col(VisitPrepSMSApprovalEvent.event_sequence).desc())
+                        .limit(1)
+                    ).one_or_none()
                     if (
                         credential.id != row.credential_id
                         or credential.revoked_at is not None
@@ -432,6 +454,7 @@ def maintain_sms_secrets(*, limit: int = 25) -> dict[str, int | str]:
                         or consent.event_kind != "granted"
                         or consent.expires_at is None
                         or consent.expires_at <= now
+                        or approval == "withdrawn"
                         or stopped
                     ):
                         _finish(session, row, "suppressed", "obsolete_context")
