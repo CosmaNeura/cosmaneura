@@ -613,3 +613,33 @@ service or release-control change is included. Qualified evidence retention,
 capture adapters, atomic enqueue, dispatch, cleanup and status UI remain open.
 Final tested revision, regression results and implementer review are recorded
 in the stacked draft PR.
+
+The physician policy-decision command now captures explicit approval or
+withdrawal in `visit_prep_email_policy.py`. It adapts the pinned CAB policy
+fingerprint and operation-replay pattern to Core's current owner locks,
+encrypted evidence and existing authoritative audit store. The future
+authenticated route must derive owner and subject from its principal; this
+domain command does not accept an actor inside the decision payload or create
+an authority identity. No new dependency, schema, route or job is introduced.
+
+Each new decision confirms the displayed policy fingerprint, explicit expiry
+and current stream sequence. The command commits evidence and a content-free
+audit together, rechecking current Core authority and database time after lock
+waits and before commit. A changed template requires new approval; withdrawing
+the previous template does not approve its replacement. Exact operation replay
+returns the original receipt and current stream sequence without another event
+or audit. Neither replay nor a stale new operation restores a withdrawn grant.
+Expired historical receipts remain receipts, not renewed permission.
+
+Synthetic PostgreSQL checks cover atomic audit failure, divergent retries,
+current identity/BAA/seat/entitlement denials, actual elapsed expiry, and
+independent competing decisions and withdrawal waits. Captured policy evidence
+is consumed by the existing locked resolver, which still denies missing
+recipient consent and denies physician withdrawal. The consent-source fixture
+in that integration check is explicitly invented, not qualified patient consent.
+
+This completes the dormant physician decision domain, not its dashboard control
+or an invitation send. Real patient/trusted-source consent capture, qualified
+evidence retention, atomic enqueue, dispatch, cleanup and delivery status remain
+open. Email and public release controls remain off. Final commit-specific checks
+and implementer review belong in its stacked draft PR.
