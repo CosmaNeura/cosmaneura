@@ -316,7 +316,7 @@ below. The companion display contract itself still grants no analysis permission
 ## Patient requested AI action October 2 2026
 
 The patient review screen now has a default-hidden “Help me clarify this answer”
-action for answered text topics. Core selects that current topic, applies its
+action for answered topics. Core selects that current topic, applies its
 clinical protection, commits a one-use analysis request and central usage intent,
 and sends only the protected words to Sovereign. A separate signed Core workload
 must hold `VisitPrep.Clarify`; a provider token or generic anonymous chat cannot
@@ -330,8 +330,8 @@ to that committed successful usage result. Core freshly checks the answer again,
 grounds exact excerpts and saves the encrypted proposal before the browser can
 read it. Patients accept, edit, keep or dismiss through the existing explicit
 decision flow. Saved follow-up answers can request another bounded suggestion;
-they remain separate words until patient acceptance. Coded-answer AI explanation
-acceptance remains unfinished; its deterministic explanation editor still works.
+they remain separate words until patient acceptance. Selected-answer explanation
+acceptance is connected in the next increment described below.
 
 Exact retries recover a saved proposal without another model call. An uncertain
 attempt is not automatically retried; the patient can continue with the saved
@@ -354,6 +354,32 @@ invented de-id/model transports. Live model quality, actual service coverage,
 cross-device/contact continuation, Acuity/SMS/reminder completion, broader
 CosmaBot actions and operational acceptance remain unfinished. No live patient
 data, message, merge, deployment or retirement is part of this increment.
+
+## AI explanations for selected answers October 2 2026
+
+Patients and caregivers can now request help for an answered choice topic as well
+as written answers. Core protects the current explanation and any actual saved
+follow-up words. The selected option is context only: neither model nor Core may
+copy its label into proposed explanatory prose. Without explanatory words, the
+bounded assistant can ask a neutral follow-up within the same physician topic.
+
+Explicit acceptance or editing appends an encrypted explanation through the
+existing contribution stream, in the same transaction as decision and audit.
+The selected code and original answer remain unchanged. Earlier explanations
+are retained; changing even to the same code revision, editing an explanation or
+withdrawing it invalidates an old proposal. The explanation changes the shared
+package version and remains separately attributed in dashboard and bot sources.
+
+Generated migration `208271feaef7` follows `dd93e7a689f1` and expands only the
+existing decision guard to admit an exact-next explanation for a choice. It adds
+no table, contact copy or alternate clinical store, and preserves existing
+immutable-source checks. Recovery remains disabling the actions and reverting
+application code while retaining the guard and evidence; use a forward fix for
+schema recovery. Existing text-proposal envelope bytes remain readable.
+
+This increment does not activate a model, invitation transport or environment.
+Controlled clinical/model/service qualification, cross-device continuation,
+Acuity booking, SMS/reminders and broader governed CosmaBot actions remain open.
 
 ## Source references
 

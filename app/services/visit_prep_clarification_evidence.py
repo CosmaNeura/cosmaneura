@@ -116,6 +116,11 @@ class ClarificationProposalEvidence:
             or not self.context.turns
         ):
             raise VisitPrepClarificationInvalid()
+        context_payload = asdict(self.context)
+        if self.context.explanation_words is None:
+            # Preserve the exact v1 envelope bytes for retained text proposals.
+            context_payload.pop("explanation_words")
+            context_payload.pop("explanation_source_ref")
         payload = {
             "format_version": 1,
             "prompt_version": PROMPT_VERSION,
@@ -125,7 +130,7 @@ class ClarificationProposalEvidence:
             "credential_generation": self.credential_generation,
             "operation_id": self.operation_id,
             "model_profile": self.model_profile,
-            "context": asdict(self.context)
+            "context": context_payload
             | {"turns": [asdict(turn) for turn in self.context.turns]},
             "reply": self.reply.model_dump(mode="json", warnings="error"),
         }
@@ -163,8 +168,13 @@ class ClarificationDecisionEvidence:
         organized = validate_clarification_reply(proposal.context, proposal.reply)
         if self.decision.action in {"confirm", "edit"}:
             if (
-                proposal.context.kind == "choice"
-                or proposal.reply.kind != "organize"
+                proposal.reply.kind != "organize"
+                or (
+                    proposal.context.kind == "choice"
+                    and any(
+                        span.source == "answer" for span in proposal.reply.statements
+                    )
+                )
                 or organized is None
                 or not _ref(self.correction_id, {"visit_prep_contribution"})
             ):

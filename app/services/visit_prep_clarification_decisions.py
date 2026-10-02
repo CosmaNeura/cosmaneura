@@ -4,7 +4,7 @@ The future patient route passes only a saved proposal ID and explicit choice.
 This command reacquires ordinary public/recipient authority and acknowledges a
 single commit of decision, exact text correction and privacy-minimized audit.
 It never accepts replacement proposal/context/model evidence from the client.
-Choice supplementation and model qualification remain separate unfinished work.
+Choice acceptance uses the existing explanation stream, never a code correction.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from app.services.visit_prep_contributions import (
     _load_contribution,
     _require_recipient,
     correct_contribution_in_session,
+    explain_contribution_in_session,
 )
 from app.services.visit_prep_interview_contract import (
     VisitPrepInterviewConflict,
@@ -277,7 +278,7 @@ def _accepted_words(
         if decision.edited_words is not None:
             raise VisitPrepClarificationInvalid()
         return None
-    if proposal.context.kind == "choice" or organized is None:
+    if organized is None:
         raise VisitPrepClarificationInvalid()
     # The codec validates exact normalized edited words and the closed action.
     return decision.edited_words if decision.action == "edit" else organized
@@ -331,7 +332,8 @@ def _check_result(
         )
         if (
             event is None
-            or event.event_kind != "correction"
+            or event.event_kind
+            != ("explanation" if proposal.context.kind == "choice" else "correction")
             or event.idempotency_key != row.operation_id
             or event.actor_role != proposal.context.actor_role
             or event.credential_generation != proposal.credential_generation
@@ -342,9 +344,23 @@ def _check_result(
             or row.recorded_at is None
             or event.recorded_at > row.recorded_at
             or not topic.applicable
-            or topic.current_correction_id != row.correction_id
             or topic.response_kind != "answered"
-            or topic.answer != accepted
+        ):
+            raise VisitPrepClarificationChanged()
+        if proposal.context.kind == "choice":
+            if (
+                topic.answer != proposal.context.answer
+                or str(topic.current_correction_id or topic.original_response_id)
+                != proposal.context.current_source_ref
+                or topic.explanation_id != row.correction_id
+                or topic.explanation_words != accepted
+                or str(event.question_id) != proposal.question_id
+                or event.response_id != topic.original_response_id
+                or event.target_revision_id != topic.current_correction_id
+            ):
+                raise VisitPrepClarificationChanged()
+        elif (
+            topic.current_correction_id != row.correction_id or topic.answer != accepted
         ):
             raise VisitPrepClarificationChanged()
     return current
@@ -415,16 +431,26 @@ def record_patient_clarification_decision(
                 correction_id = None
                 if intent is not None:
                     if proposal.context.kind == "choice":
-                        raise VisitPrepClarificationInvalid()
-                    corrected = correct_contribution_in_session(
-                        session,
-                        access_token=access_token,
-                        first_name=first_name,
-                        role=role,
-                        expected_basis=proposal.context.basis,
-                        idempotency_key=operation,
-                        response=intent.response,
-                    )
+                        corrected = explain_contribution_in_session(
+                            session,
+                            access_token=access_token,
+                            first_name=first_name,
+                            role=role,
+                            expected_basis=proposal.context.basis,
+                            idempotency_key=operation,
+                            question_key=proposal.context.question_key,
+                            patient_words=intent.supplemental_words,
+                        )
+                    else:
+                        corrected = correct_contribution_in_session(
+                            session,
+                            access_token=access_token,
+                            first_name=first_name,
+                            role=role,
+                            expected_basis=proposal.context.basis,
+                            idempotency_key=operation,
+                            response=intent.response,
+                        )
                     if corrected.disposition != "accepted":
                         raise VisitPrepClarificationChanged()
                     event = session.exec(

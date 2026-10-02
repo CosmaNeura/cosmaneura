@@ -38,7 +38,14 @@ from tests.services.visit_prep_contribution_projection_test import (
 )
 
 
-def _enable(monkeypatch, *, before_claim=None, after_call=None, record_usage=True):
+def _enable(
+    monkeypatch,
+    *,
+    before_claim=None,
+    after_call=None,
+    record_usage=True,
+    reply_factory=None,
+):
     client_id = str(uuid4())
     policy = replace(
         service_auth.SOVEREIGN_TOOL_AUTH_SETTINGS,
@@ -84,7 +91,7 @@ def _enable(monkeypatch, *, before_claim=None, after_call=None, record_usage=Tru
                 grant=grant, topic_digest=analysis._digest(topic), workload=workload
             )
         words = "my invented sleep concern comes first."
-        start = topic["reported_words"].index(words)
+        start = topic["reported_words"].index(words) if reply_factory is None else 0
         at = datetime.now(UTC)
         usage = analysis.PatientUsage(
             client_event_id=uuid4(),
@@ -129,7 +136,9 @@ def _enable(monkeypatch, *, before_claim=None, after_call=None, record_usage=Tru
             json={
                 "analysis_id": claimed["analysis_id"],
                 "usage_ref": receipt["record_ref"],
-                "reply": {
+                "reply": reply_factory(topic)
+                if reply_factory
+                else {
                     "kind": "organize",
                     "prompt_code": None,
                     "statements": [

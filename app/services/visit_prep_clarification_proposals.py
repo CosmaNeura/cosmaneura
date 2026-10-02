@@ -184,7 +184,9 @@ def _record_clarification_proposal(
             ):
                 raise VisitPrepClarificationChanged()
             validate_clarification_reply(context, reply)
-            if context.kind == "choice" and reply.kind == "organize":
+            if context.kind == "choice" and any(
+                span.source == "answer" for span in reply.statements
+            ):
                 raise VisitPrepClarificationInvalid()
             prep = authorized.visit_prep
             question = next(

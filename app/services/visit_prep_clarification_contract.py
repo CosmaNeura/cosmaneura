@@ -33,7 +33,7 @@ MAX_CONFIRMED_CHARACTERS = 2_000
 PROMPT_VERSION = "patient_clarification_quotes_v1"
 
 PromptCode = Literal["detail", "sequence", "priority", "background"]
-WordSource = Literal["answer", "clarification_1", "clarification_2"]
+WordSource = Literal["answer", "explanation", "clarification_1", "clarification_2"]
 DecisionAction = Literal["confirm", "edit", "keep_original", "dismiss"]
 
 # Model-selected codes, never model-authored questions, treatment or reassurance.
@@ -80,6 +80,8 @@ class VisitPrepClarificationContext:
     reported_words: str = field(repr=False)
     current_source_ref: str
     turns: tuple[PatientClarificationTurn, ...] = field(default=(), repr=False)
+    explanation_words: str | None = field(default=None, repr=False)
+    explanation_source_ref: str | None = None
 
 
 class PatientQuoteSpan(BaseModel):
@@ -115,9 +117,9 @@ class PatientClarificationDecision:
 class PatientConfirmedClarification:
     """Intent only; a future writer must authorize and atomically bind evidence.
 
-    Text topics can use the existing patient correction command. A choice stays
-    a choice; supplementary patient words require a separately qualified source
-    write and MUST NOT be passed to that command as a choice value.
+    Text topics use the existing patient correction command. A choice stays a
+    choice; supplementary words use the existing exact-revision explanation
+    command and MUST NOT be passed to the correction command as a choice value.
     """
 
     package_id: str
@@ -194,6 +196,14 @@ def validate_clarification_context(context: VisitPrepClarificationContext) -> No
         raise VisitPrepClarificationInvalid() from None
     if context.kind != "choice" and context.answer != context.reported_words:
         raise VisitPrepClarificationInvalid()
+    if (context.explanation_words is None) != (context.explanation_source_ref is None):
+        raise VisitPrepClarificationInvalid()
+    if context.explanation_words is not None:
+        if context.kind != "choice" or not _ref(
+            context.explanation_source_ref, {"visit_prep_contribution"}
+        ):
+            raise VisitPrepClarificationInvalid()
+        _words(context.explanation_words)
     for turn in context.turns:
         if (
             type(turn) is not PatientClarificationTurn
@@ -263,6 +273,10 @@ def select_clarification_context(
         answer=topic.answer,
         reported_words=reported,
         current_source_ref=str(source),
+        explanation_words=topic.explanation_words,
+        explanation_source_ref=str(topic.explanation_id)
+        if topic.explanation_words is not None and topic.explanation_id is not None
+        else None,
     )
     validate_clarification_context(context)
     return context
@@ -299,6 +313,8 @@ def validate_clarification_reply(
     if reply.prompt_code is not None or not reply.statements:
         raise VisitPrepClarificationInvalid()
     words = {"answer": context.reported_words}
+    if context.explanation_words is not None:
+        words["explanation"] = context.explanation_words
     words.update(
         {
             f"clarification_{i + 1}": turn.patient_words
@@ -377,6 +393,10 @@ def confirm_patient_clarification(
         return None
     if reply.kind != "organize" or organized is None:
         raise VisitPrepClarificationInvalid()
+    if context.kind == "choice" and any(
+        span.source == "answer" for span in reply.statements
+    ):
+        raise VisitPrepClarificationInvalid()
     if decision.action != "confirm" and decision.action != "edit":
         raise VisitPrepClarificationInvalid()
     if decision.action == "edit":
@@ -399,7 +419,5 @@ def confirm_patient_clarification(
         response=ResponseInput(
             context.question_key, "answered", context.answer if choice else confirmed
         ),
-        supplemental_words=confirmed
-        if choice and confirmed != context.reported_words
-        else None,
+        supplemental_words=confirmed if choice else None,
     )

@@ -44,6 +44,11 @@ class ProtectedClarification:
                 {"prompt_code": turn.prompt_code, "patient_words": turn.patient_words}
                 for turn in current.turns
             ],
+            **(
+                {"explanation_words": current.explanation_words}
+                if current.explanation_words is not None
+                else {}
+            ),
         }
 
 
@@ -58,6 +63,7 @@ def protect_clarification_context(
                 context.prompt,
                 context.reported_words,
                 *(turn.patient_words for turn in context.turns),
+                *((context.explanation_words,) if context.explanation_words else ()),
             )
         )
         protected = replace(
@@ -67,8 +73,13 @@ def protect_clarification_context(
             answer=context.answer if context.kind == "choice" else values[1],
             turns=tuple(
                 replace(turn, patient_words=value)
-                for turn, value in zip(context.turns, values[2:], strict=True)
+                for turn, value in zip(
+                    context.turns, values[2 : 2 + len(context.turns)], strict=True
+                )
             ),
+            explanation_words=values[-1]
+            if context.explanation_words is not None
+            else None,
         )
         validate_clarification_context(protected)
         return ProtectedClarification(context, protected)
@@ -90,6 +101,11 @@ def ground_protected_reply(
         validate_clarification_reply(context.protected, reply)
         original = {
             "answer": context.original.reported_words,
+            **(
+                {"explanation": context.original.explanation_words}
+                if context.original.explanation_words is not None
+                else {}
+            ),
             **{
                 f"clarification_{i + 1}": turn.patient_words
                 for i, turn in enumerate(context.original.turns)
@@ -97,6 +113,11 @@ def ground_protected_reply(
         }
         protected = {
             "answer": context.protected.reported_words,
+            **(
+                {"explanation": context.protected.explanation_words}
+                if context.protected.explanation_words is not None
+                else {}
+            ),
             **{
                 f"clarification_{i + 1}": turn.patient_words
                 for i, turn in enumerate(context.protected.turns)
