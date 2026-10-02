@@ -53,6 +53,7 @@ from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .routes.visit_prep_acuity import router as visit_prep_acuity_router
 from .routes.visit_prep_interviews import (
     visit_prep_interviews_api_app,
     visit_prep_public_network_boundary,
@@ -108,6 +109,7 @@ api_app.include_router(companion_session_prep_router, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(visit_prep_interviews_api_app)
+api_app.include_router(visit_prep_acuity_router)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
 api_app.include_router(zoom_auth_app)

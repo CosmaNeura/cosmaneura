@@ -413,6 +413,54 @@ link cannot authorize that first contact. Acuity booking and prior-contact conse
 provenance, SMS transport and STOP processing, automated reminders, cross-device
 continuation, broader CosmaBot actions and operational acceptance remain open.
 
+## Acuity booking handoff implementation October 2 2026
+
+The next stacked branch adds a default-off route for signed Acuity scheduled
+notifications. It verifies the signature against the original bounded request
+bytes, then retrieves the current appointment through Acuity's fixed API origin.
+The adapter keeps only the recipient contact and appointment timing needed for
+preparation. It discards form answers and notes, creates no patient chart, and
+uses an explicit calendar-to-practice-and-physician mapping rather than guessing
+ownership from an email address. The calendar's configured timezone governs the
+schedule; a supplied offset must agree with that timezone.
+
+The preparation uses the physician's published default five-topic set. Creation
+and a booking receipt commit in one isolated transaction, using existing Core
+ownership, practice, BAA and entitlement checks. A connection-scoped pseudonymous
+booking reference and database uniqueness fence allow duplicate notifications to
+recover the same preparation. The receipt is immutable and contains no contact
+details or invitation bearer. A changed or reassigned booking cannot silently
+create another preparation through this scheduled-only lane.
+
+No delivery is queued. John reported that permission for appointment-related
+messages is not known to exist outside possible initial booking information.
+Treat that permission as unverified: booking alone is not evidence of consent,
+and a later patient choice cannot authorize the first invitation. A verified
+prior-contact consent source or explicit booking field and disclosure remains
+necessary before automatic email or SMS invitations can be activated. No Acuity
+account, credentials, webhook registration or environment setting was changed.
+
+Generated expansion `b3f91f1acb40` follows `208271feaef7` and adds only the booking
+receipt with ownership and immutability guards. Recovery retains this schema and
+evidence: disable the source and revert the additive route and adapter if needed,
+using a forward fix for schema faults. A feature flag is not a database rollback.
+Synthetic qualification covers the actual signed route, current-source projection,
+dashboard list, duplicate and concurrent delivery, source rejection, transaction
+rollback and isolation, database immutability, and a populated predecessor expansion.
+Exact results and reviewed commit are recorded in the stacked draft PR.
+
+This is preparation creation, not complete booking automation. Native Acuity
+notifications provide no unique version for all future changes. Reschedule,
+cancellation, reassignment and changed-contact handling still need an authoritative
+lifecycle lane; invitation recovery, initial consent, ingress operational limits,
+and actual source/service qualification remain activation gates. This branch is
+stacked on the completed email workflow. Current `master` was fetched at
+`49895cb66a305558393a0862a590ee313b60c194`. Its newer CAB changes overlap application
+registration and add a separate migration branch. Reconciliation is still pending
+and must preserve both features and restore a single migration head, with affected
+checks, before the stack is ready.
+No merge, deployment, live patient data or real message is part of this increment.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
@@ -421,3 +469,4 @@ continuation, broader CosmaBot actions and operational acceptance remain open.
 - CAB source inspected at `01ad97536c4f6730e30cd8a03dd31cdb07a918fb`: [ACS email transport](https://github.com/CosmaNeura/Cosmas-CAB-Tool/blob/01ad97536c4f6730e30cd8a03dd31cdb07a918fb/cosmaneura_billing/cosmaneura_billing/chase/acs_email.py), [worker](https://github.com/CosmaNeura/Cosmas-CAB-Tool/blob/01ad97536c4f6730e30cd8a03dd31cdb07a918fb/cosmaneura_billing/cosmaneura_billing/chase/worker.py), [scheduling rules](https://github.com/CosmaNeura/Cosmas-CAB-Tool/blob/01ad97536c4f6730e30cd8a03dd31cdb07a918fb/cosmaneura_billing/cosmaneura_billing/chase/scheduling.py), and [adapter tests](https://github.com/CosmaNeura/Cosmas-CAB-Tool/blob/01ad97536c4f6730e30cd8a03dd31cdb07a918fb/cosmaneura_billing/tests/test_acs_email.py).
 - [CosmaBot architecture](https://github.com/CosmaNeura/cosmaneura-os/blob/main/docs/COSMABOT_ARCHITECTURE.md), [Session Prep connection contract](https://github.com/CosmaNeura/cosmaneura-os/blob/main/docs/core-session-prep.md), and [internal preparation work](https://github.com/CosmaNeura/cosmaneura-os/blob/main/src/cosmas_os/application/prep_work.py). These links track main; pin the selected revisions before transfer.
 - [Scheduling companion discovery contract](https://github.com/CosmaNeura/cosmaneura-scheduling/blob/main/docs/adr/0035-companion-read-only-discovery.md) and [CosmaBot clinician test harness](https://github.com/CosmaNeura/cosmaneura-os/pull/65).
+- Acuity public [webhook signature and retry contract](https://developers.acuityscheduling.com/docs/webhooks) and [current appointment response](https://developers.acuityscheduling.com/reference/get-appointments-id), inspected October 2, 2026. These document the adapter protocol, not permission to activate a practice account or contact a patient.
