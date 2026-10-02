@@ -32,6 +32,7 @@ await build({
     "process.env.NODE_ENV": '"production"',
     "import.meta.env.VITE_PYTHON_URL": '"https://testserver"',
     "import.meta.env.DEV": "false",
+    "import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED": '"false"',
   },
   outfile: resolve(
     web,

@@ -86,3 +86,10 @@ def test_empty_name_marker_is_not_a_raw_bearer_confirmation():
     assert not valid_confirmation_name("", "raw-bearer")
     assert valid_confirmation_name("José", "raw-bearer")
     assert not valid_confirmation_name("x" * 121, _access())
+
+
+def test_presented_locator_is_not_serialized_as_confirmation_proof():
+    proof = _access()
+    hinted = replace(proof, presented_token_hash="b" * 64)
+    assert open_confirmation(seal_confirmation(hinted)) == proof
+    assert "presented_token_hash" not in decrypt_value(seal_confirmation(hinted))

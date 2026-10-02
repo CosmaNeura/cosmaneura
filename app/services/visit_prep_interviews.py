@@ -65,6 +65,7 @@ from app.services.visit_prep_open_evidence import (
 from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
 from app.services.visit_prep_question_definitions import VisitPrepQuestionSetValidation
 from app.services.visit_prep_question_sets import _definition_from_rows
+from app.services.visit_prep_reschedule_continuity import validate_reschedule_continuity
 from app.services.visit_preps import (
     VisitPrepValidation as VisitPrepCredentialValidation,
 )
@@ -184,6 +185,27 @@ def _credential_locator(session: Session, *, token_hash: str) -> _CredentialLoca
     )
 
 
+def confirmation_matches_invitation(
+    *, access: ConfirmedVisitPrepAccess, presented_token_hash: str
+) -> bool:
+    """Identity-only routing hint; this is never a live authorization decision.
+
+    A cookie for another preparation must not select its saved content when a
+    new invitation is opened. Same-preparation lineage is checked under locks
+    later; this read only preserves that new-invitation confirmation screen.
+    """
+    with _visit_prep_session() as session:
+        try:
+            proof = _credential_locator(session, token_hash=access.token_hash)
+            presented = _credential_locator(session, token_hash=presented_token_hash)
+        except VisitPrepInterviewUnavailable:
+            return False
+        return (
+            proof.visit_prep_id == presented.visit_prep_id
+            and proof.owner_practice_member_id == presented.owner_practice_member_id
+        )
+
+
 def _lock_authorized_interview(
     session: Session,
     *,
@@ -300,6 +322,7 @@ def _lock_authorized_interview(
         settings=visit_prep_access.VISIT_PREP_SETTINGS,
         at=event_at,
     )
+    continued = isinstance(access_token, ConfirmedVisitPrepAccess)
     own_wrong_recipient_report = (
         allow_wrong_recipient_replay
         and visit_prep.revoked_at is not None
@@ -309,8 +332,17 @@ def _lock_authorized_interview(
         == "wrong_recipient"
         and visit_prep.revoked_by_ref
         == credential.revoked_by_ref
-        == _wrong_recipient_actor(token_hash)
+        == _wrong_recipient_actor(credential.token_hash if continued else token_hash)
     )
+    if continued:
+        validate_reschedule_continuity(
+            session,
+            prep=visit_prep,
+            current=credential,
+            access=access_token,
+            at=event_at,
+            own_wrong_recipient_replay=own_wrong_recipient_report,
+        )
     if (
         not decision.eligible
         or decision.doctor_id != visit_prep.owner_doctor_id
@@ -327,13 +359,15 @@ def _lock_authorized_interview(
             visit_prep.lifecycle_state == "misdirected"
             and not own_wrong_recipient_report
         )
-        or credential.id != locator.credential_id
+        or (credential.id != locator.credential_id and not continued)
         or credential.schedule_generation_id != schedule.id
         or (credential.revoked_at is not None and not own_wrong_recipient_report)
         or credential.token_format_version != 1
         or credential.issued_at > event_at
         or credential.expires_at <= event_at
-        or not hmac.compare_digest(credential.token_hash, token_hash)
+        or (
+            not hmac.compare_digest(credential.token_hash, token_hash) and not continued
+        )
     ):
         raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
 
@@ -342,9 +376,11 @@ def _lock_authorized_interview(
         if (
             visit_prep.confirmed_at != access_token.confirmed_at
             or visit_prep.confirmed_by_role != access_token.actor_role
-            or visit_prep.lifecycle_state
-            not in {"confirmed", "in_progress", "completed"}
-            or access_token.expires_at != credential.expires_at
+            or (
+                visit_prep.lifecycle_state
+                not in {"confirmed", "in_progress", "completed"}
+                and not own_wrong_recipient_report
+            )
             or access_token.confirmed_at > event_at
             or access_token.expires_at <= event_at
         ):
@@ -702,7 +738,9 @@ def _commit(session: Session) -> None:
         raise VisitPrepInterviewConflict("Visit Prep state changed") from None
 
 
-def get_interview(*, access_token: str | ConfirmedVisitPrepAccess) -> InterviewState:
+def _resume_interview(
+    *, access_token: str | ConfirmedVisitPrepAccess
+) -> tuple[InterviewState, ConfirmedVisitPrepAccess | None]:
     """Resume one currently authorized Visit Prep without returning prior answers."""
 
     with _visit_prep_session() as session:
@@ -721,9 +759,29 @@ def get_interview(*, access_token: str | ConfirmedVisitPrepAccess) -> InterviewS
             ) from None
         # Audit insertion may wait. Recheck current database time and authority
         # before committing an observation or disclosing the resolved snapshot.
-        _lock_authorized_interview(session, access_token=access_token)
+        current = _lock_authorized_interview(session, access_token=access_token)
+        continuation = None
+        if isinstance(access_token, ConfirmedVisitPrepAccess):
+            continuation = ConfirmedVisitPrepAccess(
+                token_hash=current.credential.token_hash,
+                actor_role=access_token.actor_role,
+                confirmed_at=access_token.confirmed_at,
+                expires_at=current.credential.expires_at,
+            )
         _commit(session)
-        return replace(state, continued_role=authorized.continued_role)
+        return replace(state, continued_role=current.continued_role), continuation
+
+
+def get_interview(*, access_token: str | ConfirmedVisitPrepAccess) -> InterviewState:
+    return _resume_interview(access_token=access_token)[0]
+
+
+def resume_confirmed_interview(
+    *, access: ConfirmedVisitPrepAccess
+) -> tuple[InterviewState, ConfirmedVisitPrepAccess]:
+    state, continuation = _resume_interview(access_token=access)
+    assert continuation is not None
+    return state, continuation
 
 
 def _wrong_recipient_actor(token_hash: str) -> str:
