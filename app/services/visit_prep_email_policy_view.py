@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import Any, Literal, cast
 
 from app.configuration.visit_prep import VisitPrepSettings
+from app.configuration.visit_prep_cadence import (
+    VisitPrepCadenceSettings,
+    current_standard_cadence,
+)
 from app.services.visit_prep_email_contract import (
     INVITATION_TEMPLATE_VERSION,
     VisitPrepEmailInvalid,
@@ -40,6 +44,7 @@ class EmailPolicyView:
     recorded_at: datetime | None
     expires_at: datetime | None
     checked_at: datetime
+    standard_cadence: VisitPrepCadenceSettings | None
 
     def __repr__(self) -> str:
         return "EmailPolicyView(<redacted>)"
@@ -124,6 +129,7 @@ def _read(session: Session, scope: dict) -> EmailPolicyView:
         row.recorded_at if row is not None else None,
         evidence.expires_at if evidence is not None else None,
         now,
+        current_standard_cadence(),
     )
     session.commit()
     return result

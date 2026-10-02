@@ -2,10 +2,11 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import uuid4
 
 import pytest
-from fastapi import Request
+from fastapi import FastAPI, Request
 
 from app.routes.dependencies.view_as import apply_view_as
 from app.services import visit_prep_access
@@ -81,6 +82,19 @@ def test_actual_policy_review_approval_withdrawal_and_old_replay_never_send(
         assert body["contract"] == "visit_prep.email_policy.v1"
         assert body["status"] == "not_approved" and body["event_sequence"] == 0
         assert body["delivery_status"] == "not_connected"
+        assert body["standard_cadence"] == {
+            "contract": "visit_prep.standard_cadence.v1",
+            "managed_by": "cosmaneura",
+            "provider_editable": False,
+            "timezone_basis": "current_appointment",
+            "version": "standard-20261002",
+            "fingerprint": body["standard_cadence"]["fingerprint"],
+            "quiet_start_hour": 21,
+            "quiet_end_hour": 8,
+            "minimum_channel_spacing_hours": 4,
+            "unopened_reminder_hours_before_visit": 48,
+            "unfinished_reminder_hours_before_visit": 12,
+        }
         assert (
             body["decision_policy_fingerprint"]
             is body["recorded_at"]
@@ -150,6 +164,21 @@ def test_actual_policy_review_approval_withdrawal_and_old_replay_never_send(
     assert fixture[1].email_send_enabled is fixture[1].public_api_enabled is False
 
 
+def test_unavailable_standard_is_explicit_and_creates_no_send_or_policy_write(
+    monkeypatch,
+):
+    import app.configuration.visit_prep_cadence as cadence
+
+    fixture = _fixture(monkeypatch)
+    monkeypatch.setattr(cadence, "VISIT_PREP_CADENCE_SETTINGS", None)
+    with _provider_client(fixture[0].doctor, monkeypatch) as client:
+        response = client.get(PATH)
+    assert response.status_code == 200 and response.json()["standard_cadence"] is None
+    assert response.json()["delivery_status"] == "not_connected"
+    assert _rows(fixture[0]) == []
+    _private(response)
+
+
 def test_expired_policy_and_changed_actual_template_are_not_current_approval(
     monkeypatch,
 ):
@@ -163,6 +192,7 @@ def test_expired_policy_and_changed_actual_template_are_not_current_approval(
         expired = client.get(PATH)
         assert expired.json()["status"] == "expired"
         original = VisitPrepInvitationEmail.body.fget
+        assert original is not None
         monkeypatch.setattr(
             VisitPrepInvitationEmail,
             "body",
@@ -194,6 +224,7 @@ def test_expired_policy_and_changed_actual_template_are_not_current_approval(
     [
         {"owner_doctor_id": "doctor_caller"},
         {"actor_id": "actor_caller"},
+        {"standard_cadence": {"quiet_start_hour": 0}},
         {"expected_event_sequence": True},
         {"expected_event_sequence": -1},
         {"expected_event_sequence": 2_147_483_647},
@@ -279,7 +310,7 @@ def test_current_authority_denies_both_read_and_decision(monkeypatch, change):
             def support(request: Request):
                 request.state.view_as = object()
 
-            client.app.dependency_overrides[apply_view_as] = support
+            cast(FastAPI, client.app).dependency_overrides[apply_view_as] = support
         read, decision = client.get(PATH), _post(client, _payload(fixture))
     assert read.status_code in {404, 409} and decision.status_code in {404, 409}
     assert not _rows(scope)
@@ -365,7 +396,7 @@ def test_domain_read_rejects_wrong_authenticated_subject_without_private_chain(
 def test_policy_openapi_has_only_current_owner_operations(monkeypatch):
     fixture = _fixture(monkeypatch)
     with _provider_client(fixture[0].doctor, monkeypatch) as client:
-        schema = client.app.openapi()
+        schema = cast(FastAPI, client.app).openapi()
     operations = schema["paths"][PATH]
     assert set(operations) == {"get", "post"}
     assert operations["get"]["operationId"] == "visit_prep_email_policy_read"

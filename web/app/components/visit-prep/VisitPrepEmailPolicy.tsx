@@ -20,10 +20,38 @@ const labels = {
   policy_changed: "Invitation policy changed — new approval required",
 }
 const hash = /^[0-9a-f]{64}$/
+function validCadence(
+  value: VisitPrepEmailPolicyResponse["standard_cadence"],
+): boolean {
+  if (value === null || value === undefined) return true
+  return (
+    value.contract === "visit_prep.standard_cadence.v1" &&
+    value.managed_by === "cosmaneura" &&
+    value.provider_editable === false &&
+    value.timezone_basis === "current_appointment" &&
+    /^[a-z0-9][a-z0-9._-]{0,63}$/.test(value.version) &&
+    hash.test(value.fingerprint) &&
+    [value.quiet_start_hour, value.quiet_end_hour].every(
+      (hour) => Number.isInteger(hour) && hour >= 0 && hour <= 23,
+    ) &&
+    value.quiet_start_hour !== value.quiet_end_hour &&
+    Number.isInteger(value.minimum_channel_spacing_hours) &&
+    value.minimum_channel_spacing_hours >= 1 &&
+    value.minimum_channel_spacing_hours <= 48 &&
+    value.unopened_reminder_hours_before_visit === 48 &&
+    value.unfinished_reminder_hours_before_visit === 12
+  )
+}
+
+function hour(value: number): string {
+  return `${String(value).padStart(2, "0")}:00`
+}
+
 function valid(value: VisitPrepEmailPolicyResponse): boolean {
   return (
     value.contract === "visit_prep.email_policy.v1" &&
     value.delivery_status === "not_connected" &&
+    validCadence(value.standard_cadence) &&
     value.template_version === "visit_prep_invitation_v1" &&
     typeof value.subject === "string" &&
     value.subject.length <= 200 &&
@@ -226,6 +254,44 @@ export function VisitPrepEmailPolicy({
       )}
       {shown && (
         <>
+          <section
+            aria-labelledby="visit-prep-standard-timing-title"
+            className="space-y-2 rounded-md border p-4 text-sm"
+          >
+            <h3 id="visit-prep-standard-timing-title" className="font-medium">
+              Standard practice reminder timing
+            </h3>
+            <p>Managed by Cosmaneura. Providers cannot edit these settings.</p>
+            {shown.standard_cadence ? (
+              <>
+                <p>
+                  No messages from{" "}
+                  {hour(shown.standard_cadence.quiet_start_hour)} to{" "}
+                  {hour(shown.standard_cadence.quiet_end_hour)} in the current
+                  appointment’s timezone.
+                </p>
+                <p>
+                  At least{" "}
+                  {shown.standard_cadence.minimum_channel_spacing_hours} hours
+                  between messages on the same channel.
+                </p>
+                <p>
+                  Booking email and SMS; SMS reminders 48 hours before the visit
+                  if unopened and 12 hours before if unfinished, subject to
+                  consent and current scheduling checks.
+                </p>
+                <p className="text-muted-foreground">
+                  Timing version: {shown.standard_cadence.version}. These rules
+                  do not grant consent or enable sending.
+                </p>
+              </>
+            ) : (
+              <p>
+                Standard timing is unavailable. Automated sending is disabled
+                until valid settings are available.
+              </p>
+            )}
+          </section>
           <p className="font-medium">{labels[shown.status]}</p>
           <p className="text-muted-foreground text-sm">
             Snapshot checked at {shown.checked_at}. Reload to check for changes.{" "}

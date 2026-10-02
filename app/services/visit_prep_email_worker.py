@@ -4,8 +4,9 @@ Commit the irreversible claim before calling a transport. Reacquire current
 authority and hold its fences through the bounded submission. A crash or lost
 acknowledgment never reopens the send lane. No job/route is registered and no
 transport or qualified consent-source adapter is selected by default.
-Cadence restrictions are explicit trusted Core inputs, bound to claim custody;
-they are not persisted policy, a scheduler or a new sending authorization.
+The standard entrypoints resolve centrally managed practice timing and fence its
+version through dispatch. Explicit-policy domain calls remain compatible for
+isolated tests. Neither path is a scheduler or new sending authorization.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
 from app.configuration.visit_prep import VISIT_PREP_SETTINGS, VisitPrepSettings
+from app.configuration.visit_prep_cadence import current_standard_cadence
 from app.services.visit_prep_command_contract import access_token_hash
 from app.services.visit_prep_current_timing import (
     CurrentTimingPlan,
@@ -104,6 +106,7 @@ class _ClaimCustody:
     lock: Any = field(default_factory=Lock)
     used: bool = False
     timing_policy: _TimingPolicy | None = None
+    standard_cadence_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -152,6 +155,14 @@ def _timing_policy(
     except DeliveryTimingInvalid:
         return None
     return quiet_hours, minimum_channel_spacing
+
+
+def _standard_claim_current(claim: EmailSubmissionClaim) -> bool:
+    fingerprint = claim._custody.standard_cadence_fingerprint
+    if fingerprint is None:
+        return True  # Existing explicit-policy domain calls remain compatible.
+    current = current_standard_cadence()
+    return current is not None and current.fingerprint == fingerprint
 
 
 def _cadence_decision(
@@ -560,6 +571,7 @@ def dispatch_email_claim(
                 not _enabled(settings)
                 or policy is None
                 or policy != claim._custody.timing_policy
+                or not _standard_claim_current(claim)
                 or source_verifier is None
                 or not callable(source_verifier)
             ):
@@ -594,7 +606,7 @@ def dispatch_email_claim(
                 return _finish(
                     session, *pair, state="suppressed", code="scope_unavailable"
                 )
-            if cadence.action != "candidate":
+            if cadence.action != "candidate" or not _standard_claim_current(claim):
                 # A committed claim is never returned to queued, even if quiet
                 # hours began during the claim/dispatch gap. No effect occurred;
                 # consume custody and clear the secret without an automatic retry.
@@ -653,6 +665,81 @@ def run_one_email(
         patient_origin=patient_origin,
         quiet_hours=quiet_hours,
         minimum_channel_spacing=minimum_channel_spacing,
+        transport=transport,
+        source_verifier=source_verifier,
+        settings=settings,
+    )
+
+
+def claim_standard_email_invitation(
+    *,
+    patient_origin: str,
+    source_verifier: EmailConsentSourceVerifier | None = None,
+    settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
+) -> EmailSubmissionClaim | Outcome:
+    """Use platform-managed practice timing, never caller/provider overrides."""
+    cadence = current_standard_cadence()
+    if cadence is None:
+        return "disabled"
+    result = claim_email_invitation(
+        patient_origin=patient_origin,
+        quiet_hours=cadence.quiet_hours,
+        minimum_channel_spacing=cadence.minimum_channel_spacing,
+        source_verifier=source_verifier,
+        settings=settings,
+    )
+    if type(result) is EmailSubmissionClaim:
+        result._custody.standard_cadence_fingerprint = cadence.fingerprint
+    return result
+
+
+def dispatch_standard_email_claim(
+    claim: EmailSubmissionClaim,
+    *,
+    patient_origin: str,
+    transport: InvitationTransport | None = None,
+    source_verifier: EmailConsentSourceVerifier | None = None,
+    settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
+) -> Outcome:
+    """Re-read the standard before dispatch; a changed claim never sends."""
+    cadence = current_standard_cadence()
+    # Missing/changed policy still consumes and finalizes an actual owned claim.
+    # Never leave it available for a later retry using a different policy.
+    if type(claim) is not EmailSubmissionClaim:
+        return "discarded"
+    if claim._custody.standard_cadence_fingerprint is None:
+        return "discarded"
+    return dispatch_email_claim(
+        claim,
+        patient_origin=patient_origin,
+        quiet_hours=cadence.quiet_hours if cadence is not None else None,
+        minimum_channel_spacing=cadence.minimum_channel_spacing
+        if cadence is not None
+        else None,
+        transport=transport,
+        source_verifier=source_verifier,
+        settings=settings,
+    )
+
+
+def run_one_standard_email(
+    *,
+    patient_origin: str,
+    transport: InvitationTransport | None = None,
+    source_verifier: EmailConsentSourceVerifier | None = None,
+    settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
+) -> Outcome:
+    """Dormant worker entry using one centrally controlled timing source."""
+    claimed = claim_standard_email_invitation(
+        patient_origin=patient_origin,
+        source_verifier=source_verifier,
+        settings=settings,
+    )
+    if not isinstance(claimed, EmailSubmissionClaim):
+        return claimed
+    return dispatch_standard_email_claim(
+        claimed,
+        patient_origin=patient_origin,
         transport=transport,
         source_verifier=source_verifier,
         settings=settings,

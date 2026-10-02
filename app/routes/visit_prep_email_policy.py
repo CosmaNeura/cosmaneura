@@ -32,6 +32,22 @@ def _explicit_timestamp(value: object) -> object:
     return value
 
 
+class VisitPrepStandardCadenceResponse(_StrictModel):
+    contract: Literal["visit_prep.standard_cadence.v1"] = (
+        "visit_prep.standard_cadence.v1"
+    )
+    managed_by: Literal["cosmaneura"] = "cosmaneura"
+    provider_editable: Literal[False] = False
+    timezone_basis: Literal["current_appointment"] = "current_appointment"
+    version: str
+    fingerprint: str
+    quiet_start_hour: int
+    quiet_end_hour: int
+    minimum_channel_spacing_hours: int
+    unopened_reminder_hours_before_visit: Literal[48] = 48
+    unfinished_reminder_hours_before_visit: Literal[12] = 12
+
+
 class VisitPrepEmailPolicyResponse(_StrictModel):
     contract: Literal["visit_prep.email_policy.v1"] = "visit_prep.email_policy.v1"
     policy_fingerprint: str
@@ -47,6 +63,7 @@ class VisitPrepEmailPolicyResponse(_StrictModel):
     expires_at: datetime | None
     checked_at: datetime
     delivery_status: Literal["not_connected"] = "not_connected"
+    standard_cadence: VisitPrepStandardCadenceResponse | None = None
 
 
 class VisitPrepEmailPolicyDecisionRequest(_StrictModel):
@@ -128,6 +145,15 @@ def visit_prep_email_policy_read(
         recorded_at=value.recorded_at,
         expires_at=value.expires_at,
         checked_at=value.checked_at,
+        standard_cadence=VisitPrepStandardCadenceResponse(
+            version=value.standard_cadence.version,
+            fingerprint=value.standard_cadence.fingerprint,
+            quiet_start_hour=value.standard_cadence.quiet_start_hour,
+            quiet_end_hour=value.standard_cadence.quiet_end_hour,
+            minimum_channel_spacing_hours=value.standard_cadence.minimum_channel_spacing_hours,
+        )
+        if value.standard_cadence is not None
+        else None,
     )
 
 

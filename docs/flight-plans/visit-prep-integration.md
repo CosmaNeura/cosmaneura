@@ -136,6 +136,17 @@ John approved the overall sequence on October 1, including the shared package/ag
 
 The branch starts from current Core and receives selective transfers, not a bulk merge. Cloud deployment, real patient messaging, clinical cohort activation and retirement still require their separate decisions. The September 25 owner policy in `/Users/jw/Desktop/Cosmas/AGENTS.md` permits applicable local checks and implementer review; independent review is not a default gate and cross-task isolation remains in force. The current user instruction to retain the work on a branch until ready takes precedence over the general merge-by-default policy.
 
+### Owner implementation decisions October 2 2026
+
+John approved the following four implementation decisions, with these modifications. They authorize branch work and synthetic qualification, not deployment or activation.
+
+- Patients affirm their identity once. Secure remembered confirmation must support re-engagement through the original invitation and established email/phone/browser continuity without repeated identity prompts. Contact values and a shared IP are not independent access credentials. Preserve invitation expiry, revocation, wrong-recipient quarantine and current practice authority; do not merely raise guessing limits.
+- Patients may explain and update their answers. Preserve original responses and attributable revisions. Store confirmed explanations alongside the exact coded-answer revision, encrypted and separately attributed; do not silently replace a selected code with narrative. Include changes in package freshness.
+- Message timing is a central, standard practice setting managed by Cosmaneura and read-only to providers, not a provider-editable policy or a new per-preparation policy table. Scheduling and dispatch must consume the same versioned settings. John approved 21:00–08:00 quiet hours in the current appointment timezone and at least four hours between messages on the same channel. The future first-party scheduling system may replace the settings source. Malformed or partial overrides disable standard dispatch; having valid timing settings does not enable a release/channel gate or grant consent.
+- Implement the proposed CosmaBot package-read contract with independent workload and current physician authentication, explicit physician action, chart/encounter-free preparation support, the same Core package and provenance, and no durable companion clinical copy. This is the first read-only increment, not a narrowing of the approved subsequent agent capabilities.
+
+Every AI analysis of patient information, including clarification, synthesis and later bot reasoning, must follow the current Core PII/PHI rules: minimum necessary input, the existing de-identification boundary and approved model/provider controls, no credentials or contact metadata in prompts, value-free logging, and centralized usage evidence. A companion display read does not invoke a model. Failure to establish the protected model boundary must stop analysis while preserving deterministic patient entry and authorized source review.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

@@ -36,6 +36,19 @@ const value = {
   expires_at: null,
   checked_at: "2026-10-01T12:00:00Z",
   delivery_status: "not_connected",
+  standard_cadence: {
+    contract: "visit_prep.standard_cadence.v1",
+    managed_by: "cosmaneura",
+    provider_editable: false,
+    timezone_basis: "current_appointment",
+    version: "standard-20261002",
+    fingerprint: "c".repeat(64),
+    quiet_start_hour: 21,
+    quiet_end_hour: 8,
+    minimum_channel_spacing_hours: 4,
+    unopened_reminder_hours_before_visit: 48,
+    unfinished_reminder_hours_before_visit: 12,
+  },
 }
 async function load() {
   fireEvent.click(
@@ -74,6 +87,41 @@ beforeEach(() => {
   }))
 })
 describe("physician invitation email policy", () => {
+  it("shows unavailable timing without substituting invented rules", async () => {
+    api.read.mockResolvedValue({ data: { ...value, standard_cadence: null } })
+    render(<VisitPrepEmailPolicy access={access} scopeKey="user_synthetic" />)
+    await load()
+    expect(screen.getByText(/Standard timing is unavailable/)).toBeVisible()
+    expect(screen.queryByText(/No messages from/)).toBeNull()
+    expect(api.decide).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { provider_editable: true },
+    { managed_by: "provider" },
+    { quiet_start_hour: 24 },
+    { minimum_channel_spacing_hours: 0 },
+    { unopened_reminder_hours_before_visit: 1 },
+    { fingerprint: "invalid" },
+  ])("rejects malformed or provider-editable timing %j", async (changes) => {
+    api.read.mockResolvedValue({
+      data: {
+        ...value,
+        standard_cadence: { ...value.standard_cadence, ...changes },
+      },
+    })
+    render(<VisitPrepEmailPolicy access={access} scopeKey="user_synthetic" />)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Load / reload email policy" }),
+    )
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "could not be loaded",
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Invitation preview" }),
+    ).toBeNull()
+  })
+
   it("loads only on demand, uses plain text, and requires explicit review and UTC deadline", async () => {
     const { container } = render(
       <VisitPrepEmailPolicy access={access} scopeKey="user_synthetic" />,
@@ -82,6 +130,14 @@ describe("physician invitation email policy", () => {
     await load()
     expect(api.read).toHaveBeenCalledWith({ cache: "no-store" })
     expect(container.querySelector("script")).toBeNull()
+    expect(
+      screen.getByText(/Providers cannot edit these settings/),
+    ).toBeVisible()
+    expect(screen.getByText(/No messages from 21:00 to 08:00/)).toBeVisible()
+    expect(screen.getByText(/At least 4 hours/)).toBeVisible()
+    expect(
+      container.querySelectorAll('input[type="number"],select'),
+    ).toHaveLength(0)
     expect(screen.getByText(/not executable/)).toBeVisible()
     const button = screen.getByRole("button", {
       name: "Record physician approval",
