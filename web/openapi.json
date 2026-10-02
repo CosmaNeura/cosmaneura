@@ -7516,6 +7516,551 @@
         ],
         "title": "VisitAudioUploadRequest"
       },
+      "VisitPrepQuestionChoiceRequest": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "VisitPrepQuestionChoiceRequest"
+      },
+      "VisitPrepQuestionChoiceResponse": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "value",
+          "label",
+          "hint"
+        ],
+        "title": "VisitPrepQuestionChoiceResponse"
+      },
+      "VisitPrepQuestionConditionRequest": {
+        "properties": {
+          "question_key": {
+            "type": "string",
+            "title": "Question Key"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Values"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_key",
+          "values"
+        ],
+        "title": "VisitPrepQuestionConditionRequest"
+      },
+      "VisitPrepQuestionConditionResponse": {
+        "properties": {
+          "question_id": {
+            "type": "string",
+            "title": "Question Id"
+          },
+          "question_key": {
+            "type": "string",
+            "title": "Question Key"
+          },
+          "values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Values"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_id",
+          "question_key",
+          "values"
+        ],
+        "title": "VisitPrepQuestionConditionResponse"
+      },
+      "VisitPrepQuestionDraftRequest": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "story",
+              "list",
+              "choice"
+            ],
+            "title": "Kind"
+          },
+          "helper_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Text"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionChoiceRequest"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "show_if": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepQuestionConditionRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "prompt",
+          "kind"
+        ],
+        "title": "VisitPrepQuestionDraftRequest"
+      },
+      "VisitPrepQuestionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "question_set_version_id": {
+            "type": "string",
+            "title": "Question Set Version Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "prompt": {
+            "type": "string",
+            "title": "Prompt"
+          },
+          "helper_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Helper Text"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "story",
+              "list",
+              "choice"
+            ],
+            "title": "Kind"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionChoiceResponse"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "show_if": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepQuestionConditionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "question_set_version_id",
+          "key",
+          "position",
+          "prompt",
+          "helper_text",
+          "kind",
+          "choices",
+          "show_if",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "VisitPrepQuestionResponse"
+      },
+      "VisitPrepQuestionSetCreateRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionDraftRequest"
+            },
+            "type": "array",
+            "title": "Questions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "VisitPrepQuestionSetCreateRequest"
+      },
+      "VisitPrepQuestionSetErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "VisitPrepQuestionSetErrorResponse"
+      },
+      "VisitPrepQuestionSetListResponse": {
+        "properties": {
+          "question_sets": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionSetResponse"
+            },
+            "type": "array",
+            "title": "Question Sets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_sets"
+        ],
+        "title": "VisitPrepQuestionSetListResponse"
+      },
+      "VisitPrepQuestionSetMutationResponse": {
+        "properties": {
+          "question_set": {
+            "$ref": "#/components/schemas/VisitPrepQuestionSetResponse"
+          },
+          "version": {
+            "$ref": "#/components/schemas/VisitPrepQuestionSetVersionResponse"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "created",
+              "updated",
+              "replayed"
+            ],
+            "title": "Disposition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question_set",
+          "version",
+          "disposition"
+        ],
+        "title": "VisitPrepQuestionSetMutationResponse"
+      },
+      "VisitPrepQuestionSetPublishRequest": {
+        "properties": {
+          "make_default": {
+            "type": "boolean",
+            "title": "Make Default",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "VisitPrepQuestionSetPublishRequest"
+      },
+      "VisitPrepQuestionSetReplaceRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionDraftRequest"
+            },
+            "type": "array",
+            "title": "Questions"
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expected Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "expected_updated_at"
+        ],
+        "title": "VisitPrepQuestionSetReplaceRequest"
+      },
+      "VisitPrepQuestionSetResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionSetVersionResponse"
+            },
+            "type": "array",
+            "title": "Versions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "updated_at",
+          "versions"
+        ],
+        "title": "VisitPrepQuestionSetResponse"
+      },
+      "VisitPrepQuestionSetSuccessorRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "VisitPrepQuestionSetSuccessorRequest"
+      },
+      "VisitPrepQuestionSetVersionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "question_set_id": {
+            "type": "string",
+            "title": "Question Set Id"
+          },
+          "version_number": {
+            "type": "integer",
+            "title": "Version Number"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "supersedes_version_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supersedes Version Id"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepQuestionResponse"
+            },
+            "type": "array",
+            "title": "Questions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "question_set_id",
+          "version_number",
+          "name",
+          "supersedes_version_id",
+          "published_at",
+          "is_default",
+          "created_at",
+          "updated_at",
+          "questions"
+        ],
+        "title": "VisitPrepQuestionSetVersionResponse"
+      },
       "VisitPrepSettingsData": {
         "properties": {
           "eligible": {
