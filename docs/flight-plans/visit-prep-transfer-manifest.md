@@ -1213,3 +1213,47 @@ ratified Sovereign boundary and clinical quality remain required before this is
 an end-to-end patient AI interaction. CosmaBot, qualified prior consent,
 Acuity/email/SMS/reminders, retention/cleanup, monitoring and clinical and
 operational acceptance remain the full approved goal.
+
+## Durable patient clarification answers
+
+Core now records actual patient follow-up words separately from model proposals.
+The patient command accepts only a saved proposal ID, explicit words and an
+operation UUID. It freshly checks current bearer, recipient, practice and source
+authority before decoding evidence. Only an undecided current neutral
+clarification request can receive an answer. Original wording and coded choices
+are unchanged; capture is not final answer acceptance, identity or consent.
+
+The generated additive migration retains encrypted immutable turns and adds a
+nullable source-turn reference to proposals. Existing proposal envelopes and
+fingerprints are preserved. Root locks, current credential and contribution
+checks, fresh database time, two-turn bounds, immutable guards and aggregate-only
+deletion protect storage. A patient turn and content-free audit commit together;
+lost acknowledgment permits only the same exact action to replay. Divergent,
+superseded, decided or newly unauthorized actions cannot overwrite the evidence.
+
+The private follow-up proposal writer reconstructs context from recorded patient
+turns and their authoritative audits. Claimed or substituted words, prompts,
+another preparation's turn, missing evidence and obsolete chains are rejected.
+The exact turn reference is bound into the encrypted proposal manifest. Later
+text organization connects to the existing patient review and atomic confirm,
+edit, keep or dismiss commands, preserving the original answer. Ancestor evidence
+is verified even after the accepted correction changes the current source.
+
+Owned synthetic PostgreSQL checks exercise patient/caregiver attribution, text,
+list and coded-choice capture, two turns, exact retries, competing requests,
+private commit visibility, rollback and lost acknowledgment. Real lock waits
+cover corrections, BAA withdrawal, wrong-recipient quarantine, credential rotation
+and link expiry; a final entitlement expiry rolls back the staged turn and audit.
+Retention, legal holds and mutation/truncate rejection are checked; aggregate
+purge is also checked with a linked follow-up proposal. A populated pre-expand
+rehearsal preserves every existing column in the selected patient and
+clarification streams. Final revision-specific regression and implementer review
+are recorded in the stacked draft PR.
+
+Reuse remains within Core's existing encrypted evidence, source, correction and
+audit domains. No conversational model, service grant, patient-turn route/UI,
+provider transport, new dependency or release control is introduced. Follow-up
+presentation/capture, choice supplements, the ratified Sovereign connection and
+clinical quality remain required for the end-to-end AI experience. CosmaBot,
+qualified prior consent, Acuity/email/SMS/reminders, retention/cleanup operations,
+monitoring and clinical/operational acceptance remain the full approved goal.

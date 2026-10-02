@@ -81,7 +81,8 @@ def test_truncate_cannot_bypass_response_retention() -> None:
                     "TRUNCATE TABLE public.visit_prep_question_response, "
                     "public.visit_prep_contribution_event, "
                     "public.visit_prep_clarification_proposal, "
-                    "public.visit_prep_clarification_decision"
+                    "public.visit_prep_clarification_decision, "
+                    "public.visit_prep_clarification_turn"
                 )
             )
         assert getattr(rejected.value.orig, "sqlstate", None) == "55000"

@@ -93,6 +93,18 @@ class VisitPrepClarificationProposal(
             deferrable=True,
             initially="DEFERRED",
         ),
+        sa.ForeignKeyConstraint(
+            ["source_turn_id", "visit_prep_id"],
+            [
+                "visit_prep_clarification_turn.id",
+                "visit_prep_clarification_turn.visit_prep_id",
+            ],
+            name="fk_vp_clarification_source_turn",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+            use_alter=True,
+        ),
         sa.UniqueConstraint("id", "visit_prep_id", name="uq_vp_clarification_id_root"),
         sa.UniqueConstraint(
             "visit_prep_id", "operation_id", name="uq_vp_clarification_operation"
@@ -125,6 +137,10 @@ class VisitPrepClarificationProposal(
         sa_column=Column(TypeIDType("visit_prep_contribution"), nullable=True),
     )
     operation_id: str = Field(max_length=36)
+    source_turn_id: TypeIDType | None = Field(
+        default=None,
+        sa_column=Column(TypeIDType("visit_prep_clarification_turn"), nullable=True),
+    )
     envelope_format_version: int = Field(default=1)
     evidence_ciphertext: str = Field(
         repr=False, exclude=True, sa_column=Column(sa.Text(), nullable=False)

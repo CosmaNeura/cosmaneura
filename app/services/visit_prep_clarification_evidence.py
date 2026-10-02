@@ -41,6 +41,7 @@ from app.models.visit_prep_clarification import (
     VisitPrepClarificationDecision,
     VisitPrepClarificationProposal,
 )
+from app.models.visit_prep_clarification_turn import VisitPrepClarificationTurn
 
 _PROPOSAL_DOMAIN = "visit-prep-clarification-proposal-v1"
 _DECISION_DOMAIN = "visit-prep-clarification-decision-v1"
@@ -93,6 +94,7 @@ class ClarificationProposalEvidence:
     model_profile: str
     context: VisitPrepClarificationContext
     reply: PatientClarificationReply
+    source_turn_id: str | None = None
 
     def manifest(self) -> dict:
         if (
@@ -109,7 +111,12 @@ class ClarificationProposalEvidence:
         ):
             raise VisitPrepClarificationInvalid()
         validate_clarification_reply(self.context, self.reply)
-        return {
+        if self.source_turn_id is not None and (
+            not _ref(self.source_turn_id, {"visit_prep_clarification_turn"})
+            or not self.context.turns
+        ):
+            raise VisitPrepClarificationInvalid()
+        payload = {
             "format_version": 1,
             "prompt_version": PROMPT_VERSION,
             "proposal_id": self.proposal_id,
@@ -122,6 +129,9 @@ class ClarificationProposalEvidence:
             | {"turns": [asdict(turn) for turn in self.context.turns]},
             "reply": self.reply.model_dump(mode="json", warnings="error"),
         }
+        if self.source_turn_id is not None:
+            payload["source_turn_id"] = self.source_turn_id
+        return payload
 
     def __repr__(self) -> str:
         return "ClarificationProposalEvidence(<redacted>)"
@@ -244,7 +254,9 @@ def seal_clarification_decision(
 
 
 def _read(
-    row: VisitPrepClarificationProposal | VisitPrepClarificationDecision,
+    row: VisitPrepClarificationProposal
+    | VisitPrepClarificationDecision
+    | VisitPrepClarificationTurn,
     *,
     domain: str,
     max_plain: int,
@@ -334,6 +346,9 @@ def read_clarification_proposal(
             reply=PatientClarificationReply.model_validate_json(
                 _json(payload["reply"])
             ),
+            source_turn_id=str(row.source_turn_id)
+            if row.source_turn_id is not None
+            else None,
         )
         if _json(checked.manifest()) != _json(payload):
             raise VisitPrepClarificationInvalid()

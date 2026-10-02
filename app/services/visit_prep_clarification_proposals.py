@@ -1,4 +1,4 @@
-"""Core's initial-proposal persistence, not a model runtime or service grant.
+"""Core's bounded-proposal persistence, not a model runtime or service grant.
 
 A future qualified conversational caller supplies a bounded reply after model
 work outside this transaction. Core freshly checks ordinary patient authority
@@ -18,6 +18,7 @@ from app.services.visit_prep_clarification_contract import (
     VisitPrepClarificationChanged,
     VisitPrepClarificationContext,
     VisitPrepClarificationInvalid,
+    _ref,
     select_clarification_context,
     validate_clarification_context,
     validate_clarification_reply,
@@ -50,6 +51,7 @@ from app.models.visit_prep_clarification import (
     VisitPrepClarificationDecision,
     VisitPrepClarificationProposal,
 )
+from app.models.visit_prep_clarification_turn import VisitPrepClarificationTurn
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
@@ -79,7 +81,7 @@ def _refs(
     authorized: _AuthorizedInterview, row: VisitPrepClarificationProposal
 ) -> list[dict[str, str]]:
     prep = authorized.visit_prep
-    return [
+    values = [
         {"kind": kind, "ref": str(ref)}
         for kind, ref in (
             ("doctor", prep.owner_doctor_id),
@@ -91,6 +93,11 @@ def _refs(
             ("visit_prep_clarification", row.id),
         )
     ]
+    if row.source_turn_id is not None:
+        values.append(
+            {"kind": "visit_prep_clarification_turn", "ref": str(row.source_turn_id)}
+        )
+    return values
 
 
 def _audit_valid(
@@ -112,7 +119,12 @@ def _audit_valid(
         and audit.resource_type == "visit_prep_clarification"
         and audit.outcome == "retained"
         and audit.client_event_id == UUID(row.operation_id)
-        and audit.route == "visit_prep_initial_clarification_proposal"
+        and audit.route
+        == (
+            "visit_prep_followup_clarification_proposal"
+            if row.source_turn_id is not None
+            else "visit_prep_initial_clarification_proposal"
+        )
         and audit.intent == "current_confirmed_bearer_source"
         and audit.occurred_at == row.recorded_at
         and audit.recorded_at >= audit.occurred_at
@@ -132,7 +144,7 @@ def _audit_valid(
     )
 
 
-def record_initial_clarification_proposal(
+def _record_clarification_proposal(
     *,
     access_token: str,
     first_name: str,
@@ -141,13 +153,14 @@ def record_initial_clarification_proposal(
     context: VisitPrepClarificationContext,
     reply: PatientClarificationReply,
     model_profile: str,
+    source_turn_id: str | None = None,
 ) -> InitialClarificationProposalReceipt:
     """Save a reply to the exact current answer, then acknowledge the commit.
 
-    Only the initial context (zero turns) is accepted. A service cannot claim
-    that the patient supplied extra words; durable patient-turn capture remains
-    a separate command. The model profile is provenance, not qualification or
-    permission. This private domain function does not authorize its future
+    Initial context has zero turns. Follow-up context must exactly match
+    independently recorded patient words; the service cannot invent them.
+    The model profile is provenance, not qualification or permission.
+    This private domain function does not authorize its future
     conversational transport or expose a route for caller-supplied model output.
     """
     result = None
@@ -155,13 +168,19 @@ def record_initial_clarification_proposal(
     try:
         operation = _operation(operation_id)
         validate_clarification_context(context)
-        if context.turns:
+        if source_turn_id is None and context.turns:
+            raise VisitPrepClarificationInvalid()
+        if source_turn_id is not None and not _ref(
+            source_turn_id, {"visit_prep_clarification_turn"}
+        ):
             raise VisitPrepClarificationInvalid()
         with _decision_session() as session:
             authorized = _authorized(
                 session, access_token=access_token, first_name=first_name, role=role
             )
-            if context != _current_context(session, authorized, context.question_key):
+            if context != _proposal_context(
+                session, authorized, context.question_key, source_turn_id
+            ):
                 raise VisitPrepClarificationChanged()
             validate_clarification_reply(context, reply)
             if context.kind == "choice" and reply.kind == "organize":
@@ -190,11 +209,14 @@ def record_initial_clarification_proposal(
                 model_profile,
                 context,
                 reply,
+                source_turn_id,
             )
             # Validate all closed provenance fields, after recipient authority.
             evidence.manifest()
             if row is not None:
-                if read_clarification_proposal(row) != evidence:
+                if read_clarification_proposal(row) != evidence or str(
+                    row.source_turn_id
+                ) != str(source_turn_id):
                     raise VisitPrepClarificationChanged()
             else:
                 sealed = seal_clarification_proposal(evidence)
@@ -216,6 +238,9 @@ def record_initial_clarification_proposal(
                     if source.prefix == "visit_prep_contribution"
                     else None,
                     operation_id=operation,
+                    source_turn_id=cast(TypeIDType, TypeID.from_string(source_turn_id))
+                    if source_turn_id is not None
+                    else None,
                     evidence_ciphertext=sealed.ciphertext,
                     payload_hmac_sha256=sealed.payload_hmac_sha256,
                 )
@@ -235,7 +260,9 @@ def record_initial_clarification_proposal(
                         client_event_id=UUID(operation),
                         resource_type="visit_prep_clarification",
                         resource_ref=str(row.id),
-                        route="visit_prep_initial_clarification_proposal",
+                        route="visit_prep_followup_clarification_proposal"
+                        if source_turn_id is not None
+                        else "visit_prep_initial_clarification_proposal",
                         intent="current_confirmed_bearer_source",
                         platform_refs=_refs(final, row),
                     )
@@ -244,7 +271,9 @@ def record_initial_clarification_proposal(
             final = _authorized(
                 session, access_token=access_token, first_name=first_name, role=role
             )
-            if context != _current_context(session, final, context.question_key):
+            if context != _proposal_context(
+                session, final, context.question_key, source_turn_id
+            ):
                 raise VisitPrepClarificationChanged()
             latest = session.exec(
                 select(VisitPrepClarificationProposal)
@@ -299,3 +328,123 @@ def record_initial_clarification_proposal(
             raise VisitPrepClarificationChanged()
         raise VisitPrepClarificationInvalid()
     return result
+
+
+def _proposal_context(
+    session: Session,
+    authorized: _AuthorizedInterview,
+    question_key: str,
+    source_turn_id: str | None,
+) -> VisitPrepClarificationContext:
+    if source_turn_id is None:
+        return _current_context(session, authorized, question_key)
+    # Local import avoids a module cycle; patient-turn capture reuses only the
+    # original current-source selector above, not this model-reply writer.
+    from app.services.visit_prep_clarification_turn_evidence import (
+        read_clarification_turn,
+    )
+    from app.services.visit_prep_clarification_turns import (
+        _check_audit,
+        _verified_context,
+    )
+
+    turn = session.exec(
+        select(VisitPrepClarificationTurn).where(
+            VisitPrepClarificationTurn.id == TypeID.from_string(source_turn_id),
+            VisitPrepClarificationTurn.visit_prep_id == authorized.visit_prep.id,
+        )
+    ).one_or_none()
+    if turn is None:
+        raise VisitPrepClarificationInvalid()
+    prior = session.exec(
+        select(VisitPrepClarificationProposal).where(
+            VisitPrepClarificationProposal.id == turn.proposal_id,
+            VisitPrepClarificationProposal.visit_prep_id == authorized.visit_prep.id,
+        )
+    ).one()
+    evidence = read_clarification_proposal(prior)
+    _verified_context(session, authorized, prior, evidence)
+    _check_audit(session, authorized, turn)
+    latest = session.exec(
+        select(VisitPrepClarificationProposal)
+        .where(
+            VisitPrepClarificationProposal.visit_prep_id == authorized.visit_prep.id,
+            VisitPrepClarificationProposal.question_id == prior.question_id,
+            VisitPrepClarificationProposal.source_version == prior.source_version,
+            VisitPrepClarificationProposal.credential_generation
+            == prior.credential_generation,
+            VisitPrepClarificationProposal.basis_response_count
+            == prior.basis_response_count,
+            VisitPrepClarificationProposal.basis_event_sequence
+            == prior.basis_event_sequence,
+        )
+        .order_by(
+            cast(Any, VisitPrepClarificationProposal.recorded_at).desc(),
+            cast(Any, VisitPrepClarificationProposal.id).desc(),
+        )
+        .limit(1)
+    ).one()
+    if latest.id != prior.id and latest.source_turn_id != turn.id:
+        raise VisitPrepClarificationChanged()
+    if (
+        session.exec(
+            select(VisitPrepClarificationDecision).where(
+                VisitPrepClarificationDecision.proposal_id == latest.id
+            )
+        ).first()
+        is not None
+    ):
+        raise VisitPrepClarificationChanged()
+    if evidence.context.question_key != question_key:
+        raise VisitPrepClarificationChanged()
+    return read_clarification_turn(turn, proposal=evidence).context(evidence)
+
+
+def record_initial_clarification_proposal(
+    *,
+    access_token: str,
+    first_name: str,
+    role: ContributionRole,
+    operation_id: str,
+    context: VisitPrepClarificationContext,
+    reply: PatientClarificationReply,
+    model_profile: str,
+) -> InitialClarificationProposalReceipt:
+    """Retain an initial reply; no model-supplied patient turns are permitted."""
+    return _record_clarification_proposal(
+        access_token=access_token,
+        first_name=first_name,
+        role=role,
+        operation_id=operation_id,
+        context=context,
+        reply=reply,
+        model_profile=model_profile,
+    )
+
+
+def record_followup_clarification_proposal(
+    *,
+    access_token: str,
+    first_name: str,
+    role: ContributionRole,
+    operation_id: str,
+    source_turn_id: str,
+    context: VisitPrepClarificationContext,
+    reply: PatientClarificationReply,
+    model_profile: str,
+) -> InitialClarificationProposalReceipt:
+    """Retain a bounded reply only against independently recorded patient words.
+
+    This private operation grants no Sovereign/service boundary or model access.
+    The caller's context must exactly match Core's current source and saved turns.
+    """
+    return _record_clarification_proposal(
+        access_token=access_token,
+        first_name=first_name,
+        role=role,
+        operation_id=operation_id,
+        context=context,
+        reply=reply,
+        model_profile=model_profile,
+        source_turn_id=source_turn_id,
+    )
