@@ -826,6 +826,34 @@ def revoke_visit_prep(
 ) -> VisitPrepMutationResult:
     """Irreversibly revoke the aggregate and its current credential."""
 
+    with _visit_prep_session() as session:
+        result = stage_visit_prep_revocation(
+            session,
+            owner_practice_member_id=owner_practice_member_id,
+            owner_doctor_id=owner_doctor_id,
+            practice_id=practice_id,
+            visit_prep_id=visit_prep_id,
+            expected_credential_generation=expected_credential_generation,
+            reason=reason,
+            now=now,
+        )
+        _commit(session)
+        return result
+
+
+def stage_visit_prep_revocation(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    visit_prep_id: TypeIDType,
+    expected_credential_generation: int,
+    reason: RevocationReason,
+    now: datetime | None = None,
+) -> VisitPrepMutationResult:
+    """Stage revocation in the caller transaction; never commit or release a receipt."""
+
     effective_at = _aware_utc(now, message="revocation time is invalid")
     if reason not in {
         "physician_revoked",
@@ -833,76 +861,73 @@ def revoke_visit_prep(
         "appointment_cancelled",
     }:
         raise VisitPrepValidation("revocation reason is invalid")
-    with _visit_prep_session() as session:
-        _lock_owner_scope(
-            session,
-            owner_practice_member_id=owner_practice_member_id,
-            owner_doctor_id=owner_doctor_id,
-            practice_id=practice_id,
-            now=effective_at,
-        )
-        visit_prep = _lock_visit_prep(
-            session,
-            owner_practice_member_id=owner_practice_member_id,
-            visit_prep_id=visit_prep_id,
-        )
-        schedule, credential = _lock_current_lineage(
-            session,
-            visit_prep=visit_prep,
-        )
-        if visit_prep.revoked_at is not None:
-            _expected_credential(
-                credential,
-                expected_generation=expected_credential_generation,
-            )
-            if (
-                visit_prep.revocation_reason != reason
-                or credential.revocation_reason != reason
-            ):
-                raise VisitPrepConflict("Visit Prep was revoked for another reason")
-            snapshot = _snapshot(
-                visit_prep,
-                schedule,
-                credential,
-                at=effective_at,
-            )
-            _commit(session)
-            return VisitPrepMutationResult(
-                visit_prep=snapshot,
-                disposition="replayed",
-            )
-        if reason == "wrong_recipient" and visit_prep.lifecycle_state != "invited":
-            raise VisitPrepConflict("interacted recipient requires quarantine")
-        _active_credential(
+    _lock_owner_scope(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        now=effective_at,
+    )
+    visit_prep = _lock_visit_prep(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        visit_prep_id=visit_prep_id,
+    )
+    schedule, credential = _lock_current_lineage(
+        session,
+        visit_prep=visit_prep,
+    )
+    if visit_prep.revoked_at is not None:
+        _expected_credential(
             credential,
             expected_generation=expected_credential_generation,
         )
         if (
-            visit_prep.created_at is not None and visit_prep.created_at > effective_at
-        ) or credential.issued_at > effective_at:
-            raise VisitPrepValidation("revocation time is invalid")
-
-        actor_ref = _actor_ref(owner_doctor_id)
-        credential.revoked_at = effective_at
-        credential.revoked_by_ref = actor_ref
-        credential.revocation_reason = reason
-        visit_prep.revoked_at = effective_at
-        visit_prep.revoked_by_ref = actor_ref
-        visit_prep.revocation_reason = reason
-        session.add(credential)
-        session.add(visit_prep)
-        snapshot = _refresh_lineage(
-            session,
-            visit_prep=visit_prep,
-            schedule=schedule,
-            credential=credential,
+            visit_prep.revocation_reason != reason
+            or credential.revocation_reason != reason
+        ):
+            raise VisitPrepConflict("Visit Prep was revoked for another reason")
+        snapshot = _snapshot(
+            visit_prep,
+            schedule,
+            credential,
             at=effective_at,
         )
-        _commit(session)
         return VisitPrepMutationResult(
             visit_prep=snapshot,
-            disposition="revoked",
+            disposition="replayed",
         )
+    if reason == "wrong_recipient" and visit_prep.lifecycle_state != "invited":
+        raise VisitPrepConflict("interacted recipient requires quarantine")
+    _active_credential(
+        credential,
+        expected_generation=expected_credential_generation,
+    )
+    if (
+        visit_prep.created_at is not None and visit_prep.created_at > effective_at
+    ) or credential.issued_at > effective_at:
+        raise VisitPrepValidation("revocation time is invalid")
+
+    actor_ref = _actor_ref(owner_doctor_id)
+    credential.revoked_at = effective_at
+    credential.revoked_by_ref = actor_ref
+    credential.revocation_reason = reason
+    visit_prep.revoked_at = effective_at
+    visit_prep.revoked_by_ref = actor_ref
+    visit_prep.revocation_reason = reason
+    session.add(credential)
+    session.add(visit_prep)
+    snapshot = _refresh_lineage(
+        session,
+        visit_prep=visit_prep,
+        schedule=schedule,
+        credential=credential,
+        at=effective_at,
+    )
+    return VisitPrepMutationResult(
+        visit_prep=snapshot,
+        disposition="revoked",
+    )
 
 
 def reschedule_visit_prep(
@@ -919,118 +944,147 @@ def reschedule_visit_prep(
 ) -> VisitPrepMutationResult:
     """Append a schedule generation and atomically rotate its bearer."""
 
+    with _visit_prep_session() as session:
+        result = stage_visit_prep_reschedule(
+            session,
+            owner_practice_member_id=owner_practice_member_id,
+            owner_doctor_id=owner_doctor_id,
+            practice_id=practice_id,
+            visit_prep_id=visit_prep_id,
+            expected_schedule_generation=expected_schedule_generation,
+            expected_credential_generation=expected_credential_generation,
+            scheduled_at=scheduled_at,
+            timezone_name=timezone_name,
+            now=now,
+        )
+        _commit(session)
+        return result
+
+
+def stage_visit_prep_reschedule(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    visit_prep_id: TypeIDType,
+    expected_schedule_generation: int,
+    expected_credential_generation: int,
+    scheduled_at: datetime,
+    timezone_name: str,
+    now: datetime | None = None,
+) -> VisitPrepMutationResult:
+    """Stage rescheduling in the caller transaction; bearer is unusable until commit."""
+
     effective_at = _aware_utc(now, message="reschedule time is invalid")
     normalized_scheduled_at, normalized_timezone = _normalized_schedule(
         scheduled_at,
         timezone_name,
         now=effective_at,
     )
-    with _visit_prep_session() as session:
-        _lock_owner_scope(
+    _lock_owner_scope(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        now=effective_at,
+    )
+    visit_prep = _lock_visit_prep(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        visit_prep_id=visit_prep_id,
+    )
+    if visit_prep.revoked_at is not None or visit_prep.lifecycle_state in {
+        "completed",
+        "misdirected",
+    }:
+        raise VisitPrepConflict("inactive Visit Prep cannot be rescheduled")
+    schedule, credential = _lock_current_lineage(
+        session,
+        visit_prep=visit_prep,
+    )
+    _expected_schedule(
+        schedule,
+        expected_generation=expected_schedule_generation,
+    )
+    _active_credential(
+        credential,
+        expected_generation=expected_credential_generation,
+    )
+    if credential.issued_at > effective_at:
+        raise VisitPrepValidation("reschedule time is invalid")
+    if credential.expires_at <= effective_at:
+        raise VisitPrepConflict("Visit Prep credential has already expired")
+
+    if visit_prep.appointment_id is not None:
+        appointment = _owned_appointment(
             session,
-            owner_practice_member_id=owner_practice_member_id,
             owner_doctor_id=owner_doctor_id,
-            practice_id=practice_id,
-            now=effective_at,
+            appointment_id=visit_prep.appointment_id,
         )
-        visit_prep = _lock_visit_prep(
+        if not _appointment_matches_schedule(
             session,
-            owner_practice_member_id=owner_practice_member_id,
-            visit_prep_id=visit_prep_id,
-        )
-        if visit_prep.revoked_at is not None or visit_prep.lifecycle_state in {
-            "completed",
-            "misdirected",
-        }:
-            raise VisitPrepConflict("inactive Visit Prep cannot be rescheduled")
-        schedule, credential = _lock_current_lineage(
-            session,
-            visit_prep=visit_prep,
-        )
-        _expected_schedule(
-            schedule,
-            expected_generation=expected_schedule_generation,
-        )
-        _active_credential(
-            credential,
-            expected_generation=expected_credential_generation,
-        )
-        if credential.issued_at > effective_at:
-            raise VisitPrepValidation("reschedule time is invalid")
-        if credential.expires_at <= effective_at:
-            raise VisitPrepConflict("Visit Prep credential has already expired")
-
-        if visit_prep.appointment_id is not None:
-            appointment = _owned_appointment(
-                session,
-                owner_doctor_id=owner_doctor_id,
-                appointment_id=visit_prep.appointment_id,
-            )
-            if not _appointment_matches_schedule(
-                session,
-                appointment_id=appointment.id,
-                scheduled_at=normalized_scheduled_at,
-            ):
-                raise VisitPrepConflict("appointment schedule does not match")
-
-        if (
-            schedule.scheduled_at == normalized_scheduled_at
-            and schedule.timezone_name == normalized_timezone
-        ):
-            snapshot = _snapshot(
-                visit_prep,
-                schedule,
-                credential,
-                at=effective_at,
-            )
-            _commit(session)
-            return VisitPrepMutationResult(
-                visit_prep=snapshot,
-                disposition="replayed",
-            )
-
-        actor_ref = _actor_ref(owner_doctor_id)
-        credential.revoked_at = effective_at
-        credential.revoked_by_ref = actor_ref
-        credential.revocation_reason = "rescheduled"
-        session.add(credential)
-        session.flush()
-        unused_purge_at, unused_hard_purge_at, _expires_at = _schedule_deadlines(
-            normalized_scheduled_at
-        )
-        successor_schedule = VisitPrepScheduleGeneration(
-            visit_prep_id=visit_prep.id,
-            owner_practice_member_id=owner_practice_member_id,
-            generation=schedule.generation + 1,
+            appointment_id=appointment.id,
             scheduled_at=normalized_scheduled_at,
-            timezone_name=normalized_timezone,
-            unused_purge_at=unused_purge_at,
-            unused_hard_purge_at=unused_hard_purge_at,
-        )
-        successor_schedule.created_at = effective_at
-        successor_schedule.updated_at = effective_at
-        session.add(successor_schedule)
-        session.flush()
-        successor_credential, access_token = _issue_credential(
-            session,
-            visit_prep=visit_prep,
-            schedule=successor_schedule,
-            generation=credential.generation + 1,
-            issued_at=effective_at,
-        )
-        snapshot = _refresh_lineage(
-            session,
-            visit_prep=visit_prep,
-            schedule=successor_schedule,
-            credential=successor_credential,
+        ):
+            raise VisitPrepConflict("appointment schedule does not match")
+
+    if (
+        schedule.scheduled_at == normalized_scheduled_at
+        and schedule.timezone_name == normalized_timezone
+    ):
+        snapshot = _snapshot(
+            visit_prep,
+            schedule,
+            credential,
             at=effective_at,
         )
-        _commit(session)
         return VisitPrepMutationResult(
             visit_prep=snapshot,
-            disposition="rescheduled",
-            access_token=access_token,
+            disposition="replayed",
         )
+
+    actor_ref = _actor_ref(owner_doctor_id)
+    credential.revoked_at = effective_at
+    credential.revoked_by_ref = actor_ref
+    credential.revocation_reason = "rescheduled"
+    session.add(credential)
+    session.flush()
+    unused_purge_at, unused_hard_purge_at, _expires_at = _schedule_deadlines(
+        normalized_scheduled_at
+    )
+    successor_schedule = VisitPrepScheduleGeneration(
+        visit_prep_id=visit_prep.id,
+        owner_practice_member_id=owner_practice_member_id,
+        generation=schedule.generation + 1,
+        scheduled_at=normalized_scheduled_at,
+        timezone_name=normalized_timezone,
+        unused_purge_at=unused_purge_at,
+        unused_hard_purge_at=unused_hard_purge_at,
+    )
+    successor_schedule.created_at = effective_at
+    successor_schedule.updated_at = effective_at
+    session.add(successor_schedule)
+    session.flush()
+    successor_credential, access_token = _issue_credential(
+        session,
+        visit_prep=visit_prep,
+        schedule=successor_schedule,
+        generation=credential.generation + 1,
+        issued_at=effective_at,
+    )
+    snapshot = _refresh_lineage(
+        session,
+        visit_prep=visit_prep,
+        schedule=successor_schedule,
+        credential=successor_credential,
+        at=effective_at,
+    )
+    return VisitPrepMutationResult(
+        visit_prep=snapshot,
+        disposition="rescheduled",
+        access_token=access_token,
+    )
 
 
 def reconcile_visit_prep(

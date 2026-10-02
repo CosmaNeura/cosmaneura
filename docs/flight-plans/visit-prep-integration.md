@@ -471,13 +471,31 @@ The real graph and affected routes run in owned synthetic PostgreSQL; populated
 expansion checks preserve both Visit Prep and CAB evidence. CAB and Visit Prep
 provider components coexist, and the locally regenerated browser client typechecks.
 
-The browser client is generated locally from the actual combined internal schema,
-not Core's older snapshot that omits Visit Prep. Publishing the reconciled schema
-snapshot remains a follow-up. Runtime configuration tests use fake vault and cloud
+The checked-in browser API snapshot now contains all 15 Visit Prep paths and their
+schemas alongside current Core/CAB. The client regenerates from that snapshot;
+an actual-application parity check protects against lost paths, and the complete
+synthetic app builds and typechecks. Runtime configuration tests use fake vault and cloud
 commands; neither environment template nor deployment script was run against a
 service. Exact commits and scoped validation are recorded in the stacked drafts.
 No feature activation or default-branch merge follows from this synchronization.
 Retain additive schemas and evidence on recovery; use forward fixes, not drops.
+
+## Booking lifecycle transaction implementation October 2 2026
+
+The existing physician reschedule and revoke commands now delegate to staging
+functions that retain the same ownership, lineage and state checks but never
+commit. A booking handler can join the lifecycle write and its source receipt in
+one caller-owned transaction, recheck source authority, then commit both together.
+A failed receipt or final gate rolls back schedule and credential changes; no
+replacement bearer may leave the handler before successful commit acknowledgment.
+Physician commands retain their original public behavior and commit boundary.
+
+This increment changes no route, delivery policy, stored schema or service
+configuration. The signed scheduled-only handler is still unchanged: normalized
+current-source change/cancel handling and retained lifecycle receipts follow next.
+Synthetic qualification proves independent readers see no staged changes and both
+successful commit and failed-handoff rollback preserve expected lineage. Recovery
+is reverting the additive transaction refactor; no database rollback is required.
 
 ## Source references
 
