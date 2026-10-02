@@ -281,6 +281,11 @@ if [[ "$CONFIGURATION_STATUS" -ne 0 ]]; then
 	exit 1
 fi
 if ! printf '%s' "$ENV_JSON" |
+	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/core_cab_runtime_config.py" --stdin; then
+	echo "Core CAB runtime configuration is not deployable."
+	exit 1
+fi
+if ! printf '%s' "$ENV_JSON" |
 	"$PYTHON_BIN" -I -S -B "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
 		--environment staging; then
 	echo "Staging capability identity configuration is not deployable."
@@ -512,6 +517,13 @@ COMMON_SECRET_VARS=(
 	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
 )
 API_ONLY_SECRET_VARS=(RECALL_WEBHOOK_SECRET)
+CAB_API_ONLY_SECRET_VARS=(BILLING_SOURCE_POLICY_JSON)
+CAB_API_ONLY_PUBLIC_VARS=(
+ CORE_CAB_AUTHORIZE_ENABLED CORE_CAB_AUTHORIZE_TENANT_ID
+ CORE_CAB_AUTHORIZE_AUDIENCE CORE_CAB_AUTHORIZE_CALLER_ID
+ CORE_CAB_BRIDGE_ENABLED CORE_CAB_ORIGIN CORE_CAB_AUDIENCE
+ CORE_CAB_MANAGED_IDENTITY_CLIENT_ID
+)
 BILLING_SECRET_VARS=(STRIPE_SECRET_KEY)
 BILLING_API_ONLY_SECRET_VARS=(STRIPE_WEBHOOK_SECRET)
 BILLING_PUBLIC_VARS=(
@@ -576,6 +588,8 @@ configure_workload_contract() {
 	container_public_vars=("${PUBLIC_VARS[@]}")
 	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")
+		container_secret_vars+=("${CAB_API_ONLY_SECRET_VARS[@]}")
+		container_public_vars+=("${CAB_API_ONLY_PUBLIC_VARS[@]}")
 	fi
 	if record_grants_enabled_for "$container_name"; then
 		container_secret_vars+=(SOVEREIGN_RECORD_GRANT_SECRET)
@@ -1477,6 +1491,9 @@ initiate_deployment() {
 	if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
 		update_args+=(--args "$SCHEDULER_COMMAND")
 	fi
+	if [[ "$container_name" != "$API_CONTAINER" ]]; then
+		remove_env_vars+=("${CAB_API_ONLY_SECRET_VARS[@]}" "${CAB_API_ONLY_PUBLIC_VARS[@]}")
+	fi
 	if ! record_grants_enabled_for "$container_name"; then
 		remove_env_vars+=("$GRANT_SECRET_ENV_NAME")
 	fi
@@ -1536,6 +1553,23 @@ verify_retained_recovery_revision() {
 		return 1
 	fi
 	echo "Verified the bound recovery revision remains available for $container_name."
+}
+
+remove_unowned_cab_policy_secret() {
+	local container_name=$1 count
+	# Retained recovery revisions may still reference the app-level secret.
+	[[ "$STAGING_PRESERVE_EFFECTIVE_CONFIGURATION" != "true" ]] || return 0
+	if [[ "$container_name" == "$API_CONTAINER" ]] && \
+		[[ -n "$(printf '%s' "$ENV_JSON" | jq -r '.BILLING_SOURCE_POLICY_JSON // empty')" ]]; then
+		return 0
+	fi
+	count=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.secrets[?name=='billing-source-policy-json'] | length(@)" \
+		-o tsv --only-show-errors) || return 1
+	if [[ "$count" != "0" ]]; then
+		az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secret-names billing-source-policy-json || return 1
+	fi
 }
 
 remove_unowned_billing_secrets() {
@@ -1785,6 +1819,7 @@ check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 verify_retained_recovery_revision "$API_CONTAINER" || exit 1
 
 for container in $CRITICAL_CONTAINERS; do
+	remove_unowned_cab_policy_secret "$container" || exit 1
 	remove_unowned_billing_secrets "$container"
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to reconcile Stripe secret scope for $container."
