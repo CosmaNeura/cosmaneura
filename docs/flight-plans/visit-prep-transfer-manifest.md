@@ -975,3 +975,39 @@ receiver authorization or actual dashboard/CosmaBot parity. The receiver, adapte
 bot actions, patient AI, delivery/booking/SMS/reminders, retention qualification
 and clinical/operational release milestones remain open. All runtime controls
 remain off; no merge, deployment, patient message or workspace retirement occurs.
+
+## Internal patient clarification rules
+
+`visit_prep_clarification_contract.py` defines a dormant internal foundation for
+the approved patient AI interaction. It selects one current answered applicable
+physician topic from an already-authorized package, preserving preparation,
+question-set, source, revision, contribution basis and patient/caregiver role.
+Original, hidden, skipped, missing and other-topic words are not selected. The
+unconditional fifth story remains in the published question set.
+
+The initial extractive organization format accepts only exact bounded spans of
+the current answer or up to two explicit patient clarification turns. Clarifying
+questions come from four neutral fixed prompts, not model-authored medical
+advice. Unknown fields, fabricated words, absent sources, repeated/overlapping
+spans, repeated prompts and excess UTF-8/character bounds are rejected. This
+mechanical grounding does not prove clinical interpretation quality or authorize
+source text as instructions.
+
+An explicit patient confirm/edit decision produces an uncommitted intent, not a
+saved answer or proof of consent/identity. A fresh current-source comparison
+rejects intervening corrections, review or scope changes. Keeping the original
+or dismissing an unavailable AI does not alter the report. Story/list intent can
+feed the existing explicit patient correction workflow; choice values remain
+unchanged, and supplemental explanations require a separately qualified source
+write. Current-source equality is not authorization or durable patient-action
+evidence.
+
+Synthetic checks use real Core package projections and existing patient correction
+commands, including caregiver attribution, manual fallback, conditional topics,
+Unicode bounds and original-word preservation. Exact reviewed revision and test
+totals belong in the draft PR. No conversational model, cross-repository adapter,
+public route, storage/migration, patient UI, audit/usage integration or release
+control is added. Conversational ownership remains with the existing service;
+Core does not acquire a second chatbot runtime. Durable clarification/action
+evidence, patient UI, the ratified patient service boundary, clinical quality,
+CosmaBot, booking/email/SMS/reminders and release qualification remain open.
