@@ -1861,6 +1861,627 @@
         }
       }
     },
+    "/internal/v1/visit-prep/preps/{prep_id}/email-status": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Email Status",
+        "operationId": "visit_prep_email_status",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepEmailStatusResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/preps/{prep_id}/package": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Package",
+        "operationId": "visit_prep_package",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepPackageResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/preps/{prep_id}/synthesis": {
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Synthesis Request",
+        "operationId": "visit_prep_synthesis_request",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepSynthesisRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepSynthesisRequestResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The bounded request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Synthesis",
+        "operationId": "visit_prep_synthesis",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepSynthesisResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The bounded request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/email-policy": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Email Policy Read",
+        "operationId": "visit_prep_email_policy_read",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepEmailPolicyResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Email Policy Decide",
+        "operationId": "visit_prep_email_policy_decide",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepEmailPolicyDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepEmailPolicyDecisionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-prep/preps/{prep_id}/email-invitation": {
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Email Invitation",
+        "operationId": "visit_prep_email_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepEmailInvitationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepEmailInvitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
