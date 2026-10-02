@@ -22,8 +22,8 @@ from tests.services.visit_prep_synthesis_artifact_test import _artifact
 signed = signed_identity
 
 
-def _client(monkeypatch, signed, *, ready=False):
-    case = _case(monkeypatch)
+def _client(monkeypatch, signed, *, ready=False, fixture=None):
+    case = _case(monkeypatch, fixture=fixture)
     if ready:
         _artifact(case.fixture).save()
     workload = {

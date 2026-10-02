@@ -47,8 +47,8 @@ from tests.services.visit_prep_packages_test import _scope
 from tests.services.visit_prep_synthesis_artifact_test import _artifact
 
 
-def _case(monkeypatch, *, complete=True, caregiver=False):
-    fixture = _prepared(
+def _case(monkeypatch, *, complete=True, caregiver=False, fixture=None):
+    fixture = fixture or _prepared(
         monkeypatch,
         "companion" + uuid4().hex[:6],
         complete=complete,

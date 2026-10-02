@@ -13,6 +13,7 @@ from app.services.visit_prep_booking_contract import (
     BookingSourceUnavailable,
     CurrentVisitPrepBookingState,
 )
+from app.services.visit_prep_booking_refresh import stage_booking_synthesis_refresh
 from app.services.visit_prep_command_contract import (
     _normalize_recipient,
     _normalized_schedule,
@@ -198,6 +199,7 @@ def record_current_booking_state(
                     expected_schedule_generation=schedule.generation,
                     scheduled_at=booking.scheduled_at,
                     timezone_name=booking.timezone_name,
+                    allow_expired=True,
                 )
         schedule, credential = _lock_current_lineage(session, visit_prep=prep)
         session.add(
@@ -217,6 +219,11 @@ def record_current_booking_state(
             )
         )
         session.flush()
+        refresh_queued = action == "rescheduled" and stage_booking_synthesis_refresh(
+            session, prep=prep
+        )
         require_admission()
+        if refresh_queued and not visit_prep.VISIT_PREP_SETTINGS.auto_synthesis_enabled:
+            raise BookingSourceUnavailable()
         session.commit()
         return BookingReceipt(str(prep.id), action)
