@@ -205,6 +205,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               }
               focusOnMount={loaderData.focusedNoteId === note.id}
               review={loaderData.session_prep_reviews?.[note.id]}
+              billingSource={loaderData.billing_header_sources?.[note.id]}
               transcript={
                 distinctNoteSources
                   ? (sourceTranscripts.find(
