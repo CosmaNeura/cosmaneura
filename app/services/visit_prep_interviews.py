@@ -96,6 +96,7 @@ from app.models.visit_prep import (
     VisitPrepScheduleGeneration,
 )
 from app.models.visit_prep_contribution import VisitPrepContributionEvent
+from app.models.visit_prep_delivery_link import VisitPrepDeliveryLink
 from app.models.visit_prep_question_set import (
     VisitPrepQuestion,
     VisitPrepQuestionChoice,
@@ -140,6 +141,7 @@ class _CredentialLocator:
     owner_practice_member_id: TypeIDType
     owner_doctor_id: TypeIDType
     practice_id: TypeIDType
+    delivery_link_id: TypeIDType | None = None
 
 
 @dataclass(frozen=True)
@@ -161,13 +163,22 @@ def _canonical_token_hash(access_token: str | ConfirmedVisitPrepAccess) -> str:
 
 
 def _credential_locator(session: Session, *, token_hash: str) -> _CredentialLocator:
+    alias = None
     credential = session.exec(
         select(VisitPrepCredentialGeneration).where(
             VisitPrepCredentialGeneration.token_hash == token_hash
         )
     ).one_or_none()
     if credential is None:
-        raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+        alias = session.exec(
+            select(VisitPrepDeliveryLink).where(
+                VisitPrepDeliveryLink.token_hash == token_hash
+            )
+        ).one_or_none()
+        if alias is not None:
+            credential = session.get(VisitPrepCredentialGeneration, alias.credential_id)
+        if credential is None:
+            raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
     visit_prep = session.exec(
         select(VisitPrep).where(
             VisitPrep.id == credential.visit_prep_id,
@@ -182,6 +193,7 @@ def _credential_locator(session: Session, *, token_hash: str) -> _CredentialLoca
         owner_practice_member_id=credential.owner_practice_member_id,
         owner_doctor_id=visit_prep.owner_doctor_id,
         practice_id=visit_prep.practice_id,
+        delivery_link_id=alias.id if alias else None,
     )
 
 
@@ -317,12 +329,36 @@ def _lock_authorized_interview(
         raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
     event_at = event_at.astimezone(UTC)
 
-    decision = visit_prep_access.resolve_visit_prep_access(
-        doctor,
-        settings=visit_prep_access.VISIT_PREP_SETTINGS,
-        at=event_at,
-    )
     continued = isinstance(access_token, ConfirmedVisitPrepAccess)
+    aliased = locator.delivery_link_id is not None and not continued
+    delivery_deadline = None
+    if aliased:
+        from app.services.visit_prep_delivery_links import (
+            DeliveryLinkUnavailable,
+            verify_delivery_link,
+        )
+
+        alias = session.get(
+            VisitPrepDeliveryLink, locator.delivery_link_id, populate_existing=True
+        )
+        try:
+            if alias is None:
+                raise DeliveryLinkUnavailable()
+            verify_delivery_link(session, alias)
+            delivery_deadline = alias.expires_at
+            if (
+                alias.token_hash != token_hash
+                or alias.credential_id != credential.id
+                or alias.visit_prep_id != visit_prep.id
+                or alias.owner_practice_member_id != owner.id
+                or alias.question_set_version_id != visit_prep.question_set_version_id
+                or not alias.issued_at <= event_at < alias.expires_at
+            ):
+                raise DeliveryLinkUnavailable()
+        except DeliveryLinkUnavailable:
+            raise VisitPrepInterviewUnavailable(
+                "Visit Prep link is unavailable"
+            ) from None
     own_wrong_recipient_report = (
         allow_wrong_recipient_replay
         and visit_prep.revoked_at is not None
@@ -332,10 +368,12 @@ def _lock_authorized_interview(
         == "wrong_recipient"
         and visit_prep.revoked_by_ref
         == credential.revoked_by_ref
-        == _wrong_recipient_actor(credential.token_hash if continued else token_hash)
+        == _wrong_recipient_actor(
+            credential.token_hash if continued or aliased else token_hash
+        )
     )
     if continued:
-        validate_reschedule_continuity(
+        delivery_deadline = validate_reschedule_continuity(
             session,
             prep=visit_prep,
             current=credential,
@@ -343,6 +381,15 @@ def _lock_authorized_interview(
             at=event_at,
             own_wrong_recipient_replay=own_wrong_recipient_report,
         )
+    # Sealed evidence and continuity reads may wait; apply deadlines to a fresh
+    # clock after those reads, not the earlier locator/lock clock.
+    event_at = cast(datetime, session.exec(select(func.clock_timestamp())).one())
+    if event_at.tzinfo is None or event_at.utcoffset() is None:
+        raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+    event_at = event_at.astimezone(UTC)
+    decision = visit_prep_access.resolve_visit_prep_access(
+        doctor, settings=visit_prep_access.VISIT_PREP_SETTINGS, at=event_at
+    )
     if (
         not decision.eligible
         or decision.doctor_id != visit_prep.owner_doctor_id
@@ -365,8 +412,11 @@ def _lock_authorized_interview(
         or credential.token_format_version != 1
         or credential.issued_at > event_at
         or credential.expires_at <= event_at
+        or (delivery_deadline is not None and delivery_deadline <= event_at)
         or (
-            not hmac.compare_digest(credential.token_hash, token_hash) and not continued
+            not hmac.compare_digest(credential.token_hash, token_hash)
+            and not continued
+            and not aliased
         )
     ):
         raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")

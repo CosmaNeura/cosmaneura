@@ -19,6 +19,7 @@ from app.services.visit_prep_command_contract import access_token_hash
 from app.services.visit_prep_current_timing import (
     plan_locked_current_delivery,
 )
+from app.services.visit_prep_delivery_links import delivery_token_deadline
 from app.services.visit_prep_delivery_timing import (
     next_outside_quiet_hours,
     plan_delivery_timing,
@@ -491,10 +492,11 @@ def enqueue_locked_sms(
         approval_verifier=approval_verifier,
         consent_verifier=consent_verifier,
     )
-    if locked.credential.id != credential_id or not hmac.compare_digest(
-        locked.credential.token_hash, token_hash
-    ):
+    if locked.credential.id != credential_id:
         raise VisitPrepSMSUnavailable()
+    token_deadline = delivery_token_deadline(
+        session, prep=prep, credential=locked.credential, token_hash=token_hash
+    )
     message = VisitPrepText(
         stored_sms_recipient(prep),
         approval.sender_digest,
@@ -509,6 +511,7 @@ def enqueue_locked_sms(
     if action != "candidate":
         return SMSQueueResult(action, reason, next_check_at=next_check)
     expires = min(
+        token_deadline,
         locked.credential.expires_at,
         _time(locked.consent.expires_at),
         approval.expires_at,
@@ -595,7 +598,7 @@ def enqueue_sms(**arguments) -> SMSQueueResult:
 
 
 def decrypt_sms_message(
-    row: VisitPrepSMSDelivery, locked: LockedSMSAuthority
+    session: Session, row: VisitPrepSMSDelivery, locked: LockedSMSAuthority
 ) -> VisitPrepText:
     evidence = _read_evidence(row)
     if (
@@ -627,7 +630,6 @@ def decrypt_sms_message(
         or payload["recipient"] != stored_sms_recipient(locked.prep)
         or sms_recipient_digest(payload["recipient"]) != row.recipient_digest
         or row.sender_digest != locked.approval.sender_digest
-        or access_token_hash(payload["access_token"]) != locked.credential.token_hash
         or payload["patient_origin"] != evidence["patient_origin"]
         or row.request_hmac
         != _request(
@@ -635,10 +637,18 @@ def decrypt_sms_message(
             row.credential_id,
             row.step,
             payload["patient_origin"],
-            locked.credential.token_hash,
+            access_token_hash(payload["access_token"]),
             row.sender_digest,
         )
     ):
+        raise VisitPrepSMSUnavailable()
+    deadline = delivery_token_deadline(
+        session,
+        prep=locked.prep,
+        credential=locked.credential,
+        token_hash=access_token_hash(payload["access_token"]),
+    )
+    if row.expires_at > deadline:
         raise VisitPrepSMSUnavailable()
     return VisitPrepText(
         payload["recipient"],
