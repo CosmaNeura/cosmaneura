@@ -20,7 +20,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, BeforeValidator, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 from starlette.routing import Match
@@ -29,6 +29,7 @@ from starlette.types import Receive, Scope, Send
 from app import log
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services import visit_prep_contributions as contributions
+from app.services import visit_prep_email_consent as email_consent
 from app.services import visit_prep_interviews as interview_service
 from app.services import visit_prep_rate_limits as rate_limits
 from app.services.visit_prep_contribution_contract import (
@@ -36,6 +37,8 @@ from app.services.visit_prep_contribution_contract import (
     ContributionMutationReceipt,
     PatientContribution,
 )
+from app.services.visit_prep_email_consent_view import get_patient_email_consent_view
+from app.services.visit_prep_email_contract import VisitPrepEmailInvalid
 from app.services.visit_prep_interview_contract import (
     InterviewMutationResult,
     InterviewQuestion,
@@ -71,6 +74,8 @@ _CONFIRMATION_PATHS = frozenset(
         "/contribution",
         "/contribution/response",
         "/contribution/review",
+        "/email-consent",
+        "/email-consent/decision",
     )
 )
 
@@ -321,6 +326,58 @@ class VisitPrepWrongRecipientResponse(_StrictModel):
 class VisitPrepConfirmationRequest(_StrictModel):
     first_name: str = Field(min_length=1, max_length=120, repr=False)
     role: Literal["patient", "caregiver"]
+
+
+def _explicit_consent_timestamp(value: object) -> object:
+    if value is not None and (
+        type(value) is not str or len(value) > 64 or value[10:11] not in {"T", "t"}
+    ):
+        raise ValueError("an explicit timezone-aware timestamp is required")
+    return value
+
+
+class VisitPrepPatientEmailConsentResponse(_StrictModel):
+    contract: Literal["visit_prep.patient_email_consent.v1"] = (
+        "visit_prep.patient_email_consent.v1"
+    )
+    actor_role: Literal["patient", "caregiver"]
+    disclosure_version: str
+    grant_disclosure: str
+    grant_disclosure_fingerprint: str
+    withdrawal_disclosure: str
+    withdrawal_disclosure_fingerprint: str
+    status: Literal["not_recorded", "grant_recorded", "withdrawn", "expired"]
+    event_sequence: int
+    recorded_at: datetime | None
+    expires_at: datetime | None
+    maximum_expires_at: datetime
+    can_grant: bool
+    checked_at: datetime
+    identity_assurance: Literal["invitation_bearer"] = "invitation_bearer"
+    sending_authority: Literal["not_qualified"] = "not_qualified"
+    delivery_status: Literal["not_connected"] = "not_connected"
+
+
+class VisitPrepPatientEmailConsentDecisionRequest(VisitPrepConfirmationRequest):
+    expected_event_sequence: int = Field(ge=0, lt=2_147_483_647)
+    event_kind: Literal["granted", "withdrawn"]
+    disclosure_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expires_at: Annotated[
+        AwareDatetime | None,
+        Field(strict=False),
+        BeforeValidator(_explicit_consent_timestamp),
+    ]
+    recipient_control_attested: bool
+    caregiver_authority_attested: bool
+
+
+class VisitPrepPatientEmailConsentDecisionResponse(_StrictModel):
+    event_sequence: int
+    current_event_sequence: int
+    event_kind: Literal["granted", "withdrawn"]
+    expires_at: datetime | None
+    recorded_at: datetime
+    disposition: Literal["recorded", "replayed"]
 
 
 class VisitPrepResponseRequest(_StrictModel):
@@ -795,6 +852,90 @@ def _contribution_key(request: Request) -> str:
     if len(values) != 1:
         raise HTTPException(status_code=422, detail=_VALIDATION_DETAIL)
     return values[0]
+
+
+def _email_consent_invoke(operation: Callable[[], _ResultT]) -> _ResultT:
+    result = None
+    try:
+        result = operation()
+    except VisitPrepEmailInvalid:
+        pass
+    if result is None:
+        # Never distinguish private authority, persistence, or stale-choice errors.
+        # A failed mutation may already have committed. Recovery is a fresh read.
+        raise HTTPException(status_code=409, detail=_CONFLICT_DETAIL)
+    return result
+
+
+@visit_prep_interviews_api_app.post(
+    "/email-consent",
+    name="visit_prep_public_read_email_consent",
+    response_model=VisitPrepPatientEmailConsentResponse,
+)
+def visit_prep_public_read_email_consent(
+    data: VisitPrepConfirmationRequest,
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepPatientEmailConsentResponse:
+    value = _email_consent_invoke(
+        lambda: get_patient_email_consent_view(
+            access_token=access_token, first_name=data.first_name, role=data.role
+        )
+    )
+    return VisitPrepPatientEmailConsentResponse(
+        actor_role=value.actor_role,
+        disclosure_version=value.disclosure_version,
+        grant_disclosure=value.grant_disclosure,
+        grant_disclosure_fingerprint=value.grant_disclosure_fingerprint,
+        withdrawal_disclosure=value.withdrawal_disclosure,
+        withdrawal_disclosure_fingerprint=value.withdrawal_disclosure_fingerprint,
+        status=value.status,
+        event_sequence=value.event_sequence,
+        recorded_at=value.recorded_at,
+        expires_at=value.expires_at,
+        maximum_expires_at=value.maximum_expires_at,
+        can_grant=value.can_grant,
+        checked_at=value.checked_at,
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/email-consent/decision",
+    name="visit_prep_public_decide_email_consent",
+    response_model=VisitPrepPatientEmailConsentDecisionResponse,
+)
+def visit_prep_public_decide_email_consent(
+    request: Request,
+    data: VisitPrepPatientEmailConsentDecisionRequest,
+    documented_idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=36, max_length=36)
+    ],
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepPatientEmailConsentDecisionResponse:
+    del documented_idempotency_key
+    value = _email_consent_invoke(
+        lambda: email_consent.record_confirmed_patient_email_consent(
+            access_token=access_token,
+            first_name=data.first_name,
+            decision=email_consent.PatientEmailConsentInput(
+                operation_id=_contribution_key(request),
+                expected_event_sequence=data.expected_event_sequence,
+                event_kind=data.event_kind,
+                role=data.role,
+                disclosure_fingerprint=data.disclosure_fingerprint,
+                expires_at=data.expires_at,
+                recipient_control_attested=data.recipient_control_attested,
+                caregiver_authority_attested=data.caregiver_authority_attested,
+            ),
+        )
+    )
+    return VisitPrepPatientEmailConsentDecisionResponse(
+        event_sequence=value.event_sequence,
+        current_event_sequence=value.current_event_sequence,
+        event_kind=value.event_kind,
+        expires_at=value.expires_at,
+        recorded_at=value.recorded_at,
+        disposition=value.disposition,
+    )
 
 
 @visit_prep_interviews_api_app.post(

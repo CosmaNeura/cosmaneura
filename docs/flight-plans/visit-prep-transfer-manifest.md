@@ -705,3 +705,39 @@ consent disclosure and retention, patient consent controls, trusted prior-consen
 intake, atomic enqueue, dispatch, cleanup and delivery status remain open. Email,
 SMS and public release controls remain off; no schema, dependency, external
 provider, deployment or cohort activation changes are included.
+
+The patient email-choice API now provides an explicit current-state read and a
+separate grant/withdrawal operation in the existing bearer-authorized public
+router. Both require the first name and role matching the preparation's original
+confirmation, using the same check as patient answer review. This is recipient
+confirmation, not verified patient identity or legal caregiver authority. Reads
+commit a content-free Core audit before returning the current sequence,
+disclosures, deadline and optional choice status. They disclose no email address,
+patient answers, internal source IDs or bearer credentials.
+
+The public capture adapter checks confirmation while holding the same authority
+and preparation locks as the immutable decision write. Exact operation replay
+returns the original receipt and latest sequence without restoring a later
+withdrawal. Completion removes the new-grant option while preserving read and
+withdrawal through a still-valid link. Expiry, rotation, wrong-recipient quarantine,
+current owner authority and elapsed database time remain checked before return.
+Lost acknowledgments require a fresh read rather than a new decision key.
+
+Public reads and decisions share the existing eight-attempt confirmation budget
+and bounded, redacted request handling. The new independent
+`VISIT_PREP_EMAIL_CONSENT_CAPTURE_ENABLED` control defaults off: enabling patient
+interviews does not also enable draft consent capture. The response explicitly
+labels a grant as recorded, its source as invitation-bearer attribution, sending
+authority as not qualified, and delivery as not connected. No qualified verifier
+is installed and no job is enqueued.
+
+Synthetic full-app HTTP checks and independent PostgreSQL lock tests cover
+patient/caregiver decisions, withdrawal, stale and divergent retries, atomic audit
+failure, a real committed decision with lost acknowledgment, support-view denial,
+strict requests, private errors, shared rate limits and current authority changes
+during lock waits. Final revision-specific regression and implementer review
+belong in the stacked draft PR. This API increment does not include the patient
+screen. Disclosure and evidence retention qualification, prior-consent intake,
+enqueue/dispatch, cleanup and delivery status remain open. It cannot authorize
+the first booking email from consent captured after opening the link. No schema,
+external dependency, deployment, real message or cohort activation was changed.
