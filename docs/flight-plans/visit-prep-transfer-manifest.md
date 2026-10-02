@@ -508,7 +508,7 @@ comment drift from unrelated tables was removed. Database checks enforce immutab
 intent, current credential/schedule at acquisition, one submission lane, explicit
 terminal state and removal of encrypted invitation payload on finalization. The
 24-hour maximum secret lifetime still requires the upcoming cleanup worker; merely
-storing expiry does not delete ciphertext. Authorization-envelope validation,
+storing expiry does not delete ciphertext. Durable authorization-envelope validation,
 durable consent/standing-approval resolution, atomic invitation enqueue, worker
 dispatch, status UI and operational reconciliation are still implementation work.
 
@@ -519,3 +519,28 @@ populated rehearsal preserves existing encrypted answers, synthesis artifacts,
 queue state and central usage byte-for-byte through `54bedaad381a` to the new expand.
 These are storage/transport-boundary checks, not an end-to-end dispatched invitation
 or external email acceptance. Final tested revision and totals belong in the draft PR.
+
+The next email increment adds explicit invitation encryption and decryption in
+`visit_prep_email_payload.py`. Its closed envelope binds the bearer and recipient
+to the outbox ID, preparation, owner, question version, schedule, credential
+verifier, operation UUID, template, expiry and separate authorization ciphertext
+fingerprint. Duplicate JSON keys, extra message fields, changed trusted origins,
+cross-bound payloads and sensitive exception chains are rejected. Recipient and
+authorization fingerprints use separate keyed domains, not plain contact hashes.
+
+The stored-row boundary explicitly decrypts the closed recipient snapshot and
+checks matching lineage, inactive preparations, revoked credentials, expiry and
+the submission lease. It never reads a chart, sends a message or mutates a row.
+The enqueue command must allocate the outbox TypeID before sealing the payload;
+Core's ordinary ID default runs only at INSERT. Real synthetic PostgreSQL checks
+verify that a sealed payload survives insertion and can be recovered against the
+stored recipient and verifier, without a canonical patient or appointment.
+
+This is integrity validation, not runtime authorization. The upcoming command
+and worker still must lock current scope and latest lineage, resolve durable
+current consent/approval, enforce channel/cohort/recipient gates, dispatch once,
+clear expired secrets and expose honest outcomes. Fingerprinting opaque
+authorization ciphertext does not validate the evidence inside it or grant
+permission to send. No route, worker registration, configuration, schema or
+release control changes in this increment. Final commit-specific checks and
+implementer review belong in its stacked draft PR.
