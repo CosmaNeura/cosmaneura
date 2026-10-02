@@ -289,13 +289,14 @@ def _creation_payload_hmac(
     timezone_name: str,
     patient_id: TypeIDType | None,
     appointment_id: TypeIDType | None,
+    creation_source: str = _CREATION_SOURCE,
 ) -> str:
     payload = json.dumps(
         {
             "appointment_id": (
                 str(appointment_id) if appointment_id is not None else None
             ),
-            "creation_source": _CREATION_SOURCE,
+            "creation_source": creation_source,
             "owner_practice_member_id": str(owner_practice_member_id),
             "patient_id": str(patient_id) if patient_id is not None else None,
             "physician_display_name": physician_display_name,

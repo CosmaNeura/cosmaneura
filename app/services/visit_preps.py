@@ -515,6 +515,51 @@ def create_visit_prep(
 ) -> VisitPrepMutationResult:
     """Create one aggregate atomically, returning its bearer exactly once."""
 
+    with _visit_prep_session() as session:
+        result = create_locked_visit_prep(
+            session,
+            owner_practice_member_id=owner_practice_member_id,
+            owner_doctor_id=owner_doctor_id,
+            practice_id=practice_id,
+            idempotency_key=idempotency_key,
+            recipient=recipient,
+            physician_display_name=physician_display_name,
+            scheduled_at=scheduled_at,
+            timezone_name=timezone_name,
+            question_set_version_id=question_set_version_id,
+            patient_id=patient_id,
+            appointment_id=appointment_id,
+            now=now,
+        )
+        _commit(session)
+        return result
+
+
+def create_locked_visit_prep(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    idempotency_key: str,
+    recipient: RecipientInput,
+    physician_display_name: str,
+    scheduled_at: datetime,
+    timezone_name: str,
+    question_set_version_id: TypeIDType,
+    patient_id: TypeIDType | None = None,
+    appointment_id: TypeIDType | None = None,
+    now: datetime | None = None,
+    creation_source: str = _CREATION_SOURCE,
+) -> VisitPrepMutationResult:
+    """Stage creation in the caller's transaction, with all existing fences.
+
+    Booking adapters must commit their source receipt in the SAME transaction.
+    This internal helper takes no external action and never commits or rolls
+    back the caller. Routes must not expose its creation_source parameter.
+    """
+    if creation_source not in {_CREATION_SOURCE, "appointment_booking"}:
+        raise VisitPrepValidation("creation source is invalid")
     effective_at = _aware_utc(now, message="creation time is invalid")
     canonical_key = _canonical_uuid(idempotency_key)
     normalized_recipient = _normalize_recipient(recipient)
@@ -530,179 +575,172 @@ def create_visit_prep(
         require_future=False,
     )
 
-    with _visit_prep_session() as session:
-        _owner, practice = _lock_owner_scope(
-            session,
-            owner_practice_member_id=owner_practice_member_id,
-            owner_doctor_id=owner_doctor_id,
-            practice_id=practice_id,
-            now=effective_at,
+    _owner, practice = _lock_owner_scope(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        now=effective_at,
+    )
+    version = _published_question_version(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        question_set_version_id=question_set_version_id,
+    )
+    existing = session.exec(
+        select(VisitPrep)
+        .where(
+            VisitPrep.owner_practice_member_id == owner_practice_member_id,
+            VisitPrep.creation_idempotency_key == canonical_key,
         )
-        version = _published_question_version(
-            session,
-            owner_practice_member_id=owner_practice_member_id,
-            question_set_version_id=question_set_version_id,
-        )
-        existing = session.exec(
-            select(VisitPrep)
-            .where(
-                VisitPrep.owner_practice_member_id == owner_practice_member_id,
-                VisitPrep.creation_idempotency_key == canonical_key,
-            )
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        ).one_or_none()
-        if existing is not None:
-            # Canonical records and the practice name can change after the
-            # original command.  A retry compares the request's semantics to
-            # the immutable snapshots instead of re-deriving mutable values.
-            linked_patient_id = patient_id
-            if (
-                appointment_id is not None
-                and patient_id is None
-                and existing.appointment_id == appointment_id
-            ):
-                linked_patient_id = existing.patient_id
-            payload_hmac = _creation_payload_hmac(
-                owner_practice_member_id=owner_practice_member_id,
-                question_set_version_id=version.id,
-                recipient=normalized_recipient,
-                physician_display_name=normalized_physician,
-                practice_display_name=existing.practice_display_name,
-                scheduled_at=normalized_scheduled_at,
-                timezone_name=normalized_timezone,
-                patient_id=linked_patient_id,
-                appointment_id=appointment_id,
-            )
-            if not hmac.compare_digest(
-                existing.creation_payload_hmac_sha256,
-                payload_hmac,
-            ):
-                raise VisitPrepConflict(
-                    "idempotency key belongs to a different payload"
-                )
-            current_schedule, current_credential = _lock_current_lineage(
-                session,
-                visit_prep=existing,
-            )
-            snapshot = _snapshot(
-                existing,
-                current_schedule,
-                current_credential,
-                at=effective_at,
-            )
-            _commit(session)
-            return VisitPrepMutationResult(
-                visit_prep=snapshot,
-                disposition="replayed",
-                access_token=None,
-            )
-
-        if normalized_scheduled_at <= effective_at:
-            raise VisitPrepValidation("scheduled time must be in the future")
-
-        normalized_practice = _normalized_text(
-            practice.legal_name,
-            maximum=200,
-            message="practice display name is invalid",
-        )
-        linked_patient_id, linked_appointment_id = _creation_links(
-            session,
-            owner_doctor_id=owner_doctor_id,
-            patient_id=patient_id,
-            appointment_id=appointment_id,
-            scheduled_at=normalized_scheduled_at,
-        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if existing is not None:
+        # Canonical records and the practice name can change after the
+        # original command.  A retry compares the request's semantics to
+        # the immutable snapshots instead of re-deriving mutable values.
+        linked_patient_id = patient_id
+        if (
+            appointment_id is not None
+            and patient_id is None
+            and existing.appointment_id == appointment_id
+        ):
+            linked_patient_id = existing.patient_id
         payload_hmac = _creation_payload_hmac(
             owner_practice_member_id=owner_practice_member_id,
             question_set_version_id=version.id,
             recipient=normalized_recipient,
             physician_display_name=normalized_physician,
-            practice_display_name=normalized_practice,
+            practice_display_name=existing.practice_display_name,
             scheduled_at=normalized_scheduled_at,
             timezone_name=normalized_timezone,
             patient_id=linked_patient_id,
-            appointment_id=linked_appointment_id,
+            appointment_id=appointment_id,
+            creation_source=creation_source,
         )
-        actor_ref = _actor_ref(owner_doctor_id)
-        try:
-            recipient_ciphertext = encrypt_value(
-                _recipient_plaintext(normalized_recipient)
-            )
-        except EncryptionError as exc:
-            raise VisitPrepUnavailable("recipient encryption unavailable") from exc
-
-        visit_prep = VisitPrep(
-            practice_id=practice_id,
-            owner_practice_member_id=owner_practice_member_id,
-            owner_doctor_id=owner_doctor_id,
-            question_set_version_id=version.id,
-            patient_id=linked_patient_id,
-            appointment_id=linked_appointment_id,
-            creation_source=_CREATION_SOURCE,
-            creation_idempotency_key=canonical_key,
-            creation_payload_hmac_sha256=payload_hmac,
-            recipient_snapshot_ciphertext=recipient_ciphertext,
-            recipient_snapshot_format_version=1,
-            has_email_contact=normalized_recipient.email is not None,
-            has_sms_contact=normalized_recipient.phone is not None,
-            physician_display_name=normalized_physician,
-            practice_display_name=normalized_practice,
-            patient_linked_at=effective_at if linked_patient_id is not None else None,
-            patient_linked_by_ref=(
-                actor_ref if linked_patient_id is not None else None
-            ),
-            appointment_linked_at=(
-                effective_at if linked_appointment_id is not None else None
-            ),
-            appointment_linked_by_ref=(
-                actor_ref if linked_appointment_id is not None else None
-            ),
-        )
-        visit_prep.created_at = effective_at
-        visit_prep.updated_at = effective_at
-        session.add(visit_prep)
-        session.flush()
-        unused_purge_at, unused_hard_purge_at, _expires_at = _schedule_deadlines(
-            normalized_scheduled_at
-        )
-        schedule = VisitPrepScheduleGeneration(
-            visit_prep_id=visit_prep.id,
-            owner_practice_member_id=owner_practice_member_id,
-            generation=1,
-            scheduled_at=normalized_scheduled_at,
-            timezone_name=normalized_timezone,
-            unused_purge_at=unused_purge_at,
-            unused_hard_purge_at=unused_hard_purge_at,
-        )
-        schedule.created_at = effective_at
-        schedule.updated_at = effective_at
-        session.add(schedule)
-        session.flush()
-        credential, access_token = _issue_credential(
+        if not hmac.compare_digest(
+            existing.creation_payload_hmac_sha256,
+            payload_hmac,
+        ):
+            raise VisitPrepConflict("idempotency key belongs to a different payload")
+        current_schedule, current_credential = _lock_current_lineage(
             session,
-            visit_prep=visit_prep,
-            schedule=schedule,
-            generation=1,
-            issued_at=effective_at,
+            visit_prep=existing,
         )
-        snapshot = _refresh_lineage(
-            session,
-            visit_prep=visit_prep,
-            schedule=schedule,
-            credential=credential,
+        snapshot = _snapshot(
+            existing,
+            current_schedule,
+            current_credential,
             at=effective_at,
         )
-        try:
-            stage_creation_coverage(session, prep=visit_prep, credential=credential)
-        except InvitationOpenEvidenceInvalid:
-            raise VisitPrepUnavailable("Visit Prep is unavailable") from None
-        _commit(session)
         return VisitPrepMutationResult(
             visit_prep=snapshot,
-            disposition="created",
-            access_token=access_token,
+            disposition="replayed",
+            access_token=None,
         )
+
+    if normalized_scheduled_at <= effective_at:
+        raise VisitPrepValidation("scheduled time must be in the future")
+
+    normalized_practice = _normalized_text(
+        practice.legal_name,
+        maximum=200,
+        message="practice display name is invalid",
+    )
+    linked_patient_id, linked_appointment_id = _creation_links(
+        session,
+        owner_doctor_id=owner_doctor_id,
+        patient_id=patient_id,
+        appointment_id=appointment_id,
+        scheduled_at=normalized_scheduled_at,
+    )
+    payload_hmac = _creation_payload_hmac(
+        owner_practice_member_id=owner_practice_member_id,
+        question_set_version_id=version.id,
+        recipient=normalized_recipient,
+        physician_display_name=normalized_physician,
+        practice_display_name=normalized_practice,
+        scheduled_at=normalized_scheduled_at,
+        timezone_name=normalized_timezone,
+        patient_id=linked_patient_id,
+        appointment_id=linked_appointment_id,
+        creation_source=creation_source,
+    )
+    actor_ref = _actor_ref(owner_doctor_id)
+    try:
+        recipient_ciphertext = encrypt_value(_recipient_plaintext(normalized_recipient))
+    except EncryptionError as exc:
+        raise VisitPrepUnavailable("recipient encryption unavailable") from exc
+
+    visit_prep = VisitPrep(
+        practice_id=practice_id,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        question_set_version_id=version.id,
+        patient_id=linked_patient_id,
+        appointment_id=linked_appointment_id,
+        creation_source=creation_source,
+        creation_idempotency_key=canonical_key,
+        creation_payload_hmac_sha256=payload_hmac,
+        recipient_snapshot_ciphertext=recipient_ciphertext,
+        recipient_snapshot_format_version=1,
+        has_email_contact=normalized_recipient.email is not None,
+        has_sms_contact=normalized_recipient.phone is not None,
+        physician_display_name=normalized_physician,
+        practice_display_name=normalized_practice,
+        patient_linked_at=effective_at if linked_patient_id is not None else None,
+        patient_linked_by_ref=(actor_ref if linked_patient_id is not None else None),
+        appointment_linked_at=(
+            effective_at if linked_appointment_id is not None else None
+        ),
+        appointment_linked_by_ref=(
+            actor_ref if linked_appointment_id is not None else None
+        ),
+    )
+    visit_prep.created_at = effective_at
+    visit_prep.updated_at = effective_at
+    session.add(visit_prep)
+    session.flush()
+    unused_purge_at, unused_hard_purge_at, _expires_at = _schedule_deadlines(
+        normalized_scheduled_at
+    )
+    schedule = VisitPrepScheduleGeneration(
+        visit_prep_id=visit_prep.id,
+        owner_practice_member_id=owner_practice_member_id,
+        generation=1,
+        scheduled_at=normalized_scheduled_at,
+        timezone_name=normalized_timezone,
+        unused_purge_at=unused_purge_at,
+        unused_hard_purge_at=unused_hard_purge_at,
+    )
+    schedule.created_at = effective_at
+    schedule.updated_at = effective_at
+    session.add(schedule)
+    session.flush()
+    credential, access_token = _issue_credential(
+        session,
+        visit_prep=visit_prep,
+        schedule=schedule,
+        generation=1,
+        issued_at=effective_at,
+    )
+    snapshot = _refresh_lineage(
+        session,
+        visit_prep=visit_prep,
+        schedule=schedule,
+        credential=credential,
+        at=effective_at,
+    )
+    try:
+        stage_creation_coverage(session, prep=visit_prep, credential=credential)
+    except InvitationOpenEvidenceInvalid:
+        raise VisitPrepUnavailable("Visit Prep is unavailable") from None
+    return VisitPrepMutationResult(
+        visit_prep=snapshot,
+        disposition="created",
+        access_token=access_token,
+    )
 
 
 def rotate_visit_prep_credential(
