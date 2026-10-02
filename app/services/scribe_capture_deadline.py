@@ -7,6 +7,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, Lock, get_ident
 
+from app.utils.native_request_timing import phase
+
 from sqlalchemy import Engine, event
 from sqlalchemy.orm import Session
 
@@ -81,7 +83,8 @@ def check_async_capture_deadline() -> None:
 
 async def capture_call[T](operation: Callable[[], Awaitable[T]]) -> T:
     check_async_capture_deadline()
-    result = await operation()
+    with phase("downstream"):
+        result = await operation()
     check_async_capture_deadline()
     return result
 
