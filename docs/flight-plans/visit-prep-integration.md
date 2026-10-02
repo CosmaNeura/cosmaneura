@@ -920,6 +920,51 @@ booking permission, automatic invitation and reminder creation, authenticated
 callbacks and receipts, secure link recovery, alert routing and live operational
 qualification remain unfinished.
 
+### Short lived delivery links and atomic SMS handoff
+
+Core can now issue a short-lived link to an existing preparation without rotating
+its canonical invitation. Only the hash and sealed issuance evidence are retained;
+the bearer is returned once after commit. Links expire within twenty-four hours
+and no later than the current credential or appointment. A current owner and a
+separately qualified delivery source are required; no accepting source is installed
+by default. A booking contact or later patient choice does not establish permission
+for the first invitation.
+
+The patient API accepts these links through its existing private bearer boundary.
+Confirmation remains tied to the canonical credential, not the temporary link.
+A remembered patient or caregiver can open another valid link for the same prep
+without repeating the initial affirmation, including after an eligible reschedule.
+A copied link without that cookie requires confirmation. Old-generation links,
+expiry, quarantine, revocation and loss of current practice authority still deny
+access. Email, phone and IP remain non-credentials.
+
+The new internal SMS handoff joins issuance and the actual outbox enqueue in one
+transaction. Current channel permission, standing approval, sender suppression
+and central timing remain independent gates. A late enqueue failure rolls back
+the link and audit. The outbox payload expires no later than its link, and the
+worker verifies the sealed alias against current lineage before its sole transport
+attempt. Exact recovery returns only a receipt, never a replacement bearer or
+restored payload. The original invitation still works unchanged.
+
+Generated expansion `898301cffd5c` follows `85d330017454`, adding only the link
+table and its immutable guards. The actual populated predecessor rehearsal
+preserved every prior table row and Visit Prep guard definition, including five
+completed answers and a published synthesis. Recovery keeps the table and evidence
+dormant, disables new issuance and linked handoff, and uses a forward schema fix;
+never drop the retained expansion. Aggregate cleanup must account for its restricted
+foreign keys and immutable evidence before activation.
+
+Focused synthetic checks cover real patient/caregiver HTTP confirmation and return,
+rescheduling, concurrent issuance, expiry under PostgreSQL time, canonical-hash
+collision refusal, direct mutation guards, lost commit acknowledgment, atomic
+queue rollback and the existing SMS worker consuming the actual encrypted link.
+They use owned databases, Redis and invented source qualification, not a real
+provider or messaging permission. Exact final verification belongs in the draft PR.
+This connects reusable delivery primitives; it does not install the automatic
+booking/reminder scheduler, initial booking-consent source, SMS vendor or callbacks.
+Email linkage, live service acceptance, retention qualification and rollout remain
+required. All release controls stay off; no merge, deployment or real message occurs.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

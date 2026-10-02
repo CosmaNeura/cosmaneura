@@ -247,7 +247,7 @@ def dispatch_sms_claim(
                 locked, action, _, fingerprint = _eligible(
                     session, row, settings, approval_verifier, consent_verifier
                 )
-                message = decrypt_sms_message(row, locked)
+                message = decrypt_sms_message(session, row, locked)
                 # Recheck after decryption and all source/policy reads. The transaction
                 # keeps owner/root, consent and sender-recipient locks through invocation.
                 _, final_action, _, final_fingerprint = _eligible(

@@ -15,6 +15,7 @@ from app.models.visit_prep import (
     VisitPrepCredentialGeneration,
     VisitPrepScheduleGeneration,
 )
+from app.models.visit_prep_delivery_link import VisitPrepDeliveryLink
 from sqlmodel import Session, col, select
 
 MAX_CONTINUITY_GENERATIONS = 128
@@ -28,7 +29,9 @@ def validate_reschedule_continuity(
     access: ConfirmedVisitPrepAccess,
     at: datetime,
     own_wrong_recipient_replay: bool = False,
-) -> None:
+) -> datetime | None:
+    delivery_deadline = None
+
     def unavailable():
         raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
 
@@ -72,6 +75,33 @@ def validate_reschedule_continuity(
             )
             .execution_options(populate_existing=True)
         ).one_or_none()
+        if presented is None:
+            from app.services.visit_prep_delivery_links import (
+                DeliveryLinkUnavailable,
+                verify_delivery_link,
+            )
+
+            alias = session.exec(
+                select(VisitPrepDeliveryLink).where(
+                    VisitPrepDeliveryLink.token_hash == access.presented_token_hash
+                )
+            ).one_or_none()
+            try:
+                if alias is None:
+                    raise DeliveryLinkUnavailable()
+                verify_delivery_link(session, alias)
+                if (
+                    alias.visit_prep_id != prep.id
+                    or alias.owner_practice_member_id != prep.owner_practice_member_id
+                    or alias.question_set_version_id != prep.question_set_version_id
+                    or alias.credential_id != current.id
+                    or not alias.issued_at <= at < alias.expires_at
+                ):
+                    raise DeliveryLinkUnavailable()
+                delivery_deadline = alias.expires_at
+                presented = current
+            except DeliveryLinkUnavailable:
+                unavailable()
         if presented is None:
             unavailable()
         assert presented is not None
@@ -125,3 +155,4 @@ def validate_reschedule_continuity(
             or hmac.compare_digest(credential.token_hash, successor.token_hash)
         ):
             unavailable()
+    return delivery_deadline
