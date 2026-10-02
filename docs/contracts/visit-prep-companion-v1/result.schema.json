@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Draft Visit Prep companion read result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "preparation_ref",
+    "connection_sha256",
+    "workspace_id",
+    "request_nonce",
+    "checked_at",
+    "package"
+  ],
+  "properties": {
+    "contract_version": { "const": "1" },
+    "preparation_ref": { "$ref": "#/$defs/prepRef" },
+    "connection_sha256": { "$ref": "#/$defs/digest" },
+    "workspace_id": { "type": "string", "format": "uuid" },
+    "request_nonce": { "type": "string", "format": "uuid" },
+    "checked_at": { "$ref": "#/$defs/time" },
+    "package": { "$ref": "#/$defs/package" }
+  },
+  "$defs": {
+    "prepRef": {
+      "type": "string",
+      "pattern": "^visit_prep_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "time": { "type": "string", "format": "date-time" },
+    "nullableTime": {
+      "anyOf": [{ "$ref": "#/$defs/time" }, { "type": "null" }]
+    },
+    "reviewRef": {
+      "type": ["string", "null"],
+      "pattern": "^visit_prep_contribution_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+    },
+    "key": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+    "keys": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/key" }
+    },
+    "responseKind": { "enum": ["answered", "skipped", null] },
+    "answer": { "type": ["string", "null"], "minLength": 1, "maxLength": 2000 },
+    "choice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "label"],
+      "properties": {
+        "value": { "$ref": "#/$defs/key" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "topic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "question_key",
+        "position",
+        "prompt",
+        "kind",
+        "choices",
+        "response_kind",
+        "answer",
+        "initial_response_kind",
+        "initial_answer",
+        "changed",
+        "original_response_id",
+        "additional_answer_source_id",
+        "current_revision_id",
+        "recorded_at",
+        "initial_recorded_at"
+      ],
+      "properties": {
+        "question_key": { "$ref": "#/$defs/key" },
+        "position": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "kind": { "enum": ["story", "list", "choice"] },
+        "choices": {
+          "type": "array",
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/choice" }
+        },
+        "response_kind": { "$ref": "#/$defs/responseKind" },
+        "answer": { "$ref": "#/$defs/answer" },
+        "initial_response_kind": { "$ref": "#/$defs/responseKind" },
+        "initial_answer": { "$ref": "#/$defs/answer" },
+        "changed": { "type": "boolean" },
+        "original_response_id": {
+          "type": ["string", "null"],
+          "pattern": "^visit_prep_response_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "additional_answer_source_id": { "$ref": "#/$defs/reviewRef" },
+        "current_revision_id": { "$ref": "#/$defs/reviewRef" },
+        "recorded_at": { "$ref": "#/$defs/nullableTime" },
+        "initial_recorded_at": { "$ref": "#/$defs/nullableTime" }
+      }
+    },
+    "preparation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "question_set_version_id",
+        "patient_id",
+        "appointment_id",
+        "lifecycle_state",
+        "has_email_contact",
+        "has_sms_contact",
+        "physician_display_name",
+        "practice_display_name",
+        "scheduled_at",
+        "timezone_name",
+        "schedule_generation",
+        "credential_generation",
+        "credential_expires_at",
+        "credential_active",
+        "revoked_at",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/$defs/prepRef" },
+        "question_set_version_id": {
+          "type": "string",
+          "pattern": "^visit_prep_question_set_version_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "patient_id": {
+          "type": ["string", "null"],
+          "pattern": "^patient_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "appointment_id": {
+          "type": ["string", "null"],
+          "pattern": "^appointment_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "lifecycle_state": {
+          "enum": ["confirmed", "in_progress", "completed"]
+        },
+        "has_email_contact": { "type": "boolean" },
+        "has_sms_contact": { "type": "boolean" },
+        "physician_display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "practice_display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "scheduled_at": { "$ref": "#/$defs/time" },
+        "timezone_name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "schedule_generation": { "type": "integer", "minimum": 1 },
+        "credential_generation": { "type": "integer", "minimum": 1 },
+        "credential_expires_at": { "$ref": "#/$defs/time" },
+        "credential_active": { "type": "boolean" },
+        "revoked_at": { "$ref": "#/$defs/nullableTime" },
+        "created_at": { "$ref": "#/$defs/nullableTime" },
+        "updated_at": { "$ref": "#/$defs/nullableTime" }
+      }
+    },
+    "basis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["original_response_count", "event_sequence"],
+      "properties": {
+        "original_response_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "event_sequence": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "package_id",
+        "source_version",
+        "preparation",
+        "basis",
+        "actor_role",
+        "original_interview_completed",
+        "current_answers_complete",
+        "current_answers_reviewed",
+        "current_review_id",
+        "reviewed_at",
+        "missing_question_keys",
+        "skipped_question_keys",
+        "topics"
+      ],
+      "properties": {
+        "contract": { "const": "visit_prep.patient_sources.v1" },
+        "package_id": { "$ref": "#/$defs/prepRef" },
+        "source_version": { "$ref": "#/$defs/digest" },
+        "preparation": { "$ref": "#/$defs/preparation" },
+        "basis": { "$ref": "#/$defs/basis" },
+        "actor_role": { "enum": ["patient", "caregiver"] },
+        "original_interview_completed": { "type": "boolean" },
+        "current_answers_complete": { "type": "boolean" },
+        "current_answers_reviewed": { "type": "boolean" },
+        "current_review_id": { "$ref": "#/$defs/reviewRef" },
+        "reviewed_at": { "$ref": "#/$defs/nullableTime" },
+        "missing_question_keys": { "$ref": "#/$defs/keys" },
+        "skipped_question_keys": { "$ref": "#/$defs/keys" },
+        "topics": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/topic" }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_ref", "quote"],
+      "properties": {
+        "source_ref": {
+          "type": "string",
+          "pattern": "^visit_prep_(response|contribution)_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "quote": { "type": "string", "minLength": 1, "maxLength": 300 }
+      }
+    },
+    "briefItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "evidence"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 700 },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/evidence" }
+        }
+      }
+    },
+    "brief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "headline",
+        "summary",
+        "visit_priorities",
+        "medication_and_adherence",
+        "barriers",
+        "uncertainties"
+      ],
+      "properties": {
+        "headline": {
+          "anyOf": [{ "$ref": "#/$defs/briefItem" }, { "type": "null" }]
+        },
+        "summary": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "$ref": "#/$defs/briefItem" }
+        },
+        "visit_priorities": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/briefItem" }
+        },
+        "medication_and_adherence": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/briefItem" }
+        },
+        "barriers": {
+          "type": "array",
+          "maxItems": 2,
+          "items": { "$ref": "#/$defs/briefItem" }
+        },
+        "uncertainties": {
+          "type": "array",
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/briefItem" }
+        }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "sources",
+        "status",
+        "build_status",
+        "retry_at",
+        "artifact_id",
+        "version",
+        "recorded_at",
+        "generator_version",
+        "prompt_version",
+        "model_profile",
+        "brief"
+      ],
+      "properties": {
+        "contract": { "const": "visit_prep.patient_synthesis.v1" },
+        "sources": { "$ref": "#/$defs/sources" },
+        "status": { "enum": ["missing", "stale", "ready"] },
+        "build_status": {
+          "enum": ["not_requested", "pending", "running", "failed", "ready"]
+        },
+        "retry_at": { "$ref": "#/$defs/nullableTime" },
+        "artifact_id": {
+          "type": ["string", "null"],
+          "pattern": "^visit_prep_brief_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+        },
+        "version": { "type": ["integer", "null"], "minimum": 1 },
+        "recorded_at": { "$ref": "#/$defs/nullableTime" },
+        "generator_version": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "prompt_version": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "model_profile": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "brief": { "anyOf": [{ "$ref": "#/$defs/brief" }, { "type": "null" }] }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "ready" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "build_status": { "const": "ready" },
+              "retry_at": { "type": "null" },
+              "artifact_id": { "type": "string" },
+              "version": { "type": "integer" },
+              "recorded_at": { "type": "string" },
+              "brief": { "type": "object" }
+            }
+          },
+          "else": {
+            "properties": {
+              "build_status": {
+                "enum": ["not_requested", "pending", "running", "failed"]
+              },
+              "artifact_id": { "type": "null" },
+              "version": { "type": "null" },
+              "recorded_at": { "type": "null" },
+              "brief": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

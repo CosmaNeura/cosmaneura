@@ -948,3 +948,30 @@ authorization must support a new patient without fabricating a chart or encounte
 the existing encounter-bound Session Prep mount does not provide that authority.
 The broader patient AI, delivery, scheduling, SMS/reminder, retention and release
 milestones remain open.
+
+## Draft CosmaBot package contract
+
+The [proposed companion read](../contracts/visit-prep-companion-v1/draft.md) and
+closed request/result schemas live on this Core branch for owner review. They
+are not ratified policy or an implemented receiver. The proposed read verifies
+the companion workload and physician Core session independently on every call,
+uses preparation-scoped ownership without requiring a chart/encounter, and wraps
+the existing dashboard source/artifact projection. It grants no generation,
+messaging, chart access, signing or chat-context permission.
+
+Synthetic fixtures preserve the unconditional fifth story, original/current
+wording, missing/skipped state, caregiver attribution and versioned citations.
+Offline AJV checks exercise closed objects, bounds and stale-content exclusion;
+Python checks compare fields with the actual Core models and reuse the existing
+source/brief grounding validators, including corrections and all-skipped input.
+The AJV runtime is explicitly supplied from existing local test dependencies;
+no dependency is added or installed. Exact reviewed revision and test totals
+belong in the draft PR.
+
+Architecture v3.5 and the current Session Prep contract remain unchanged. Owner
+ratification of the companion/preparation boundary is required before receiver
+implementation. This draft does not qualify live authentication, transactional
+receiver authorization or actual dashboard/CosmaBot parity. The receiver, adapter,
+bot actions, patient AI, delivery/booking/SMS/reminders, retention qualification
+and clinical/operational release milestones remain open. All runtime controls
+remain off; no merge, deployment, patient message or workspace retirement occurs.
