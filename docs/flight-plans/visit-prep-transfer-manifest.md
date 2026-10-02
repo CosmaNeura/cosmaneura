@@ -639,7 +639,36 @@ recipient consent and denies physician withdrawal. The consent-source fixture
 in that integration check is explicitly invented, not qualified patient consent.
 
 This completes the dormant physician decision domain, not its dashboard control
-or an invitation send. Real patient/trusted-source consent capture, qualified
-evidence retention, atomic enqueue, dispatch, cleanup and delivery status remain
-open. Email and public release controls remain off. Final commit-specific checks
-and implementer review belong in its stacked draft PR.
+or an invitation send. Its commit-specific checks and implementer review are
+recorded in the stacked draft PR. Email and public release controls remain off.
+
+The next domain increment separately captures an explicit email grant or
+withdrawal from a currently confirmed patient/caregiver invitation holder.
+`visit_prep_email_consent.py` uses the existing current-bearer and owner locks,
+append-only encrypted consent stream, and Core audit store. Opening a link,
+confirming a name, answering questions, physician approval and declining email
+remain distinct actions. The fixed draft disclosure is email-only and optional;
+its actual text, role, purpose, deadline and separate recipient/caregiver
+attestations are bound to the capture evidence. Grants cannot extend past the
+current invitation or shown visit, and completion prevents a new grant while
+allowing withdrawal through a still-valid link.
+
+Evidence and its content-free source audit commit together using database time.
+Exact retries preserve the original receipt and report the latest sequence;
+neither replay nor a stale fresh operation restores a later withdrawal. The
+source reader verifies the actual stored evidence, original credential and exact
+capture audit. It reports invitation-bearer attribution and explicit attestations,
+not independent patient identity or legal caregiver verification. No qualified
+source verifier is installed in the sending resolver. A later link rotation
+preserves historical attribution but never revives the old bearer.
+
+Synthetic PostgreSQL checks exercise patient and caregiver choices, divergent
+and uncertain retries, atomic audit failure, elapsed expiry, competing choices,
+and committed withdrawal/BAA/rotation/wrong-recipient changes during real lock
+waits. They do not establish legally qualified consent or an external send.
+Draft disclosure and evidence retention/hold/cleanup qualification, public and
+physician controls, trusted prior-consent intake, atomic enqueue, dispatch and
+delivery status remain open. Consent captured after opening a link cannot
+authorize the first booking email; that requires separately verified prior
+consent. No schema, mounted route, job, dependency or release control changes
+in this increment. Final revision-specific validation belongs in its draft PR.
