@@ -852,6 +852,37 @@ acceptance remain required. No schema or release control changes in this API ste
 Recovery reverts its additive route, registration and display service while
 retaining policy evidence and the existing expansion. No send is enabled.
 
+### Physician SMS policy dashboard
+
+The dashboard now has separate SMS policy controls alongside the email policy.
+An explicit load displays the three fixed text previews, current approval state
+and centrally managed, read-only timing. Approval requires review and an explicit
+future UTC expiry. The request binds the reviewed sender and policy; a stale
+sender review cannot authorize its replacement. Withdrawal uses the retained
+decision even after routing changes or disappears. No patient, contact or working
+invitation is selected, and no consent, queue entry or text is created.
+
+The display clears on owner scope, access, view-as, page visibility and focus
+changes, rejecting pending responses from the prior scope. A decision clears its
+preview and inputs before submission. A lost acknowledgment is reported as an
+unknown outcome and requires a fresh read, never an automatic replacement request.
+The UI validates the closed API receipt and continues to describe delivery as
+not connected, regardless of recorded physician approval.
+
+Final local qualification passed 27 backend and desktop/mobile browser checks
+against the actual owner API, including existing email policy behavior, plus 55
+focused SMS/email UI checks. The complete synthetic app build and full frontend
+typecheck passed. Changed files passed formatting and Python lint. Desktop and
+mobile screenshots were visually inspected; no horizontal overflow or script
+execution was observed. Existing framework deprecation, source-map and future-flag
+warnings remain. These are synthetic results, not live identity or SMS acceptance.
+
+Recovery reverts the additive SMS display and its route composition, retaining
+policy records and the API expansion. No schema, runtime service, dependency or
+release setting is changed. Real transport, sender/source qualification, initial
+booking permission, automatic invitations and reminders, callbacks, cleanup and
+operational acceptance remain required before activation.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

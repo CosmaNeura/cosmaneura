@@ -20,7 +20,7 @@ const labels = {
   policy_changed: "Invitation policy changed — new approval required",
 }
 const hash = /^[0-9a-f]{64}$/
-function validCadence(
+export function validCadence(
   value: VisitPrepEmailPolicyResponse["standard_cadence"],
 ): boolean {
   if (value === null || value === undefined) return true

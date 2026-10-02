@@ -4,6 +4,7 @@ import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar"
 import { VisitPrepCreator } from "~/components/visit-prep/VisitPrepCreator"
 import { VisitPrepEmailPolicy } from "~/components/visit-prep/VisitPrepEmailPolicy"
 import { VisitPrepPackages } from "~/components/visit-prep/VisitPrepPackages"
+import { VisitPrepSMSPolicy } from "~/components/visit-prep/VisitPrepSMSPolicy"
 import { useVisitPrepAccess } from "~/configuration/visit-prep-access"
 
 import { useUser } from "@clerk/clerk-react"
@@ -37,6 +38,7 @@ export default function VisitPrepsPage() {
           />
           <VisitPrepPackages access={access} scopeKey={user?.id ?? ""} />
           <VisitPrepEmailPolicy access={access} scopeKey={user?.id ?? ""} />
+          <VisitPrepSMSPolicy access={access} scopeKey={user?.id ?? ""} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>
