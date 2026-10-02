@@ -3,6 +3,7 @@ import Markdown from "react-markdown"
 
 import { ChevronDown } from "lucide-react"
 
+import { BillingHeaderButton } from "@/components/notes/BillingHeaderButton"
 import { Button } from "@/components/ui/button"
 import {
   Collapsible,
@@ -14,8 +15,10 @@ import { CopyButton } from "~/components/shared/CopyButton"
 import type {
   AiVisitNote,
   AiVisitTranscript,
+  BillingHeaderSource,
   SessionPrepNoteReview,
 } from "~/configuration/client"
+import { usableBillingSource } from "~/lib/cab-billing-header"
 
 import { SessionPrepNoteReviewButton } from "./SessionPrepNoteReviewButton"
 
@@ -25,12 +28,14 @@ export default function VisitNoteViewer({
   review,
   transcript,
   focusOnMount = false,
+  billingSource,
 }: {
   note: AiVisitNote
   defaultOpen: boolean
   review?: SessionPrepNoteReview
   transcript?: AiVisitTranscript | null
   focusOnMount?: boolean
+  billingSource?: BillingHeaderSource
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -48,7 +53,7 @@ export default function VisitNoteViewer({
       open={isOpen}
       onOpenChange={setOpen}
     >
-      <div className="flex items-start">
+      <div className="flex flex-wrap items-start gap-2">
         <CollapsibleTrigger asChild>
           <Button variant="ghost" size="sm" className="h-auto p-2">
             <ChevronDown
@@ -60,6 +65,13 @@ export default function VisitNoteViewer({
           </Button>
         </CollapsibleTrigger>
         {isOpen && <CopyButton htmlRef={contentRef} className="mt-1 ml-5" />}
+        {usableBillingSource(billingSource, note) && (
+          <BillingHeaderButton
+            key={`${note.id}:${billingSource.source.contentSha256}`}
+            noteId={note.id}
+            source={billingSource}
+          />
+        )}
       </div>
 
       <CollapsibleContent className="mt-3">
