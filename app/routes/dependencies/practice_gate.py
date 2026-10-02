@@ -67,6 +67,7 @@ EXEMPT_ROUTE_NAMES = {
     "visit_prep_synthesis_request",
     "visit_prep_email_policy_read",
     "visit_prep_email_policy_decide",
+    "visit_prep_email_status",
 }
 
 # These routes still require a real practice, an in-force BAA, and an authorized

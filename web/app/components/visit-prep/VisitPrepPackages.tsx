@@ -16,6 +16,7 @@ import {
 } from "~/lib/view-as-binding"
 
 import { SynthesisView, reportedWords, validSynthesis } from "./SynthesisView"
+import { VisitPrepEmailStatus } from "./VisitPrepEmailStatus"
 
 function appointment(prep: VisitPrepCommandStateResponse): string {
   try {
@@ -156,6 +157,7 @@ export function VisitPrepPackages({
   const [next, setNext] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
   const [selected, setSelected] = useState<string | null>(null)
+  const [emailSelected, setEmailSelected] = useState<string | null>(null)
   const [value, setValue] = useState<VisitPrepSynthesisResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -169,6 +171,7 @@ export function VisitPrepPackages({
       setNext(null)
       setLoaded(false)
       setSelected(null)
+      setEmailSelected(null)
       setValue(null)
       setBusy(false)
       setError(null)
@@ -202,6 +205,7 @@ export function VisitPrepPackages({
     setBusy(true)
     setValue(null)
     setSelected(null)
+    setEmailSelected(null)
     setPreps([])
     setError(null)
     setLoaded(false)
@@ -230,6 +234,7 @@ export function VisitPrepPackages({
     setBusy(true)
     setValue(null)
     setSelected(id)
+    setEmailSelected(null)
     setError(null)
     try {
       const result = await visitPrepSynthesis({
@@ -249,6 +254,15 @@ export function VisitPrepPackages({
     } finally {
       if (generation.current === requestGeneration) setBusy(false)
     }
+  }
+
+  function openEmailStatus(id: string) {
+    if (!allowed || blocked || busy) return
+    generation.current += 1
+    setValue(null)
+    setSelected(null)
+    setError(null)
+    setEmailSelected(id)
   }
 
   async function requestSynthesis() {
@@ -357,6 +371,14 @@ export function VisitPrepPackages({
             </div>
             <Button
               variant="outline"
+              disabled={busy}
+              onClick={() => openEmailStatus(prep.id)}
+              aria-label={`Email invitation status ${prep.id}`}
+            >
+              Email status
+            </Button>
+            <Button
+              variant="outline"
               disabled={
                 busy ||
                 prep.revoked_at !== null ||
@@ -378,6 +400,14 @@ export function VisitPrepPackages({
         >
           Next preparations
         </Button>
+      )}
+      {currentScope && emailSelected && (
+        <VisitPrepEmailStatus
+          key={`${scopeKey}:${emailSelected}`}
+          preparationId={emailSelected}
+          access={access}
+          scopeKey={scopeKey}
+        />
       )}
       {currentScope && selected && (
         <Button

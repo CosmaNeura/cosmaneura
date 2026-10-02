@@ -7,12 +7,14 @@ const api = vi.hoisted(() => ({
   list: vi.fn(),
   package: vi.fn(),
   request: vi.fn(),
+  email: vi.fn(),
   subscribe: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => ({
   visitPrepList: (...args: unknown[]) => api.list(...args),
   visitPrepSynthesis: (...args: unknown[]) => api.package(...args),
   visitPrepSynthesisRequest: (...args: unknown[]) => api.request(...args),
+  visitPrepEmailStatus: (...args: unknown[]) => api.email(...args),
 }))
 vi.mock("~/lib/view-as-binding", () => ({
   VIEW_AS_HARD_BLOCK_EVENT: "cosmaneura:view-as-hard-block",
@@ -170,6 +172,56 @@ beforeEach(() => {
   api.package.mockResolvedValue({ data: value })
 })
 describe("provider current-answer package", () => {
+  it("never mixes a contribution with another preparation's invitation panel", async () => {
+    const other = { ...prep, id: "visit_prep_other" }
+    api.list.mockResolvedValue({
+      data: { preparations: [prep, other], next_before_id: null },
+    })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Email invitation status ${other.id}`,
+      }),
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Patient contribution" }),
+    ).toBeNull()
+    expect(
+      screen.getByRole("heading", { name: "Invitation email status" }),
+    ).toBeVisible()
+    fireEvent.click(
+      screen.getByRole("button", { name: `Open contribution ${prep.id}` }),
+    )
+    await screen.findByRole("heading", { name: "Patient contribution" })
+    expect(
+      screen.queryByRole("heading", { name: "Invitation email status" }),
+    ).toBeNull()
+    expect(api.email).not.toHaveBeenCalled()
+  })
+  it("opens status independently of patient answers, including an unopened interview", async () => {
+    api.list.mockResolvedValue({
+      data: {
+        preparations: [{ ...prep, lifecycle_state: "invited" }],
+        next_before_id: null,
+      },
+    })
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    fireEvent.click(screen.getByRole("button", { name: "Load preparations" }))
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: `Email invitation status ${prep.id}`,
+      }),
+    )
+    expect(
+      screen.getByRole("heading", { name: "Invitation email status" }),
+    ).toBeVisible()
+    expect(api.package).not.toHaveBeenCalled()
+    expect(api.email).not.toHaveBeenCalled()
+    expect(
+      screen.getByRole("button", { name: `Open contribution ${prep.id}` }),
+    ).toBeDisabled()
+  })
   it("reads only on demand, displays actual words and honest missing/revision labels", async () => {
     render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
     expect(api.list).not.toHaveBeenCalled()
