@@ -1484,3 +1484,52 @@ authentic prior consent, SMS/STOP and reminder storage, callbacks, monitoring,
 cleanup, usable session continuation, Sovereign/CosmaBot integration and clinical
 and operational qualification remain requirements of the full goal. All controls
 remain off, with no merge, deployment, live message or retirement.
+
+## Email recovery health
+
+The new internal health reader reports aggregate queued, submitting, accepted,
+failed, suppressed and uncertain counts from the retained email outbox. One
+PostgreSQL statement uses one materialized database clock and reads only metadata;
+it never selects private envelopes, contacts, token verifiers or owner identifiers
+into its result. It takes no sending locks, writes no audit or lifecycle state,
+and refuses an ambient global transaction without flushing or releasing it.
+Storage failure returns only `storage_unavailable`, not invented zero counts.
+No endpoint, worker task, scheduler, runtime configuration or service grant is
+registered by this increment.
+
+Separate recovery counts identify expired queued secrets, obsolete queued
+context, and submissions beyond either their lease or secret expiry. Obsolete
+context includes completion, wrong-recipient quarantine, revocation, old
+credential/schedule generations, expired credentials, past appointments, and
+the latest consent or physician approval withdrawal. Expired and obsolete
+counts can overlap. Health visibility remains available with release gates off
+or BAA authority withdrawn; it grants no permission to send or disclose a
+patient package and does not change retained legal holds.
+
+Queue age is advisory, with timing explicitly `unqualified`: a quiet-hour or
+channel-spacing wait is not proof of a stalled worker. Accepted remains distinct
+from delivered. An overdue submission is potentially sent and cannot be retried
+from these counts. Retained uncertain outcomes remain attention-worthy; failures
+remain counted, but only those finalized within the last fifteen minutes affect
+recovery status. This telemetry window is not a cadence, retry deadline or
+activation threshold. An `ok` recovery snapshot does not prove that a consumer
+or provider is running.
+
+Owned synthetic checks use actual enqueue, claim, dispatch, consent withdrawal,
+patient completion, wrong-recipient reports, rotation, rescheduling and secret
+maintenance. Independent connections verify committed-only visibility and a
+nonblocking health read while submission holds owner fences. Real secret expiry
+and lost provider acknowledgment are exercised; exact lease and recent-failure
+boundaries use explicitly labeled diagnostic clocks. Query observation verifies
+one metadata read, and retained rows, encrypted evidence and legal holds stay
+unchanged by health inspection. Exact final-source checks and implementer review
+belong in the stacked draft PR.
+
+Reuse stays within current Core's durable outbox, immutable lifecycle metadata
+and content-free operations pattern; there is no new cross-repository transfer
+or schema change. Durable cadence policy and scheduling, authentic prior consent,
+Acuity, SMS/STOP/reminders, receipt reconciliation, monitoring installation and
+operational alert acceptance, consent retention/aggregate cleanup, usable patient
+session continuation, Sovereign/CosmaBot and clinical qualification remain open.
+All release controls remain off. No merge, deployment, live message or retirement
+is authorized by this increment.
