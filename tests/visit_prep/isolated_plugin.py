@@ -11,6 +11,8 @@ import json
 import os
 import socket
 import sys
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 
@@ -21,7 +23,7 @@ from tests.visit_prep.owned_redis import (
 )
 
 
-def pytest_sessionstart(session):
+def _owned_test_root() -> Path:
     root = Path(os.environ["VISIT_PREP_OWNED_TEST_DIRECTORY"])
     if (
         root.parent != Path("/private/tmp")
@@ -35,6 +37,82 @@ def pytest_sessionstart(session):
         )
     ):
         raise RuntimeError("Visit Prep tests require the owned synthetic runner")
+    return root
+
+
+@contextmanager
+def owned_email_test_boundary():
+    """Settle only newly pending emails in this runner's disposable database.
+
+    Integration tests commit independently, while the worker claims globally.
+    Keep prior pending rows and all terminal evidence untouched. Never reclaim
+    a submission or delete evidence; use the real terminal-state guards.
+    """
+    root = _owned_test_root()
+    from activemodel.session_manager import get_session
+    from app.models.visit_prep_delivery import VisitPrepEmailDelivery
+    from sqlalchemy import text, update
+    from sqlmodel import col, select
+
+    pending = select(col(VisitPrepEmailDelivery.id)).where(
+        col(VisitPrepEmailDelivery.state).in_(("queued", "submitting"))
+    )
+
+    def identifiers(database):
+        if database.execute(
+            text(
+                "SELECT current_database(), current_user, "
+                "current_setting('data_directory')"
+            )
+        ).one() != (
+            "visit_prep_test",
+            "visit_prep_test_owner",
+            str(root / "data"),
+        ):
+            raise RuntimeError("email cleanup requires the owned test connection")
+        # Populated migration rehearsals may start before the outbox expand.
+        if (
+            database.execute(
+                text("SELECT to_regclass('visit_prep_email_delivery')")
+            ).scalar_one()
+            is None
+        ):
+            return set()
+        return set(database.exec(pending).all())
+
+    with get_session() as database:
+        existing = identifiers(database)
+    try:
+        yield
+    finally:
+        if _owned_test_root() != root:
+            raise RuntimeError("email cleanup ownership changed during the test")
+        with get_session() as database:
+            created = identifiers(database) - existing
+            for identifier in created:
+                for prior, terminal, code in (
+                    ("queued", "suppressed", "scope_unavailable"),
+                    ("submitting", "uncertain", "submission_uncertain"),
+                ):
+                    database.execute(
+                        update(VisitPrepEmailDelivery)
+                        .where(
+                            col(VisitPrepEmailDelivery.id) == identifier,
+                            col(VisitPrepEmailDelivery.state) == prior,
+                        )
+                        .values(
+                            state=terminal,
+                            outcome_code=code,
+                            payload_ciphertext=None,
+                            lease_until=None,
+                            finalized_at=datetime.now(UTC),
+                        )
+                    )
+            database.commit()
+
+
+def pytest_sessionstart(session):
+    _owned_test_root()
 
     guard = pytest.MonkeyPatch()
 
@@ -108,7 +186,8 @@ def isolated_database_test(request):
     if "integration" in request.node.path.parts:
         # Independent-connection races need real commits; their factories use
         # unique invented owners. The entire owned cluster is discarded later.
-        yield
+        with owned_email_test_boundary():
+            yield
     else:
         from activemodel.pytest import database_reset_transaction
 

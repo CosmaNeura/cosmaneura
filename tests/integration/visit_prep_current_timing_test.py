@@ -54,29 +54,10 @@ from tests.services.visit_preps_test import _withdraw_seat
 
 @pytest.fixture
 def preparation():
-    owned = []
-
     def create(label="current-timing"):
-        fixture = _ready(label)
-        owned.append(fixture)
-        return fixture
+        return _ready(label)
 
-    yield create
-    # Only these invented rows; reads intentionally never clean up the outbox.
-    for fixture in owned:
-        for row in _rows(fixture):
-            if row.state in {"queued", "submitting"}:
-                claimed = row.state == "submitting"
-                _update(
-                    row,
-                    state="uncertain" if claimed else "suppressed",
-                    outcome_code="submission_uncertain"
-                    if claimed
-                    else "scope_unavailable",
-                    payload_ciphertext=None,
-                    lease_until=None,
-                    finalized_at=datetime.now(UTC),
-                )
+    return create
 
 
 def _policy(*, quiet=False):
