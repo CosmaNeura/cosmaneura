@@ -38,6 +38,7 @@ Reason = Literal[
     "booking_first",
     "later_reminder_supersedes",
     "no_permitted_window",
+    "channel_history_unavailable",
 ]
 _STEPS: tuple[tuple[Step, Channel, int | None], ...] = (
     ("booking_email", "email", None),
