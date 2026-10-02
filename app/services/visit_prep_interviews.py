@@ -955,11 +955,15 @@ def complete_interview(
 ) -> InterviewMutationResult:
     """Explicitly complete an interview only after all applicable questions."""
 
+    # Late import keeps the shared contribution/owner projection acyclic.
+    from app.services.visit_prep_patient_handoff import stage_patient_handoff
+
     with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         visit_prep = authorized.visit_prep
         if visit_prep.lifecycle_state == "completed":
             state = _interview_state(session, authorized=authorized)
+            stage_patient_handoff(session, access_token=access_token)
             _commit(session)
             return InterviewMutationResult(interview=state, disposition="completed")
 
@@ -976,5 +980,6 @@ def complete_interview(
             session.rollback()
             raise VisitPrepInterviewConflict("Visit Prep state changed") from None
         state = _interview_state(session, authorized=authorized)
+        stage_patient_handoff(session, access_token=access_token)
         _commit(session)
         return InterviewMutationResult(interview=state, disposition="completed")

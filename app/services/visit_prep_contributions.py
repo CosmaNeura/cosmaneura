@@ -748,6 +748,8 @@ def review_contribution(
 ) -> ContributionMutationReceipt:
     """Acknowledge the exact current contribution, never mark it clinician-verified."""
 
+    from app.services.visit_prep_patient_handoff import stage_patient_handoff
+
     if not isinstance(expected_basis, ContributionBasis):
         raise VisitPrepInterviewValidation("contribution basis is invalid")
     key = _canonical_idempotency_key(idempotency_key)
@@ -763,6 +765,7 @@ def review_contribution(
             basis=expected_basis,
         )
         if _existing_event(session, prep=prep, key=key, fingerprint=fingerprint):
+            stage_patient_handoff(session, access_token=access_token)
             _commit(session)
             return _receipt(current, replayed=True)
         if current.basis != expected_basis or not current.current_answers_complete:
@@ -779,6 +782,7 @@ def review_contribution(
         except VisitPrepInterviewConflict:
             session.rollback()
             raise
+        stage_patient_handoff(session, access_token=access_token)
         _commit(session)
         return _receipt(updated)
 
