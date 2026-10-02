@@ -5,6 +5,187 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/internal/v1/visit-prep/sms-policy": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Sms Policy Read",
+        "operationId": "visit_prep_sms_policy_read",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepSMSPolicyResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Sms Policy Decide",
+        "operationId": "visit_prep_sms_policy_decide",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitPrepSMSPolicyDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepSMSPolicyDecisionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request is too large."
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/visit-prep/preps/{prep_id}/sms-status": {
       "get": {
         "tags": [
@@ -5053,6 +5234,280 @@
   },
   "components": {
     "schemas": {
+      "VisitPrepSMSPolicyDecisionRequest": {
+        "properties": {
+          "expected_event_sequence": {
+            "type": "integer",
+            "exclusiveMaximum": 2147483647,
+            "minimum": 0,
+            "title": "Expected Event Sequence"
+          },
+          "event_kind": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "withdrawn"
+            ],
+            "title": "Event Kind"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Policy Fingerprint"
+          },
+          "expected_sender_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Sender Digest"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_event_sequence",
+          "event_kind",
+          "policy_fingerprint",
+          "expected_sender_digest",
+          "expires_at"
+        ],
+        "title": "VisitPrepSMSPolicyDecisionRequest"
+      },
+      "VisitPrepSMSPolicyDecisionResponse": {
+        "properties": {
+          "event_sequence": {
+            "type": "integer",
+            "title": "Event Sequence"
+          },
+          "current_event_sequence": {
+            "type": "integer",
+            "title": "Current Event Sequence"
+          },
+          "event_kind": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "withdrawn"
+            ],
+            "title": "Event Kind"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "title": "Policy Fingerprint"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Recorded At"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "recorded",
+              "replayed"
+            ],
+            "title": "Disposition"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "event_sequence",
+          "current_event_sequence",
+          "event_kind",
+          "policy_fingerprint",
+          "expires_at",
+          "recorded_at",
+          "disposition"
+        ],
+        "title": "VisitPrepSMSPolicyDecisionResponse"
+      },
+      "VisitPrepSMSPolicyResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.sms_policy.v1",
+            "title": "Contract",
+            "default": "visit_prep.sms_policy.v1"
+          },
+          "policy_fingerprint": {
+            "type": "string",
+            "title": "Policy Fingerprint"
+          },
+          "policy_text": {
+            "type": "string",
+            "title": "Policy Text"
+          },
+          "template_version": {
+            "type": "string",
+            "const": "visit_prep_sms_v1",
+            "title": "Template Version",
+            "default": "visit_prep_sms_v1"
+          },
+          "sender_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sender Digest"
+          },
+          "templates": {
+            "$ref": "#/components/schemas/VisitPrepSMSTemplatesResponse"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_approved",
+              "approved",
+              "withdrawn",
+              "expired",
+              "policy_changed",
+              "sender_changed",
+              "identity_changed"
+            ],
+            "title": "Status"
+          },
+          "event_sequence": {
+            "type": "integer",
+            "title": "Event Sequence"
+          },
+          "decision_policy_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Policy Fingerprint"
+          },
+          "decision_sender_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Sender Digest"
+          },
+          "recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recorded At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "delivery_status": {
+            "type": "string",
+            "const": "not_connected",
+            "title": "Delivery Status",
+            "default": "not_connected"
+          },
+          "standard_cadence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitPrepStandardCadenceResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "policy_fingerprint",
+          "policy_text",
+          "sender_digest",
+          "templates",
+          "status",
+          "event_sequence",
+          "decision_policy_fingerprint",
+          "decision_sender_digest",
+          "recorded_at",
+          "expires_at",
+          "checked_at",
+          "standard_cadence"
+        ],
+        "title": "VisitPrepSMSPolicyResponse"
+      },
+      "VisitPrepSMSTemplatesResponse": {
+        "properties": {
+          "booking_sms": {
+            "type": "string",
+            "title": "Booking Sms"
+          },
+          "unopened_48h_sms": {
+            "type": "string",
+            "title": "Unopened 48H Sms"
+          },
+          "unfinished_12h_sms": {
+            "type": "string",
+            "title": "Unfinished 12H Sms"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "booking_sms",
+          "unopened_48h_sms",
+          "unfinished_12h_sms"
+        ],
+        "title": "VisitPrepSMSTemplatesResponse"
+      },
       "VisitPrepSMSMessageStatusResponse": {
         "properties": {
           "step": {

@@ -69,6 +69,8 @@ EXEMPT_ROUTE_NAMES = {
     "visit_prep_email_policy_decide",
     "visit_prep_email_status",
     "visit_prep_sms_status",
+    "visit_prep_sms_policy_read",
+    "visit_prep_sms_policy_decide",
     "visit_prep_email_invitation",
 }
 
