@@ -508,6 +508,18 @@ not a patient-roster identity or a new scheduling product. It still handles only
 scheduled notifications; source change/cancel processing is the next increment.
 No schema, invitation, channel or service activation changes here.
 
+### Retained lifecycle receipts
+
+Generated expansion `ac4d76856637` follows the combined head `c3aa7a31f3ae` and
+adds an append-only booking event table. Each event references its original
+booking receipt, preparation owner, exact schedule and credential. Database
+guards require the next source snapshot and applied current lifecycle; mismatched,
+stale or unapplied receipts fail the transaction. Events retain keyed digests,
+opaque references and timing, not contacts, original vendor payloads or bearers.
+Existing preparation, booking and patient records are not rewritten or backfilled.
+Recovery retains the additive schema and evidence and uses a forward fix. This
+storage rung alone activates no notification, message or scheduling source.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
