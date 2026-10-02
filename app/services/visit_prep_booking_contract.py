@@ -38,3 +38,14 @@ class NormalizedVisitPrepBooking:
 
     def __repr__(self):
         return "NormalizedVisitPrepBooking(<redacted>)"
+
+
+@dataclass(frozen=True, repr=False)
+class CurrentVisitPrepBookingState:
+    booking_digest: str = field(repr=False)
+    source_snapshot_hmac: str = field(repr=False)
+    observed_at: datetime
+    active_booking: NormalizedVisitPrepBooking | None = field(repr=False)
+
+    def __repr__(self):
+        return "CurrentVisitPrepBookingState(<redacted>)"
