@@ -60,6 +60,8 @@ function setup(initial = invited) {
     readContribution: vi.fn(),
     correctContribution: vi.fn(),
     reviewContribution: vi.fn(),
+    readEmailConsent: vi.fn(),
+    decideEmailConsent: vi.fn(),
     dispose: vi.fn(),
   }
   const makeClient = vi.fn(() => client)
@@ -76,6 +78,41 @@ afterEach(() => {
 })
 
 describe("patient journey", () => {
+  it("opens optional email choices explicitly, skips parent focus reload and clears on support-view denial", async () => {
+    const { client, makeClient } = setup(state("story", 5))
+    render(<PatientInterview makeClient={makeClient} />)
+    await screen.findByRole("heading", { name: "Tell me your story" })
+    fireEvent.change(screen.getByLabelText("Tell me your story"), {
+      target: { value: "Unsaved synthetic story" },
+    })
+    expect(client.readEmailConsent).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Optional email choices" }),
+    )
+    await screen.findByRole("heading", { name: "Optional email choices" })
+    fireEvent(window, new Event("focus"))
+    expect(client.resume).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole("button", { name: "Back to preparation" }))
+    await screen.findByRole("heading", { name: "Tell me your story" })
+    expect(screen.getByLabelText("Tell me your story")).toHaveValue(
+      "Unsaved synthetic story",
+    )
+    expect(client.decideEmailConsent).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Optional email choices" }),
+    )
+    fireEvent.change(screen.getByLabelText("Recipient first name"), {
+      target: { value: "José" },
+    })
+    await act(async () =>
+      window.dispatchEvent(new Event("cosmaneura:view-as-hard-block")),
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Optional email choices" }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByDisplayValue("José")).not.toBeInTheDocument()
+    expect(client.dispose).toHaveBeenCalledOnce()
+  })
   it("mounts review only after an explicit choice and clears saved answers on support-view denial", async () => {
     const { client, makeClient } = setup({
       ...invited,
