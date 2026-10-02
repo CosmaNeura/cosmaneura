@@ -107,6 +107,18 @@ def test_policy_control_actual_choices_uncertain_ack_and_current_denial(
                 page.get_by_text("Delivery is not connected.", exact=False)
             ).to_be_visible()
             expect(
+                page.get_by_role("heading", name="Standard practice reminder timing")
+            ).to_be_visible()
+            expect(
+                page.get_by_text(
+                    "Managed by Cosmaneura. Providers cannot edit these settings."
+                )
+            ).to_be_visible()
+            expect(
+                page.get_by_text("No messages from 21:00 to 08:00", exact=False)
+            ).to_be_visible()
+            assert page.locator('input[type="number"],select').count() == 0
+            expect(
                 page.get_by_role("button", name="Record physician approval")
             ).to_be_disabled()
             page.get_by_label("Approval expires at (UTC)").fill("2099-01-01T12:00")

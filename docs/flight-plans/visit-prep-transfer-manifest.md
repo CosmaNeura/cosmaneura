@@ -1620,3 +1620,44 @@ cleanup execution nor operational readiness. Aggregate and consent-evidence purg
 qualification, installed monitoring/cleanup, usable patient session continuation,
 Sovereign/CosmaBot, booking/email/SMS/STOP/reminder automation and clinical/release
 acceptance remain incomplete. Nothing is merged, deployed, sent or retired.
+
+## Centrally managed standard reminder settings
+
+John approved the four pending implementation decisions on October 2, with one
+initial patient identity affirmation, attributable explanations and answer
+updates, central read-only provider timing, and the CosmaBot read boundary. Every
+patient AI analysis must use Core's existing PII/PHI safeguards. These decisions
+are recorded in the integration plan; this increment implements the central
+timing setting, not the remaining patient-session or companion work.
+
+The owner-approved standard is 21:00–08:00 quiet hours in the current appointment
+timezone and four hours between messages on the same channel. It uses Core's
+existing configuration mechanism, with a version and fingerprint covering all
+timing rules. All practices share the standard. Partial or malformed overrides
+make standard timing unavailable rather than select a permissive fallback. No
+provider write API, policy table, migration or environment file change is added.
+
+Standard enqueue and worker entrypoints load the same central settings; callers
+cannot supply quiet-hour or spacing overrides to those entrypoints. Actual
+current schedule, consent, authority, expiry and uncertain-send checks remain in
+the existing locked domains. A policy change during enqueue rolls back the new
+intent; a changed/missing policy before submission consumes and suppresses the
+claim without a provider call or reopening the send lane. The final check also
+protects standard claims routed through the lower-level dispatch function.
+
+The authenticated invitation-policy read displays the central version, quiet
+hours, channel spacing and agreed reminder offsets as provider-read-only fields.
+Existing physician invitation approval is separate from this timing display and
+still never creates recipient consent. Desktop/mobile synthetic browser checks
+exercise the actual components and API, including no provider timing inputs.
+Owned PostgreSQL checks cover quiet waiting, actual prior-send spacing across
+credential rotation, policy changes, gated sends, source-verification changes,
+enqueue rollback and ambient-transaction refusal. Configuration and client tests
+cover strict parsing, immutable settings, malformed overrides and private UI
+failures; revision-specific results belong in the stacked draft PR.
+
+The scheduler, authentic booking/consent adapters, SMS/STOP/callbacks, patient
+continuation, confirmed coded explanations, protected Sovereign analysis,
+CosmaBot receiver/adapter, retention qualification and clinical/release acceptance
+remain incomplete. Settings availability is not sending authorization. Runtime
+controls stay off; nothing is merged, deployed, sent to a real recipient or retired.

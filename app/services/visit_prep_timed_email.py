@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from app.configuration.visit_prep import VISIT_PREP_SETTINGS, VisitPrepSettings
+from app.configuration.visit_prep_cadence import current_standard_cadence
 from app.services.visit_prep_command_contract import access_token_hash
 from app.services.visit_prep_current_timing import plan_locked_current_delivery
 from app.services.visit_prep_delivery_timing import plan_delivery_timing
@@ -139,6 +140,71 @@ def enqueue_timed_email_invitation(**arguments) -> TimedEmailResult:
         with _visit_prep_session() as session:
             try:
                 result = enqueue_locked_timed_email(session, **arguments)
+                session.commit()
+            except _ERRORS:
+                session.rollback()
+                raise
+    except _ERRORS:
+        result = None
+    if result is None:
+        raise VisitPrepEmailInvalid() from None
+    return result
+
+
+def enqueue_locked_standard_email(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    expected_clerk_subject: str,
+    visit_prep_id: TypeIDType,
+    expected_credential_generation: int,
+    access_token: str,
+    operation_id: str,
+    patient_origin: str,
+    source_verifier: EmailConsentSourceVerifier | None = None,
+    view_as_active: bool = False,
+    settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
+) -> TimedEmailResult:
+    """Use the same central standard as dispatch, never a provider's rules.
+
+    The caller owns rollback/commit. A changed policy during a lock/audit wait
+    fails the entire enqueue; no partial intent is allowed to become visible.
+    """
+    cadence = current_standard_cadence()
+    if cadence is None:
+        raise VisitPrepEmailInvalid()
+    result = enqueue_locked_timed_email(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        expected_clerk_subject=expected_clerk_subject,
+        visit_prep_id=visit_prep_id,
+        expected_credential_generation=expected_credential_generation,
+        access_token=access_token,
+        operation_id=operation_id,
+        patient_origin=patient_origin,
+        quiet_hours=cadence.quiet_hours,
+        minimum_channel_spacing=cadence.minimum_channel_spacing,
+        source_verifier=source_verifier,
+        view_as_active=view_as_active,
+        settings=settings,
+    )
+    current = current_standard_cadence()
+    if current is None or current.fingerprint != cadence.fingerprint:
+        raise VisitPrepEmailInvalid()
+    return result
+
+
+def enqueue_standard_email_invitation(**arguments) -> TimedEmailResult:
+    """Commit standard scheduling under existing consent, scope and send gates."""
+    result = None
+    try:
+        with _visit_prep_session() as session:
+            try:
+                result = enqueue_locked_standard_email(session, **arguments)
                 session.commit()
             except _ERRORS:
                 session.rollback()
