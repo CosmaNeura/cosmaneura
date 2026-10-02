@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime
-from typing import Annotated, Any, Literal, TypeVar
+from typing import Annotated, Any, Literal, TypeVar, cast
 
 from fastapi import (
     APIRouter,
@@ -29,6 +29,7 @@ from starlette.types import Receive, Scope, Send
 from app import log
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services import visit_prep_clarification_decisions as clarification_decisions
+from app.services import visit_prep_clarification_turns as clarification_turns
 from app.services import visit_prep_contributions as contributions
 from app.services import visit_prep_email_consent as email_consent
 from app.services import visit_prep_interviews as interview_service
@@ -38,7 +39,10 @@ from app.services.visit_prep_clarification_contract import (
     VisitPrepClarificationChanged,
     VisitPrepClarificationInvalid,
 )
-from app.services.visit_prep_clarification_view import get_patient_clarification_view
+from app.services.visit_prep_clarification_view import (
+    get_patient_clarification_view,
+    get_patient_followup_view,
+)
 from app.services.visit_prep_contribution_contract import (
     ContributionBasis,
     ContributionMutationReceipt,
@@ -83,6 +87,8 @@ _CONFIRMATION_PATHS = frozenset(
         "/contribution/review",
         "/clarification",
         "/clarification/decision",
+        "/clarification/follow-up",
+        "/clarification/turn",
         "/email-consent",
         "/email-consent/decision",
     )
@@ -466,6 +472,33 @@ class VisitPrepClarificationDecisionRequest(VisitPrepConfirmationRequest):
     edited_words: str | None = Field(
         default=None, min_length=1, max_length=2000, repr=False
     )
+
+
+class VisitPrepFollowupViewResponse(_StrictModel):
+    contract: Literal["visit_prep.patient_followup.v1"] = (
+        "visit_prep.patient_followup.v1"
+    )
+    status: Literal["prompt", "answered", "not_available"]
+    question_key: str
+    actor_role: Literal["patient", "caregiver"]
+    basis: VisitPrepContributionBasis
+    proposal_id: str | None
+    current_words: str | None = Field(max_length=2000, repr=False)
+    pending_prompt: str | None = Field(max_length=200, repr=False)
+    turns: list[VisitPrepClarificationTurnResponse] = Field(max_length=2, repr=False)
+
+
+class VisitPrepClarificationTurnRequest(VisitPrepConfirmationRequest):
+    proposal_id: str = Field(min_length=1, max_length=64)
+    patient_words: str = Field(min_length=1, max_length=2000, repr=False)
+
+
+class VisitPrepPatientTurnReceiptResponse(_StrictModel):
+    turn_id: str
+    proposal_id: str
+    disposition: Literal["accepted", "replayed"]
+    turn_sequence: Literal[1, 2]
+    basis: VisitPrepContributionBasis
 
 
 class VisitPrepClarificationReceiptResponse(VisitPrepContributionReceiptResponse):
@@ -1081,7 +1114,7 @@ def visit_prep_public_read_clarification(
         )
     )
     return VisitPrepClarificationViewResponse(
-        status=view.status,
+        status=cast(Literal["available", "not_available"], view.status),
         question_key=view.question_key,
         actor_role=view.actor_role,
         basis=VisitPrepContributionBasis(
@@ -1097,6 +1130,77 @@ def visit_prep_public_read_clarification(
             )
             for t in view.turns
         ],
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/clarification/follow-up",
+    name="visit_prep_public_read_followup",
+    response_model=VisitPrepFollowupViewResponse,
+)
+def visit_prep_public_read_followup(
+    data: VisitPrepClarificationReadRequest,
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepFollowupViewResponse:
+    view = _invoke(
+        lambda: get_patient_followup_view(
+            access_token=access_token,
+            first_name=data.first_name,
+            role=data.role,
+            question_key=data.question_key,
+        )
+    )
+    return VisitPrepFollowupViewResponse(
+        status=cast(Literal["prompt", "answered", "not_available"], view.status),
+        question_key=view.question_key,
+        actor_role=view.actor_role,
+        basis=VisitPrepContributionBasis(
+            original_response_count=view.basis.original_response_count,
+            event_sequence=view.basis.event_sequence,
+        ),
+        proposal_id=view.proposal_id,
+        current_words=view.current_words,
+        pending_prompt=view.pending_prompt,
+        turns=[
+            VisitPrepClarificationTurnResponse(
+                prompt=t.prompt, patient_words=t.patient_words
+            )
+            for t in view.turns
+        ],
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/clarification/turn",
+    name="visit_prep_public_record_clarification_turn",
+    response_model=VisitPrepPatientTurnReceiptResponse,
+)
+def visit_prep_public_record_clarification_turn(
+    request: Request,
+    data: VisitPrepClarificationTurnRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepPatientTurnReceiptResponse:
+    del documented_idempotency_key
+    receipt = _invoke(
+        lambda: clarification_turns.record_patient_clarification_turn(
+            access_token=access_token,
+            first_name=data.first_name,
+            role=data.role,
+            proposal_id=data.proposal_id,
+            operation_id=_contribution_key(request),
+            patient_words=data.patient_words,
+        )
+    )
+    return VisitPrepPatientTurnReceiptResponse(
+        turn_id=receipt.turn_id,
+        proposal_id=receipt.proposal_id,
+        disposition=receipt.disposition,
+        turn_sequence=cast(Literal[1, 2], receipt.turn_sequence),
+        basis=VisitPrepContributionBasis(
+            original_response_count=receipt.basis.original_response_count,
+            event_sequence=receipt.basis.event_sequence,
+        ),
     )
 
 

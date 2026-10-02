@@ -274,6 +274,12 @@ export class VisitPrepPatientFailure extends Error {
 const clarificationId = z
   .string()
   .regex(/^visit_prep_clarification_[0-7][0-9a-hjkmnp-tv-z]{25}$/)
+const clarificationTurn = z
+  .object({
+    prompt: z.string().min(1).max(200),
+    patient_words: z.string().min(1).max(2_000),
+  })
+  .strict()
 export const visitPrepPatientClarification = z
   .object({
     contract: z.literal("visit_prep.patient_clarification.v1"),
@@ -284,16 +290,7 @@ export const visitPrepPatientClarification = z
     proposal_id: clarificationId.nullable(),
     current_words: z.string().min(1).max(2_000).nullable(),
     organized_words: z.string().min(1).max(2_000).nullable(),
-    turns: z
-      .array(
-        z
-          .object({
-            prompt: z.string().min(1).max(200),
-            patient_words: z.string().min(1).max(2_000),
-          })
-          .strict(),
-      )
-      .max(2),
+    turns: z.array(clarificationTurn).max(2),
   })
   .strict()
   .refine((view) =>
@@ -332,6 +329,50 @@ export type PatientClarificationChoice = PatientConfirmation & {
   proposal_id: string
   action: "confirm" | "edit" | "keep_original" | "dismiss"
   edited_words: string | null
+}
+
+export const visitPrepPatientFollowup = z
+  .object({
+    contract: z.literal("visit_prep.patient_followup.v1"),
+    status: z.enum(["prompt", "answered", "not_available"]),
+    question_key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    actor_role: z.enum(["patient", "caregiver"]),
+    basis: contributionBasis,
+    proposal_id: clarificationId.nullable(),
+    current_words: z.string().min(1).max(2_000).nullable(),
+    pending_prompt: z.string().min(1).max(200).nullable(),
+    turns: z.array(clarificationTurn).max(2),
+  })
+  .strict()
+  .refine((view) =>
+    view.status === "not_available"
+      ? view.proposal_id === null &&
+        view.current_words === null &&
+        view.pending_prompt === null &&
+        view.turns.length === 0
+      : view.proposal_id !== null &&
+        view.current_words !== null &&
+        view.pending_prompt !== null &&
+        (view.status === "prompt"
+          ? view.turns.length < 2
+          : view.turns.length > 0 &&
+            view.turns.at(-1)?.prompt === view.pending_prompt),
+  )
+const patientTurnReceipt = z
+  .object({
+    turn_id: z
+      .string()
+      .regex(/^visit_prep_clarification_turn_[0-7][0-9a-hjkmnp-tv-z]{25}$/),
+    proposal_id: clarificationId,
+    disposition: z.enum(["accepted", "replayed"]),
+    turn_sequence: z.union([z.literal(1), z.literal(2)]),
+    basis: contributionBasis,
+  })
+  .strict()
+export type PatientFollowupView = z.infer<typeof visitPrepPatientFollowup>
+export type PatientFollowupAnswer = PatientConfirmation & {
+  proposal_id: string
+  patient_words: string
 }
 
 function safeBaseUrl(value: string): URL {
@@ -471,6 +512,33 @@ export function createVisitPrepPatientClient(
         receipt.proposal_id !== payload.proposal_id ||
         receipt.action !== payload.action
       )
+        throw new VisitPrepPatientFailure("temporary")
+      return receipt
+    },
+    readFollowup: async (
+      confirmation: PatientConfirmation,
+      question_key: string,
+    ) => {
+      const view = await request(
+        "/clarification/follow-up",
+        visitPrepPatientFollowup,
+        { ...confirmation, question_key },
+      )
+      if (
+        view.question_key !== question_key ||
+        view.actor_role !== confirmation.role
+      )
+        throw new VisitPrepPatientFailure("temporary")
+      return view
+    },
+    answerFollowup: async (payload: PatientFollowupAnswer, key: string) => {
+      const receipt = await request(
+        "/clarification/turn",
+        patientTurnReceipt,
+        payload,
+        key,
+      )
+      if (receipt.proposal_id !== payload.proposal_id)
         throw new VisitPrepPatientFailure("temporary")
       return receipt
     },

@@ -1257,3 +1257,51 @@ presentation/capture, choice supplements, the ratified Sovereign connection and
 clinical quality remain required for the end-to-end AI experience. CosmaBot,
 qualified prior consent, Acuity/email/SMS/reminders, retention/cleanup operations,
 monitoring and clinical/operational acceptance remain the full approved goal.
+
+## Patient followup capture and recovery
+
+The saved-answer screen now explicitly reads a retained neutral follow-up and
+saves the patient's response through separate private POST operations. Core
+checks the current recipient, source, credential and practice before decoding
+the actual encrypted turn chain, and commits an access audit before disclosure.
+The closed read contract distinguishes an unanswered prompt, an answered prompt
+and unavailable work. The save returns only a receipt bound to the proposal,
+turn sequence and contribution basis. No model is invoked by either operation.
+The existing wording-review contract remains unchanged.
+
+An acknowledged save displays exactly the submitted words without an extra
+request or changing the original answer. An uncertain save freezes editing and
+retries the same words and UUID. The patient can instead explicitly check retained
+evidence without resubmitting; that recovery clears the old snapshot before
+loading current answers and follow-up evidence. Visibility, support-view and
+source changes discard private snapshots and late responses. Coded choices show
+their published labels; an explanation does not change the chosen code.
+
+Synthetic desktop and mobile browser journeys use the actual production-bundled
+UI, API, PostgreSQL and isolated Redis. They cover both patient and caregiver,
+lost save acknowledgment, exact retry, subsequent source-bound wording review,
+explicit acceptance, final contribution review and retained original wording.
+No invented reply is described as Sovereign qualification. HTTP checks cover
+two actual patient turns, unavailable and superseded work, closed requests,
+private failures, lost read acknowledgment and real correction/BAA lock waits.
+The test helper now uses unique documentation-range transport peers because
+imported and pytest-collected module instances otherwise reuse local counters.
+Runtime rate limits have not changed. Exact revision-specific regression,
+type/build checks and implementer review belong in the stacked draft PR.
+
+The two-turn test exposes a release gap rather than proving a usable full AI
+session. Even without automatic post-save reads, loading answers, reading and
+saving two prompts, reading and accepting wording, and refreshing answers use
+the eight confirmation requests allowed in fifteen minutes. Final contribution
+review is the ninth request and receives a private 429. Extra checks or retries
+can reach that limit earlier. A separately reviewed continuation design must
+preserve guessing limits and current authority while supporting the agreed
+multi-topic interaction; simply raising or bypassing the existing limit is not
+part of this increment. This is not a two-turn operational acceptance result.
+
+Reuse stays within Core's existing patient evidence, audit, private client and
+review components. No schema, dependency, service grant, model call, provider
+message, deployment or release-control change is introduced. Choice supplements,
+the Sovereign connection, clinical quality, CosmaBot receiver/adapter, qualified
+prior consent, Acuity/email/SMS/reminders, retention/cleanup operations,
+monitoring and clinical/operational acceptance remain full-goal requirements.

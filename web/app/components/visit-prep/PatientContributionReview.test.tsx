@@ -56,6 +56,8 @@ function setup() {
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
     decideClarification: vi.fn(),
+    readFollowup: vi.fn(),
+    answerFollowup: vi.fn(),
     readEmailConsent: vi.fn(),
     decideEmailConsent: vi.fn(),
   }
@@ -86,6 +88,241 @@ const receipt = (sequence: number, complete = true, reviewed = false) => ({
 })
 
 describe("saved patient contribution review", () => {
+  const followup = {
+    contract: "visit_prep.patient_followup.v1",
+    status: "prompt",
+    question_key: "story",
+    actor_role: "caregiver",
+    basis: initial.basis,
+    proposal_id: "visit_prep_clarification_00000000000000000000000001",
+    current_words: "Original invented story.",
+    pending_prompt:
+      "Is there anything you would like to make clearer about this answer?",
+    turns: [],
+  }
+  const answeredFollowup = {
+    ...followup,
+    status: "answered",
+    turns: [
+      {
+        prompt: followup.pending_prompt,
+        patient_words: "Invented follow-up words.",
+      },
+    ],
+  }
+  async function showFollowup(client: ReturnType<typeof setup>["client"]) {
+    client.readFollowup.mockResolvedValue(followup)
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Check follow-up: Tell me your story",
+      }),
+    )
+    await screen.findByRole("heading", { name: "Clarify your answer" })
+  }
+  it("acknowledges exact follow-up words without extra reads or changing answers", async () => {
+    const { client } = setup()
+    await open()
+    await showFollowup(client)
+    expect(client.answerFollowup).not.toHaveBeenCalled()
+    fireEvent.change(screen.getByLabelText(followup.pending_prompt), {
+      target: { value: " Invented follow-up words. " },
+    })
+    client.answerFollowup.mockResolvedValue({
+      proposal_id: followup.proposal_id,
+      turn_id: "visit_prep_clarification_turn_00000000000000000000000001",
+      disposition: "accepted",
+      turn_sequence: 1,
+      basis: initial.basis,
+    })
+    client.readFollowup.mockResolvedValue(answeredFollowup)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    await screen.findByText(/Your follow-up answer is saved/)
+    expect(client.answerFollowup.mock.calls[0][0]).toEqual({
+      first_name: "José",
+      role: "caregiver",
+      proposal_id: followup.proposal_id,
+      patient_words: "Invented follow-up words.",
+    })
+    expect(client.correctContribution).not.toHaveBeenCalled()
+    expect(client.decideClarification).not.toHaveBeenCalled()
+    expect(client.readContribution).toHaveBeenCalledOnce()
+    expect(client.readFollowup).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByLabelText(followup.pending_prompt),
+    ).not.toBeInTheDocument()
+  })
+  it("retries identical follow-up words after an uncertain save", async () => {
+    const { client } = setup()
+    await open()
+    await showFollowup(client)
+    fireEvent.change(screen.getByLabelText(followup.pending_prompt), {
+      target: { value: "Invented follow-up words." },
+    })
+    client.answerFollowup
+      .mockRejectedValueOnce(new VisitPrepPatientFailure("temporary"))
+      .mockResolvedValue({ turn_sequence: 1, basis: initial.basis })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    await screen.findByRole("button", { name: "Retry same save" })
+    expect(screen.getByLabelText(followup.pending_prompt)).toBeDisabled()
+    client.readFollowup.mockResolvedValue(answeredFollowup)
+    fireEvent.click(screen.getByRole("button", { name: "Retry same save" }))
+    await screen.findByText(/Your follow-up answer is saved/)
+    expect(client.answerFollowup.mock.calls[0]).toEqual(
+      client.answerFollowup.mock.calls[1],
+    )
+  })
+  it("can recover a saved follow-up without resubmitting after a lost receipt", async () => {
+    const { client } = setup()
+    await open()
+    await showFollowup(client)
+    fireEvent.change(screen.getByLabelText(followup.pending_prompt), {
+      target: { value: "Invented follow-up words." },
+    })
+    client.answerFollowup.mockRejectedValue(
+      new VisitPrepPatientFailure("temporary"),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    await screen.findByRole("button", { name: "Check whether follow-up saved" })
+    client.readFollowup.mockResolvedValue(answeredFollowup)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check whether follow-up saved" }),
+    )
+    await screen.findByText(/Your follow-up answer is saved/)
+    expect(client.answerFollowup).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByRole("button", { name: "Retry same save" }),
+    ).not.toBeInTheDocument()
+  })
+  it("conceals pending follow-up words and discards late acknowledgment", async () => {
+    const { client } = setup()
+    await open()
+    await showFollowup(client)
+    let resolve!: (value: object) => void
+    client.answerFollowup.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r
+        }),
+    )
+    fireEvent.change(screen.getByLabelText(followup.pending_prompt), {
+      target: { value: "Invented follow-up words." },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    fireEvent(window, new Event("blur"))
+    await act(async () => resolve({ turn_sequence: 1, basis: initial.basis }))
+    expect(
+      screen.queryByText("Invented follow-up words."),
+    ).not.toBeInTheDocument()
+    client.readFollowup.mockResolvedValue(answeredFollowup)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Check whether follow-up saved" }),
+    )
+    await screen.findByText(/Your follow-up answer is saved/)
+    expect(client.answerFollowup).toHaveBeenCalledOnce()
+  })
+  it("rejects a follow-up source changed before presentation", async () => {
+    const { client } = setup()
+    await open()
+    client.readFollowup.mockResolvedValue({
+      ...followup,
+      current_words: "Different invented answer.",
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Check follow-up: Tell me your story",
+      }),
+    )
+    await screen.findByRole("button", { name: "Reload saved answers" })
+    expect(
+      screen.queryByText("Different invented answer."),
+    ).not.toBeInTheDocument()
+    expect(client.answerFollowup).not.toHaveBeenCalled()
+  })
+  it("leaves manual editing usable when a follow-up is unavailable", async () => {
+    const { client } = setup()
+    await open()
+    client.readFollowup.mockResolvedValue({
+      ...followup,
+      status: "not_available",
+      proposal_id: null,
+      current_words: null,
+      pending_prompt: null,
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Check follow-up: Tell me your story",
+      }),
+    )
+    await screen.findByText(/No current follow-up is available/)
+    expect(
+      screen.getByRole("button", { name: "Change: Tell me your story" }),
+    ).toBeEnabled()
+    expect(client.answerFollowup).not.toHaveBeenCalled()
+  })
+  it("does not accept a mismatched turn receipt", async () => {
+    const { client } = setup()
+    await open()
+    await showFollowup(client)
+    client.answerFollowup.mockResolvedValue({
+      turn_sequence: 2,
+      basis: initial.basis,
+    })
+    fireEvent.change(screen.getByLabelText(followup.pending_prompt), {
+      target: { value: "Invented follow-up words." },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    await screen.findByRole("button", { name: "Retry same save" })
+    expect(client.readFollowup).toHaveBeenCalledOnce()
+    expect(
+      screen.queryByText(/Your follow-up answer is saved/),
+    ).not.toBeInTheDocument()
+  })
+  it("captures a second saved prompt without inventing a third or accepting wording", async () => {
+    const { client } = setup()
+    await open()
+    client.readFollowup.mockResolvedValue({
+      ...followup,
+      turns: answeredFollowup.turns,
+      proposal_id: "visit_prep_clarification_00000000000000000000000002",
+      pending_prompt: "What would you most like to discuss at this visit?",
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Check follow-up: Tell me your story",
+      }),
+    )
+    await screen.findByRole("heading", { name: "Clarify your answer" })
+    fireEvent.change(
+      screen.getByLabelText(
+        "What would you most like to discuss at this visit?",
+      ),
+      { target: { value: "Invented visit priority." } },
+    )
+    client.answerFollowup.mockResolvedValue({
+      turn_sequence: 2,
+      basis: initial.basis,
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save follow-up answer" }),
+    )
+    await screen.findByText(/Your follow-up answer is saved/)
+    expect(screen.getByText("Invented follow-up words.")).toBeVisible()
+    expect(screen.getByText("Invented visit priority.")).toBeVisible()
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument()
+    expect(client.readFollowup).toHaveBeenCalledOnce()
+    expect(client.correctContribution).not.toHaveBeenCalled()
+    expect(client.decideClarification).not.toHaveBeenCalled()
+  })
   const proposal = {
     contract: "visit_prep.patient_clarification.v1",
     status: "available",
