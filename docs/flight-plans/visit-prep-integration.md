@@ -288,6 +288,36 @@ Retain existing queue records; disabling does not delete sources or artifacts.
 Patient submissions continue through the existing flow with automatic handoff
 off. No schema, dependency, deployment or real recipient is part of this increment.
 
+## Patient clarification protection October 2 2026
+
+Core now selects one current patient-authorized topic for conversational work,
+including follow-up words reconstructed from saved patient-command evidence.
+Protection reuses the existing Core clinical de-identifier and verified text
+frames, with no raw fallback. The Sovereign payload contains only the protected
+prompt, patient words, role, topic kind and at most two follow-up turns. Record
+identifiers, contacts, credentials and other topics are excluded.
+
+The paired Sovereign branch adds a generator using its existing metered model
+client. It asks only unused neutral follow-up codes or returns exact patient
+excerpts; it supplies no new clinical prose. The generator requires the dormant
+clarification switch, Azure model configuration, BAA attestation and an active
+canonical usage context with a durable receipt for its call. These checks are
+controls, not proof of service coverage or patient authority.
+
+Core maps accepted excerpts only through unchanged text blocks, accounting for
+offsets shifted by de-identification. Substituted identifiers and surviving
+fragments inside changed words are rejected. An invented-source check exercises
+protection, mapping, saved proposal and explicit patient confirmation through
+the existing correction command. Existing batch protection remains supported.
+
+The authenticated Core to Sovereign request path, dedicated patient context and
+usage lineage contract, browser generation action and controlled service
+acceptance are not implemented by these private functions. The existing display
+contract grants none of those capabilities. No route is installed and no live
+switch, model call, deployment or message was activated. Recovery is to leave
+the feature off and revert the paired additive increments; no schema changes
+or data deletion are involved.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

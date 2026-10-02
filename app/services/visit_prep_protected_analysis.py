@@ -148,6 +148,41 @@ def protect_patient_analysis(
         for source in selection.sources
         for text in (source.prompt, source.reported_text)
     ]
+    values = protect_analysis_texts(tuple(texts))
+    try:
+        sources = tuple(
+            replace(
+                source,
+                prompt=values[index * 2],
+                answer=source.answer
+                if source.kind == "choice"
+                else values[index * 2 + 1],
+                choice_label=values[index * 2 + 1] if source.kind == "choice" else None,
+            )
+            for index, source in enumerate(selection.sources)
+        )
+        protected = VisitPrepProtectedAnalysis(
+            PROTECTION_PROFILE, replace(selection, sources=sources)
+        )
+        validate_protected_analysis(protected, selection)
+        return protected
+    except Exception:
+        raise VisitPrepProtectionFailed() from None
+
+
+def protect_analysis_texts(texts: tuple[str, ...]) -> tuple[str, ...]:
+    """One Core clinical de-id call with separately verified text frames.
+
+    No authority is granted. Batch and single-topic conversational callers must
+    independently recheck their current source/usage/disclosure boundaries.
+    """
+    if (
+        should_use_test_openai_fallback()
+        or not isinstance(texts, tuple)
+        or not 1 <= len(texts) <= 20
+        or any(not isinstance(text, str) or not text.strip() for text in texts)
+    ):
+        raise VisitPrepProtectionFailed()
     marker = f"VP_BOUNDARY_{uuid4().hex}_"
     frames = [(f"{marker}{i}_BEGIN\n", f"\n{marker}{i}_END") for i in range(len(texts))]
     body = "\n".join(
@@ -179,22 +214,7 @@ def protect_patient_analysis(
                 remaining = remaining[1:]
         if remaining:
             raise VisitPrepProtectionFailed()
-        sources = tuple(
-            replace(
-                source,
-                prompt=values[index * 2],
-                answer=source.answer
-                if source.kind == "choice"
-                else values[index * 2 + 1],
-                choice_label=values[index * 2 + 1] if source.kind == "choice" else None,
-            )
-            for index, source in enumerate(selection.sources)
-        )
-        protected = VisitPrepProtectedAnalysis(
-            PROTECTION_PROFILE, replace(selection, sources=sources)
-        )
-        validate_protected_analysis(protected, selection)
-        return protected
+        return tuple(values)
     except Exception:
         # Neither SDK exceptions nor validation input can reach job stores/logs.
         raise VisitPrepProtectionFailed() from None
