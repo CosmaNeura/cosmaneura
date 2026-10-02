@@ -8,6 +8,7 @@ const api = vi.hoisted(() => ({
   package: vi.fn(),
   request: vi.fn(),
   email: vi.fn(),
+  sms: vi.fn(),
   subscribe: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => ({
@@ -15,6 +16,7 @@ vi.mock("~/configuration/client", () => ({
   visitPrepSynthesis: (...args: unknown[]) => api.package(...args),
   visitPrepSynthesisRequest: (...args: unknown[]) => api.request(...args),
   visitPrepEmailStatus: (...args: unknown[]) => api.email(...args),
+  visitPrepSmsStatus: (...args: unknown[]) => api.sms(...args),
 }))
 vi.mock("~/lib/view-as-binding", () => ({
   VIEW_AS_HARD_BLOCK_EVENT: "cosmaneura:view-as-hard-block",
@@ -172,6 +174,56 @@ beforeEach(() => {
   api.package.mockResolvedValue({ data: value })
 })
 describe("provider current-answer package", () => {
+  it("keeps SMS, email and contribution selections mutually exclusive without automatic reads", async () => {
+    render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+    await open()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `SMS invitation and reminder status ${prep.id}`,
+      }),
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Patient contribution" }),
+    ).toBeNull()
+    expect(
+      screen.getByRole("heading", {
+        name: "Invitation and reminder SMS status",
+      }),
+    ).toBeVisible()
+    expect(api.sms).not.toHaveBeenCalled()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Email invitation status ${prep.id}`,
+      }),
+    )
+    expect(
+      screen.queryByRole("heading", {
+        name: "Invitation and reminder SMS status",
+      }),
+    ).toBeNull()
+    expect(
+      screen.getByRole("heading", { name: "Invitation email status" }),
+    ).toBeVisible()
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `SMS invitation and reminder status ${prep.id}`,
+      }),
+    )
+    expect(
+      screen.queryByRole("heading", { name: "Invitation email status" }),
+    ).toBeNull()
+    fireEvent.click(
+      screen.getByRole("button", { name: `Open contribution ${prep.id}` }),
+    )
+    await screen.findByRole("heading", { name: "Patient contribution" })
+    expect(
+      screen.queryByRole("heading", {
+        name: "Invitation and reminder SMS status",
+      }),
+    ).toBeNull()
+    expect(api.sms).not.toHaveBeenCalled()
+    expect(api.email).not.toHaveBeenCalled()
+  })
   it("never mixes a contribution with another preparation's invitation panel", async () => {
     const other = { ...prep, id: "visit_prep_other" }
     api.list.mockResolvedValue({

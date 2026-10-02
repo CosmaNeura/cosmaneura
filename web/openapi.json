@@ -5,6 +5,95 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/internal/v1/visit-prep/preps/{prep_id}/sms-status": {
+      "get": {
+        "tags": [
+          "private",
+          "visit-prep"
+        ],
+        "summary": "Visit Prep Sms Status",
+        "operationId": "visit_prep_sms_status",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "prep_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 80,
+              "title": "Prep Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepSMSStatusResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The authenticated context cannot perform this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Visit Prep is unavailable or the resource was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The command conflicts with current Visit Prep state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request is invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Visit Prep persistence is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitPrepCommandErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/admin/usage": {
       "get": {
         "tags": [
@@ -4964,6 +5053,206 @@
   },
   "components": {
     "schemas": {
+      "VisitPrepSMSMessageStatusResponse": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "booking_sms",
+              "unopened_48h_sms",
+              "unfinished_12h_sms"
+            ],
+            "title": "Step"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_requested",
+              "queued",
+              "submitting",
+              "accepted",
+              "failed",
+              "suppressed",
+              "uncertain"
+            ],
+            "title": "Status"
+          },
+          "outcome_code": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "transport_unavailable",
+                  "scope_unavailable",
+                  "obsolete_context",
+                  "expired",
+                  "submission_uncertain"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Code"
+          },
+          "credential_generation": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Generation"
+          },
+          "context_current": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Current"
+          },
+          "invitation_expired": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitation Expired"
+          },
+          "submission_window_elapsed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submission Window Elapsed"
+          },
+          "requested_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          },
+          "finalized_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finalized At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "step",
+          "status",
+          "outcome_code",
+          "credential_generation",
+          "context_current",
+          "invitation_expired",
+          "submission_window_elapsed",
+          "requested_at",
+          "expires_at",
+          "submitted_at",
+          "finalized_at"
+        ],
+        "title": "VisitPrepSMSMessageStatusResponse"
+      },
+      "VisitPrepSMSStatusResponse": {
+        "properties": {
+          "contract": {
+            "type": "string",
+            "const": "visit_prep.sms_status.v1",
+            "title": "Contract",
+            "default": "visit_prep.sms_status.v1"
+          },
+          "preparation_id": {
+            "type": "string",
+            "title": "Preparation Id"
+          },
+          "current_credential_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Current Credential Generation"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepSMSMessageStatusResponse"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Messages"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "dispatch_integration": {
+            "type": "string",
+            "const": "not_connected",
+            "title": "Dispatch Integration",
+            "default": "not_connected"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preparation_id",
+          "current_credential_generation",
+          "messages",
+          "checked_at"
+        ],
+        "title": "VisitPrepSMSStatusResponse"
+      },
       "AIVisitNote": {
         "properties": {
           "id": {

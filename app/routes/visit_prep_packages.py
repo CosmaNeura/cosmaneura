@@ -29,6 +29,8 @@ from app.services.visit_prep_email_status import (
     EmailStatus,
     get_email_status,
 )
+from app.services.visit_prep_sms_contract import SMSStep, VisitPrepSMSUnavailable
+from app.services.visit_prep_sms_status import SMSOutcomeCode, SMSStatus, get_sms_status
 
 
 class VisitPrepPackageBasisResponse(_StrictModel):
@@ -108,6 +110,31 @@ class VisitPrepEmailStatusResponse(_StrictModel):
     dispatch_integration: Literal["default_off_worker"] = "default_off_worker"
 
 
+class VisitPrepSMSMessageStatusResponse(_StrictModel):
+    step: SMSStep
+    status: SMSStatus
+    outcome_code: SMSOutcomeCode | None
+    credential_generation: int | None
+    context_current: bool | None
+    invitation_expired: bool | None
+    submission_window_elapsed: bool | None
+    requested_at: datetime | None
+    expires_at: datetime | None
+    submitted_at: datetime | None
+    finalized_at: datetime | None
+
+
+class VisitPrepSMSStatusResponse(_StrictModel):
+    contract: Literal["visit_prep.sms_status.v1"] = "visit_prep.sms_status.v1"
+    preparation_id: str
+    current_credential_generation: int = Field(gt=0, strict=True)
+    messages: list[VisitPrepSMSMessageStatusResponse] = Field(
+        min_length=3, max_length=3
+    )
+    checked_at: datetime
+    dispatch_integration: Literal["not_connected"] = "not_connected"
+
+
 visit_prep_packages_api_app = APIRouter(
     prefix="/visit-prep/preps",
     tags=["visit-prep"],
@@ -159,6 +186,39 @@ def visit_prep_email_status(
     if value is None:
         raise HTTPException(404, "Not found")
     return VisitPrepEmailStatusResponse(**asdict(value))
+
+
+@visit_prep_packages_api_app.get(
+    "/{prep_id}/sms-status",
+    name="visit_prep_sms_status",
+    response_model=VisitPrepSMSStatusResponse,
+)
+def visit_prep_sms_status(
+    request: Request,
+    prep_id: Annotated[str, Path(max_length=80)],
+    decision: Annotated[
+        VisitPrepAccessDecision, Depends(require_visit_prep_package_read)
+    ],
+) -> VisitPrepSMSStatusResponse:
+    _query_keys(request, frozenset())
+    owner, doctor, practice = _scope(decision)
+    identifier = _type_id(prep_id, prefix="visit_prep", path=True)
+    value = None
+    try:
+        value = get_sms_status(
+            owner_practice_member_id=owner,
+            owner_doctor_id=doctor,
+            practice_id=practice,
+            expected_clerk_subject=request.state.doctor.clerk_id,
+            visit_prep_id=identifier,
+            settings=visit_prep_access.VISIT_PREP_SETTINGS,
+            view_as_active=getattr(request.state, "view_as", None) is not None,
+        )
+    except VisitPrepSMSUnavailable:
+        pass
+    if value is None:
+        raise HTTPException(404, "Not found")
+    return VisitPrepSMSStatusResponse(**asdict(value))
 
 
 @visit_prep_packages_api_app.get(
