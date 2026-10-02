@@ -642,6 +642,33 @@ Evidence cleanup must be qualified before operational activation. This increment
 does not provide messaging consent, replacement invitations, SMS or reminders.
 No account, environment control, live source, message or deployment is changed.
 
+### Separate patient SMS choices
+
+Patients and caregivers can now explicitly allow or withdraw Visit Prep invitation
+and reminder texts through an optional screen, using their existing remembered
+confirmation. The UI displays the permission deadline in local time; Core limits
+it to the current invitation and appointment. Rescheduling preserves the original
+choice without extending its deadline. Declining texts does not block answers,
+and a missing mobile number makes SMS permission unavailable without collecting
+a replacement number in this screen. Email and SMS permissions remain independent.
+
+Generated expansion `5789bd0d277e` adds a separate append-only SMS consent stream
+after `0b78b19b8d6e`, with encrypted, purpose-bound capture evidence and atomic,
+content-free audit. Exact retries recover the original decision without restoring
+a grant after later withdrawal. The current authority, recipient, disclosure,
+sequence and deadline are rechecked before commit. The populated predecessor
+rehearsal preserves existing records and guard definitions.
+
+Server `VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED` and browser
+`VITE_VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED` default off. This is capture evidence,
+not verified phone control, qualified consent or initial-booking outreach authority.
+It does not install an SMS transport, sender approval, provider STOP callback,
+phone-wide suppression, delivery receipts or reminder dispatcher. Those remain
+required before activation. Recovery disables capture and reverts the additive
+application change while retaining consent records and schema; use a forward fix
+for schema faults. Consent retention and legal-hold cleanup require qualification.
+No live message, account, environment control, model or deployment is changed.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

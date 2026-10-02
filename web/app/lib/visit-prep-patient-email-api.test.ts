@@ -4,6 +4,7 @@ import {
   createVisitPrepPatientClient,
   visitPrepPatientEmailConsent,
   visitPrepPatientEmailConsentReceipt,
+  visitPrepPatientSMSConsent,
 } from "./visit-prep-patient-api"
 
 const token = `vp1_${"A".repeat(43)}`
@@ -35,6 +36,58 @@ const receipt = {
   disposition: "recorded",
 }
 describe("patient email public contract", () => {
+  it("separates SMS from email contracts and requires honest missing-contact state", async () => {
+    const sms = {
+      ...choice,
+      contract: "visit_prep.patient_sms_consent.v1",
+      disclosure_version: "visit_prep_sms_consent_v1",
+      contact_available: true,
+    }
+    expect(visitPrepPatientSMSConsent.safeParse(choice).success).toBe(false)
+    expect(visitPrepPatientEmailConsent.safeParse(sms).success).toBe(false)
+    expect(visitPrepPatientSMSConsent.safeParse(sms).success).toBe(true)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({ ...sms, contact_available: false })
+        .success,
+    ).toBe(false)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({
+        ...sms,
+        contact_available: false,
+        can_grant: false,
+      }).success,
+    ).toBe(true)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({ ...sms, phone: "+12025550123" })
+        .success,
+    ).toBe(false)
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(sms)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(receipt)))
+    const client = createVisitPrepPatientClient(
+      "https://api.example.test",
+      token,
+      fetcher,
+    )
+    expect(await client.readSMSConsent({ role: "patient" })).toEqual(sms)
+    await client.decideSMSConsent(
+      {
+        role: "patient",
+        expected_event_sequence: 0,
+        event_kind: "withdrawn",
+        disclosure_fingerprint: sms.withdrawal_disclosure_fingerprint,
+        expires_at: null,
+        recipient_control_attested: false,
+        caregiver_authority_attested: false,
+      },
+      "00000000-0000-4000-8000-000000000001",
+    )
+    expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      "/external/v1/visit-prep/sms-consent",
+      "/external/v1/visit-prep/sms-consent/decision",
+    ])
+  })
   it("uses separate POSTs with fresh confirmation and an exact decision UUID, never credentials in URLs", async () => {
     const fetcher = vi
       .fn()

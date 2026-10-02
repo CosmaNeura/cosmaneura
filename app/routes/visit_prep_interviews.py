@@ -36,6 +36,7 @@ from app.services import visit_prep_email_consent as email_consent
 from app.services import visit_prep_interviews as interview_service
 from app.services import visit_prep_patient_analysis as patient_analysis
 from app.services import visit_prep_rate_limits as rate_limits
+from app.services import visit_prep_sms_consent as sms_consent
 from app.services.visit_prep_clarification_contract import (
     PatientClarificationDecision,
     VisitPrepClarificationChanged,
@@ -104,6 +105,8 @@ _CONFIRMATION_PATHS = frozenset(
         "/clarification/generate",
         "/email-consent",
         "/email-consent/decision",
+        "/sms-consent",
+        "/sms-consent/decision",
     )
 )
 
@@ -372,10 +375,7 @@ def _explicit_consent_timestamp(value: object) -> object:
     return value
 
 
-class VisitPrepPatientEmailConsentResponse(_StrictModel):
-    contract: Literal["visit_prep.patient_email_consent.v1"] = (
-        "visit_prep.patient_email_consent.v1"
-    )
+class _PatientConsentResponse(_StrictModel):
     actor_role: Literal["patient", "caregiver"]
     disclosure_version: str
     grant_disclosure: str
@@ -392,6 +392,19 @@ class VisitPrepPatientEmailConsentResponse(_StrictModel):
     identity_assurance: Literal["invitation_bearer"] = "invitation_bearer"
     sending_authority: Literal["not_qualified"] = "not_qualified"
     delivery_status: Literal["not_connected"] = "not_connected"
+
+
+class VisitPrepPatientEmailConsentResponse(_PatientConsentResponse):
+    contract: Literal["visit_prep.patient_email_consent.v1"] = (
+        "visit_prep.patient_email_consent.v1"
+    )
+
+
+class VisitPrepPatientSMSConsentResponse(_PatientConsentResponse):
+    contract: Literal["visit_prep.patient_sms_consent.v1"] = (
+        "visit_prep.patient_sms_consent.v1"
+    )
+    contact_available: bool
 
 
 class VisitPrepPatientEmailConsentDecisionRequest(VisitPrepConfirmationRequest):
@@ -1171,6 +1184,84 @@ def visit_prep_public_decide_email_consent(
             access_token=access_token,
             first_name=_recipient_name(data, access_token),
             decision=email_consent.PatientEmailConsentInput(
+                operation_id=_contribution_key(request),
+                expected_event_sequence=data.expected_event_sequence,
+                event_kind=data.event_kind,
+                role=data.role,
+                disclosure_fingerprint=data.disclosure_fingerprint,
+                expires_at=data.expires_at,
+                recipient_control_attested=data.recipient_control_attested,
+                caregiver_authority_attested=data.caregiver_authority_attested,
+            ),
+        )
+    )
+    return VisitPrepPatientEmailConsentDecisionResponse(
+        event_sequence=value.event_sequence,
+        current_event_sequence=value.current_event_sequence,
+        event_kind=value.event_kind,
+        expires_at=value.expires_at,
+        recorded_at=value.recorded_at,
+        disposition=value.disposition,
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/sms-consent",
+    name="visit_prep_public_read_sms_consent",
+    response_model=VisitPrepPatientSMSConsentResponse,
+)
+def visit_prep_public_read_sms_consent(
+    data: VisitPrepConfirmationRequest,
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
+) -> VisitPrepPatientSMSConsentResponse:
+    value = _email_consent_invoke(
+        lambda: sms_consent.get_patient_sms_consent_view(
+            access_token=access_token,
+            first_name=_recipient_name(data, access_token),
+            role=data.role,
+        )
+    )
+    return VisitPrepPatientSMSConsentResponse(
+        actor_role=value.actor_role,
+        disclosure_version=value.disclosure_version,
+        grant_disclosure=value.grant_disclosure,
+        grant_disclosure_fingerprint=value.grant_disclosure_fingerprint,
+        withdrawal_disclosure=value.withdrawal_disclosure,
+        withdrawal_disclosure_fingerprint=value.withdrawal_disclosure_fingerprint,
+        status=value.status,
+        event_sequence=value.event_sequence,
+        recorded_at=value.recorded_at,
+        expires_at=value.expires_at,
+        maximum_expires_at=value.maximum_expires_at,
+        can_grant=value.can_grant,
+        checked_at=value.checked_at,
+        contact_available=value.contact_available,
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/sms-consent/decision",
+    name="visit_prep_public_decide_sms_consent",
+    response_model=VisitPrepPatientEmailConsentDecisionResponse,
+)
+def visit_prep_public_decide_sms_consent(
+    request: Request,
+    data: VisitPrepPatientEmailConsentDecisionRequest,
+    documented_idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=36, max_length=36)
+    ],
+    access_token: Annotated[
+        str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
+    ],
+) -> VisitPrepPatientEmailConsentDecisionResponse:
+    del documented_idempotency_key
+    value = _email_consent_invoke(
+        lambda: sms_consent.record_patient_sms_consent(
+            access_token=access_token,
+            first_name=_recipient_name(data, access_token),
+            decision=sms_consent.PatientSMSConsentInput(
                 operation_id=_contribution_key(request),
                 expected_event_sequence=data.expected_event_sequence,
                 event_kind=data.event_kind,

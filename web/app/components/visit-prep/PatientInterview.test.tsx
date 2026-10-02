@@ -68,6 +68,8 @@ function setup(initial = invited) {
     answerFollowup: vi.fn(),
     readEmailConsent: vi.fn(),
     decideEmailConsent: vi.fn(),
+    readSMSConsent: vi.fn(),
+    decideSMSConsent: vi.fn(),
     dispose: vi.fn(),
   }
   const makeClient = vi.fn(() => client)
