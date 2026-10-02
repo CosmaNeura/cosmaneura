@@ -121,7 +121,7 @@ export function readPreparedBillingOperation(
     value.sourceRevision < 1 ||
     typeof value.replayed !== "boolean" ||
     !Number.isFinite(Date.parse(value.completedAt)) ||
-    value.transport?.state !== "not_configured" ||
+    !["configured", "not_configured"].includes(value.transport?.state ?? "") ||
     !Object.entries(source).every(
       ([key, expected]) =>
         value.source[key as keyof typeof source] === expected,

@@ -40,6 +40,13 @@ export default function VisitNoteViewer({
   const [isOpen, setOpen] = useState(defaultOpen)
   const contentRef = useRef<HTMLDivElement>(null)
   const noteRef = useRef<HTMLDivElement>(null)
+  const retainedBillingSource = useRef<BillingHeaderSource | null>(null)
+  const billingAvailable = usableBillingSource(billingSource, note)
+  if (billingAvailable && !retainedBillingSource.current)
+    retainedBillingSource.current = billingSource
+  const visibleBillingSource = billingAvailable
+    ? billingSource
+    : retainedBillingSource.current
 
   useEffect(() => {
     if (focusOnMount) noteRef.current?.scrollIntoView({ block: "start" })
@@ -65,11 +72,11 @@ export default function VisitNoteViewer({
           </Button>
         </CollapsibleTrigger>
         {isOpen && <CopyButton htmlRef={contentRef} className="mt-1 ml-5" />}
-        {usableBillingSource(billingSource, note) && (
+        {visibleBillingSource && (
           <BillingHeaderButton
-            key={`${note.id}:${billingSource.source.contentSha256}`}
             noteId={note.id}
-            source={billingSource}
+            source={visibleBillingSource}
+            available={billingAvailable}
           />
         )}
       </div>
