@@ -782,3 +782,44 @@ off. Qualified disclosure, evidence retention/hold/cleanup, prior-consent intake
 invitation enqueue/dispatch/status, bounded patient AI clarification, CosmaBot,
 Acuity and SMS/reminders remain open. Consent collected through an already-opened
 link cannot authorize that first invitation email.
+
+The owner-scoped email handoff command now atomically records an encrypted
+invitation intent and its content-free audit in the existing outbox. Its locked
+helper does not commit and can be composed into a future booking/creation
+transaction; the current creation and scheduling paths do not call it yet.
+The command derives recipient contact from the preparation, verifies the
+actual current bearer and credential generation, and independently rechecks
+current owner authority, policy approval and qualified recipient consent.
+No consent-source verifier is installed by default. Missing verification,
+disabled controls, changed context or divergent request intent denies new work.
+
+The allocated outbox ID, schedule/credential lineage, requester, deadline and
+the two exact evidence manifests are encrypted together. The transient bearer
+and mailbox are sealed in the separate existing payload and cross-bound to
+that evidence. The deadline is at most 24 hours and cannot outlive either
+permission or the credential. Source verification is repeated after encryption
+and before any command writes; final authority/time checks follow the audit.
+No source callback runs after these writes. Any pre-commit failure rolls back
+both the outbox and its audit.
+
+One credential permits one invitation operation. A repeated exact operation
+returns its existing receipt without extending the deadline, restoring a
+terminal secret or refreshing evidence. A new key for the same credential or
+changed bearer/origin is rejected. Historical replay still requires current
+owner access but does not require current sending permission: its explicit
+replayed disposition is not authority to dispatch. Lost commit acknowledgment
+recovers by replaying that same intent, never by generating a fresh operation.
+
+Real synthetic PostgreSQL tests cover concurrent identical and competing keys,
+withdrawals and revocation/rotation committed while enqueue waits, elapsed
+expiry, caller rollback, final-check failure after audit, and lost commit
+acknowledgment. They also verify the retained invitation decrypts against the
+stored lineage, new credentials require their own actual bearer, and terminal
+receipts cannot reopen submission. No transport, model or live service is called.
+
+This completes the atomic existing-invitation handoff, not email delivery.
+Worker dispatch/status/secret cleanup, creation/booking integration, qualified
+prior-consent intake and evidence retention/hold/cleanup remain open. The
+patient capture and channel/public controls remain unchanged and default off.
+The broader patient AI, CosmaBot, Acuity, SMS/STOP/reminder and release milestones
+remain in scope. Exact validation and implementer review belong in the stacked PR.
