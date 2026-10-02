@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react"
 
 import { Button } from "~/components/ui/button"
 import {
+  type PatientClarificationChoice,
+  type PatientClarificationView,
   type PatientConfirmation,
   type PatientContribution,
   type PatientContributionChange,
@@ -15,6 +17,12 @@ import { QuestionForm } from "./QuestionForm"
 type Pending =
   | { kind: "change"; payload: PatientContributionChange; key: string }
   | { kind: "review"; payload: ReviewPayload; key: string }
+  | {
+      kind: "clarification"
+      payload: PatientClarificationChoice
+      key: string
+      basis: PatientContribution["basis"]
+    }
 
 const COPY = {
   unavailable:
@@ -44,6 +52,10 @@ export function PatientContributionReview({
   const [current, setCurrent] = useState<PatientContribution | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
   const [draft, setDraft] = useState("")
+  const [proposal, setProposal] = useState<PatientClarificationView | null>(
+    null,
+  )
+  const [editingProposal, setEditingProposal] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<VisitPrepPatientFailure["code"] | null>(
     null,
@@ -67,6 +79,8 @@ export function PatientContributionReview({
       setCurrent(null)
       setEditing(null)
       setDraft("")
+      setProposal(null)
+      setEditingProposal(false)
       setFirstName("")
       setError(null)
       if (!pending.current) confirmation.current = null
@@ -100,11 +114,20 @@ export function PatientContributionReview({
       const code =
         failure instanceof VisitPrepPatientFailure ? failure.code : "temporary"
       setError(code)
+      if (code === "conflict") {
+        refreshRequired.current = true
+        setCurrent(null)
+        setProposal(null)
+        setEditingProposal(false)
+        setEditing(null)
+        setDraft("")
+      }
       if (code === "unavailable") {
         confirmation.current = null
         pending.current = null
         setCurrent(null)
         setDraft("")
+        setProposal(null)
         setFirstName("")
         onUnavailable()
       }
@@ -127,6 +150,8 @@ export function PatientContributionReview({
     setFirstName("")
     setEditing(null)
     setDraft("")
+    setProposal(null)
+    setEditingProposal(false)
   }
 
   function retrySave() {
@@ -138,8 +163,19 @@ export function PatientContributionReview({
       const receipt =
         save.kind === "change"
           ? await client.correctContribution(save.payload, save.key)
-          : await client.reviewContribution(save.payload, save.key)
+          : save.kind === "clarification"
+            ? await client.decideClarification(save.payload, save.key)
+            : await client.reviewContribution(save.payload, save.key)
       if (!mounted.current || generation.current !== requestGeneration) return
+      if (
+        save.kind === "clarification" &&
+        (receipt.basis.original_response_count !==
+          save.basis.original_response_count ||
+          receipt.basis.event_sequence !==
+            save.basis.event_sequence +
+              Number(["confirm", "edit"].includes(save.payload.action)))
+      )
+        throw new VisitPrepPatientFailure("temporary")
       onStatus(
         receipt.current_answers_complete,
         receipt.current_answers_reviewed,
@@ -148,6 +184,8 @@ export function PatientContributionReview({
       refreshRequired.current = true
       setEditing(null)
       setDraft("")
+      setProposal(null)
+      setEditingProposal(false)
       if (
         save.kind === "review" &&
         receipt.current_answers_reviewed &&
@@ -215,6 +253,69 @@ export function PatientContributionReview({
         payload: {
           ...confirmation.current,
           basis: current.basis,
+        },
+      }
+      retrySave()
+    } catch {
+      setError("temporary")
+    }
+  }
+
+  function readProposal(questionKey: string) {
+    const confirmed = confirmation.current
+    const snapshot = current
+    if (!confirmed || !snapshot || pending.current || busyRef.current) return
+    const requestGeneration = generation.current
+    setProposal(null)
+    setEditingProposal(false)
+    setDraft("")
+    void run(async () => {
+      const view = await client.readClarification(confirmed, questionKey)
+      if (!mounted.current || generation.current !== requestGeneration) return
+      if (
+        view.basis.original_response_count !==
+          snapshot.basis.original_response_count ||
+        view.basis.event_sequence !== snapshot.basis.event_sequence ||
+        (view.status === "available" &&
+          view.current_words !==
+            snapshot.topics.find((t) => t.question.key === questionKey)?.answer)
+      )
+        throw new VisitPrepPatientFailure("conflict")
+      setProposal(view)
+    })
+  }
+
+  function chooseProposal(action: PatientClarificationChoice["action"]) {
+    if (
+      busyRef.current ||
+      pending.current ||
+      !confirmation.current ||
+      !proposal?.proposal_id
+    )
+      return
+    try {
+      const words =
+        action === "edit"
+          ? draft.normalize("NFC").replace(/\r\n?/g, "\n").trim()
+          : null
+      if (
+        words !== null &&
+        (!words ||
+          words.length > 2000 ||
+          /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/u.test(words.replace(/\n/g, "")))
+      ) {
+        setError("invalid")
+        return
+      }
+      pending.current = {
+        kind: "clarification",
+        key: crypto.randomUUID(),
+        basis: proposal.basis,
+        payload: {
+          ...confirmation.current,
+          proposal_id: proposal.proposal_id,
+          action,
+          edited_words: words,
         },
       }
       retrySave()
@@ -294,6 +395,83 @@ export function PatientContributionReview({
             </form>
           )}
         </>
+      ) : proposal?.status === "available" ? (
+        <>
+          <h1 className="text-2xl font-semibold">Review proposed wording</h1>
+          <p className="mt-3">
+            This organizes words you supplied, not medical advice or a provider
+            review. Accept it only if it reflects what you want to share. Your
+            original wording is retained.
+          </p>
+          <h2 className="mt-6 font-semibold">Current answer</h2>
+          <p className="mt-2 break-words whitespace-pre-wrap">
+            {proposal.current_words}
+          </p>
+          {proposal.turns.map((turn, index) => (
+            <div key={index} className="mt-4">
+              <p className="font-semibold">{turn.prompt}</p>
+              <p className="mt-2 break-words whitespace-pre-wrap">
+                {turn.patient_words}
+              </p>
+            </div>
+          ))}
+          <h2 className="mt-6 font-semibold">Proposed wording</h2>
+          <p className="mt-2 break-words whitespace-pre-wrap">
+            {proposal.organized_words}
+          </p>
+          {editingProposal && (
+            <>
+              <label htmlFor="clarification-edit" className="mt-4 block">
+                Your wording to share
+              </label>
+              <textarea
+                id="clarification-edit"
+                value={draft}
+                maxLength={2000}
+                disabled={blocked}
+                autoComplete="off"
+                onChange={(e) => setDraft(e.target.value)}
+                className="mt-2 min-h-32 w-full rounded border bg-white p-3 text-base"
+              />
+            </>
+          )}
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Button
+              disabled={blocked || (editingProposal && !draft.trim())}
+              onClick={() =>
+                chooseProposal(editingProposal ? "edit" : "confirm")
+              }
+            >
+              {editingProposal
+                ? "Save my edited wording"
+                : "Accept proposed wording"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={blocked}
+              onClick={() => {
+                setEditingProposal(true)
+                setDraft(proposal.organized_words ?? "")
+              }}
+            >
+              Edit proposed wording
+            </Button>
+            <Button
+              variant="outline"
+              disabled={blocked}
+              onClick={() => chooseProposal("keep_original")}
+            >
+              Keep my current answer
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={blocked}
+              onClick={() => chooseProposal("dismiss")}
+            >
+              Dismiss proposal
+            </Button>
+          </div>
+        </>
       ) : topic ? (
         <>
           <p className="mb-4 text-sm">
@@ -330,6 +508,12 @@ export function PatientContributionReview({
             retained.
           </p>
           <div className="mt-6 grid gap-5">
+            {proposal?.status === "not_available" && (
+              <p role="status">
+                No current wording proposal is available for this topic. You can
+                still change your answer yourself.
+              </p>
+            )}
             {current.topics.map((row) => (
               <article
                 key={row.question.key}
@@ -366,6 +550,18 @@ export function PatientContributionReview({
                     ? "Answer topic"
                     : "Change response"}
                 </Button>
+                {row.response_kind === "answered" &&
+                  row.question.kind !== "choice" && (
+                    <Button
+                      variant="ghost"
+                      className="mt-4"
+                      disabled={blocked}
+                      aria-label={`Review wording proposal: ${row.question.prompt}`}
+                      onClick={() => readProposal(row.question.key)}
+                    >
+                      Review wording proposal
+                    </Button>
+                  )}
               </article>
             ))}
           </div>

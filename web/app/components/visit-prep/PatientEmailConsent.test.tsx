@@ -40,6 +40,8 @@ function setup(value = consent) {
     readContribution: vi.fn(),
     correctContribution: vi.fn(),
     reviewContribution: vi.fn(),
+    readClarification: vi.fn(),
+    decideClarification: vi.fn(),
     readEmailConsent: vi.fn().mockResolvedValue(value),
     decideEmailConsent: vi.fn(),
   }

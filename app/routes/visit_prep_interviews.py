@@ -28,10 +28,17 @@ from starlette.types import Receive, Scope, Send
 
 from app import log
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
+from app.services import visit_prep_clarification_decisions as clarification_decisions
 from app.services import visit_prep_contributions as contributions
 from app.services import visit_prep_email_consent as email_consent
 from app.services import visit_prep_interviews as interview_service
 from app.services import visit_prep_rate_limits as rate_limits
+from app.services.visit_prep_clarification_contract import (
+    PatientClarificationDecision,
+    VisitPrepClarificationChanged,
+    VisitPrepClarificationInvalid,
+)
+from app.services.visit_prep_clarification_view import get_patient_clarification_view
 from app.services.visit_prep_contribution_contract import (
     ContributionBasis,
     ContributionMutationReceipt,
@@ -74,6 +81,8 @@ _CONFIRMATION_PATHS = frozenset(
         "/contribution",
         "/contribution/response",
         "/contribution/review",
+        "/clarification",
+        "/clarification/decision",
         "/email-consent",
         "/email-consent/decision",
     )
@@ -428,6 +437,43 @@ class VisitPrepContributionReceiptResponse(_StrictModel):
     current_answers_reviewed: bool
 
 
+class VisitPrepClarificationReadRequest(VisitPrepConfirmationRequest):
+    question_key: str = Field(min_length=1, max_length=64)
+
+
+class VisitPrepClarificationTurnResponse(_StrictModel):
+    prompt: str = Field(max_length=200, repr=False)
+    patient_words: str = Field(min_length=1, max_length=2000, repr=False)
+
+
+class VisitPrepClarificationViewResponse(_StrictModel):
+    contract: Literal["visit_prep.patient_clarification.v1"] = (
+        "visit_prep.patient_clarification.v1"
+    )
+    status: Literal["available", "not_available"]
+    question_key: str
+    actor_role: Literal["patient", "caregiver"]
+    basis: VisitPrepContributionBasis
+    proposal_id: str | None
+    current_words: str | None = Field(max_length=2000, repr=False)
+    organized_words: str | None = Field(max_length=2000, repr=False)
+    turns: list[VisitPrepClarificationTurnResponse] = Field(max_length=2, repr=False)
+
+
+class VisitPrepClarificationDecisionRequest(VisitPrepConfirmationRequest):
+    proposal_id: str = Field(min_length=1, max_length=64)
+    action: Literal["confirm", "edit", "keep_original", "dismiss"]
+    edited_words: str | None = Field(
+        default=None, min_length=1, max_length=2000, repr=False
+    )
+
+
+class VisitPrepClarificationReceiptResponse(VisitPrepContributionReceiptResponse):
+    proposal_id: str
+    decision_id: str
+    action: Literal["confirm", "edit", "keep_original", "dismiss"]
+
+
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status.HTTP_404_NOT_FOUND: {
         "model": VisitPrepPublicErrorResponse,
@@ -632,7 +678,7 @@ visit_prep_interviews_api_app = APIRouter(
 def _invoke(operation: Callable[[], _ResultT]) -> _ResultT:
     try:
         return operation()
-    except VisitPrepInterviewUnavailable:
+    except (VisitPrepInterviewUnavailable, VisitPrepClarificationInvalid):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=_UNAVAILABLE_DETAIL,
@@ -642,7 +688,7 @@ def _invoke(operation: Callable[[], _ResultT]) -> _ResultT:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=_VALIDATION_DETAIL,
         ) from None
-    except VisitPrepInterviewConflict:
+    except (VisitPrepInterviewConflict, VisitPrepClarificationChanged):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=_CONFLICT_DETAIL,
@@ -1014,6 +1060,79 @@ def visit_prep_public_review_contribution(
                 idempotency_key=key,
             )
         )
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/clarification",
+    name="visit_prep_public_read_clarification",
+    response_model=VisitPrepClarificationViewResponse,
+)
+def visit_prep_public_read_clarification(
+    data: VisitPrepClarificationReadRequest,
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepClarificationViewResponse:
+    view = _invoke(
+        lambda: get_patient_clarification_view(
+            access_token=access_token,
+            first_name=data.first_name,
+            role=data.role,
+            question_key=data.question_key,
+        )
+    )
+    return VisitPrepClarificationViewResponse(
+        status=view.status,
+        question_key=view.question_key,
+        actor_role=view.actor_role,
+        basis=VisitPrepContributionBasis(
+            original_response_count=view.basis.original_response_count,
+            event_sequence=view.basis.event_sequence,
+        ),
+        proposal_id=view.proposal_id,
+        current_words=view.current_words,
+        organized_words=view.organized_words,
+        turns=[
+            VisitPrepClarificationTurnResponse(
+                prompt=t.prompt, patient_words=t.patient_words
+            )
+            for t in view.turns
+        ],
+    )
+
+
+@visit_prep_interviews_api_app.post(
+    "/clarification/decision",
+    name="visit_prep_public_decide_clarification",
+    response_model=VisitPrepClarificationReceiptResponse,
+)
+def visit_prep_public_decide_clarification(
+    request: Request,
+    data: VisitPrepClarificationDecisionRequest,
+    documented_idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
+    access_token: Annotated[str, Depends(require_public_visit_prep_bearer)],
+) -> VisitPrepClarificationReceiptResponse:
+    del documented_idempotency_key
+    receipt = _invoke(
+        lambda: clarification_decisions.record_patient_clarification_decision(
+            access_token=access_token,
+            first_name=data.first_name,
+            role=data.role,
+            proposal_id=data.proposal_id,
+            operation_id=_contribution_key(request),
+            decision=PatientClarificationDecision(data.action, data.edited_words),
+        )
+    )
+    return VisitPrepClarificationReceiptResponse(
+        proposal_id=receipt.proposal_id,
+        decision_id=receipt.decision_id,
+        action=receipt.action,
+        disposition=receipt.disposition,
+        basis=VisitPrepContributionBasis(
+            original_response_count=receipt.basis.original_response_count,
+            event_sequence=receipt.basis.event_sequence,
+        ),
+        current_answers_complete=receipt.current_answers_complete,
+        current_answers_reviewed=receipt.current_answers_reviewed,
     )
 
 

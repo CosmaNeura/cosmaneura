@@ -271,6 +271,69 @@ export class VisitPrepPatientFailure extends Error {
   }
 }
 
+const clarificationId = z
+  .string()
+  .regex(/^visit_prep_clarification_[0-7][0-9a-hjkmnp-tv-z]{25}$/)
+export const visitPrepPatientClarification = z
+  .object({
+    contract: z.literal("visit_prep.patient_clarification.v1"),
+    status: z.enum(["available", "not_available"]),
+    question_key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    actor_role: z.enum(["patient", "caregiver"]),
+    basis: contributionBasis,
+    proposal_id: clarificationId.nullable(),
+    current_words: z.string().min(1).max(2_000).nullable(),
+    organized_words: z.string().min(1).max(2_000).nullable(),
+    turns: z
+      .array(
+        z
+          .object({
+            prompt: z.string().min(1).max(200),
+            patient_words: z.string().min(1).max(2_000),
+          })
+          .strict(),
+      )
+      .max(2),
+  })
+  .strict()
+  .refine((view) =>
+    view.status === "available"
+      ? view.proposal_id !== null &&
+        view.current_words !== null &&
+        view.organized_words !== null
+      : view.proposal_id === null &&
+        view.current_words === null &&
+        view.organized_words === null &&
+        view.turns.length === 0,
+  )
+
+const clarificationReceipt = z
+  .object({
+    proposal_id: clarificationId,
+    decision_id: z
+      .string()
+      .regex(/^visit_prep_clarification_decision_[0-7][0-9a-hjkmnp-tv-z]{25}$/),
+    action: z.enum(["confirm", "edit", "keep_original", "dismiss"]),
+    disposition: z.enum(["accepted", "replayed"]),
+    basis: contributionBasis,
+    current_answers_complete: z.boolean(),
+    current_answers_reviewed: z.boolean(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      !value.current_answers_reviewed || value.current_answers_complete,
+  )
+
+export type PatientClarificationView = z.infer<
+  typeof visitPrepPatientClarification
+>
+export type PatientClarificationChoice = PatientConfirmation & {
+  proposal_id: string
+  action: "confirm" | "edit" | "keep_original" | "dismiss"
+  edited_words: string | null
+}
+
 function safeBaseUrl(value: string): URL {
   try {
     const base = new URL(value === "/" ? window.location.origin : value)
@@ -378,6 +441,39 @@ export function createVisitPrepPatientClient(
       request("/contribution/response", contributionReceipt, payload, key),
     reviewContribution: (payload: PatientContributionReview, key: string) =>
       request("/contribution/review", contributionReceipt, payload, key),
+    readClarification: async (
+      confirmation: PatientConfirmation,
+      question_key: string,
+    ) => {
+      const view = await request(
+        "/clarification",
+        visitPrepPatientClarification,
+        { ...confirmation, question_key },
+      )
+      if (
+        view.question_key !== question_key ||
+        view.actor_role !== confirmation.role
+      )
+        throw new VisitPrepPatientFailure("temporary")
+      return view
+    },
+    decideClarification: async (
+      payload: PatientClarificationChoice,
+      key: string,
+    ) => {
+      const receipt = await request(
+        "/clarification/decision",
+        clarificationReceipt,
+        payload,
+        key,
+      )
+      if (
+        receipt.proposal_id !== payload.proposal_id ||
+        receipt.action !== payload.action
+      )
+        throw new VisitPrepPatientFailure("temporary")
+      return receipt
+    },
     readEmailConsent: (confirmation: PatientConfirmation) =>
       request("/email-consent", visitPrepPatientEmailConsent, confirmation),
     decideEmailConsent: (payload: PatientEmailConsentDecision, key: string) =>
