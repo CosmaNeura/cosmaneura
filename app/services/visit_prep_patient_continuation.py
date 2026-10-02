@@ -34,6 +34,8 @@ class ConfirmedVisitPrepAccess:
     actor_role: Literal["patient", "caregiver"]
     confirmed_at: datetime
     expires_at: datetime
+    # Request-only locator; never serialized into a cookie or used as proof.
+    presented_token_hash: str | None = field(default=None, repr=False)
 
 
 def valid_confirmation_name(
@@ -61,6 +63,13 @@ def _validate(access: ConfirmedVisitPrepAccess) -> None:
             for value in (access.confirmed_at, access.expires_at)
         )
         or access.confirmed_at >= access.expires_at
+        or (
+            access.presented_token_hash is not None
+            and (
+                type(access.presented_token_hash) is not str
+                or _HASH.fullmatch(access.presented_token_hash) is None
+            )
+        )
     ):
         raise PatientContinuationInvalid
 

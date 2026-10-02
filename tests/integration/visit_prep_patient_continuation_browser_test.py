@@ -15,8 +15,10 @@ import app.routes.visit_prep_interviews as routes
 from app import root
 from app.server import api_app
 
-from tests.services.visit_prep_contribution_projection_test import _projection, _topic
+from tests.integration.visit_prep_reschedule_continuity_http_test import _move
+from tests.services.visit_prep_contribution_projection_test import _topic
 from tests.services.visit_prep_interviews_test import _fixture
+from tests.services.visit_prep_packages_test import _read
 
 
 @pytest.mark.parametrize("width,height", [(1440, 1000), (390, 844)])
@@ -105,6 +107,8 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
 
             context.route("**/*", dispatch)
             page = context.new_page()
+            page_errors = []
+            page.on("pageerror", lambda error: page_errors.append(str(error)))
             page.goto(
                 f"https://testserver/visit-prep#access_token={fixture.access_token}"
             )
@@ -117,6 +121,12 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
             expect(
                 page.get_by_label("What is the main reason for this visit?")
             ).to_be_visible()
+            page.reload()
+            expect(
+                page.get_by_label("What is the main reason for this visit?")
+            ).to_be_visible()
+            expect(page.get_by_label("Recipient first name")).to_have_count(0)
+            _move(fixture)
             page.reload()
             expect(
                 page.get_by_label("What is the main reason for this visit?")
@@ -135,6 +145,7 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
             expect(
                 page.get_by_role("heading", name="Visit Prep complete")
             ).to_be_visible()
+            _move(fixture, generation=2)
             # Reopen the invitation in a new document, as from email/SMS;
             # changing only the fragment on the same document is not a reopen.
             page.goto("about:blank")
@@ -150,9 +161,20 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
             ).to_be_visible()
             expect(page.get_by_label("Recipient first name")).to_have_count(0)
             adherence_prompt = "Are you taking them as prescribed?"
-            page.get_by_role(
+            # Restore focus and, if the real privacy handler concealed the
+            # review, explicitly reload the current authorized saved answers.
+            page.bring_to_front()
+            if page.get_by_role(
+                "button", name="Show saved answers", exact=True
+            ).count():
+                page.get_by_role(
+                    "button", name="Show saved answers", exact=True
+                ).click()
+            explanation_button = page.get_by_role(
                 "button", name=f"Explain: {adherence_prompt}", exact=True
-            ).click()
+            )
+            expect(explanation_button).to_be_visible(timeout=5000)
+            explanation_button.click()
             page.get_by_label("What would you like your provider to understand?").fill(
                 "My invented explanation for this choice."
             )
@@ -160,7 +182,9 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
             expect(
                 page.get_by_text("My invented explanation for this choice.", exact=True)
             ).to_be_visible()
-            explanation = _topic(_projection(fixture), "adherence")
+            # Verify the patient update through the provider's current package,
+            # not the correctly revoked original invitation bearer.
+            explanation = _topic(_read(fixture).contribution, "adherence")
             assert explanation.answer == explanation.original_answer == "yes"
             assert (
                 explanation.explanation_words
@@ -220,7 +244,8 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
             )
             assert fixture.access_token not in page.url
             assert not unexpected
-            story = _topic(_projection(fixture), "story")
+            assert not page_errors
+            story = _topic(_read(fixture).contribution, "story")
             assert story.answer == "My updated invented story."
             assert story.original_answer == "My original invented story."
         finally:

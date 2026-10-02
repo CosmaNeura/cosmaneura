@@ -540,8 +540,9 @@ Synthetic checks preserve an in-progress patient's original encrypted answer and
 initial confirmation, and cover current-state action mismatch, replay, late source
 responses, malformed sources and rollback. Exact evidence belongs in the draft PR.
 
-This does not complete booking automation. Continuity across rotated links, replacement invitation recovery,
-changed-recipient recovery and calendar reassignment remain open. An unknown
+This does not complete booking automation. Returning-patient continuity for
+unchanged-recipient reschedules is implemented below; replacement invitation
+recovery, changed-recipient recovery and calendar reassignment remain open. An unknown
 cancellation is a no-op; durable unknown-booking cancellation ordering still needs
 implementation. The existing scheduled-only endpoint is retained. No source,
 release or channel control is activated; recovery disables the source and reverts
@@ -569,13 +570,46 @@ retained patient and booking rows are unchanged and the other guard clauses are
 preserved. Synthetic qualification also covers package refresh, replay, expiry,
 invalid lineage, immutability and matching refreshed packages through the actual
 signed Companion endpoint and dashboard projection. Exact reviewed commit and local results belong
-in the stacked PR. This does not yet restore returning-patient access across
-rotated links or deliver replacement invitations.
+in the stacked PR. The following increment restores remembered access across
+eligible reschedules; delivery of replacement invitations remains unfinished.
 
 Recovery retains schemas and evidence: disable automatic synthesis and the
 booking source, revert the additive application increment if necessary, and use
 a forward fix for a schema fault. No environment control, live source account,
 message transport, deployment or real patient data was used or activated.
+
+### Returning patient access after rescheduling
+
+A patient or caregiver who already affirmed their identity can resume the same
+preparation after an unchanged-recipient reschedule without another identity
+prompt. A still-valid encrypted browser confirmation follows the retained chain
+of rescheduled credentials. Reopening the original invitation, opening the new
+invitation in that browser, and returning without a link all use the current
+preparation. An authorized resume renews the confirmation to the current
+credential expiry without changing the initial affirmation or attribution.
+
+Every use rechecks current practice and physician authority, retention, schedule,
+credential expiry and quarantine under the existing canonical locks. The old
+link alone remains revoked. Explicit credential rotation, cancellation and
+recipient revocation cannot be crossed, even if a later reschedule occurs.
+An invitation for another preparation does not select the remembered answers.
+Email, phone number and shared IP are not access credentials. The cookie contains
+no raw invitation bearer, contact detail or patient answer; its envelope remains
+compatible with existing confirmations. There is no new schema or clinical store.
+
+Focused synthetic acceptance uses the actual patient components on desktop and
+mobile for both patient and caregiver, including two reschedules, reopening,
+explanations and confirmed corrections. Those updates are checked through the
+provider's authoritative package. The real signed booking-change route is also
+covered. Exact final results and reviewed commit belong in the stacked draft PR.
+
+Missing cookies, an unrenewed expired confirmation, cross-device recovery and
+changed-recipient replacement invitations remain unfinished. Continuity is
+bounded to 128 retained credential generations per request. This increment does
+not grant outreach consent or queue a message. Recovery reverts this additive
+application change while retaining the existing credentials and evidence.
+Release controls remain off; no service account, environment configuration,
+live model, patient message, deployment or retirement is changed.
 
 ## Source references
 

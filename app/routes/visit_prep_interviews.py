@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable, Coroutine, Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import Annotated, Any, Literal, TypeVar, cast
 
@@ -727,10 +728,16 @@ def require_public_visit_prep_bearer(
         if cookie:
             try:
                 candidate = open_confirmation(cookie)
-                if access_token is None or candidate.token_hash == access_token_hash(
-                    access_token
-                ):
+                if access_token is None:
                     continued = candidate
+                else:
+                    presented = access_token_hash(access_token)
+                    if candidate.token_hash == presented:
+                        continued = candidate
+                    elif interview_service.confirmation_matches_invitation(
+                        access=candidate, presented_token_hash=presented
+                    ):
+                        continued = replace(candidate, presented_token_hash=presented)
             except (PatientContinuationInvalid, ValueError):
                 pass
     if continued is not None and request.url.path != f"{_PUBLIC_PREFIX}/confirm":
@@ -892,11 +899,20 @@ def _recipient_name(
 )
 def visit_prep_public_resume(
     request: Request,
+    response: Response,
     access_token: Annotated[
         str | ConfirmedVisitPrepAccess, Depends(require_public_visit_prep_bearer)
     ],
 ) -> VisitPrepPublicStateResponse:
-    state = _invoke(lambda: interview_service.get_interview(access_token=access_token))
+    if isinstance(access_token, ConfirmedVisitPrepAccess):
+        state, continuation = _invoke(
+            lambda: interview_service.resume_confirmed_interview(access=access_token)
+        )
+        _remember_confirmation(response, continuation)
+    else:
+        state = _invoke(
+            lambda: interview_service.get_interview(access_token=access_token)
+        )
     if request.headers.getlist(REQUEST_HEADER) == ["1"] and not isinstance(
         access_token, ConfirmedVisitPrepAccess
     ):
@@ -939,17 +955,21 @@ def visit_prep_public_confirm(
         continuation = result.continuation
         if continuation is None:
             raise HTTPException(status_code=503, detail=_TEMPORARY_DETAIL)
-        cookie = _invoke(lambda: seal_confirmation(continuation))
-        response.set_cookie(
-            COOKIE_NAME,
-            cookie,
-            expires=continuation.expires_at,
-            secure=True,
-            httponly=True,
-            samesite="strict",
-            path="/",
-        )
+        _remember_confirmation(response, continuation)
     return _mutation_response(result)
+
+
+def _remember_confirmation(response: Response, continuation: ConfirmedVisitPrepAccess):
+    cookie = _invoke(lambda: seal_confirmation(continuation))
+    response.set_cookie(
+        COOKIE_NAME,
+        cookie,
+        expires=continuation.expires_at,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
 
 
 @visit_prep_interviews_api_app.post(
