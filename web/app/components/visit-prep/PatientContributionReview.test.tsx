@@ -54,6 +54,8 @@ function setup() {
     readContribution: vi.fn().mockResolvedValue(initial),
     correctContribution: vi.fn(),
     reviewContribution: vi.fn(),
+    readClarification: vi.fn(),
+    decideClarification: vi.fn(),
     readEmailConsent: vi.fn(),
     decideEmailConsent: vi.fn(),
   }
@@ -84,6 +86,186 @@ const receipt = (sequence: number, complete = true, reviewed = false) => ({
 })
 
 describe("saved patient contribution review", () => {
+  const proposal = {
+    contract: "visit_prep.patient_clarification.v1",
+    status: "available",
+    question_key: "story",
+    actor_role: "caregiver",
+    basis: initial.basis,
+    proposal_id: "visit_prep_clarification_00000000000000000000000001",
+    current_words: "Original invented story.",
+    organized_words: "Original invented story.\nSynthetic additional detail.",
+    turns: [
+      {
+        prompt:
+          "Is there anything you would like to make clearer about this answer?",
+        patient_words: "Synthetic additional detail.",
+      },
+    ],
+  }
+  async function showProposal(client: ReturnType<typeof setup>["client"]) {
+    client.readClarification.mockResolvedValue(proposal)
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review wording proposal: Tell me your story",
+      }),
+    )
+    await screen.findByRole("heading", { name: "Review proposed wording" })
+  }
+  it.each([
+    ["confirm", "Accept proposed wording"],
+    ["edit", "Save my edited wording"],
+    ["keep_original", "Keep my current answer"],
+    ["dismiss", "Dismiss proposal"],
+  ])(
+    "requires explicit %s and refreshes authoritative answers",
+    async (action, label) => {
+      const { client } = setup()
+      await open()
+      await showProposal(client)
+      expect(client.decideClarification).not.toHaveBeenCalled()
+      expect(client.readClarification).toHaveBeenCalledWith(
+        { first_name: "José", role: "caregiver" },
+        "story",
+      )
+      expect(screen.getByText(/not medical advice/)).toBeInTheDocument()
+      if (action === "edit") {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Edit proposed wording" }),
+        )
+        fireEvent.change(screen.getByLabelText("Your wording to share"), {
+          target: { value: " Synthetic patient edit. " },
+        })
+      }
+      client.decideClarification.mockResolvedValue(
+        receipt(["confirm", "edit"].includes(action) ? 1 : 0),
+      )
+      fireEvent.click(screen.getByRole("button", { name: label }))
+      await screen.findByRole("heading", { name: "Your saved answers" })
+      expect(client.decideClarification.mock.calls[0][0]).toEqual({
+        first_name: "José",
+        role: "caregiver",
+        proposal_id: proposal.proposal_id,
+        action,
+        edited_words: action === "edit" ? "Synthetic patient edit." : null,
+      })
+      expect(client.readContribution).toHaveBeenCalledTimes(2)
+      expect(client.correctContribution).not.toHaveBeenCalled()
+    },
+  )
+  it("keeps manual editing available when no proposal exists", async () => {
+    const { client } = setup()
+    await open()
+    client.readClarification.mockResolvedValue({
+      ...proposal,
+      status: "not_available",
+      proposal_id: null,
+      current_words: null,
+      organized_words: null,
+      turns: [],
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review wording proposal: Tell me your story",
+      }),
+    )
+    await screen.findByText(/No current wording proposal/)
+    expect(
+      screen.getByRole("button", { name: "Change: Tell me your story" }),
+    ).toBeEnabled()
+    expect(client.decideClarification).not.toHaveBeenCalled()
+  })
+  it("conceals an uncertain proposal and retries precisely the same choice", async () => {
+    const { client } = setup()
+    await open()
+    await showProposal(client)
+    let resolve!: (value: ReturnType<typeof receipt>) => void
+    client.decideClarification
+      .mockImplementationOnce(
+        () =>
+          new Promise((r) => {
+            resolve = r
+          }),
+      )
+      .mockResolvedValue(receipt(1))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Accept proposed wording" }),
+    )
+    await waitFor(() =>
+      expect(client.decideClarification).toHaveBeenCalledOnce(),
+    )
+    fireEvent(window, new Event("blur"))
+    expect(
+      screen.queryByText(/Synthetic additional detail/),
+    ).not.toBeInTheDocument()
+    await act(async () => resolve(receipt(1)))
+    expect(
+      screen.queryByRole("heading", { name: "Your saved answers" }),
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Retry same save" }))
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.decideClarification.mock.calls[0]).toEqual(
+      client.decideClarification.mock.calls[1],
+    )
+  })
+  it("rejects stale wording before presentation and requires a reload", async () => {
+    const { client } = setup()
+    await open()
+    client.readClarification.mockResolvedValue({
+      ...proposal,
+      current_words: "Different synthetic words.",
+    })
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review wording proposal: Tell me your story",
+      }),
+    )
+    await screen.findByRole("button", { name: "Reload saved answers" })
+    expect(
+      screen.queryByText(/Different synthetic words/),
+    ).not.toBeInTheDocument()
+    expect(client.decideClarification).not.toHaveBeenCalled()
+  })
+  it("discards late proposal reads after concealment", async () => {
+    const { client } = setup()
+    await open()
+    let resolve!: (value: typeof proposal) => void
+    client.readClarification.mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r
+        }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Review wording proposal: Tell me your story",
+      }),
+    )
+    fireEvent(window, new Event("blur"))
+    await act(async () => resolve(proposal))
+    expect(
+      screen.queryByText(/Synthetic additional detail/),
+    ).not.toBeInTheDocument()
+    expect(screen.getByLabelText("Recipient first name")).toHaveValue("")
+  })
+  it("does not acknowledge a mismatched decision basis", async () => {
+    const { client } = setup()
+    await open()
+    await showProposal(client)
+    client.decideClarification
+      .mockResolvedValueOnce(receipt(9))
+      .mockResolvedValueOnce(receipt(1))
+    fireEvent.click(
+      screen.getByRole("button", { name: "Accept proposed wording" }),
+    )
+    await screen.findByRole("button", { name: "Retry same save" })
+    expect(client.readContribution).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole("button", { name: "Retry same save" }))
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.decideClarification.mock.calls[0]).toEqual(
+      client.decideClarification.mock.calls[1],
+    )
+  })
   it("requires fresh confirmation and confirms the exact displayed basis without clinician claims", async () => {
     const { client, onStatus } = setup()
     expect(client.readContribution).not.toHaveBeenCalled()

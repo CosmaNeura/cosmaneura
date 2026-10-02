@@ -1121,3 +1121,50 @@ choice supplemental sources, patient routes/UI and the ratified Sovereign
 boundary remain required. CosmaBot, booking/email/SMS/reminders, retention
 qualification, cleanup, monitoring and clinical/operational acceptance remain
 in scope. No runtime flag, provider call, deployment or retirement changes.
+
+## Patient review of saved clarification proposals
+
+The patient API now reads the latest current undecided text-organization proposal
+for one applicable physician topic. It freshly checks the invitation, recipient
+first name and patient/caregiver role before loading encrypted evidence. It
+compares the exact current source context and commits a content-free read audit
+before returning the current wording, supplied clarification turns and proposed
+wording. Hidden, missing, skipped, coded-choice, stale or already decided proposals
+are not offered as current wording. A decided latest proposal does not reveal an
+older alternative. No proposal or model call is created by this read.
+
+The separate explicit decision endpoint connects the existing atomic command:
+confirm, edit, keep the current answer or dismiss. Only a saved proposal ID and
+patient choice enter the command; replacement model/context evidence is rejected.
+Both POST routes retain header-only bearer authority, bounded bodies, strict
+fields, redacted errors, no-store/no-referrer and the existing confirmation limits.
+The public client uses closed validation independently of the account SDK; the
+actual public OpenAPI is checked because internal SDK generation excludes it.
+
+The saved-answer review screen offers proposal review only for answered text
+topics. It shows the current answer and supplied clarification words alongside
+the proposal, requires an explicit choice and retains the original answer. An
+uncertain choice freezes further editing and retries the exact payload and UUID.
+Acknowledged choices reload Core's current contribution; mismatched receipts,
+stale views, concealment and support-view denial cannot retain or restore private
+wording. When no proposal is available, manual editing remains usable.
+
+Owned synthetic HTTP checks cover all four decisions, patient/caregiver roles,
+authority and support-view denials, stale/hidden/other-topic exclusion, strict
+requests, existing rate limits, audit rollback and lost acknowledgment. Actual
+PostgreSQL waits exercise a competing correction and BAA withdrawal. Built
+desktop/mobile acceptance uses the real component, API and encrypted storage,
+including explicit confirmation/editing and exact retry after a committed choice
+loses its acknowledgment. Synthetic screenshots were inspected at both sizes
+without clipping or horizontal overflow. Exact final regression, build, type and
+implementer-review evidence belongs in the draft PR.
+
+This completes review and saving of already retained wording proposals, not the
+end-to-end patient AI interface. Proposal creation, durable turn capture, choice
+supplements, the ratified Sovereign connection and clinical quality remain open.
+The read audit is server access evidence, not proof that the browser displayed
+the words or that the patient understood them. First-name confirmation is not
+verified identity or consent. No new schema, dependency, runtime control, model
+call, message, deployment or retirement is introduced. CosmaBot, qualified prior
+consent, Acuity/email/SMS/reminders, retention/cleanup, monitoring and clinical
+and operational acceptance remain full-goal requirements.

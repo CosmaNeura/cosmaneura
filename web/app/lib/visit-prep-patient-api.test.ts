@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest"
 import {
   VisitPrepPatientFailure,
   createVisitPrepPatientClient,
+  visitPrepPatientClarification,
   visitPrepPatientContribution,
   visitPrepPatientState,
 } from "./visit-prep-patient-api"
@@ -45,6 +46,106 @@ const contribution = {
 }
 
 describe("patient public API boundary", () => {
+  const proposal = {
+    contract: "visit_prep.patient_clarification.v1",
+    status: "available",
+    question_key: "story",
+    actor_role: "patient",
+    basis: contribution.basis,
+    proposal_id: "visit_prep_clarification_00000000000000000000000001",
+    current_words: "Invented story.",
+    organized_words: "Invented story.",
+    turns: [],
+  }
+  it.each([
+    { owner_id: "private" },
+    { status: "not_available" },
+    { organized_words: null },
+    { proposal_id: "wrong-id" },
+    { turns: [{ prompt: "x", patient_words: "y", model: "private" }] },
+  ])("rejects malformed or overbroad proposal views", (extra) => {
+    expect(
+      visitPrepPatientClarification.safeParse({ ...proposal, ...extra })
+        .success,
+    ).toBe(false)
+  })
+  it("uses private POST read and exact decision receipt binding", async () => {
+    const confirmation = { first_name: "José", role: "patient" as const }
+    const payload = {
+      ...confirmation,
+      proposal_id: proposal.proposal_id,
+      action: "confirm" as const,
+      edited_words: null,
+    }
+    const result = {
+      proposal_id: proposal.proposal_id,
+      decision_id:
+        "visit_prep_clarification_decision_00000000000000000000000001",
+      action: "confirm",
+      disposition: "accepted",
+      basis: { original_response_count: 4, event_sequence: 1 },
+      current_answers_complete: true,
+      current_answers_reviewed: false,
+    }
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(proposal)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(result)))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...result, action: "dismiss" })),
+      )
+    const client = createVisitPrepPatientClient(
+      "https://api.example.test",
+      token,
+      fetcher,
+    )
+    expect(await client.readClarification(confirmation, "story")).toEqual(
+      proposal,
+    )
+    expect(
+      await client.decideClarification(
+        payload,
+        "00000000-0000-4000-8000-000000000001",
+      ),
+    ).toEqual(result)
+    await expect(
+      client.decideClarification(
+        payload,
+        "00000000-0000-4000-8000-000000000001",
+      ),
+    ).rejects.toMatchObject({ code: "temporary" })
+    for (const [url, options] of fetcher.mock.calls) {
+      expect(String(url)).not.toContain(token)
+      expect(options).toMatchObject({
+        method: "POST",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      })
+    }
+    client.dispose()
+  })
+  it.each([{ actor_role: "caregiver" }, { question_key: "reason" }])(
+    "rejects a proposal from a different scope",
+    async (extra) => {
+      const client = createVisitPrepPatientClient(
+        "https://api.example.test",
+        token,
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ ...proposal, ...extra })),
+          ),
+      )
+      await expect(
+        client.readClarification(
+          { first_name: "José", role: "patient" },
+          "story",
+        ),
+      ).rejects.toMatchObject({ code: "temporary" })
+      client.dispose()
+    },
+  )
   it("reads saved answers only by POST with fresh recipient fields and keeps revision receipts value-free", async () => {
     const receipt = {
       disposition: "accepted",
