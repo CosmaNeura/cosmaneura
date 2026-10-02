@@ -735,6 +735,36 @@ STOP callbacks and receipts, initial booking consent, automated source wiring,
 retention and operational qualification remain required. No live service, message,
 model, account, deployment or release configuration is changed.
 
+### SMS submission and secret maintenance
+
+The separate Core worker commits a single submission claim before invoking a
+trusted SMS transport. It rechecks current consent, approval, invitation, timing
+and STOP after decrypting the private payload, keeping the sender and recipient
+transaction fence through the effect. Claims contain no contact, answer or link
+and have process-local, single-use custody; they are not broker or browser payloads.
+
+The worker records provider acceptance, never delivery without a confirmed receipt.
+An exception, unknown response, late response or expired submission lease is
+uncertain and cannot be automatically resent. A change between claim and dispatch
+suppresses the effect. The adapter must enforce its 30-second attempt budget;
+the worker rejects a late result but does not itself interrupt an arbitrary adapter.
+
+Secret maintenance works with sends disabled. It clears expired and obsolete
+queued payloads, including STOP and changed consent, and records uncertainty for
+expired submission claims without deleting retained evidence. Its candidate query
+targets cleanup-due rows so healthy queued work does not hide older required cleanup.
+This is internal worker behavior, not a scheduled production job or a claim that
+monitoring is operational. Real transport and qualified source adapters, job wiring,
+callback retry and delivery receipts remain unfinished activation requirements.
+
+Synthetic acceptance covers the actual queue and worker, unfinished-visit reminder,
+current changes between claim and effect, cross-preparation spacing, independent
+STOP contention during transport, one-use custody, uncertain outcomes and disabled
+secret maintenance. No real SMS service, account, credential, message, model,
+environment setting or deployment was used. Recovery disables sending, preserves
+the existing expansion and evidence, and runs secret maintenance before retiring
+the worker code; an uncertain claim is never made eligible for resend by rollback.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
