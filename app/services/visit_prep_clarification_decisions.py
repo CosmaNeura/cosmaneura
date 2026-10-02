@@ -167,6 +167,10 @@ def _proposal(
     ).one()
     if latest.id != row.id:
         raise VisitPrepClarificationChanged()
+    if row.source_turn_id is not None:
+        from app.services.visit_prep_clarification_turns import _verified_context
+
+        _verified_context(session, authorized, row, evidence, require_current=False)
     return row, evidence
 
 
