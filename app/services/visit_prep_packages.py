@@ -336,8 +336,38 @@ def _load_authorized_package(
         raise VisitPrepNotFound("Visit Prep is unavailable") from None
     now = _database_now(session)
     _authorize(session, owner=owner, practice=practice, at=now)
-    # Preserve the original source-version recipe: immutable source identities
-    # and lifecycle metadata only, never a hash of patient wording.
+    return _LockedPackage(
+        package=_source_package_from_locked_state(
+            prep=prep,
+            schedule=schedule,
+            credential=credential,
+            contribution=contribution,
+            at=now,
+        ),
+        preparation=prep,
+        owner=owner,
+        practice=practice,
+        schedule=schedule,
+        credential=credential,
+    )
+
+
+def _source_package_from_locked_state(
+    *,
+    prep: VisitPrep,
+    schedule: VisitPrepScheduleGeneration,
+    credential: VisitPrepCredentialGeneration,
+    contribution: PatientContribution,
+    at: datetime,
+) -> VisitPrepSourcePackage:
+    """Build the shared source version after the caller's ordinary authority.
+
+    No queries, authorization, disclosure, audit or transaction boundary. The
+    caller must hold the current root/lineage locks and have freshly loaded the
+    contribution. Patient callers use public recipient authority, not the
+    provider loader or a fabricated provider identity.
+    """
+    # Immutable source identities and lifecycle metadata, never patient wording.
     version = hashlib.sha256(
         json.dumps(
             {
@@ -358,15 +388,8 @@ def _load_authorized_package(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return _LockedPackage(
-        package=VisitPrepSourcePackage(
-            preparation=_snapshot(prep, schedule, credential, at=now),
-            source_version=version,
-            contribution=contribution,
-        ),
-        preparation=prep,
-        owner=owner,
-        practice=practice,
-        schedule=schedule,
-        credential=credential,
+    return VisitPrepSourcePackage(
+        preparation=_snapshot(prep, schedule, credential, at=at),
+        source_version=version,
+        contribution=contribution,
     )

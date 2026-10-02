@@ -1082,3 +1082,42 @@ remain open. Reuse stays within Core's existing encrypted contribution domain;
 no route, wire contract, dependency, provider call, runtime flag, deployment or
 retirement changes. CosmaBot, booking/email/SMS/reminders, retention qualification,
 monitoring and clinical/operational acceptance remain full-goal requirements.
+
+## Patient clarification decision transaction
+
+The dormant patient command loads an encrypted saved proposal by its ID under
+ordinary current public-link and recipient authority. Its input is an explicit
+confirm, edit, keep-original or dismiss choice, never replacement proposal text
+or client-supplied model evidence. Confirming or editing a text topic commits the
+exact matching patient correction, encrypted decision and minimized audit in one
+transaction. Original patient words remain intact. Keeping or dismissing records
+the choice without changing the answer. No saved receipt is returned before an
+acknowledged commit.
+
+Patient and provider paths now reuse the same metadata-only source-version
+builder after their distinct authorization checks. Exact retries require the
+same proposal, operation and patient choice, a matching authoritative audit and
+an unchanged resulting contribution. Later corrections or review invalidate the
+old receipt instead of implying that it describes today's answer. Current link,
+recipient, credential, legal/entitlement and source authority are rechecked after
+later transaction work using database time.
+
+Owned synthetic PostgreSQL checks exercise all four decisions, patient/caregiver
+attribution, text topic kinds, private-before-commit visibility, lost commit
+acknowledgment, competing identical/different choices, mismatched correction
+words, rollback and actual lock waits across correction, quarantine, credential
+rotation, BAA withdrawal and expiry. A final entitlement expiry after projection
+also denies and rolls back. Failure explicitly rolls back even when the request
+reuses an enclosing session and its caller catches the error. Direct storage
+fixtures without this command's audit cannot be replayed as qualified command
+receipts. Final commit-specific results
+and implementer review belong in the draft PR.
+
+Reuse is limited to Core's current correction transaction, encrypted evidence,
+source projection and audit store; no external code or new schema is introduced.
+This is not a model qualification, browser-presentation proof, verified identity,
+consent or an end-to-end AI interaction. Proposal creation/turn persistence,
+choice supplemental sources, patient routes/UI and the ratified Sovereign
+boundary remain required. CosmaBot, booking/email/SMS/reminders, retention
+qualification, cleanup, monitoring and clinical/operational acceptance remain
+in scope. No runtime flag, provider call, deployment or retirement changes.
