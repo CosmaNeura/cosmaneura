@@ -23,7 +23,10 @@ import {
   prepareBillingVisit,
   readPreparedBillingOperation,
 } from "~/lib/cab-billing-header"
+import { sameCabValue } from "~/lib/cab-provider-header"
 import { withReadDeadline } from "~/lib/read-deadline"
+
+import { CabBillingHeaderConnection } from "./CabBillingHeaderConnection"
 
 const inputClass =
   "border-input bg-background h-10 w-full rounded-md border px-3 text-sm"
@@ -31,9 +34,11 @@ const inputClass =
 export function BillingHeaderButton({
   noteId,
   source,
+  available = true,
 }: {
   noteId: string
   source: BillingHeaderSource
+  available?: boolean
 }) {
   const prefix = useId()
   const [open, setOpen] = useState(false)
@@ -41,12 +46,40 @@ export function BillingHeaderButton({
   const [confirmed, setConfirmed] = useState(false)
   const [pending, setPending] = useState(false)
   const [uncertain, setUncertain] = useState(false)
-  const [saved, setSaved] = useState(Boolean(source.latestOperation))
+  const [preparedId, setPreparedId] = useState(
+    source.latestOperation?.operationId ?? null,
+  )
+  const [updatingVisit, setUpdatingVisit] = useState(false)
+  const [headerLocked, setHeaderLocked] = useState(false)
   const [stale, setStale] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const command = useRef<PrepareBillingHeaderOperation | null>(null)
   const inFlight = useRef(false)
-  const locked = pending || uncertain
+  const [binding] = useState(() => ({
+    noteId,
+    source: structuredClone(source.source),
+  }))
+  const latestSeen = useRef(source.latestOperation?.operationId ?? null)
+  const externalStale = useRef(false)
+  const latest = source.latestOperation?.operationId ?? null
+  if (
+    !available ||
+    noteId !== binding.noteId ||
+    !sameCabValue(source.source, binding.source)
+  )
+    externalStale.current = true
+  if (latest !== latestSeen.current) {
+    if (latest !== preparedId && latest !== command.current?.operationId)
+      externalStale.current = true
+    latestSeen.current = latest
+  }
+  const blocked = stale || externalStale.current
+  const current = useRef(true)
+  current.current = !blocked
+  const locked = pending || (uncertain && !blocked) || headerLocked
+  useEffect(() => {
+    if (externalStale.current) setStale(true)
+  }, [available, source])
 
   useEffect(() => {
     if (!locked) return
@@ -59,14 +92,14 @@ export function BillingHeaderButton({
   }, [locked])
 
   function field(name: keyof BillingVisitDraft, value: string) {
-    if (locked || stale) return
+    if (locked || blocked) return
     setVisit((current) => ({ ...current, [name]: value }))
     setConfirmed(false)
     setError(null)
   }
 
   async function submit() {
-    if (inFlight.current || stale) return
+    if (inFlight.current || !current.current) return
     if (!command.current) {
       try {
         if (!confirmed)
@@ -75,8 +108,8 @@ export function BillingHeaderButton({
           )
         command.current = {
           operationId: crypto.randomUUID(),
-          expectedContentSha256: source.source.contentSha256,
-          expectedTextSha256: source.source.textSha256,
+          expectedContentSha256: binding.source.contentSha256,
+          expectedTextSha256: binding.source.textSha256,
           confirmedComplete: true,
           visit: prepareBillingVisit(visit),
         }
@@ -97,12 +130,13 @@ export function BillingHeaderButton({
       // A deadline may occur after persistence: preserve the command for exact retry.
       const result = await withReadDeadline((signal) =>
         prepareBillingHeaderOperation({
-          path: { note_id: noteId },
+          path: { note_id: binding.noteId },
           body: exactCommand,
           signal,
           throwOnError: false,
         }),
       )
+      if (!current.current) return
       if (
         [400, 401, 403, 404, 409, 422].includes(result.response?.status ?? 0)
       ) {
@@ -114,11 +148,13 @@ export function BillingHeaderButton({
         return
       }
       if (!result.response?.ok) throw new Error("Unconfirmed response")
-      readPreparedBillingOperation(result.data, exactCommand, source.source)
-      setSaved(true)
+      readPreparedBillingOperation(result.data, exactCommand, binding.source)
+      setPreparedId(exactCommand.operationId)
+      setUpdatingVisit(false)
       setUncertain(false)
       command.current = null
     } catch {
+      if (!current.current) return
       setUncertain(true)
       setError(
         "We couldn't confirm the save. Retry this same confirmation to check its result.",
@@ -145,7 +181,12 @@ export function BillingHeaderButton({
         <FileCheck2 className="h-4 w-4" aria-hidden="true" />
         Billing header
       </Button>
-      <DialogContent className="max-h-[90dvh] w-[calc(100%-2rem)] max-w-xl overflow-y-auto">
+      <DialogContent
+        className={
+          "max-h-[90dvh] w-[calc(100%-2rem)] overflow-y-auto " +
+          (preparedId && !updatingVisit ? "max-w-3xl" : "max-w-xl")
+        }
+      >
         <DialogHeader>
           <DialogTitle>Billing header</DialogTitle>
           <DialogDescription>
@@ -154,17 +195,37 @@ export function BillingHeaderButton({
           </DialogDescription>
         </DialogHeader>
 
-        {saved ? (
-          <div
-            role="status"
-            className="bg-muted space-y-2 rounded-md p-4 text-sm"
+        {externalStale.current && (!preparedId || updatingVisit) && (
+          <p
+            role="alert"
+            className="rounded-md border border-amber-300 p-3 text-sm"
           >
-            <p className="font-medium">Billing confirmation saved</p>
-            <p>
-              The billing connection is not configured yet. A header has not
-              been generated.
-            </p>
-          </div>
+            This note, its billing confirmation, or your access changed. Your
+            inputs are retained. Reload the note before continuing.
+          </p>
+        )}
+        {preparedId && !updatingVisit ? (
+          <CabBillingHeaderConnection
+            key={preparedId}
+            operationId={preparedId}
+            source={binding.source}
+            sourceStale={blocked}
+            onLocked={setHeaderLocked}
+            onUpdateVisit={(context) => {
+              if (locked || blocked) return
+              setVisit({
+                patientAge: String(context.patientAge),
+                patientSex: context.patientSex,
+                encounterType: context.encounterType,
+                placeOfService: context.placeOfService,
+                providerSpecialty: context.providerSpecialty,
+                serviceDate: context.serviceDate ?? "",
+              })
+              setConfirmed(false)
+              setError(null)
+              setUpdatingVisit(true)
+            }}
+          />
         ) : (
           <form
             onSubmit={(event) => {
@@ -172,6 +233,12 @@ export function BillingHeaderButton({
               void submit()
             }}
           >
+            {updatingVisit && (
+              <p className="bg-muted mb-4 rounded-md p-3 text-sm">
+                Confirm the corrected details, then generate a new header. The
+                previous header is retained in the record.
+              </p>
+            )}
             {source.source.excludedRecordingTime && (
               <p className="bg-muted mb-4 rounded-md p-3 text-sm">
                 Recording-based care time will be excluded from the billing
@@ -179,7 +246,7 @@ export function BillingHeaderButton({
               </p>
             )}
             <fieldset
-              disabled={locked || stale}
+              disabled={locked || blocked}
               className="grid grid-cols-1 gap-4 sm:grid-cols-2"
             >
               <legend className="sr-only">Visit details</legend>
@@ -297,13 +364,15 @@ export function BillingHeaderButton({
                 type="button"
                 variant="outline"
                 disabled={locked}
-                onClick={() => setOpen(false)}
+                onClick={() =>
+                  updatingVisit ? setUpdatingVisit(false) : setOpen(false)
+                }
               >
-                Close
+                {updatingVisit ? "Cancel visit changes" : "Close"}
               </Button>
               <Button
                 type="submit"
-                disabled={pending || stale || (!confirmed && !uncertain)}
+                disabled={pending || blocked || (!confirmed && !uncertain)}
               >
                 {pending
                   ? "Saving confirmation…"

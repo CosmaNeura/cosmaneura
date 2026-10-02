@@ -47,6 +47,15 @@ describe("Core provider header response", () => {
       ).rejects.toThrow()
     }
   })
+  it("exports only the context bound to the saved header source", () => {
+    const view = header()
+    const exported = cabProviderExport(view, source)
+    expect(exported).toContain("Service date: 2026-10-02")
+    expect(exported).toContain("Note status: Provider-confirmed completed note")
+    const wrong = structuredClone(source)
+    wrong.headerSource.encounterVersion += 1
+    expect(() => cabProviderExport(view, wrong)).toThrow()
+  })
   it("copies current proposals with originals and clears diagnosis confirmation after edits", () => {
     const view = header(),
       original = JSON.stringify(view)

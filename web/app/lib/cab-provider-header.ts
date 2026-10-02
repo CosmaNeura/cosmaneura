@@ -503,7 +503,7 @@ export function changeCabCodes(
       sameCabValue(diagnoses(draft.codes), diagnoses(codes)),
   }
 }
-export function cabProviderExport(view: CabView): string {
+export function cabProviderExport(view: CabView, source?: CabSource): string {
   const h = view.header,
     draft = editableCabHeader(view)
   const lines = [
@@ -518,6 +518,23 @@ export function cabProviderExport(view: CabView): string {
     "",
     "VISIT FACTS",
   ]
+  if (source) {
+    requireValue(sameCabValue(source.headerSource, h.expectedSource))
+    const visit = source.visitContext
+    lines.splice(
+      lines.length - 2,
+      0,
+      "",
+      "CONFIRMED VISIT DETAILS",
+      "Note status: Provider-confirmed completed note",
+      "Service date: " + (visit.serviceDate || "Not specified"),
+      "Visit setting: " + visit.encounterType.replaceAll("_", " "),
+      "Place of service: " + visit.placeOfService,
+      "Provider specialty: " + visit.providerSpecialty,
+      "Age at visit: " + visit.patientAge,
+      "Documented sex: " + visit.patientSex,
+    )
+  }
   for (const fact of h.facts) {
     lines.push(
       fact.label +
