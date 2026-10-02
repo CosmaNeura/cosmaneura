@@ -61,7 +61,11 @@ from activemodel.session_manager import global_session
 from activemodel.types import TypeIDType
 from app.models.authority import AuthorityAuditEvent
 from app.models.practice import Practice
-from app.models.visit_prep import VisitPrep, VisitPrepCredentialGeneration
+from app.models.visit_prep import (
+    VisitPrep,
+    VisitPrepCredentialGeneration,
+    VisitPrepScheduleGeneration,
+)
 from app.models.visit_prep_delivery import VisitPrepEmailDelivery
 from app.models.visit_prep_email_authority import (
     VisitPrepEmailApprovalEvent,
@@ -661,6 +665,8 @@ def maintain_email_secrets(*, limit: int = 25) -> dict[str, int | str]:
     Only the transient invitation ciphertext is cleared. Keep authorization,
     immutable evidence, patient words and legal holds. This is not the still
     unqualified consent-evidence retention/aggregate purge workflow.
+    Candidate selection includes passed appointments and obsolete lineage;
+    recheck current facts after acquiring custody, never from the routing hint.
     """
     counts = {"suppressed": 0, "uncertain": 0}
     if type(limit) is not int or not 1 <= limit <= 100:
@@ -672,6 +678,15 @@ def maintain_email_secrets(*, limit: int = 25) -> dict[str, int | str]:
                 select(func.max(VisitPrepCredentialGeneration.generation))
                 .where(
                     VisitPrepCredentialGeneration.visit_prep_id
+                    == VisitPrepEmailDelivery.visit_prep_id
+                )
+                .correlate(VisitPrepEmailDelivery)
+                .scalar_subquery()
+            )
+            latest_schedule = (
+                select(func.max(VisitPrepScheduleGeneration.generation))
+                .where(
+                    VisitPrepScheduleGeneration.visit_prep_id
                     == VisitPrepEmailDelivery.visit_prep_id
                 )
                 .correlate(VisitPrepEmailDelivery)
@@ -705,6 +720,20 @@ def maintain_email_secrets(*, limit: int = 25) -> dict[str, int | str]:
                     VisitPrep,
                     col(VisitPrep.id) == col(VisitPrepEmailDelivery.visit_prep_id),
                 )
+                .join(
+                    VisitPrepScheduleGeneration,
+                    col(VisitPrepScheduleGeneration.id)
+                    == col(VisitPrepEmailDelivery.schedule_generation_id),
+                )
+                .join(
+                    VisitPrepCredentialGeneration,
+                    and_(
+                        VisitPrepCredentialGeneration.visit_prep_id
+                        == VisitPrepEmailDelivery.visit_prep_id,
+                        VisitPrepCredentialGeneration.generation
+                        == VisitPrepEmailDelivery.credential_generation,
+                    ),
+                )
                 .where(
                     or_(
                         and_(
@@ -723,6 +752,13 @@ def maintain_email_secrets(*, limit: int = 25) -> dict[str, int | str]:
                                 col(VisitPrep.completed_at).is_not(None),
                                 VisitPrepEmailDelivery.credential_generation
                                 != latest_credential,
+                                VisitPrepScheduleGeneration.generation
+                                != latest_schedule,
+                                VisitPrepScheduleGeneration.scheduled_at <= now,
+                                col(VisitPrepCredentialGeneration.revoked_at).is_not(
+                                    None
+                                ),
+                                VisitPrepCredentialGeneration.expires_at <= now,
                                 latest_consent_kind == "withdrawn",
                                 latest_approval_kind == "withdrawn",
                             ),
@@ -773,11 +809,13 @@ def maintain_email_secrets(*, limit: int = 25) -> dict[str, int | str]:
                     schedule, credential = _lock_current_lineage(
                         session, visit_prep=prep
                     )
+                    now = _database_now(session)
                     if (
                         row.schedule_generation_id != schedule.id
                         or row.credential_generation != credential.generation
                         or credential.revoked_at is not None
-                        or credential.expires_at <= _database_now(session)
+                        or credential.expires_at <= now
+                        or schedule.scheduled_at <= now
                     ):
                         code = "obsolete_context"
                     else:
