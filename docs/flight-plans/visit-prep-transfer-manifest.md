@@ -69,6 +69,8 @@ Transfers use committed source and preserve the repository's existing license.
 | Recoverable synthesis worker and atomic publication | Current Session Prep queue-drain and metadata-only job patterns; Visit Prep queue, generator, publication and central ledger | Connect source selection, committed call intent, bounded generation and durable result recording. Reacquire exact current sources, owner authority and live claim before committing artifact, ready job and Core audit together. Register argument-free, default-off drain and health tasks with no Celery autoretries. Report expired unmatched intents as uncertain without fabricating results. No provider synthesis API or dashboard display is mounted yet. |
 | Provider synthesis request and current read API | Existing owner package authorization, source serializer, durable queue and artifact reader | Add bounded owner-only POST/GET operations. Request only the displayed source hash; return current sources, cited brief and build state from one locked/audited snapshot. Exclude old-source job state and stale brief payload. Recheck access after audit flush. Preserve the old source-only endpoint, regenerate the current SDK, and test actual HTTP-to-worker publication and independent PostgreSQL races. |
 | Current cited brief on the provider dashboard | Existing source-package dashboard, current synthesis SDK and no-store support-view clearing | Read sources and synthesis atomically on explicit selection. Display a bounded interpretation, patient/caregiver and review status, missing/skipped topics, exact supporting words and current source references. Queue only an explicit exact-source request and re-read; never automatically retry an uncertain POST. Clear content on reload, concealment, access change or support denial. Test current, stale, empty and failed output plus desktop/mobile worker publication and lost-acknowledgment recovery. |
+| Minimal invitation and dormant SMTP adapter | CAB `01ad97536c4f6730e30cd8a03dd31cdb07a918fb`, `chase/acs_email.py` and adapter tests; Core's existing mailer/SMTP transport | Retain one recipient, sanitized errors and acceptance-versus-delivery distinction. Replace arbitrary message inputs and insurance filtering with a closed plain-text Visit Prep template. Use existing Core SMTP, not the CAB ACS dependency or credentials. Require TLS and certificate validation; reject console/file/null sinks. Bound one attempt to 30 seconds. SMTP message ID is provenance, not idempotency. Preserve Apache-2.0 in `docs/licenses/cab-apache-2.0.txt`. |
+| Dormant email outbox expand | CAB at the same pinned revision, `scheduler_store.py` irreversible claim/uncertain-state pattern; new Core model and generated migration | Generate `ed9dec654c8c` after `54bedaad381a`. Bind one invitation per credential to owner, question and schedule lineage. Separate encrypted authorization evidence from the transient invitation secret, capped at 24 hours. Fence one submission with a database-owned 90-second lease; never return it to the send lane. Clear the secret at terminal outcomes, preserve parent retention/legal holds and refuse destructive downgrade. No command, worker or email route is connected. |
 
 No schema migration is needed for the question-authoring recovery: current Core
 already contains the question-set models and migration `271e4439bff6`. The
@@ -472,7 +474,7 @@ the technical dashboard journey, not real-account access, model quality,
 clinician usefulness, external delivery or deployment. Final revision-specific
 regression/build results belong in the draft review.
 
-Bounded AI clarification, CAB delivery mechanics,
+Bounded AI clarification, remaining CAB delivery integration,
 CosmaBot receiver/adapter, Acuity and SMS/reminders remain implementation work.
 Their source inventory is in the approved plan. The synthesis contract, adapter,
 artifact storage, owner publication/read domain, durable queue, central accounting
@@ -483,3 +485,37 @@ Pin selected external revisions and record each adaptation here.
 Deployment, actual patient messages, cohort activation and workspace retirement
 remain separate release decisions. All current runtime release controls remain
 off; local evidence is synthetic and does not establish live-service readiness.
+
+The first CAB-derived email increment now supplies the closed invitation template,
+dormant Core SMTP adapter and additive outbox storage. CAB `main` was freshly
+verified at `01ad97536c4f6730e30cd8a03dd31cdb07a918fb`; its email adapter and worker
+are unchanged from the separately inspected desktop commit `e3c335d32b43`.
+No unrelated CAB checkout content, configuration, credentials, billing policy or database was copied.
+The copied mailbox-validation behavior retains CAB's Apache license; changed-file
+notices describe the adaptation.
+
+The email contains only fixed preparation guidance and its private invitation
+link. It has no patient name, appointment details, answers, diagnoses, attachments,
+tracking pixels or arbitrary message context. The SMTP adapter uses the existing
+dependency but rejects non-SMTP, non-TLS or certificate-unvalidated configuration.
+This is a fail-closed prerequisite, not a change to existing mailer configuration.
+Timeouts and provider errors are sanitized uncertainty, never proof of non-send.
+The provider message ID contains only the random operation UUID and sender domain;
+SMTP does not promise provider deduplication or confirmed delivery.
+
+The generated outbox expand changes only its new table and guards. Autogenerated
+comment drift from unrelated tables was removed. Database checks enforce immutable
+intent, current credential/schedule at acquisition, one submission lane, explicit
+terminal state and removal of encrypted invitation payload on finalization. The
+24-hour maximum secret lifetime still requires the upcoming cleanup worker; merely
+storing expiry does not delete ciphertext. Authorization-envelope validation,
+durable consent/standing-approval resolution, atomic invitation enqueue, worker
+dispatch, status UI and operational reconciliation are still implementation work.
+
+Synthetic checks exercise the actual Core mailer with SMTP replaced at the provider
+boundary and network access denied, plus real PostgreSQL claim races, revocation
+after a parent-lock wait, named truncate rejection and legal-hold cleanup. A
+populated rehearsal preserves existing encrypted answers, synthesis artifacts,
+queue state and central usage byte-for-byte through `54bedaad381a` to the new expand.
+These are storage/transport-boundary checks, not an end-to-end dispatched invitation
+or external email acceptance. Final tested revision and totals belong in the draft PR.
