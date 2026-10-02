@@ -36,7 +36,10 @@ from app.services.visit_prep_synthesis_contract import (
     VisitPrepSynthesisInvalid,
 )
 from app.services.visit_prep_synthesis_generator import MODEL_PROFILE
-from app.services.visit_prep_synthesis_publication import get_visit_prep_synthesis
+from app.services.visit_prep_synthesis_publication import (
+    VisitPrepSynthesisView,
+    get_visit_prep_synthesis,
+)
 from app.services.visit_preps import VisitPrepUnavailable
 from app.utils.encryption import EncryptionError
 
@@ -189,6 +192,11 @@ def visit_prep_synthesis(
     _query_keys(request, frozenset())
     args = _owner_args(request, decision, prep_id)
     result = _invoke_synthesis(lambda: get_visit_prep_synthesis(**args))
+    return _synthesis_response(result)
+
+
+def _synthesis_response(result: VisitPrepSynthesisView) -> VisitPrepSynthesisResponse:
+    """Pure shared dashboard/companion projection; no read or authorization."""
     return VisitPrepSynthesisResponse(
         sources=_source_response(result.package),
         status=result.status,
