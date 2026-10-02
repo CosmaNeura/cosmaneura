@@ -257,6 +257,37 @@ No migration, environment activation, external service call or real message is
 part of this work. Connected patient-to-provider/device/delivery acceptance and
 broader governed bot actions remain open; the full delivery goal is unchanged.
 
+## Patient submission handoff October 2 2026
+
+Patient completion now stages a durable synthesis job in the same transaction
+as the completed interview. Confirming updated answers stages the replacement
+source version. Unconfirmed edits do not trigger analysis. This closes the gap
+where a provider had to request the initial brief manually; explicit provider
+generation remains available for its existing incomplete or unreviewed sources.
+
+The implementation reuses Core's queue, protected analysis, usage ledger and
+atomic publication. It adds no model call to the patient request, no text to
+broker jobs, no chart writes and no duplicated package store. The encrypted job
+envelope identifies automatic work separately from provider requests, while
+remaining compatible with existing envelopes. A worker rejects automatic work
+if the patient changes their contribution without confirming it. The separate
+`VISIT_PREP_AUTO_SYNTHESIS_ENABLED` control defaults off and is also checked by
+the worker before analysis and publication. No environment setting was activated.
+
+Focused synthetic qualification covers initial patient and caregiver completion,
+retries without duplicate jobs or changed leases, confirmed revisions, unconfirmed
+edits, stopping queued automatic work and rollback after a late gate failure.
+The connected check runs the existing worker with an invented AI transport and
+compares versions one and two through the dashboard projection and actual signed
+Companion endpoint. This is not live AI, full CosmaBot transport, native-device
+acceptance or messaging qualification. Exact local evidence belongs in the
+stacked draft PR. The broader delivery and governed bot work remain unfinished.
+
+Recovery is to disable automatic handoff and revert this additive increment.
+Retain existing queue records; disabling does not delete sources or artifacts.
+Patient submissions continue through the existing flow with automatic handoff
+off. No schema, dependency, deployment or real recipient is part of this increment.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

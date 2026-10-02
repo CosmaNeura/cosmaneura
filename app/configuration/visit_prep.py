@@ -25,6 +25,7 @@ class VisitPrepSettings:
 
     enabled: bool = False
     public_api_enabled: bool = False
+    auto_synthesis_enabled: bool = False
     email_consent_capture_enabled: bool = False
     enabled_doctor_ids: frozenset[str] = field(default_factory=frozenset)
     enabled_practice_ids: frozenset[str] = field(default_factory=frozenset)
@@ -88,6 +89,9 @@ def load_visit_prep_settings(
     try:
         enabled = _parse_bool(read(VISIT_PREP_FLAG_ENV, "false"))
         public_api_enabled = _parse_bool(read(VISIT_PREP_PUBLIC_API_ENV, "false"))
+        auto_synthesis_enabled = _parse_bool(
+            read("VISIT_PREP_AUTO_SYNTHESIS_ENABLED", "false")
+        )
         email_consent_capture_enabled = _parse_bool(
             read("VISIT_PREP_EMAIL_CONSENT_CAPTURE_ENABLED", "false")
         )
@@ -109,6 +113,7 @@ def load_visit_prep_settings(
     return VisitPrepSettings(
         enabled=enabled,
         public_api_enabled=public_api_enabled,
+        auto_synthesis_enabled=auto_synthesis_enabled,
         email_consent_capture_enabled=email_consent_capture_enabled,
         enabled_doctor_ids=enabled_doctor_ids,
         enabled_practice_ids=enabled_practice_ids,

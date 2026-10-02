@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
+from app.services import visit_prep_access
 from app.services.visit_prep_packages import (
     _audit,
     _authorize,
@@ -94,17 +95,26 @@ def _requester_context(prep: VisitPrep) -> dict[str, str | int]:
     )
 
 
-def _encrypt_requester(prep: VisitPrep, subject: str) -> str:
+def _encrypt_requester(
+    prep: VisitPrep, subject: str, *, patient_handoff: bool = False
+) -> str:
     if not isinstance(subject, str) or not 1 <= len(subject) <= 256:
         raise VisitPrepNotFound("Visit Prep is unavailable")
     return encrypt_value(
         json.dumps(
-            {**_requester_context(prep), "subject": subject}, separators=(",", ":")
+            {
+                **_requester_context(prep),
+                "subject": subject,
+                **({"request_origin": "patient_handoff"} if patient_handoff else {}),
+            },
+            separators=(",", ":"),
         )
     )
 
 
-def _decrypt_requester(build: VisitPrepSynthesisBuild, prep: VisitPrep) -> str:
+def _decode_requester(
+    build: VisitPrepSynthesisBuild, prep: VisitPrep
+) -> tuple[str, bool]:
     try:
         if (
             build.requester_format_version != 1
@@ -113,7 +123,13 @@ def _decrypt_requester(build: VisitPrepSynthesisBuild, prep: VisitPrep) -> str:
             raise ValueError
         payload = json.loads(decrypt_value(build.requester_ciphertext))
         expected = _requester_context(prep)
-        if not isinstance(payload, dict) or set(payload) != {*expected, "subject"}:
+        if not isinstance(payload, dict) or set(payload) not in (
+            {*expected, "subject"},
+            {*expected, "subject", "request_origin"},
+        ):
+            raise ValueError
+        automatic = "request_origin" in payload
+        if automatic and payload["request_origin"] != "patient_handoff":
             raise ValueError
         if any(
             type(payload[key]) is not type(value) or payload[key] != value
@@ -123,9 +139,13 @@ def _decrypt_requester(build: VisitPrepSynthesisBuild, prep: VisitPrep) -> str:
         subject = payload["subject"]
         if not isinstance(subject, str) or not 1 <= len(subject) <= 256:
             raise ValueError
-        return subject
+        return subject, automatic
     except Exception:
         raise VisitPrepNotFound("Visit Prep is unavailable") from None
+
+
+def _decrypt_requester(build: VisitPrepSynthesisBuild, prep: VisitPrep) -> str:
+    return _decode_requester(build, prep)[0]
 
 
 def _finish(
@@ -173,57 +193,78 @@ def request_visit_prep_synthesis(
         selection = select_patient_sources(locked.package)
         if selection.source_version != expected_source_version:
             raise VisitPrepSynthesisStale()
-        build = session.exec(
-            _profile_query()
-            .where(VisitPrepSynthesisBuild.visit_prep_id == visit_prep_id)
-            .with_for_update()
-        ).one_or_none()
-        now = _database_now(session)
-        existing = _current_artifact(
-            session, prep_id=visit_prep_id, source_version=selection.source_version
-        )
-        if existing is not None:
-            _decoded_current(existing, locked, selection)
-        if build is None:
-            build = VisitPrepSynthesisBuild(
-                visit_prep_id=visit_prep_id,
-                owner_practice_member_id=locked.owner.id,
-                question_set_version_id=locked.preparation.question_set_version_id,
-                generator_version=GENERATOR_VERSION,
-                prompt_version=PROMPT_VERSION,
-                model_profile=MODEL_PROFILE,
-                source_version=selection.source_version,
-                requester_ciphertext=_encrypt_requester(
-                    locked.preparation, expected_clerk_subject
-                ),
-                requested_at=now,
-                retry_at=now,
-                state="ready" if existing else "pending",
-            )
-        elif (
-            (existing is not None and build.state != "ready")
-            or (existing is None and build.state == "ready")
-            or build.source_version != selection.source_version
-            or (build.state == "failed" and build.retry_at <= now)
-        ):
-            build.epoch += 1
-            build.attempts = 0
-            build.source_version = selection.source_version
-            build.requester_ciphertext = _encrypt_requester(
-                locked.preparation, expected_clerk_subject
-            )
-            build.requested_at = build.retry_at = now
-            build.state = "ready" if existing else "pending"
-            build.lease_until = build.failure_code = None
-        # Same-source retries must not extend a lease, erase attempts/backoff or
-        # silently replace the requester that authorized running work.
-        session.add(build)
-        session.flush()
-        result = VisitPrepBuildReceipt(
-            build.id, build.source_version, build.epoch, build.state
+        result = stage_synthesis_request(
+            session, locked=locked, expected_clerk_subject=expected_clerk_subject
         )
         _finish(session, locked, "synthesis_requested")
         return result
+
+
+def stage_synthesis_request(
+    session: Session,
+    *,
+    locked: _LockedPackage,
+    expected_clerk_subject: str,
+    patient_handoff: bool = False,
+) -> VisitPrepBuildReceipt:
+    """Stage one source-bound job under the caller's already locked authority.
+
+    No authorization, commit, model call or disclosure is granted here. The
+    caller must recheck its own authority and audit before acknowledging commit.
+    The encrypted subject is the canonical owner binding checked by the worker;
+    a system handoff must not represent it as a patient/provider sign-in.
+    """
+    selection = select_patient_sources(locked.package)
+    build = session.exec(
+        _profile_query()
+        .where(VisitPrepSynthesisBuild.visit_prep_id == locked.preparation.id)
+        .with_for_update()
+    ).one_or_none()
+    now = _database_now(session)
+    existing = _current_artifact(
+        session, prep_id=locked.preparation.id, source_version=selection.source_version
+    )
+    if existing is not None:
+        _decoded_current(existing, locked, selection)
+    if build is None:
+        build = VisitPrepSynthesisBuild(
+            visit_prep_id=locked.preparation.id,
+            owner_practice_member_id=locked.owner.id,
+            question_set_version_id=locked.preparation.question_set_version_id,
+            generator_version=GENERATOR_VERSION,
+            prompt_version=PROMPT_VERSION,
+            model_profile=MODEL_PROFILE,
+            source_version=selection.source_version,
+            requester_ciphertext=_encrypt_requester(
+                locked.preparation,
+                expected_clerk_subject,
+                patient_handoff=patient_handoff,
+            ),
+            requested_at=now,
+            retry_at=now,
+            state="ready" if existing else "pending",
+        )
+    elif (
+        (existing is not None and build.state != "ready")
+        or (existing is None and build.state == "ready")
+        or build.source_version != selection.source_version
+        or (build.state == "failed" and build.retry_at <= now)
+    ):
+        build.epoch += 1
+        build.attempts = 0
+        build.source_version = selection.source_version
+        build.requester_ciphertext = _encrypt_requester(
+            locked.preparation, expected_clerk_subject, patient_handoff=patient_handoff
+        )
+        build.requested_at = build.retry_at = now
+        build.state = "ready" if existing else "pending"
+        build.lease_until = build.failure_code = None
+    # Replays cannot extend a lease, erase backoff or replace its owner binding.
+    session.add(build)
+    session.flush()
+    return VisitPrepBuildReceipt(
+        build.id, build.source_version, build.epoch, build.state
+    )
 
 
 def claim_visit_prep_synthesis() -> VisitPrepBuildClaim | None:
@@ -374,7 +415,7 @@ def _load_locked_claim(
     ):
         raise VisitPrepBuildDiscarded()
     ciphertext = candidate.requester_ciphertext
-    subject = _decrypt_requester(candidate, prep)
+    subject, automatic = _decode_requester(candidate, prep)
     locked = _load_authorized_package(
         session,
         owner_practice_member_id=prep.owner_practice_member_id,
@@ -395,4 +436,18 @@ def _load_locked_claim(
         or not _matches(build, claim, _database_now(session))
     ):
         raise VisitPrepBuildDiscarded()
-    return locked, build, select_patient_sources(locked.package)
+    current = select_patient_sources(locked.package)
+    if automatic and not (
+        visit_prep_access.VISIT_PREP_SETTINGS.configuration_valid
+        and visit_prep_access.VISIT_PREP_SETTINGS.enabled
+        and visit_prep_access.VISIT_PREP_SETTINGS.auto_synthesis_enabled
+        and current.original_interview_completed
+        and current.current_answers_complete
+        and (current.current_answers_reviewed or current.basis.event_sequence == 0)
+    ):
+        # A patient may revise while work is queued or running. Never let an
+        # automatic request adopt an unconfirmed revision; their next review
+        # schedules the new source epoch. Explicit provider requests keep their
+        # existing ability to summarize visibly incomplete/unreviewed sources.
+        raise VisitPrepNotFound("Visit Prep is unavailable")
+    return locked, build, current
