@@ -1,4 +1,4 @@
-"""Audited patient read of a saved current wording proposal, not generation.
+"""Audited patient reads of saved wording and neutral follow-ups, not generation.
 
 Core authorizes disclosure and owns evidence. This does not qualify the source
 model/service, prove browser receipt, or grant identity, consent or bot access.
@@ -19,6 +19,8 @@ from app.services.visit_prep_clarification_decisions import (
     _decision_session,
     _proposal,
 )
+from app.services.visit_prep_clarification_turn_evidence import read_clarification_turn
+from app.services.visit_prep_clarification_turns import _check_audit, _verified_context
 from app.services.visit_prep_contribution_contract import (
     ContributionBasis,
     ContributionRole,
@@ -36,6 +38,7 @@ from app.models.visit_prep_clarification import (
     VisitPrepClarificationDecision,
     VisitPrepClarificationProposal,
 )
+from app.models.visit_prep_clarification_turn import VisitPrepClarificationTurn
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import select
 
@@ -48,7 +51,7 @@ class PatientClarificationTurnView:
 
 @dataclass(frozen=True)
 class PatientClarificationView:
-    status: Literal["available", "not_available"]
+    status: Literal["available", "not_available", "prompt", "answered"]
     question_key: str
     actor_role: ContributionRole
     basis: ContributionBasis
@@ -56,16 +59,52 @@ class PatientClarificationView:
     current_words: str | None = field(default=None, repr=False)
     organized_words: str | None = field(default=None, repr=False)
     turns: tuple[PatientClarificationTurnView, ...] = field(default=(), repr=False)
+    pending_prompt: str | None = field(default=None, repr=False)
 
 
 def get_patient_clarification_view(
     *, access_token: str, first_name: str, role: ContributionRole, question_key: str
 ) -> PatientClarificationView:
-    """Return only a current undecided text organization after an audited commit.
+    return _get_patient_clarification_view(
+        access_token=access_token,
+        first_name=first_name,
+        role=role,
+        question_key=question_key,
+        followup_only=False,
+    )
+
+
+def get_patient_followup_view(
+    *, access_token: str, first_name: str, role: ContributionRole, question_key: str
+) -> PatientClarificationView:
+    """Read a current saved neutral prompt or its actual patient response.
+
+    No generation, polling or fabricated patient turn. An answered prompt is
+    acknowledged from retained evidence, independently of a lost save receipt.
+    Superseded/decided prompts leave manual editing or wording review available.
+    """
+    return _get_patient_clarification_view(
+        access_token=access_token,
+        first_name=first_name,
+        role=role,
+        question_key=question_key,
+        followup_only=True,
+    )
+
+
+def _get_patient_clarification_view(
+    *,
+    access_token: str,
+    first_name: str,
+    role: ContributionRole,
+    question_key: str,
+    followup_only: bool,
+) -> PatientClarificationView:
+    """Return only current saved evidence after an audited commit.
 
     No proposal is created and no source/model profile supplied by a browser is
-    accepted. Missing, stale, decided or non-text proposals leave manual entry
-    usable. Recipient confirmation remains a bearer check, not verified identity.
+    accepted. Missing, stale or decided proposals leave manual entry usable.
+    Recipient confirmation remains a bearer check, not verified identity.
     """
     result = None
     try:
@@ -99,7 +138,9 @@ def get_patient_clarification_view(
                 "not_available", question_key, role, current.basis
             )
             proposal_row = None
-            if topic.response_kind == "answered" and topic.question.kind != "choice":
+            if topic.response_kind == "answered" and (
+                followup_only or topic.question.kind != "choice"
+            ):
                 row = session.exec(
                     select(VisitPrepClarificationProposal)
                     .where(
@@ -139,7 +180,11 @@ def get_patient_clarification_view(
                         words = validate_clarification_reply(
                             evidence.context, evidence.reply
                         )
-                        if evidence.reply.kind == "organize" and words is not None:
+                        if (
+                            not followup_only
+                            and evidence.reply.kind == "organize"
+                            and words is not None
+                        ):
                             view = PatientClarificationView(
                                 "available",
                                 question_key,
@@ -154,6 +199,38 @@ def get_patient_clarification_view(
                                     )
                                     for t in evidence.context.turns
                                 ),
+                            )
+                        elif followup_only and evidence.reply.kind == "clarify":
+                            if evidence.reply.prompt_code is None:
+                                raise VisitPrepClarificationInvalid()
+                            context = _verified_context(
+                                session, authorized, proposal_row, evidence
+                            )
+                            turn = session.exec(
+                                select(VisitPrepClarificationTurn).where(
+                                    VisitPrepClarificationTurn.proposal_id == row.id,
+                                    VisitPrepClarificationTurn.visit_prep_id == prep.id,
+                                )
+                            ).one_or_none()
+                            if turn is not None:
+                                _check_audit(session, authorized, turn)
+                                context = read_clarification_turn(
+                                    turn, proposal=evidence
+                                ).context(evidence)
+                            view = PatientClarificationView(
+                                status="answered" if turn is not None else "prompt",
+                                question_key=question_key,
+                                actor_role=role,
+                                basis=current.basis,
+                                proposal_id=str(row.id),
+                                current_words=evidence.context.answer,
+                                turns=tuple(
+                                    PatientClarificationTurnView(
+                                        PROMPTS[t.prompt_code], t.patient_words
+                                    )
+                                    for t in context.turns
+                                ),
+                                pending_prompt=PROMPTS[evidence.reply.prompt_code],
                             )
             refs = [
                 ("doctor", prep.owner_doctor_id),
@@ -174,7 +251,9 @@ def get_patient_clarification_view(
                     resource_type="visit_prep",
                     resource_ref=str(prep.id),
                     route="visit_prep_patient_clarification_read",
-                    intent="confirmed_bearer_saved_wording_review",
+                    intent="confirmed_bearer_saved_followup_review"
+                    if followup_only
+                    else "confirmed_bearer_saved_wording_review",
                     platform_refs=[
                         {"kind": kind, "ref": str(ref)} for kind, ref in refs
                     ],

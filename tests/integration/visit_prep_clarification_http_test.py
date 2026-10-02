@@ -5,7 +5,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from itertools import count
+from ipaddress import IPv6Address
 from threading import Event
 from uuid import uuid4
 
@@ -45,15 +45,17 @@ from tests.services.visit_prep_contribution_projection_test import (
 )
 
 PREFIX = "/external/v1/visit-prep/clarification"
-_PEERS = count(1)
 
 
 def _client(monkeypatch, redis):
     monkeypatch.setattr(route.rate_limits, "get_rate_limit_redis", lambda: redis)
+    # Imported helpers and pytest-collected modules can be distinct instances.
+    # A module-local counter then reuses network buckets across unrelated tests.
+    peer = IPv6Address((0x20010DB8 << 96) | (uuid4().int & ((1 << 96) - 1)))
     return TestClient(
         api_app,
         base_url=allowed_hosts(with_scheme=True)[0],
-        client=(f"198.18.0.{next(_PEERS)}", 50000),
+        client=(str(peer), 50000),
     )
 
 

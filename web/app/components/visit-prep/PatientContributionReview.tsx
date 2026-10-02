@@ -7,6 +7,8 @@ import {
   type PatientConfirmation,
   type PatientContribution,
   type PatientContributionChange,
+  type PatientFollowupAnswer,
+  type PatientFollowupView,
   type PatientContributionReview as ReviewPayload,
   type VisitPrepPatientClient,
   VisitPrepPatientFailure,
@@ -22,6 +24,12 @@ type Pending =
       payload: PatientClarificationChoice
       key: string
       basis: PatientContribution["basis"]
+    }
+  | {
+      kind: "followup"
+      payload: PatientFollowupAnswer
+      key: string
+      view: PatientFollowupView
     }
 
 const COPY = {
@@ -56,6 +64,7 @@ export function PatientContributionReview({
     null,
   )
   const [editingProposal, setEditingProposal] = useState(false)
+  const [followup, setFollowup] = useState<PatientFollowupView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<VisitPrepPatientFailure["code"] | null>(
     null,
@@ -80,6 +89,7 @@ export function PatientContributionReview({
       setEditing(null)
       setDraft("")
       setProposal(null)
+      setFollowup(null)
       setEditingProposal(false)
       setFirstName("")
       setError(null)
@@ -118,6 +128,7 @@ export function PatientContributionReview({
         refreshRequired.current = true
         setCurrent(null)
         setProposal(null)
+        setFollowup(null)
         setEditingProposal(false)
         setEditing(null)
         setDraft("")
@@ -128,6 +139,7 @@ export function PatientContributionReview({
         setCurrent(null)
         setDraft("")
         setProposal(null)
+        setFollowup(null)
         setFirstName("")
         onUnavailable()
       }
@@ -151,6 +163,7 @@ export function PatientContributionReview({
     setEditing(null)
     setDraft("")
     setProposal(null)
+    setFollowup(null)
     setEditingProposal(false)
   }
 
@@ -160,6 +173,39 @@ export function PatientContributionReview({
     if (!save || !confirmed) return
     const requestGeneration = generation.current
     void run(async () => {
+      if (save.kind === "followup") {
+        const receipt = await client.answerFollowup(save.payload, save.key)
+        if (!mounted.current || generation.current !== requestGeneration) return
+        if (
+          receipt.basis.original_response_count !==
+            save.view.basis.original_response_count ||
+          receipt.basis.event_sequence !== save.view.basis.event_sequence ||
+          receipt.turn_sequence !== save.view.turns.length + 1
+        )
+          throw new VisitPrepPatientFailure("temporary")
+        pending.current = null
+        setDraft("")
+        if (current) {
+          // The bound receipt acknowledges precisely these explicit words.
+          // No answer, choice, contribution basis or applicability changes.
+          setFollowup({
+            ...save.view,
+            status: "answered",
+            turns: [
+              ...save.view.turns,
+              {
+                prompt: save.view.pending_prompt!,
+                patient_words: save.payload.patient_words,
+              },
+            ],
+          })
+          refreshRequired.current = false
+        } else {
+          refreshRequired.current = true
+          await loadFollowup(confirmed, save.view.question_key)
+        }
+        return
+      }
       const receipt =
         save.kind === "change"
           ? await client.correctContribution(save.payload, save.key)
@@ -267,6 +313,7 @@ export function PatientContributionReview({
     if (!confirmed || !snapshot || pending.current || busyRef.current) return
     const requestGeneration = generation.current
     setProposal(null)
+    setFollowup(null)
     setEditingProposal(false)
     setDraft("")
     void run(async () => {
@@ -283,6 +330,80 @@ export function PatientContributionReview({
         throw new VisitPrepPatientFailure("conflict")
       setProposal(view)
     })
+  }
+
+  async function loadFollowup(
+    confirmed: PatientConfirmation,
+    questionKey: string,
+    existing?: PatientContribution,
+  ) {
+    const requestGeneration = generation.current
+    const snapshot = existing ?? (await client.readContribution(confirmed))
+    if (!mounted.current || generation.current !== requestGeneration) return
+    const view = await client.readFollowup(confirmed, questionKey)
+    if (!mounted.current || generation.current !== requestGeneration) return
+    if (
+      view.basis.original_response_count !==
+        snapshot.basis.original_response_count ||
+      view.basis.event_sequence !== snapshot.basis.event_sequence ||
+      (view.status !== "not_available" &&
+        view.current_words !==
+          snapshot.topics.find((t) => t.question.key === questionKey)?.answer)
+    )
+      throw new VisitPrepPatientFailure("conflict")
+    setCurrent(snapshot)
+    refreshRequired.current = false
+    onStatus(
+      snapshot.current_answers_complete,
+      snapshot.current_answers_reviewed,
+    )
+    setFollowup(view)
+    setDraft("")
+  }
+
+  function readFollowup(questionKey: string) {
+    const confirmed = confirmation.current
+    if (!confirmed || !current || pending.current || busyRef.current) return
+    setProposal(null)
+    setFollowup(null)
+    setEditing(null)
+    setDraft("")
+    void run(() => loadFollowup(confirmed, questionKey, current))
+  }
+
+  function answerFollowup() {
+    if (
+      busyRef.current ||
+      pending.current ||
+      !confirmation.current ||
+      followup?.status !== "prompt" ||
+      !followup.proposal_id
+    )
+      return
+    try {
+      const words = draft.normalize("NFC").replace(/\r\n?/g, "\n").trim()
+      if (
+        !words ||
+        words.length > 2000 ||
+        /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}]/u.test(words.replace(/\n/g, ""))
+      ) {
+        setError("invalid")
+        return
+      }
+      pending.current = {
+        kind: "followup",
+        key: crypto.randomUUID(),
+        view: followup,
+        payload: {
+          ...confirmation.current,
+          proposal_id: followup.proposal_id,
+          patient_words: words,
+        },
+      }
+      retrySave()
+    } catch {
+      setError("temporary")
+    }
   }
 
   function chooseProposal(action: PatientClarificationChoice["action"]) {
@@ -394,6 +515,82 @@ export function PatientContributionReview({
               </Button>
             </form>
           )}
+        </>
+      ) : followup && followup.status !== "not_available" ? (
+        <>
+          <h1 className="text-2xl font-semibold">Clarify your answer</h1>
+          <p className="mt-3">
+            This optional follow-up helps organize what you want to share. It is
+            not medical advice or a provider review. Saving it retains your
+            words separately; it does not replace your current answer.
+          </p>
+          <h2 className="mt-6 font-semibold">Current answer</h2>
+          <p className="mt-2 break-words whitespace-pre-wrap">
+            {current.topics
+              .find((row) => row.question.key === followup.question_key)
+              ?.question.choices.find(
+                (choice) => choice.value === followup.current_words,
+              )?.label ?? followup.current_words}
+          </p>
+          {followup.turns.map((turn, index) => (
+            <div key={index} className="mt-4">
+              <p className="font-semibold">{turn.prompt}</p>
+              <p className="mt-2 break-words whitespace-pre-wrap">
+                {turn.patient_words}
+              </p>
+            </div>
+          ))}
+          {followup.status === "prompt" ? (
+            <>
+              <label
+                htmlFor="followup-answer"
+                className="mt-6 block font-semibold"
+              >
+                {followup.pending_prompt}
+              </label>
+              <textarea
+                id="followup-answer"
+                value={draft}
+                maxLength={2000}
+                disabled={blocked}
+                autoComplete="off"
+                onChange={(event) => setDraft(event.target.value)}
+                className="mt-2 min-h-32 w-full rounded border bg-white p-3 text-base"
+              />
+              <Button
+                className="mt-4"
+                disabled={blocked || !draft.trim()}
+                onClick={answerFollowup}
+              >
+                Save follow-up answer
+              </Button>
+            </>
+          ) : (
+            <p role="status" className="mt-6">
+              Your follow-up answer is saved. No new wording has been accepted.
+              You can check for another saved follow-up or review a wording
+              proposal.
+            </p>
+          )}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              disabled={blocked}
+              onClick={() => readFollowup(followup.question_key)}
+            >
+              Check saved follow-up
+            </Button>
+            <Button
+              variant="outline"
+              disabled={blocked}
+              onClick={() => {
+                setFollowup(null)
+                setDraft("")
+              }}
+            >
+              Back to saved answers
+            </Button>
+          </div>
         </>
       ) : proposal?.status === "available" ? (
         <>
@@ -514,6 +711,12 @@ export function PatientContributionReview({
                 still change your answer yourself.
               </p>
             )}
+            {followup?.status === "not_available" && (
+              <p role="status">
+                No current follow-up is available. You can still change your
+                answer or review a saved wording proposal.
+              </p>
+            )}
             {current.topics.map((row) => (
               <article
                 key={row.question.key}
@@ -542,6 +745,8 @@ export function PatientContributionReview({
                   disabled={blocked}
                   onClick={() => {
                     setEditing(row.question.key)
+                    setFollowup(null)
+                    setProposal(null)
                     setDraft(row.answer ?? "")
                     setError(null)
                   }}
@@ -550,6 +755,17 @@ export function PatientContributionReview({
                     ? "Answer topic"
                     : "Change response"}
                 </Button>
+                {row.response_kind === "answered" && (
+                  <Button
+                    variant="ghost"
+                    className="mt-4"
+                    disabled={blocked}
+                    aria-label={`Check follow-up: ${row.question.prompt}`}
+                    onClick={() => readFollowup(row.question.key)}
+                  >
+                    Check follow-up
+                  </Button>
+                )}
                 {row.response_kind === "answered" &&
                   row.question.kind !== "choice" && (
                     <Button
@@ -596,6 +812,27 @@ export function PatientContributionReview({
       {!busy && pending.current && error !== "conflict" && (
         <Button className="mt-4" onClick={retrySave}>
           Retry same save
+        </Button>
+      )}
+      {!busy && pending.current?.kind === "followup" && (
+        <Button
+          variant="outline"
+          className="mt-4"
+          onClick={() => {
+            const save = pending.current
+            const confirmed = confirmation.current
+            if (save?.kind !== "followup" || !confirmed) return
+            pending.current = null
+            refreshRequired.current = true
+            setCurrent(null)
+            setFollowup(null)
+            setDraft("")
+            void run(async () => {
+              await loadFollowup(confirmed, save.view.question_key)
+            })
+          }}
+        >
+          Check whether follow-up saved
         </Button>
       )}
       {!busy &&

@@ -5,6 +5,7 @@ import {
   createVisitPrepPatientClient,
   visitPrepPatientClarification,
   visitPrepPatientContribution,
+  visitPrepPatientFollowup,
   visitPrepPatientState,
 } from "./visit-prep-patient-api"
 
@@ -46,6 +47,80 @@ const contribution = {
 }
 
 describe("patient public API boundary", () => {
+  const followup = {
+    contract: "visit_prep.patient_followup.v1",
+    status: "prompt",
+    question_key: "story",
+    actor_role: "patient",
+    basis: contribution.basis,
+    proposal_id: "visit_prep_clarification_00000000000000000000000001",
+    current_words: "Invented story.",
+    pending_prompt: "Invented neutral prompt?",
+    turns: [],
+  }
+  it.each([
+    { status: "answered" },
+    { status: "not_available" },
+    { pending_prompt: null },
+    { owner_id: "private" },
+    { turns: [{ prompt: "x", patient_words: "y", model: "z" }] },
+  ])("rejects malformed follow-up views", (extra) => {
+    expect(
+      visitPrepPatientFollowup.safeParse({ ...followup, ...extra }).success,
+    ).toBe(false)
+  })
+  it("uses separate private follow-up read/save contracts and exact receipt binding", async () => {
+    const confirmation = { first_name: "José", role: "patient" as const }
+    const payload = {
+      ...confirmation,
+      proposal_id: followup.proposal_id,
+      patient_words: "Invented follow-up words.",
+    }
+    const receipt = {
+      proposal_id: followup.proposal_id,
+      turn_id: "visit_prep_clarification_turn_00000000000000000000000001",
+      disposition: "accepted",
+      turn_sequence: 1,
+      basis: contribution.basis,
+    }
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(followup)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(receipt)))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...receipt,
+            proposal_id: "visit_prep_clarification_00000000000000000000000002",
+          }),
+        ),
+      )
+    const client = createVisitPrepPatientClient(
+      "https://api.example.test",
+      token,
+      fetcher,
+    )
+    expect(await client.readFollowup(confirmation, "story")).toEqual(followup)
+    expect(
+      await client.answerFollowup(
+        payload,
+        "00000000-0000-4000-8000-000000000001",
+      ),
+    ).toEqual(receipt)
+    await expect(
+      client.answerFollowup(payload, "00000000-0000-4000-8000-000000000001"),
+    ).rejects.toMatchObject({ code: "temporary" })
+    for (const [url, options] of fetcher.mock.calls) {
+      expect(String(url)).not.toContain(token)
+      expect(options).toMatchObject({
+        method: "POST",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      })
+    }
+    client.dispose()
+  })
   const proposal = {
     contract: "visit_prep.patient_clarification.v1",
     status: "available",
