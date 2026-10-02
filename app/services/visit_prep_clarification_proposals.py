@@ -423,6 +423,45 @@ def record_initial_clarification_proposal(
     )
 
 
+def select_patient_clarification_context(
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
+    question_key: str,
+    expected_basis: ContributionBasis,
+    source_turn_id: str | None = None,
+) -> VisitPrepClarificationContext:
+    """Current patient-authorized context for protection/model work outside locks.
+
+    This private operation is not a Sovereign egress grant or HTTP interface.
+    A host must reselect and compare the complete context after protection/model
+    waits, and persist a grounded proposal before any patient disclosure.
+    Follow-up words are reconstructed only from existing patient-command evidence.
+    """
+    if (
+        type(expected_basis) is not ContributionBasis
+        or type(question_key) is not str
+        or source_turn_id is not None
+        and not _ref(source_turn_id, {"visit_prep_clarification_turn"})
+    ):
+        raise VisitPrepClarificationInvalid()
+    with _decision_session() as session:
+        authorized = _authorized(
+            session, access_token=access_token, first_name=first_name, role=role
+        )
+        context = _proposal_context(session, authorized, question_key, source_turn_id)
+        if context.basis != expected_basis:
+            raise VisitPrepClarificationChanged()
+        final = _authorized(
+            session, access_token=access_token, first_name=first_name, role=role
+        )
+        if _proposal_context(session, final, question_key, source_turn_id) != context:
+            raise VisitPrepClarificationChanged()
+        _commit(session)
+        return context
+
+
 def record_followup_clarification_proposal(
     *,
     access_token: str | ConfirmedVisitPrepAccess,
