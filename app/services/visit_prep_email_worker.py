@@ -4,18 +4,30 @@ Commit the irreversible claim before calling a transport. Reacquire current
 authority and hold its fences through the bounded submission. A crash or lost
 acknowledgment never reopens the send lane. No job/route is registered and no
 transport or qualified consent-source adapter is selected by default.
+Cadence restrictions are explicit trusted Core inputs, bound to claim custody;
+they are not persisted policy, a scheduler or a new sending authorization.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any, Literal, Protocol, cast
 
 from app.configuration.visit_prep import VISIT_PREP_SETTINGS, VisitPrepSettings
 from app.services.visit_prep_command_contract import access_token_hash
+from app.services.visit_prep_current_timing import (
+    CurrentTimingPlan,
+    plan_locked_current_delivery,
+)
+from app.services.visit_prep_delivery_timing import (
+    DeliveryTimingInvalid,
+    TimingDecision,
+    plan_delivery_timing,
+    validate_delivery_timing_policy,
+)
 from app.services.visit_prep_email_authority import (
     EmailConsentSourceVerifier,
     LockedEmailAuthority,
@@ -59,6 +71,7 @@ from sqlmodel import Session, and_, col, func, or_, select
 
 Outcome = Literal[
     "idle",
+    "wait",
     "disabled",
     "accepted",
     "suppressed",
@@ -67,6 +80,7 @@ Outcome = Literal[
     "discarded",
     "storage_unavailable",
 ]
+_TimingPolicy = tuple[tuple[int, int], timedelta]
 
 
 class InvitationTransport(Protocol):
@@ -85,6 +99,7 @@ class InvitationTransport(Protocol):
 class _ClaimCustody:
     lock: Any = field(default_factory=Lock)
     used: bool = False
+    timing_policy: _TimingPolicy | None = None
 
 
 @dataclass(frozen=True, repr=False)
@@ -119,6 +134,91 @@ def _enabled(settings: VisitPrepSettings) -> bool:
         and settings.public_api_enabled is True
         and settings.email_send_enabled is True
     )
+
+
+def _timing_policy(
+    quiet_hours: tuple[int, int] | None, minimum_channel_spacing: timedelta | None
+) -> _TimingPolicy | None:
+    if quiet_hours is None or minimum_channel_spacing is None:
+        return None
+    try:
+        validate_delivery_timing_policy(
+            quiet_hours=quiet_hours, minimum_channel_spacing=minimum_channel_spacing
+        )
+    except DeliveryTimingInvalid:
+        return None
+    return quiet_hours, minimum_channel_spacing
+
+
+def _cadence_decision(
+    plan: CurrentTimingPlan, *, policy: _TimingPolicy, checked_at: datetime
+) -> TimingDecision:
+    return plan_delivery_timing(
+        plan.snapshot,
+        now=checked_at,
+        quiet_hours=policy[0],
+        minimum_channel_spacing=policy[1],
+        history=plan.email_history,
+    )[0]
+
+
+def _current_cadence(
+    session: Session,
+    prep: VisitPrep,
+    row: VisitPrepEmailDelivery,
+    *,
+    locked: LockedEmailAuthority,
+    scope: dict,
+    policy: _TimingPolicy,
+) -> tuple[CurrentTimingPlan, TimingDecision]:
+    plan = plan_locked_current_delivery(
+        session,
+        **scope,
+        visit_prep_id=prep.id,
+        quiet_hours=policy[0],
+        minimum_channel_spacing=policy[1],
+    )
+    own = [
+        touch
+        for touch in plan.email_history
+        if touch.step == "booking_email"
+        and touch.credential_generation == row.credential_generation
+        and touch.schedule_generation == plan.snapshot.schedule_generation
+    ]
+    if (
+        plan.preparation_id != str(row.visit_prep_id)
+        or row.credential_generation != plan.snapshot.credential_generation
+        or row.schedule_generation_id != locked.credential.schedule_generation_id
+        or len(own) != 1
+        or own[0].state != row.state
+        or own[0].requested_at != row.requested_at
+        or own[0].submitted_at != row.submitted_at
+        or row.state not in {"queued", "submitting"}
+    ):
+        raise VisitPrepEmailInvalid()
+    # The loader validated ALL retained history first. Exclude only this exact
+    # current invitation (unique per root/credential), not other generations'
+    # uncertain/pending submissions or their channel-spacing timestamps.
+    plan = replace(
+        plan,
+        email_history=tuple(
+            touch for touch in plan.email_history if touch is not own[0]
+        ),
+    )
+    _, _, now = _authorize_owner(session, **scope)
+    deadlines = [
+        row.expires_at,
+        locked.credential.expires_at,
+        locked.approval.expires_at,
+        locked.consent.expires_at,
+    ]
+    if row.state == "submitting":
+        deadlines.append(row.lease_until)
+    if any(deadline is None or now >= deadline for deadline in deadlines):
+        raise VisitPrepEmailInvalid()
+    # Source/approval fences are still held. Recheck their expiry after cadence
+    # query waits; the planner itself is never authority to send.
+    return plan, _cadence_decision(plan, policy=policy, checked_at=now)
 
 
 def _lock_rows(
@@ -288,6 +388,8 @@ def _finish(
 def claim_email_invitation(
     *,
     patient_origin: str,
+    quiet_hours: tuple[int, int] | None = None,
+    minimum_channel_spacing: timedelta | None = None,
     source_verifier: EmailConsentSourceVerifier | None = None,
     settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
 ) -> EmailSubmissionClaim | Outcome:
@@ -296,9 +398,13 @@ def claim_email_invitation(
     Uses its own global session and rejects an ambient global transaction.
     Lost claim acknowledgment yields storage_unavailable, never a provider call.
     No expired submitting row is reclaimed: maintenance alone finalizes it.
+    Missing/invalid cadence inputs disable claiming. Wait leaves the exact
+    queued intent unchanged; other candidates in this bounded batch are checked.
     """
+    policy = _timing_policy(quiet_hours, minimum_channel_spacing)
     if (
         not _enabled(settings)
+        or policy is None
         or source_verifier is None
         or not callable(source_verifier)
     ):
@@ -315,6 +421,7 @@ def claim_email_invitation(
                 )
                 .limit(16)
             ).all()
+            waiting = False
             for identifier in identifiers:
                 pair = _lock_rows(session, identifier)
                 if pair is None or pair[1].state != "queued":
@@ -334,6 +441,9 @@ def claim_email_invitation(
                         source_verifier=source_verifier,
                         settings=settings,
                     )
+                    plan, cadence = _current_cadence(
+                        session, prep, row, locked=locked, scope=scope, policy=policy
+                    )
                 except (VisitPrepEmailInvalid, VisitPrepError, ValueError):
                     # A verifier that released a transaction cannot authorize
                     # even a suppression write with this now-unlocked snapshot.
@@ -343,6 +453,14 @@ def claim_email_invitation(
                         return "discarded"
                     return _finish(
                         session, *pair, state="suppressed", code="scope_unavailable"
+                    )
+                if cadence.action == "wait":
+                    waiting = True
+                    session.rollback()
+                    continue
+                if cadence.action != "candidate":
+                    return _finish(
+                        session, prep, row, state="suppressed", code="obsolete_context"
                     )
                 row.state, row.submitted_at = "submitting", locked.checked_at
                 row.lease_until = locked.checked_at + timedelta(seconds=90)
@@ -355,20 +473,36 @@ def claim_email_invitation(
                 if (
                     row.submitted_at is None
                     or row.lease_until is None
-                    or checked_at >= min(row.expires_at, row.lease_until)
+                    or locked.approval.expires_at is None
+                    or locked.consent.expires_at is None
+                    or checked_at
+                    >= min(
+                        row.expires_at,
+                        row.lease_until,
+                        locked.credential.expires_at,
+                        locked.approval.expires_at,
+                        locked.consent.expires_at,
+                    )
                 ):
                     session.rollback()
                     return "storage_unavailable"
+                if (
+                    _cadence_decision(plan, policy=policy, checked_at=checked_at).action
+                    != "candidate"
+                ):
+                    session.rollback()
+                    return "wait"
                 claim = EmailSubmissionClaim(
                     row.id,
                     prep.id,
                     str(row.operation_id),
                     row.submitted_at,
                     row.lease_until,
+                    _custody=_ClaimCustody(timing_policy=policy),
                 )
                 session.commit()
                 return claim
-            return "idle"
+            return "wait" if waiting else "idle"
     except Exception:
         # SQL, source and custody diagnostics may contain bound secrets. No
         # exception or provider data is transported into a task failure store.
@@ -379,6 +513,8 @@ def dispatch_email_claim(
     claim: EmailSubmissionClaim,
     *,
     patient_origin: str,
+    quiet_hours: tuple[int, int] | None = None,
+    minimum_channel_spacing: timedelta | None = None,
     transport: InvitationTransport | None = None,
     source_verifier: EmailConsentSourceVerifier | None = None,
     settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
@@ -388,6 +524,8 @@ def dispatch_email_claim(
     Do not serialize/replay a claim or expose it through an API. The worker
     retains custody locks through the transport's bounded 30-second attempt.
     A successful SMTP acceptance is not confirmed recipient delivery.
+    Require the claim's same explicit restrictions and current cadence. A
+    delayed claim that is no longer permitted is suppressed, never requeued.
     """
     if (
         type(claim) is not EmailSubmissionClaim
@@ -395,6 +533,7 @@ def dispatch_email_claim(
         or not claim.consume()
     ):
         return "discarded"
+    policy = _timing_policy(quiet_hours, minimum_channel_spacing)
     try:
         with global_session() as session:
             pair = _lock_rows(session, claim.delivery_id)
@@ -415,6 +554,8 @@ def dispatch_email_claim(
                 )
             if (
                 not _enabled(settings)
+                or policy is None
+                or policy != claim._custody.timing_policy
                 or source_verifier is None
                 or not callable(source_verifier)
             ):
@@ -426,13 +567,16 @@ def dispatch_email_claim(
                     session, prep, row, state="failed", code="transport_unavailable"
                 )
             try:
-                _, invitation, _ = _eligible(
+                locked, invitation, scope = _eligible(
                     session,
                     prep,
                     row,
                     patient_origin=_patient_origin(patient_origin),
                     source_verifier=source_verifier,
                     settings=settings,
+                )
+                _, cadence = _current_cadence(
+                    session, prep, row, locked=locked, scope=scope, policy=policy
                 )
             except (VisitPrepEmailInvalid, VisitPrepError, ValueError):
                 session.rollback()
@@ -445,6 +589,13 @@ def dispatch_email_claim(
                     return "discarded"
                 return _finish(
                     session, *pair, state="suppressed", code="scope_unavailable"
+                )
+            if cadence.action != "candidate":
+                # A committed claim is never returned to queued, even if quiet
+                # hours began during the claim/dispatch gap. No effect occurred;
+                # consume custody and clear the secret without an automatic retry.
+                return _finish(
+                    session, prep, row, state="suppressed", code="scope_unavailable"
                 )
             transaction, nested = (
                 session.get_transaction(),
@@ -477,6 +628,8 @@ def dispatch_email_claim(
 def run_one_email(
     *,
     patient_origin: str,
+    quiet_hours: tuple[int, int] | None = None,
+    minimum_channel_spacing: timedelta | None = None,
     transport: InvitationTransport | None = None,
     source_verifier: EmailConsentSourceVerifier | None = None,
     settings: VisitPrepSettings = VISIT_PREP_SETTINGS,
@@ -484,6 +637,8 @@ def run_one_email(
     """Drain one invitation, never autoretry or resume an earlier send claim."""
     claimed = claim_email_invitation(
         patient_origin=patient_origin,
+        quiet_hours=quiet_hours,
+        minimum_channel_spacing=minimum_channel_spacing,
         source_verifier=source_verifier,
         settings=settings,
     )
@@ -492,6 +647,8 @@ def run_one_email(
     return dispatch_email_claim(
         claimed,
         patient_origin=patient_origin,
+        quiet_hours=quiet_hours,
+        minimum_channel_spacing=minimum_channel_spacing,
         transport=transport,
         source_verifier=source_verifier,
         settings=settings,

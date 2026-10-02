@@ -163,6 +163,17 @@ def _quiet(value: object) -> tuple[int, int]:
     return value
 
 
+def validate_delivery_timing_policy(
+    *, quiet_hours: tuple[int, int], minimum_channel_spacing: timedelta
+) -> None:
+    """Validate explicit restrictions without introducing an enabled policy."""
+    _quiet(quiet_hours)
+    if type(minimum_channel_spacing) is not timedelta or not timedelta(
+        hours=1
+    ) <= minimum_channel_spacing <= timedelta(hours=48):
+        raise _invalid()
+
+
 def _inside_quiet(local: datetime, quiet: tuple[int, int]) -> bool:
     start, end = map(time, quiet)
     clock = local.time().replace(tzinfo=None)
@@ -341,11 +352,9 @@ def plan_delivery_timing(
     current = _instant(now)
     _validate(snapshot, history, current)
     _zone(snapshot.timezone_name)
-    _quiet(quiet_hours)
-    if type(minimum_channel_spacing) is not timedelta or not timedelta(
-        hours=1
-    ) <= minimum_channel_spacing <= timedelta(hours=48):
-        raise _invalid()
+    validate_delivery_timing_policy(
+        quiet_hours=quiet_hours, minimum_channel_spacing=minimum_channel_spacing
+    )
     booked, appointment, expires = map(
         _instant,
         (snapshot.booked_at, snapshot.scheduled_at, snapshot.credential_expires_at),

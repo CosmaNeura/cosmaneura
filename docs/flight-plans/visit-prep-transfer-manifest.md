@@ -1438,3 +1438,49 @@ integration, qualified prior consent, SMS/STOP and reminder storage, callbacks,
 monitoring, cleanup, session continuation, Sovereign/CosmaBot integration and
 clinical/operational qualification. All runtime controls remain off. No merge,
 deployment, patient message or workspace retirement occurs.
+
+## Email cadence at claim and dispatch
+
+The dormant email worker now requires explicit quiet hours and minimum channel
+spacing before claiming work. Missing, invalid or coerced policy disables the
+worker. These are additional trusted Core restrictions, not consent or a sending
+capability. They are bound to process-local claim custody; dispatch with missing
+or changed restrictions suppresses the claim without reopening its send lane.
+No email job, provider, policy resolver or enabled default is installed.
+
+Claim and dispatch load current Core cadence under the existing owner,
+preparation, lineage and delivery locks. The full history is validated before
+excluding only the candidate's exact current invitation. Older potential sends,
+pending work and uncertain submissions remain in the timing decision. The
+history query does not decrypt another invitation. Current source, approval,
+credential and lease expiry are checked after timing reads; final claim checks
+follow the real audit flush. Dispatch reevaluates timing immediately before the
+bounded transport attempt while the existing authority fences remain held.
+
+A quiet-hour or spacing wait leaves a queued intent, its operation key and its
+secret unchanged. The worker checks other candidates in its existing bounded
+batch. It suppresses work with no permitted appointment window. If a committed
+claim is no longer permitted at dispatch, it consumes that claim, suppresses the
+submission and clears the transient secret. It never returns a committed claim
+to queued or retries an uncertain provider effect. The generic existing
+suppression code does not expose a new policy-specific delivery status.
+
+Reuse stays within Core's current cadence loader, timing rules, outbox and
+single-submission worker. No new cross-repository transfer, schema, route,
+dependency, service grant, auth/session change or release control is introduced.
+Owned synthetic tests exercise schedule-local quiet hours, preserved waiting
+intents, a later due candidate in the same batch, changed policy, old-generation
+pending/uncertain sends and spacing, current-intent mismatch, real appointment
+and source expiry during lock/query waits, claim audit rollback and value-free
+history. Quiet-boundary clock diagnostics supplement those actual database
+checks; they do not prove a real-provider or deployed scheduler qualification.
+Exact revision-specific commands, results and implementer review belong in the
+stacked draft PR.
+
+The outbox still does not persist cadence policy. A qualified policy resolver
+or separately reviewed persistence design and a durable scheduler are required
+before installation; this worker input is not their substitute. Acuity booking,
+authentic prior consent, SMS/STOP and reminder storage, callbacks, monitoring,
+cleanup, usable session continuation, Sovereign/CosmaBot integration and clinical
+and operational qualification remain requirements of the full goal. All controls
+remain off, with no merge, deployment, live message or retirement.
