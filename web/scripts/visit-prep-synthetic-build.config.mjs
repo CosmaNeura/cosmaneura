@@ -24,8 +24,15 @@ export default defineConfig({
   plugins: [tailwind(), reactRouter(), paths()],
   ssr: { noExternal: ["react-dropzone"] },
   define: {
+    "import.meta.env.VITE_VISIT_PREP_EMAIL_WORKFLOW_ENABLED": JSON.stringify(
+      process.env.VITE_VISIT_PREP_EMAIL_WORKFLOW_ENABLED === "true"
+        ? "true"
+        : "false",
+    ),
     "import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED": JSON.stringify(
-      process.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED === "true" ? "true" : "false",
+      process.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED === "true"
+        ? "true"
+        : "false",
     ),
     "import.meta.env.VITE_PYTHON_URL": '"https://testserver"',
     "import.meta.env.VITE_BUILD_COMMIT": JSON.stringify(

@@ -381,6 +381,38 @@ This increment does not activate a model, invitation transport or environment.
 Controlled clinical/model/service qualification, cross-device continuation,
 Acuity booking, SMS/reminders and broader governed CosmaBot actions remain open.
 
+## Provider email workflow implementation October 2 2026
+
+The dashboard creator now offers an explicit email handoff behind the default-off
+browser control. It queues the current invitation through the authenticated Core
+API, retaining neither contact details nor bearer credentials in browser storage.
+Core derives the patient origin from its own configuration and uses the existing
+encrypted outbox. Exact retries recover the original operation; an uncertain
+acknowledgment must not become a replacement invitation or a new submission.
+
+The argument-free scheduled worker uses Core's existing bounded SMTP adapter,
+current physician approval and a verifier for the actual recorded patient or
+caregiver email choice. `VISIT_PREP_PATIENT_EMAIL_SOURCE_QUALIFIED` defaults false
+and is not itself consent, identity proof or service approval. The worker rechecks
+current permission and centrally managed quiet hours and spacing before its single
+submission. Queued work waits during quiet hours without retaining the bearer in
+the browser. Separate maintenance clears expired or obsolete transient secrets,
+including after sending is disabled; retained patient and consent evidence stays.
+
+Synthetic desktop and mobile journeys exercise the actual creator and email
+controls through the provider API and scheduled worker. They show queue state and
+email-provider acceptance, never confirmed recipient delivery. No live SMTP call,
+environment setting, deployment or real patient message was used. There is no
+schema migration in this increment. Recovery is disabling the browser action and
+email send/source controls, leaving secret maintenance active, and reverting the
+additive route and worker code if required.
+
+This connects provider-initiated email after an actual patient email choice. It
+does not solve the first booking invitation: consent collected after opening a
+link cannot authorize that first contact. Acuity booking and prior-contact consent
+provenance, SMS transport and STOP processing, automated reminders, cross-device
+continuation, broader CosmaBot actions and operational acceptance remain open.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

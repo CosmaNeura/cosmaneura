@@ -76,7 +76,7 @@ export function validEmailStatus(
     !fields.every((key) => Object.hasOwn(value, key)) ||
     value.contract !== "visit_prep.email_status.v1" ||
     value.preparation_id !== id ||
-    value.dispatch_integration !== "not_connected" ||
+    value.dispatch_integration !== "default_off_worker" ||
     !Object.hasOwn(labels, value.status) ||
     !generation(value.current_credential_generation) ||
     !timestamp(value.checked_at)
@@ -260,8 +260,9 @@ export function VisitPrepEmailStatus({
             )}
             <p className="text-sm">
               This is the recorded state at last load, not confirmed recipient
-              delivery or permission to send. Delivery automation is not
-              connected.
+              delivery or permission to send. The email worker remains off until
+              separately qualified and enabled; automatic booking and SMS
+              reminders are not connected.
             </p>
             {value.status === "accepted" && (
               <p className="text-sm">
