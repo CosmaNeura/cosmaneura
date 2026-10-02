@@ -157,6 +157,57 @@ def invitation_authorization_digest(ciphertext: str) -> str:
     return digest
 
 
+def stored_email_recipient(preparation: VisitPrep) -> str:
+    """Explicitly decode the closed contact snapshot; this grants no consent."""
+    email = None
+    try:
+        if (
+            type(preparation.recipient_snapshot_format_version) is not int
+            or preparation.recipient_snapshot_format_version != 1
+            or preparation.has_email_contact is not True
+        ):
+            raise VisitPrepEmailInvalid()
+        ciphertext = preparation.recipient_snapshot_ciphertext
+        if not 1 <= len(ciphertext.encode("utf-8")) <= 16_384:
+            raise VisitPrepEmailInvalid()
+        plaintext = decrypt_value(ciphertext)
+        if len(plaintext.encode("utf-8")) > 12_000:
+            raise VisitPrepEmailInvalid()
+        recipient = json.loads(plaintext, object_pairs_hook=_closed_object)
+        if (
+            not isinstance(recipient, dict)
+            or set(recipient) != {"version", "first_name", "role", "email", "phone"}
+            or type(recipient["version"]) is not int
+            or recipient["version"] != 1
+        ):
+            raise VisitPrepEmailInvalid()
+        normalized = _normalize_recipient(
+            RecipientInput(
+                first_name=recipient["first_name"],
+                role=recipient["role"],
+                email=recipient["email"],
+                phone=recipient["phone"],
+            )
+        )
+        if normalized.email != recipient["email"] or normalized.email is None:
+            raise VisitPrepEmailInvalid()
+        email = email_address(normalized.email)
+    except (
+        DecryptionError,
+        VisitPrepValidation,
+        VisitPrepEmailInvalid,
+        ValueError,
+        TypeError,
+        AttributeError,
+        UnicodeError,
+        RecursionError,
+    ):
+        pass
+    if email is None:
+        raise VisitPrepEmailInvalid()
+    return email
+
+
 def bind_stored_invitation(
     delivery: VisitPrepEmailDelivery,
     preparation: VisitPrep,
@@ -213,30 +264,7 @@ def bind_stored_invitation(
             )
         ):
             raise VisitPrepEmailInvalid()
-        encrypted_contact = preparation.recipient_snapshot_ciphertext
-        if not 1 <= len(encrypted_contact.encode("utf-8")) <= 16_384:
-            raise VisitPrepEmailInvalid()
-        plaintext = decrypt_value(encrypted_contact)
-        if len(plaintext.encode("utf-8")) > 12_000:
-            raise VisitPrepEmailInvalid()
-        recipient = json.loads(plaintext, object_pairs_hook=_closed_object)
-        if (
-            not isinstance(recipient, dict)
-            or set(recipient) != {"version", "first_name", "role", "email", "phone"}
-            or type(recipient["version"]) is not int
-            or recipient["version"] != 1
-        ):
-            raise VisitPrepEmailInvalid()
-        normalized = _normalize_recipient(
-            RecipientInput(
-                first_name=recipient["first_name"],
-                role=recipient["role"],
-                email=recipient["email"],
-                phone=recipient["phone"],
-            )
-        )
-        if normalized.email != recipient["email"] or normalized.email is None:
-            raise VisitPrepEmailInvalid()
+        recipient_email = stored_email_recipient(preparation)
         binding = EmailInvitationBinding(
             delivery_id=str(delivery.id),
             visit_prep_id=str(preparation.id),
@@ -247,7 +275,7 @@ def bind_stored_invitation(
             operation_id=str(delivery.operation_id),
             expires_at=delivery.expires_at,
             credential_token_hash=credential.token_hash,
-            recipient_digest=invitation_recipient_digest(normalized.email),
+            recipient_digest=invitation_recipient_digest(recipient_email),
             authorization_digest=invitation_authorization_digest(
                 delivery.authorization_ciphertext
             ),

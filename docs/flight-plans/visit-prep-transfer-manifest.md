@@ -573,8 +573,43 @@ a restrictive parent reference rather than silently disappearing with unused
 preparation cleanup. This is temporary protected custody, not a completed
 retention policy: preparations carrying this new evidence cannot yet be purged.
 A qualified consent-evidence retention/hold/cleanup path is required before
-capture or dispatch activation. Validated evidence codecs, current-authority
-capture and resolution commands, patient/trusted-source consent intake, atomic
-invitation enqueue and worker submission remain implementation work. No
+capture or dispatch activation. Current-authority capture commands,
+patient/trusted-source consent intake, atomic invitation enqueue and worker
+submission remain implementation work. No
 schema row is permission to send. Final commit-specific validation and review
 belong in the next stacked draft PR.
+
+The evidence and resolution increment adds explicit closed encrypted manifests
+for physician policy approval and recipient communication consent. Each binds
+its own event ID, owner, sequence, operation and expiry to the stored row.
+Consent also binds the preparation, question version, recipient, role and
+source-event provenance. Duplicate JSON keys, extra fields, coercion, mismatched
+metadata and private exception chains are rejected. The policy fingerprint
+tracks the actual fixed invitation text and existing outbox limits rather
+than accepting an authored policy hash as current permission.
+
+The resolver locks current Core owner scope, preparation, latest schedule and
+credential, and both latest authority streams. It rechecks current channel,
+public-link and cohort controls, identity, membership, BAA and entitlement;
+linked appointments/patients remain optional but must match when present.
+An older grant cannot substitute for the latest withdrawal, expired evidence
+or changed policy. Recipient contact is explicitly decoded through the same
+closed boundary used by invitation binding. Time-dependent authority is checked
+after source verification and all lock waits.
+
+No consent-source adapter is installed by default. A trusted Core verifier
+must independently establish authentic source, exact intent and actor or
+caregiver authority; a role label, ciphertext or booking connection proves
+none of those. Missing or unavailable verification fails closed. A verifier
+cannot release the caller's transaction or savepoint and still return authority.
+The result remains transaction-bound, not a transferable send capability.
+
+Synthetic PostgreSQL tests use an explicitly invented complete source intent,
+not real consent. Independent connections exercise committed withdrawals,
+revocation, BAA withdrawal, actual elapsed expiry and caller-held withdrawal
+fences. These checks verify the dormant resolver, not consent capture or a
+dispatched invitation. No schema, frontend, route, job registration, external
+service or release-control change is included. Qualified evidence retention,
+capture adapters, atomic enqueue, dispatch, cleanup and status UI remain open.
+Final tested revision, regression results and implementer review are recorded
+in the stacked draft PR.
