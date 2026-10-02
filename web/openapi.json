@@ -8193,6 +8193,301 @@
         ],
         "title": "VisitAudioUploadRequest"
       },
+      "VisitPrepCommandErrorResponse": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "VisitPrepCommandErrorResponse"
+      },
+      "VisitPrepCommandResponse": {
+        "properties": {
+          "visit_prep": {
+            "$ref": "#/components/schemas/VisitPrepCommandStateResponse"
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "created",
+              "replayed",
+              "rotated",
+              "revoked",
+              "rescheduled",
+              "reconciled"
+            ],
+            "title": "Disposition"
+          },
+          "access_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "visit_prep",
+          "disposition",
+          "access_url"
+        ],
+        "title": "VisitPrepCommandResponse"
+      },
+      "VisitPrepCommandStateResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "question_set_version_id": {
+            "type": "string",
+            "title": "Question Set Version Id"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "title": "Lifecycle State"
+          },
+          "has_email_contact": {
+            "type": "boolean",
+            "title": "Has Email Contact"
+          },
+          "has_sms_contact": {
+            "type": "boolean",
+            "title": "Has Sms Contact"
+          },
+          "physician_display_name": {
+            "type": "string",
+            "title": "Physician Display Name"
+          },
+          "practice_display_name": {
+            "type": "string",
+            "title": "Practice Display Name"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled At"
+          },
+          "timezone_name": {
+            "type": "string",
+            "title": "Timezone Name"
+          },
+          "schedule_generation": {
+            "type": "integer",
+            "title": "Schedule Generation"
+          },
+          "credential_generation": {
+            "type": "integer",
+            "title": "Credential Generation"
+          },
+          "credential_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Credential Expires At"
+          },
+          "credential_active": {
+            "type": "boolean",
+            "title": "Credential Active"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "question_set_version_id",
+          "patient_id",
+          "appointment_id",
+          "lifecycle_state",
+          "has_email_contact",
+          "has_sms_contact",
+          "physician_display_name",
+          "practice_display_name",
+          "scheduled_at",
+          "timezone_name",
+          "schedule_generation",
+          "credential_generation",
+          "credential_expires_at",
+          "credential_active",
+          "revoked_at",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "VisitPrepCommandStateResponse"
+      },
+      "VisitPrepCopyLinkRequest": {
+        "properties": {
+          "expected_credential_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Expected Credential Generation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_credential_generation"
+        ],
+        "title": "VisitPrepCopyLinkRequest"
+      },
+      "VisitPrepCreateRequest": {
+        "properties": {
+          "recipient": {
+            "$ref": "#/components/schemas/VisitPrepRecipientRequest"
+          },
+          "physician_display_name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Physician Display Name"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled At"
+          },
+          "timezone_name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Timezone Name"
+          },
+          "question_set_version_id": {
+            "type": "string",
+            "title": "Question Set Version Id"
+          },
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "recipient",
+          "physician_display_name",
+          "scheduled_at",
+          "timezone_name",
+          "question_set_version_id"
+        ],
+        "title": "VisitPrepCreateRequest"
+      },
+      "VisitPrepListResponse": {
+        "properties": {
+          "preparations": {
+            "items": {
+              "$ref": "#/components/schemas/VisitPrepCommandStateResponse"
+            },
+            "type": "array",
+            "title": "Preparations"
+          },
+          "next_before_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "preparations",
+          "next_before_id"
+        ],
+        "title": "VisitPrepListResponse"
+      },
       "VisitPrepQuestionChoiceRequest": {
         "properties": {
           "value": {
@@ -8737,6 +9032,143 @@
           "questions"
         ],
         "title": "VisitPrepQuestionSetVersionResponse"
+      },
+      "VisitPrepRecipientRequest": {
+        "properties": {
+          "first_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "First Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "patient",
+              "caregiver"
+            ],
+            "title": "Role",
+            "default": "patient"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 320
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "phone": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phone"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "first_name"
+        ],
+        "title": "VisitPrepRecipientRequest"
+      },
+      "VisitPrepReconcileRequest": {
+        "properties": {
+          "patient_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Id"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "VisitPrepReconcileRequest"
+      },
+      "VisitPrepRescheduleRequest": {
+        "properties": {
+          "expected_credential_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Expected Credential Generation"
+          },
+          "expected_schedule_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Expected Schedule Generation"
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Scheduled At"
+          },
+          "timezone_name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Timezone Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_credential_generation",
+          "expected_schedule_generation",
+          "scheduled_at",
+          "timezone_name"
+        ],
+        "title": "VisitPrepRescheduleRequest"
+      },
+      "VisitPrepRevokeRequest": {
+        "properties": {
+          "expected_credential_generation": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "title": "Expected Credential Generation"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "physician_revoked",
+              "wrong_recipient",
+              "appointment_cancelled"
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_credential_generation",
+          "reason"
+        ],
+        "title": "VisitPrepRevokeRequest"
       },
       "VisitPrepSettingsData": {
         "properties": {
