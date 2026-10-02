@@ -62,6 +62,8 @@ function setup(continuedRole: "patient" | "caregiver" | null = null) {
     answerFollowup: vi.fn(),
     readEmailConsent: vi.fn(),
     decideEmailConsent: vi.fn(),
+    readSMSConsent: vi.fn(),
+    decideSMSConsent: vi.fn(),
   }
   const props = {
     client,

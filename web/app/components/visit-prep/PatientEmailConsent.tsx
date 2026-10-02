@@ -5,6 +5,7 @@ import {
   type PatientConfirmation,
   type PatientEmailConsent,
   type PatientEmailConsentDecision,
+  type PatientSMSConsent,
   type VisitPrepPatientClient,
   VisitPrepPatientFailure,
 } from "~/lib/visit-prep-patient-api"
@@ -28,23 +29,30 @@ const errors = {
     "We could not confirm the request. A choice may have been saved. Confirm the recipient again to load current state; do not repeat the decision automatically.",
 }
 
-/** Optional choice, not qualified send authority; never retries a decision. */
+/** Shared optional-choice UI; independent channel endpoints and consent history. */
 export function PatientEmailConsent({
   client,
   onClose,
   onUnavailable,
   continuedRole = null,
+  channel = "email",
 }: {
   client: VisitPrepPatientClient
   onClose: () => void
   onUnavailable: () => void
   continuedRole?: PatientConfirmation["role"] | null
+  channel?: "email" | "sms"
 }) {
+  const sms = channel === "sms"
+  const channelName = sms ? "SMS" : "email"
+  const contactName = sms ? "mobile number" : "email address"
   const generation = useRef(0)
   const mounted = useRef(false)
   const pending = useRef(false)
   const confirmation = useRef<PatientConfirmation | null>(null)
-  const [value, setValue] = useState<PatientEmailConsent | null>(null)
+  const [value, setValue] = useState<
+    PatientEmailConsent | PatientSMSConsent | null
+  >(null)
   const [firstName, setFirstName] = useState("")
   const [role, setRole] = useState<PatientConfirmation["role"]>("patient")
   const [expiry, setExpiry] = useState("")
@@ -87,7 +95,7 @@ export function PatientEmailConsent({
 
   useEffect(() => {
     if (continuedRole) load()
-  }, [continuedRole])
+  }, [continuedRole, channel])
 
   async function run(operation: (version: number) => Promise<void>) {
     if (pending.current) return
@@ -102,7 +110,13 @@ export function PatientEmailConsent({
       const code =
         error instanceof VisitPrepPatientFailure ? error.code : "temporary"
       clear()
-      setMessage(errors[code])
+      setMessage(
+        sms
+          ? code === "unavailable"
+            ? errors.unavailable
+            : "We could not confirm the SMS choice. A decision may already have been saved. Load current SMS choices before deciding again."
+          : errors[code],
+      )
       if (code === "unavailable") onUnavailable()
     } finally {
       if (mounted.current && generation.current === version) {
@@ -118,7 +132,9 @@ export function PatientEmailConsent({
       ? { role: continuedRole }
       : { first_name: firstName, role }
     void run(async (version) => {
-      const next = await client.readEmailConsent(confirmed)
+      const next = await (sms
+        ? client.readSMSConsent(confirmed)
+        : client.readEmailConsent(confirmed))
       if (!mounted.current || generation.current !== version) return
       if (next.actor_role !== confirmed.role)
         throw new VisitPrepPatientFailure("temporary")
@@ -131,9 +147,12 @@ export function PatientEmailConsent({
     })
   }
 
-  const deadline = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(expiry)
-    ? Date.parse(expiry + ":00Z")
-    : NaN
+  const deadline =
+    sms && value
+      ? Date.parse(value.maximum_expires_at)
+      : /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(expiry)
+        ? Date.parse(expiry + ":00Z")
+        : NaN
   const attestations =
     recipientAttested &&
     (value?.actor_role !== "caregiver" || caregiverAttested)
@@ -179,7 +198,9 @@ export function PatientEmailConsent({
       setExpiry("")
       setRecipientAttested(false)
       setCaregiverAttested(false)
-      const receipt = await client.decideEmailConsent(payload, key)
+      const receipt = await (sms
+        ? client.decideSMSConsent(payload, key)
+        : client.decideEmailConsent(payload, key))
       if (!mounted.current || generation.current !== version) return
       if (
         receipt.event_kind !== kind ||
@@ -192,26 +213,28 @@ export function PatientEmailConsent({
         throw new VisitPrepPatientFailure("temporary")
       clear()
       setMessage(
-        "Your decision was recorded. Confirm the recipient again to load current email choices. No email has been sent by this screen.",
+        sms
+          ? "Your decision was recorded. Load current SMS choices to review it. No text has been sent by this screen."
+          : "Your decision was recorded. Confirm the recipient again to load current email choices. No email has been sent by this screen.",
       )
     })
   }
 
   return (
     <section>
-      <h1 className="text-2xl font-semibold">Optional email choices</h1>
+      <h1 className="text-2xl font-semibold">Optional {channelName} choices</h1>
       <p className="mt-3">
-        You can prepare for your visit without allowing emails. These choices do
-        not change your answers.
+        You can prepare for your visit without allowing{" "}
+        {sms ? "texts" : "emails"}. These choices do not change your answers.
       </p>
       <p className="mt-3 text-sm">
-        This branch records a choice only. Email delivery is not connected, and
-        recorded permission is not yet qualified for sending. This does not
-        permit SMS or marketing.
+        This branch records a choice only. {sms ? "SMS" : "Email"} delivery is
+        not connected, and recorded permission is not yet qualified for sending.
+        This does not permit {sms ? "email" : "SMS"} or marketing.
       </p>
       {!value && continuedRole ? (
         <Button className="mt-6" disabled={busy} onClick={load}>
-          {busy ? "Loading…" : "Load current email choices"}
+          {busy ? "Loading…" : `Load current ${channelName} choices`}
         </Button>
       ) : !value ? (
         <form
@@ -258,13 +281,17 @@ export function PatientEmailConsent({
             className="mt-6"
             disabled={busy || !firstName.trim()}
           >
-            {busy ? "Checking…" : "Load current email choices"}
+            {busy ? "Checking…" : `Load current ${channelName} choices`}
           </Button>
         </form>
       ) : (
         <>
           <p role="status" className="mt-6 font-medium">
-            {labels[value.status]}
+            {sms
+              ? labels[value.status]
+                  .replaceAll("email", "SMS")
+                  .replaceAll("Email", "SMS")
+              : labels[value.status]}
           </p>
           <p className="mt-2 text-sm">
             Checked at {value.checked_at}. Reload before relying on this
@@ -274,7 +301,9 @@ export function PatientEmailConsent({
             <p className="mt-2 text-sm">Recorded expiry: {value.expires_at}</p>
           )}
           <h2 className="mt-6 text-lg font-semibold">
-            Invitation email permission
+            {sms
+              ? "Invitation and reminder text permission"
+              : "Invitation email permission"}
           </h2>
           <p className="mt-3 break-words whitespace-pre-wrap">
             {value.grant_disclosure}
@@ -299,8 +328,9 @@ export function PatientEmailConsent({
                 />
                 <span>
                   I reviewed these disclosures and confirm I am the intended
-                  recipient, authorized to receive invitations at the email
-                  address already provided.
+                  recipient, authorized to receive{" "}
+                  {sms ? "invitations and reminders" : "invitations"} at the{" "}
+                  {contactName} already provided.
                 </span>
               </label>
               {value.actor_role === "caregiver" && (
@@ -323,23 +353,39 @@ export function PatientEmailConsent({
               )}
             </>
           )}
+          {sms && "contact_available" in value && !value.contact_available && (
+            <p className="mt-6">
+              No mobile number was provided for this preparation. You can
+              continue without texts.
+            </p>
+          )}
           {value.can_grant ? (
             <>
-              <label htmlFor="email-expiry" className="mt-6 block">
-                Permission expiry (UTC)
-              </label>
-              <input
-                id="email-expiry"
-                type="datetime-local"
-                value={expiry}
-                disabled={busy}
-                onChange={(event) => setExpiry(event.target.value)}
-                className="mt-2 w-full rounded border bg-white p-3 text-base"
-              />
-              <p className="mt-2 text-sm">
-                Choose a future UTC time no later than{" "}
-                {value.maximum_expires_at}.
-              </p>
+              {sms ? (
+                <p className="mt-6 text-sm">
+                  Permission ends no later than{" "}
+                  {new Date(value.maximum_expires_at).toLocaleString()}.
+                  Rescheduling does not automatically extend a recorded grant.
+                </p>
+              ) : (
+                <>
+                  <label htmlFor="email-expiry" className="mt-6 block">
+                    Permission expiry (UTC)
+                  </label>
+                  <input
+                    id="email-expiry"
+                    type="datetime-local"
+                    value={expiry}
+                    disabled={busy}
+                    onChange={(event) => setExpiry(event.target.value)}
+                    className="mt-2 w-full rounded border bg-white p-3 text-base"
+                  />
+                  <p className="mt-2 text-sm">
+                    Choose a future UTC time no later than{" "}
+                    {value.maximum_expires_at}.
+                  </p>
+                </>
+              )}
               <Button
                 className="mt-4"
                 disabled={!canGrant}
@@ -350,20 +396,27 @@ export function PatientEmailConsent({
             </>
           ) : (
             <p className="mt-6">
-              New permission cannot be recorded for this completed or expired
-              preparation. You can still withdraw through a valid invitation.
+              {sms && "contact_available" in value && !value.contact_available
+                ? "Text permission is unavailable because no mobile number was provided."
+                : "New permission cannot be recorded for this completed or expired preparation. You can still withdraw through a valid invitation."}
             </p>
           )}
           <div className="mt-4 flex flex-wrap gap-3">
             <Button
               variant="outline"
-              disabled={!canDecide}
+              disabled={
+                !canDecide ||
+                (sms &&
+                  "contact_available" in value &&
+                  !value.contact_available)
+              }
               onClick={() => decide("withdrawn")}
             >
-              Do not allow / withdraw email invitations
+              Do not allow / withdraw {channelName}{" "}
+              {sms ? "texts" : "invitations"}
             </Button>
             <Button variant="ghost" disabled={busy} onClick={clear}>
-              Reload email choices
+              Reload {channelName} choices
             </Button>
           </div>
           <p className="mt-3 text-sm">

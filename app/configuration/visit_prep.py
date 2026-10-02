@@ -27,6 +27,7 @@ class VisitPrepSettings:
     public_api_enabled: bool = False
     auto_synthesis_enabled: bool = False
     email_consent_capture_enabled: bool = False
+    sms_consent_capture_enabled: bool = False
     enabled_doctor_ids: frozenset[str] = field(default_factory=frozenset)
     enabled_practice_ids: frozenset[str] = field(default_factory=frozenset)
     email_send_enabled: bool = False
@@ -95,6 +96,9 @@ def load_visit_prep_settings(
         email_consent_capture_enabled = _parse_bool(
             read("VISIT_PREP_EMAIL_CONSENT_CAPTURE_ENABLED", "false")
         )
+        sms_consent_capture_enabled = _parse_bool(
+            read("VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED", "false")
+        )
         enabled_doctor_ids = _parse_typeid_cohort(
             read("VISIT_PREP_ENABLED_DOCTOR_IDS", ""),
             prefix="doctor",
@@ -115,6 +119,7 @@ def load_visit_prep_settings(
         public_api_enabled=public_api_enabled,
         auto_synthesis_enabled=auto_synthesis_enabled,
         email_consent_capture_enabled=email_consent_capture_enabled,
+        sms_consent_capture_enabled=sms_consent_capture_enabled,
         enabled_doctor_ids=enabled_doctor_ids,
         enabled_practice_ids=enabled_practice_ids,
         email_send_enabled=email_send_enabled,

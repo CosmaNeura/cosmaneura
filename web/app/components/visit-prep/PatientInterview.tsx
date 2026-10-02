@@ -59,7 +59,9 @@ export function PatientInterview({
   )
   const [reported, setReported] = useState(false)
   const [reviewing, setReviewing] = useState(false)
-  const [emailChoices, setEmailChoices] = useState(false)
+  const [emailChoices, setEmailChoices] = useState<false | "email" | "sms">(
+    false,
+  )
   const emailChoicesRef = useRef(false)
   const [contributionComplete, setContributionComplete] = useState<
     boolean | null
@@ -289,6 +291,7 @@ export function PatientInterview({
         </section>
       ) : emailChoices && client.current ? (
         <PatientEmailConsent
+          channel={emailChoices}
           continuedRole={state?.continued_role ?? null}
           client={client.current}
           onUnavailable={discardPatientState}
@@ -458,21 +461,39 @@ export function PatientInterview({
             disabled={busy || pendingAnswer.current !== null}
             onClick={() => {
               emailChoicesRef.current = true
-              setEmailChoices(true)
+              setEmailChoices("email")
             }}
           >
             Optional email choices
           </Button>
         )}
       {!reported && !reviewing && !emailChoices && client.current && (
-        <Button
-          variant="ghost"
-          className="mt-8 self-start"
-          disabled={busy}
-          onClick={() => void report()}
-        >
-          This invitation was sent to the wrong person
-        </Button>
+        <>
+          {import.meta.env.VITE_VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED ===
+            "true" &&
+            state &&
+            state.status !== "confirmation_required" && (
+              <Button
+                variant="outline"
+                className="mt-4 self-start"
+                disabled={busy || pendingAnswer.current !== null}
+                onClick={() => {
+                  emailChoicesRef.current = true
+                  setEmailChoices("sms")
+                }}
+              >
+                Optional SMS choices
+              </Button>
+            )}
+          <Button
+            variant="ghost"
+            className="mt-8 self-start"
+            disabled={busy}
+            onClick={() => void report()}
+          >
+            This invitation was sent to the wrong person
+          </Button>
+        </>
       )}
       <p className="mt-6 text-xs text-[var(--brand-muted-text)]">
         Saved progress can be resumed from your original invitation. Unsaved

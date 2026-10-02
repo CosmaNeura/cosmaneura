@@ -73,6 +73,7 @@ def _fixture(
     *,
     scheduled_at: datetime | None = None,
     recipient_role: Literal["patient", "caregiver"] = "patient",
+    phone: str | None = None,
 ) -> _Fixture:
     nonce = secrets.token_hex(5)
     now = datetime.now(UTC)
@@ -110,6 +111,7 @@ def _fixture(
             first_name="Jos\N{LATIN SMALL LETTER E WITH ACUTE}",
             role=recipient_role,
             email="patient@example.com",
+            phone=phone,
         ),
         physician_display_name="Dr. Synthetic",
         scheduled_at=scheduled_at,

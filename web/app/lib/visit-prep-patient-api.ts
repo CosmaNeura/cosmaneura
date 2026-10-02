@@ -181,7 +181,7 @@ export type PatientExplanation = PatientConfirmation & {
 
 const consentTime = z.string().datetime({ offset: true })
 const consentSequence = z.number().int().min(0).max(2_147_483_647)
-export const visitPrepPatientEmailConsent = z
+const emailConsentShape = z
   .object({
     contract: z.literal("visit_prep.patient_email_consent.v1"),
     actor_role: z.enum(["patient", "caregiver"]),
@@ -202,31 +202,60 @@ export const visitPrepPatientEmailConsent = z
     delivery_status: z.literal("not_connected"),
   })
   .strict()
+
+function validateConsent(
+  value: z.infer<typeof emailConsentShape>,
+  context: z.RefinementCtx,
+) {
+  const checked = Date.parse(value.checked_at)
+  const maximum = Date.parse(value.maximum_expires_at)
+  const expiry = value.expires_at === null ? null : Date.parse(value.expires_at)
+  if (
+    value.grant_disclosure_fingerprint ===
+      value.withdrawal_disclosure_fingerprint ||
+    (value.event_sequence === 0
+      ? value.status !== "not_recorded" ||
+        value.recorded_at !== null ||
+        expiry !== null
+      : value.status === "not_recorded" || value.recorded_at === null) ||
+    (value.recorded_at !== null && Date.parse(value.recorded_at) > checked) ||
+    (value.status === "withdrawn" && expiry !== null) ||
+    (["grant_recorded", "expired"].includes(value.status) && expiry === null) ||
+    (value.status === "grant_recorded" &&
+      Math.min(expiry!, maximum) <= checked) ||
+    (value.status === "expired" && Math.min(expiry!, maximum) > checked) ||
+    (value.can_grant && maximum <= checked)
+  )
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid communication choice",
+    })
+}
+
+export const visitPrepPatientEmailConsent =
+  emailConsentShape.superRefine(validateConsent)
+export const visitPrepPatientSMSConsent = emailConsentShape
+  .extend({
+    contract: z.literal("visit_prep.patient_sms_consent.v1"),
+    disclosure_version: z.literal("visit_prep_sms_consent_v1"),
+    contact_available: z.boolean(),
+  })
   .superRefine((value, context) => {
-    const checked = Date.parse(value.checked_at)
-    const maximum = Date.parse(value.maximum_expires_at)
-    const expiry =
-      value.expires_at === null ? null : Date.parse(value.expires_at)
+    validateConsent(
+      {
+        ...value,
+        contract: "visit_prep.patient_email_consent.v1",
+        disclosure_version: "visit_prep_email_consent_v1",
+      },
+      context,
+    )
     if (
-      value.grant_disclosure_fingerprint ===
-        value.withdrawal_disclosure_fingerprint ||
-      (value.event_sequence === 0
-        ? value.status !== "not_recorded" ||
-          value.recorded_at !== null ||
-          expiry !== null
-        : value.status === "not_recorded" || value.recorded_at === null) ||
-      (value.recorded_at !== null && Date.parse(value.recorded_at) > checked) ||
-      (value.status === "withdrawn" && expiry !== null) ||
-      (["grant_recorded", "expired"].includes(value.status) &&
-        expiry === null) ||
-      (value.status === "grant_recorded" &&
-        Math.min(expiry!, maximum) <= checked) ||
-      (value.status === "expired" && Math.min(expiry!, maximum) > checked) ||
-      (value.can_grant && maximum <= checked)
+      !value.contact_available &&
+      (value.can_grant || value.event_sequence !== 0)
     )
       context.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Invalid email choice",
+        message: "Invalid SMS choice",
       })
   })
 export const visitPrepPatientEmailConsentReceipt = z
@@ -249,6 +278,7 @@ export const visitPrepPatientEmailConsentReceipt = z
         value.current_event_sequence === value.event_sequence),
   )
 export type PatientEmailConsent = z.infer<typeof visitPrepPatientEmailConsent>
+export type PatientSMSConsent = z.infer<typeof visitPrepPatientSMSConsent>
 export type PatientEmailConsentDecision = PatientConfirmation & {
   expected_event_sequence: number
   event_kind: "granted" | "withdrawn"
@@ -593,6 +623,15 @@ export function createVisitPrepPatientClient(
     decideEmailConsent: (payload: PatientEmailConsentDecision, key: string) =>
       request(
         "/email-consent/decision",
+        visitPrepPatientEmailConsentReceipt,
+        payload,
+        key,
+      ),
+    readSMSConsent: (confirmation: PatientConfirmation) =>
+      request("/sms-consent", visitPrepPatientSMSConsent, confirmation),
+    decideSMSConsent: (payload: PatientEmailConsentDecision, key: string) =>
+      request(
+        "/sms-consent/decision",
         visitPrepPatientEmailConsentReceipt,
         payload,
         key,

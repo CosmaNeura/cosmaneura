@@ -24,6 +24,12 @@ export default defineConfig({
   plugins: [tailwind(), reactRouter(), paths()],
   ssr: { noExternal: ["react-dropzone"] },
   define: {
+    "import.meta.env.VITE_VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED":
+      JSON.stringify(
+        process.env.VITE_VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED === "true"
+          ? "true"
+          : "false",
+      ),
     "import.meta.env.VITE_VISIT_PREP_EMAIL_WORKFLOW_ENABLED": JSON.stringify(
       process.env.VITE_VISIT_PREP_EMAIL_WORKFLOW_ENABLED === "true"
         ? "true"

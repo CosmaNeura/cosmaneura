@@ -51,6 +51,8 @@ function setup(
     answerFollowup: vi.fn(),
     readEmailConsent: vi.fn().mockResolvedValue(value),
     decideEmailConsent: vi.fn(),
+    readSMSConsent: vi.fn(),
+    decideSMSConsent: vi.fn(),
   }
   const props = { client, onClose: vi.fn(), onUnavailable: vi.fn() }
   render(<PatientEmailConsent {...props} continuedRole={continuedRole} />)

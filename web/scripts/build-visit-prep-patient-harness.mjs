@@ -33,6 +33,8 @@ await build({
     "import.meta.env.VITE_PYTHON_URL": '"https://testserver"',
     "import.meta.env.DEV": "false",
     "import.meta.env.VITE_VISIT_PREP_PATIENT_AI_ENABLED": '"false"',
+    // Actual UI enabled only in this local, network-blocked synthetic harness.
+    "import.meta.env.VITE_VISIT_PREP_SMS_CONSENT_CAPTURE_ENABLED": '"true"',
   },
   outfile: resolve(
     web,
