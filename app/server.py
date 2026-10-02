@@ -35,6 +35,7 @@ from .routes.authority_errors import (
     normalize_trace_id,
     token_problem_response,
 )
+from .routes.cab_authorization import router as cab_authorization_router
 from .routes.chat import chat_api_app
 from .routes.companion_appointment_setup import (
     install as install_companion_appointment_setup,
@@ -88,6 +89,7 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
 # Agent and context-token contracts are workload/host APIs and intentionally stay
