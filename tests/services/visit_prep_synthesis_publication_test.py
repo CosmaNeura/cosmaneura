@@ -21,6 +21,7 @@ from app.services.visit_prep_synthesis_publication import (
     VisitPrepSynthesisStale,
     get_visit_prep_synthesis,
     publish_visit_prep_synthesis,
+    read_visit_prep_synthesis_in_session,
 )
 from app.services.visit_preps import (
     VisitPrepNotFound,
@@ -33,7 +34,7 @@ from activemodel.session_manager import get_session
 from app.models.authority import AuthorityAuditEvent
 from app.models.doctor import Doctor
 from app.models.visit_prep_synthesis import VisitPrepSynthesisArtifact
-from sqlmodel import select
+from sqlmodel import col, select
 
 from tests.services.visit_prep_contribution_commands_test import _correct, _review
 from tests.services.visit_prep_contribution_projection_test import _prepared
@@ -62,12 +63,19 @@ def _view(fixture):
     return get_visit_prep_synthesis(**_scope(fixture), visit_prep_id=fixture.prep_id)
 
 
+def _staged_view(fixture):
+    with get_session() as session:
+        return read_visit_prep_synthesis_in_session(
+            session, **_scope(fixture), visit_prep_id=fixture.prep_id
+        )
+
+
 def _rows(fixture):
     with get_session() as session:
         return session.exec(
             select(VisitPrepSynthesisArtifact)
             .where(VisitPrepSynthesisArtifact.visit_prep_id == fixture.prep_id)
-            .order_by(VisitPrepSynthesisArtifact.version)
+            .order_by(col(VisitPrepSynthesisArtifact.version))
         ).all()
 
 
@@ -76,7 +84,7 @@ def _audits(fixture):
         return session.exec(
             select(AuthorityAuditEvent).where(
                 AuthorityAuditEvent.resource_ref == str(fixture.prep_id),
-                AuthorityAuditEvent.event_type.in_(
+                col(AuthorityAuditEvent.event_type).in_(
                     ["visit_prep.synthesis_published", "visit_prep.synthesis_read"]
                 ),
             )
@@ -95,7 +103,8 @@ def test_publish_and_read_bind_current_sources_without_a_chart(
     assert receipt.disposition == "published" and receipt.version == 1
     view = _view(fixture)
     assert view.status == "ready" and view.artifact_id == receipt.artifact_id
-    assert view.version == 1 and view.recorded_at.tzinfo is not None
+    assert view.version == 1 and view.recorded_at is not None
+    assert view.recorded_at.tzinfo is not None
     assert view.prepared == _brief(selection)
     assert view.package.source_version == selection.source_version
     assert view.package.preparation.patient_id is None
@@ -146,13 +155,17 @@ def test_later_source_change_rejects_old_output_and_never_discloses_it_as_curren
         _review(fixture)
     elif change == "rotation":
         rotate_visit_prep_credential(
-            **_scope(fixture, package=False),
+            owner_practice_member_id=fixture.owner.id,
+            owner_doctor_id=fixture.doctor.id,
+            practice_id=fixture.practice.id,
             visit_prep_id=fixture.prep_id,
             expected_credential_generation=1,
         )
     elif change == "reschedule":
         reschedule_visit_prep(
-            **_scope(fixture, package=False),
+            owner_practice_member_id=fixture.owner.id,
+            owner_doctor_id=fixture.doctor.id,
+            practice_id=fixture.practice.id,
             visit_prep_id=fixture.prep_id,
             expected_credential_generation=1,
             expected_schedule_generation=1,
@@ -216,7 +229,7 @@ def test_caller_cannot_launder_changed_selection_even_with_unchanged_basis(
     assert not _rows(fixture) and not _audits(fixture)
 
 
-@pytest.mark.parametrize("operation", ["publish", "read"])
+@pytest.mark.parametrize("operation", ["publish", "read", "staged_read"])
 @pytest.mark.parametrize("denial", ["gate", "baa", "seat", "identity", "quarantine"])
 def test_current_denial_prevents_artifact_write_or_decryption(
     monkeypatch, operation, denial
@@ -239,6 +252,7 @@ def test_current_denial_prevents_artifact_write_or_decryption(
     elif denial == "identity":
         with get_session() as session:
             doctor = session.get(Doctor, fixture.doctor.id)
+            assert doctor is not None
             doctor.clerk_id = "user_synthetic_rebound_identity"
             session.add(doctor)
             session.commit()
@@ -250,7 +264,12 @@ def test_current_denial_prevents_artifact_write_or_decryption(
         lambda *_args: pytest.fail("unauthorized artifact decryption"),
     )
     with pytest.raises(VisitPrepNotFound):
-        _publish(fixture, selected) if operation == "publish" else _view(fixture)
+        if operation == "publish":
+            _publish(fixture, selected)
+        elif operation == "staged_read":
+            _staged_view(fixture)
+        else:
+            _view(fixture)
     assert len(_rows(fixture)) == 1 and len(_audits(fixture)) == initial_audits
 
 
@@ -262,10 +281,19 @@ def test_another_owner_cannot_publish_or_read_even_an_existing_valid_artifact(
     _publish(first, selected)
     second = _prepared(monkeypatch, "publication-owner-second")
     with pytest.raises(VisitPrepNotFound):
-        get_visit_prep_synthesis(**_scope(second), visit_prep_id=first.prep_id)
+        get_visit_prep_synthesis(
+            owner_practice_member_id=second.owner.id,
+            owner_doctor_id=second.doctor.id,
+            practice_id=second.practice.id,
+            expected_clerk_subject=second.doctor.clerk_id,
+            visit_prep_id=first.prep_id,
+        )
     with pytest.raises(VisitPrepNotFound):
         publish_visit_prep_synthesis(
-            **_scope(second),
+            owner_practice_member_id=second.owner.id,
+            owner_doctor_id=second.doctor.id,
+            practice_id=second.practice.id,
+            expected_clerk_subject=second.doctor.clerk_id,
             visit_prep_id=first.prep_id,
             expected_selection=selected,
             prepared=_brief(selected),
@@ -284,7 +312,8 @@ def test_all_skipped_input_publishes_empty_brief_not_invented_information(monkey
     assert not selected.sources
     _publish(fixture, selected)
     view = _view(fixture)
-    assert view.status == "ready" and not view.prepared.items()
+    assert view.status == "ready" and view.prepared is not None
+    assert not view.prepared.items()
     assert view.package.contribution.current_answers_complete
     assert not view.package.contribution.current_answers_reviewed
 

@@ -115,7 +115,7 @@ def _decoded_current(
     return decrypt_synthesis_payload(artifact.payload_ciphertext, selection)
 
 
-def _finish_audit(
+def _stage_audit(
     session: Session,
     locked: _LockedPackage,
     operation: Literal["synthesis_read", "synthesis_published"],
@@ -132,13 +132,21 @@ def _finish_audit(
     )
     session.flush()
     # Audit insertion may wait. Recheck the time-dependent access boundary
-    # after that wait before committing a provider disclosure receipt.
+    # after that wait before handing the snapshot to its transaction owner.
     _authorize(
         session,
         owner=locked.owner,
         practice=locked.practice,
         at=_database_now(session),
     )
+
+
+def _finish_audit(
+    session: Session,
+    locked: _LockedPackage,
+    operation: Literal["synthesis_read", "synthesis_published"],
+) -> None:
+    _stage_audit(session, locked, operation)
     _commit(session)
 
 
@@ -241,7 +249,7 @@ def get_visit_prep_synthesis(
 ) -> VisitPrepSynthesisView:
     """Show only current profile/source output; stale payload is not decrypted."""
     with _visit_prep_session() as session:
-        locked = _load_authorized_package(
+        result = read_visit_prep_synthesis_in_session(
             session,
             owner_practice_member_id=owner_practice_member_id,
             owner_doctor_id=owner_doctor_id,
@@ -249,51 +257,87 @@ def get_visit_prep_synthesis(
             expected_clerk_subject=expected_clerk_subject,
             visit_prep_id=visit_prep_id,
         )
-        current = select_patient_sources(locked.package)
-        artifact = _current_artifact(
-            session, prep_id=visit_prep_id, source_version=current.source_version
-        )
-        if artifact is not None:
-            result = VisitPrepSynthesisView(
-                package=locked.package,
-                status="ready",
-                artifact_id=artifact.id,
-                version=artifact.version,
-                recorded_at=artifact.recorded_at,
-                prepared=_decoded_current(artifact, locked, current),
-                build_status="ready",
-            )
-        else:
-            prior_id = session.exec(
-                select(cast(Any, VisitPrepSynthesisArtifact.id))
-                .where(VisitPrepSynthesisArtifact.visit_prep_id == visit_prep_id)
-                .limit(1)
-            ).first()
-            build = session.exec(
-                select(VisitPrepSynthesisBuild).where(
-                    VisitPrepSynthesisBuild.visit_prep_id == visit_prep_id,
-                    VisitPrepSynthesisBuild.source_version == current.source_version,
-                    VisitPrepSynthesisBuild.generator_version == GENERATOR_VERSION,
-                    VisitPrepSynthesisBuild.prompt_version == PROMPT_VERSION,
-                    VisitPrepSynthesisBuild.model_profile == MODEL_PROFILE,
-                )
-            ).one_or_none()
-            # Old-source work is not current work. A ready queue row without a
-            # valid current artifact is never presented as successful output.
-            build_status = (
-                cast(Literal["pending", "running", "failed"], build.state)
-                if build is not None and build.state in {"pending", "running", "failed"}
-                else "failed"
-                if build is not None
-                else "not_requested"
-            )
-            result = VisitPrepSynthesisView(
-                package=locked.package,
-                status="stale" if prior_id else "missing",
-                build_status=build_status,
-                retry_at=build.retry_at
-                if build is not None and build.state in {"pending", "failed"}
-                else None,
-            )
-        _finish_audit(session, locked, "synthesis_read")
+        _commit(session)
         return result
+
+
+def read_visit_prep_synthesis_in_session(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    expected_clerk_subject: str,
+    visit_prep_id: TypeIDType,
+) -> VisitPrepSynthesisView:
+    """Stage the authoritative dashboard package in a caller-owned transaction.
+
+    Reacquire current owner authority, lineage and sources, then flush the
+    content-free read audit and recheck time-dependent access. Never commit,
+    roll back, open another session or invoke a model. Locks remain held so a
+    receiver can perform its own final authorization and audit atomically.
+
+    The returned value is private, staged data: the caller must commit the
+    enclosing transaction successfully before disclosure and discard it on any
+    later denial or uncertain commit. If more work follows the read, recheck
+    Core's time-dependent owner authority as well as the receiver's authority
+    immediately before that final commit. Owner IDs must come from the caller's
+    verified principal, not an untrusted request. This grants no bot capability,
+    encounter permission, patient identity or chart linkage by itself.
+    """
+    locked = _load_authorized_package(
+        session,
+        owner_practice_member_id=owner_practice_member_id,
+        owner_doctor_id=owner_doctor_id,
+        practice_id=practice_id,
+        expected_clerk_subject=expected_clerk_subject,
+        visit_prep_id=visit_prep_id,
+    )
+    current = select_patient_sources(locked.package)
+    artifact = _current_artifact(
+        session, prep_id=visit_prep_id, source_version=current.source_version
+    )
+    if artifact is not None:
+        result = VisitPrepSynthesisView(
+            package=locked.package,
+            status="ready",
+            artifact_id=artifact.id,
+            version=artifact.version,
+            recorded_at=artifact.recorded_at,
+            prepared=_decoded_current(artifact, locked, current),
+            build_status="ready",
+        )
+    else:
+        prior_id = session.exec(
+            select(cast(Any, VisitPrepSynthesisArtifact.id))
+            .where(VisitPrepSynthesisArtifact.visit_prep_id == visit_prep_id)
+            .limit(1)
+        ).first()
+        build = session.exec(
+            select(VisitPrepSynthesisBuild).where(
+                VisitPrepSynthesisBuild.visit_prep_id == visit_prep_id,
+                VisitPrepSynthesisBuild.source_version == current.source_version,
+                VisitPrepSynthesisBuild.generator_version == GENERATOR_VERSION,
+                VisitPrepSynthesisBuild.prompt_version == PROMPT_VERSION,
+                VisitPrepSynthesisBuild.model_profile == MODEL_PROFILE,
+            )
+        ).one_or_none()
+        # Old-source work is not current work. A ready queue row without a
+        # valid current artifact is never presented as successful output.
+        build_status = (
+            cast(Literal["pending", "running", "failed"], build.state)
+            if build is not None and build.state in {"pending", "running", "failed"}
+            else "failed"
+            if build is not None
+            else "not_requested"
+        )
+        result = VisitPrepSynthesisView(
+            package=locked.package,
+            status="stale" if prior_id else "missing",
+            build_status=build_status,
+            retry_at=build.retry_at
+            if build is not None and build.state in {"pending", "failed"}
+            else None,
+        )
+    _stage_audit(session, locked, "synthesis_read")
+    return result
