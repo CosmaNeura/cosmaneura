@@ -235,9 +235,27 @@ One focused owned-database run passed the complete signed-JWT HTTP path and
 transaction recovery checks (37 checks). Implementer review, type checks and
 the exact commit are recorded in the stacked draft PR. This is branch-level
 qualification, not activation or live cross-client acceptance. Recovery remains
-flag-off plus revert of this additive increment. Next is the matching CosmaBot
-display adapter and actual shared-client package review; application merges and
-deployment remain outside this increment.
+flag-off plus revert of this additive increment. The matching CosmaBot display
+adapter is now implemented in draft PR 93; actual live shared-client acceptance
+remains unfinished. Application merges and deployment remain outside this increment.
+
+## Preparation picker implementation October 2 2026
+
+The next paired branch increment replaces manual preparation references in
+CosmaBot with an explicit owner-scoped picker. Core shares its dashboard list
+domain under the existing companion dual-auth/current-connection boundary.
+The list includes only invitation first name/role, appointment timing, lifecycle,
+chart-link status and selector metadata. It includes no contact details, patient
+answers or model output. Package opening independently rechecks current access.
+
+The picker paginates older preparations and clears private selection metadata
+on connection/scope/focus changes. Names are invitation identifiers, not verified
+patient identity. Branch contract details are in the existing companion contract;
+canonical architecture reconciliation of this additive list wire remains a
+release gate. Recovery is flag-off and revert of the additive selector increment.
+No migration, environment activation, external service call or real message is
+part of this work. Connected patient-to-provider/device/delivery acceptance and
+broader governed bot actions remain open; the full delivery goal is unchanged.
 
 ## Source references
 
