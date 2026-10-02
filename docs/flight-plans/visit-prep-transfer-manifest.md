@@ -1533,3 +1533,49 @@ operational alert acceptance, consent retention/aggregate cleanup, usable patien
 session continuation, Sovereign/CosmaBot and clinical qualification remain open.
 All release controls remain off. No merge, deployment, live message or retirement
 is authorized by this increment.
+
+## Prompt cleanup of obsolete email secrets
+
+The existing dormant `maintain_email_secrets` service now selects queued
+invitations whose appointment has passed, whose credential was revoked or
+expired, or whose schedule generation is obsolete. Previously, a queued
+invitation with a past appointment could retain its transient payload until the
+later secret expiry even though dispatch would refuse it. A real-clock owned
+PostgreSQL regression reproduced that gap before the fix.
+
+Candidate selection reads existing lifecycle metadata and remains only a routing
+hint. After the established practice, preparation and delivery custody locks,
+the service refreshes current schedule and credential facts and database time
+before suppressing work. An older active invitation cannot consume a bounded
+batch slot needed by a past-appointment invitation. A future invitation waiting
+for quiet hours is not erased. A concurrent reschedule preserves the new intent;
+a regrant that makes the selection stale causes a fresh check rather than an
+automatic suppression.
+
+Only the transient invitation payload is cleared through the existing terminal
+state guards and atomic content-free audit. Authorization ciphertext, original
+answers, corrections, review events, brief artifacts, consent/approval evidence,
+schedule/credential history, recipient snapshot and legal holds remain intact.
+Cleanup works with release gates off or BAA authority withdrawn. It neither
+changes clinical retention nor authorizes a consent-evidence or aggregate purge.
+A past appointment alone does not finalize a live submission claim, which could
+already have an external effect. Submission expiry still means uncertain, never
+permission to send again.
+
+Owned integration checks use actual rescheduling, a short future appointment,
+PostgreSQL time passing, source capture/correction/review, encrypted brief
+storage and legal holds. Independent connections exercise competing maintainers,
+rescheduling and consent regrant during real lock waits, and committed versus
+uncommitted lost maintenance acknowledgments. They also verify refusal of an
+ambient unflushed audit. The regression retains historical terminal evidence;
+it does not disable guards, invent old timestamps, truncate tables or call a
+real provider. Exact final-source validation and implementer review belong in
+the stacked draft PR.
+
+This is a focused correction of Core's existing maintenance service, not a new
+cross-repository transfer, schema, worker registration, scheduler, provider or
+configuration change. Installed cleanup and monitoring, qualified consent
+retention/aggregate purge, durable cadence policy, booking/email/SMS/STOP/reminder
+automation, usable patient session continuation, Sovereign/CosmaBot integration
+and clinical/operational acceptance remain full-goal work. All release controls
+remain off; no merge, deployment, live message or workspace retirement occurs.
