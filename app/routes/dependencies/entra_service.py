@@ -16,6 +16,7 @@ from app.configuration.service_auth import (
     SERVICE_AUTH_SETTINGS,
     SOVEREIGN_TOOL_AUTH_SETTINGS,
 )
+from app.utils.native_request_timing import active, phase
 
 
 @dataclass(frozen=True)
@@ -57,12 +58,19 @@ class EntraAuthPolicy(Protocol):
     def is_complete(self) -> bool: ...
 
 
+class _ObservedJWKClient(PyJWKClient):
+    def fetch_data(self) -> Any:
+        with phase("entra_jwks"):
+            return super().fetch_data()
+
+
 class EntraTokenDecoder:
     """Verify Entra v2 access tokens against the tenant's published signing keys."""
 
     def __init__(self, settings: EntraAuthPolicy):
         self.settings = settings
-        self.jwks_client = PyJWKClient(settings.jwks_url, cache_keys=True)
+        client_type = _ObservedJWKClient if active() else PyJWKClient
+        self.jwks_client = client_type(settings.jwks_url, cache_keys=True)
 
     def __call__(self, token: str) -> dict[str, Any]:
         signing_key = self.jwks_client.get_signing_key_from_jwt(token)
