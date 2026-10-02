@@ -1,14 +1,15 @@
 """Current locked Core cadence evidence, never messaging authorization.
 
-Only the email outbox exists today. SMS decisions explicitly wait for durable
-channel history; an empty email history must not imply that no SMS was sent.
+Email and SMS have separate durable histories. An empty email history never
+implies that no SMS was sent. Shared-sender spacing also requires the SMS worker's
+cross-preparation channel fence before dispatch.
 Keep the caller's transaction open through any separately authorized handoff.
 No contact, bearer, answer, consent decryption, provider call or commit occurs.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Literal, cast
 
@@ -42,6 +43,7 @@ from app.models.visit_prep import (
     VisitPrepScheduleGeneration,
 )
 from app.models.visit_prep_delivery import VisitPrepEmailDelivery
+from app.models.visit_prep_sms_delivery import VisitPrepSMSDelivery
 from sqlalchemy import and_
 from sqlalchemy import select as columns_select
 from sqlmodel import Session, col
@@ -54,7 +56,8 @@ class CurrentTimingPlan:
     email_history: tuple[TimingTouch, ...]
     decisions: tuple[TimingDecision, ...]
     checked_at: datetime
-    sms_history_available: bool = False
+    sms_history_available: bool = True
+    sms_history: tuple[TimingTouch, ...] = ()
 
     def __repr__(self) -> str:
         return "CurrentTimingPlan(<redacted>)"
@@ -172,7 +175,7 @@ def plan_locked_current_delivery(
     Scope is normalized trusted Core input, not a browser assertion or service
     grant. Denial requires caller rollback. No source adapter, booking job or
     public route is installed. Explicit policy inputs introduce no live defaults.
-    SMS stays unavailable until its own authoritative history can be loaded.
+    SMS history is loaded separately; timing still grants no sending authority.
     """
     if (
         type(settings) is not VisitPrepSettings
@@ -233,6 +236,7 @@ def plan_locked_current_delivery(
     ):
         raise VisitPrepEmailInvalid()
     history = _email_history(session, prep)
+    sms_history = _sms_history(session, prep)
     # All waits precede the final authoritative clock/access recheck. An owner
     # lock freezes mutation, not expiry. Do not use a caller-supplied clock.
     _, _, now = _authorize_owner(session, **scope)
@@ -262,19 +266,80 @@ def plan_locked_current_delivery(
         now=now,
         quiet_hours=quiet_hours,
         minimum_channel_spacing=minimum_channel_spacing,
-        history=history,
+        history=history + sms_history,
     )
-    # Timing for email is complete for this outbox. Never publish inferred SMS
-    # candidates based on the unrelated email table's empty channel history.
-    decisions = tuple(
-        decision
-        if decision.channel == "email"
-        else replace(
-            decision,
-            action="wait",
-            reason="channel_history_unavailable",
-            next_check_at=None,
+    return CurrentTimingPlan(
+        str(prep.id), snapshot, history, decisions, now, True, sms_history
+    )
+
+
+def _sms_history(session: Session, prep: VisitPrep) -> tuple[TimingTouch, ...]:
+    rows = session.execute(
+        columns_select(
+            col(VisitPrepSMSDelivery.owner_practice_member_id),
+            col(VisitPrepSMSDelivery.question_set_version_id),
+            col(VisitPrepSMSDelivery.step),
+            col(VisitPrepSMSDelivery.template_version),
+            col(VisitPrepSMSDelivery.state),
+            col(VisitPrepSMSDelivery.requested_at),
+            col(VisitPrepSMSDelivery.submitted_at),
+            col(VisitPrepCredentialGeneration.generation),
+            col(VisitPrepCredentialGeneration.visit_prep_id),
+            col(VisitPrepCredentialGeneration.owner_practice_member_id),
+            col(VisitPrepScheduleGeneration.generation),
+            col(VisitPrepScheduleGeneration.visit_prep_id),
+            col(VisitPrepScheduleGeneration.owner_practice_member_id),
         )
-        for decision in decisions
-    )
-    return CurrentTimingPlan(str(prep.id), snapshot, history, decisions, now)
+        .select_from(VisitPrepSMSDelivery)
+        .outerjoin(
+            VisitPrepCredentialGeneration,
+            col(VisitPrepCredentialGeneration.id)
+            == col(VisitPrepSMSDelivery.credential_id),
+        )
+        .outerjoin(
+            VisitPrepScheduleGeneration,
+            col(VisitPrepScheduleGeneration.id)
+            == col(VisitPrepCredentialGeneration.schedule_generation_id),
+        )
+        .where(col(VisitPrepSMSDelivery.visit_prep_id) == prep.id)
+        .order_by(col(VisitPrepSMSDelivery.requested_at))
+        .limit(129)
+        .with_for_update(of=VisitPrepSMSDelivery)
+    ).all()
+    if len(rows) > 128:
+        raise VisitPrepEmailInvalid()
+    history = []
+    for (
+        owner,
+        version,
+        step,
+        template,
+        state,
+        requested,
+        submitted,
+        generation,
+        credential_prep,
+        credential_owner,
+        schedule_generation,
+        schedule_prep,
+        schedule_owner,
+    ) in rows:
+        if (
+            owner != prep.owner_practice_member_id
+            or version != prep.question_set_version_id
+            or credential_prep != prep.id
+            or schedule_prep != prep.id
+            or credential_owner != owner
+            or schedule_owner != owner
+            or generation is None
+            or schedule_generation is None
+            or template != "visit_prep_sms_v1"
+            or step not in {"booking_sms", "unopened_48h_sms", "unfinished_12h_sms"}
+        ):
+            raise VisitPrepEmailInvalid()
+        history.append(
+            TimingTouch(
+                step, schedule_generation, generation, state, requested, submitted
+            )
+        )
+    return tuple(history)
