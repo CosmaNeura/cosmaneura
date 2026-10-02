@@ -823,3 +823,51 @@ prior-consent intake and evidence retention/hold/cleanup remain open. The
 patient capture and channel/public controls remain unchanged and default off.
 The broader patient AI, CosmaBot, Acuity, SMS/STOP/reminder and release milestones
 remain in scope. Exact validation and implementer review belong in the stacked PR.
+
+The dormant email worker now commits an irreversible submission claim before
+invoking a transport. It then reacquires Core authority and compares the actual
+current approval and qualified consent with the exact encrypted enqueue
+manifests. Credential, schedule, recipient, owner, origin, policy and database
+time must remain current. The worker holds the existing withdrawal fences
+through the bounded transport attempt and atomic terminal audit. No job, route,
+transport or qualified consent-source adapter is registered by default.
+
+Only the original successfully acknowledged claim invocation may proceed.
+Its process-local one-use guard is shared by shallow copies and dataclass
+replacement; claims are not serialized to a broker or exposed through an API.
+The durable outbox state never returns to the send lane. Losing acknowledgment
+of a committed claim prevents any provider call. A crash, an unrecognized
+transport result, a provider exception or an expired submission remains
+uncertain and is never automatically resent. This is a single application
+submission attempt, not a promise of exactly-once external delivery. Provider
+acceptance is recorded as accepted, never delivered.
+
+Secret maintenance remains available with release and sending controls off.
+It selects due or obsolete work rather than letting older active invitations
+fill the batch. Queued invitations are suppressed after expiry, revocation,
+wrong-recipient quarantine, completion, credential rotation, consent withdrawal
+or physician approval withdrawal. Expired submission claims become uncertain.
+Terminal state, transient payload erasure and the content-free audit commit
+together. Authorization ciphertext, immutable consent evidence, patient words
+and legal holds remain untouched. Evidence retention and aggregate purge still
+require separate qualification.
+
+Independent synthetic PostgreSQL checks observe committed claims from a
+separate connection, race two actual workers, and verify withdrawals and other
+authority changes committed during real lock waits. They also hold a withdrawal
+through the fake provider call, inject acknowledgment loss after actual SQL
+commits, and prove terminal storage failure cannot replay the original or a
+copied claim. The real Core mailer is exercised with only a fake SMTP function;
+no message or credential leaves the owned test boundary. Atomic audit failure,
+transaction-releasing source callbacks and private provider failures are covered.
+Final exact-revision regression and implementer review belong in the draft PR.
+
+This completes the dormant submission and transient-secret maintenance domain,
+not operational email delivery. Creation/booking composition, qualified prior
+consent, evidence retention, worker registration, dashboard delivery status,
+queue monitoring and controlled provider acceptance remain open. Consent
+collected after opening a link cannot authorize its first booking invitation.
+No schema, dependency, deployment, real messaging or release control changed.
+Bounded patient AI clarification, matching Core/CosmaBot packages, Acuity,
+SMS/STOP/reminders and clinical/operational release acceptance remain full-goal
+requirements. The original workspace has not been retired.
