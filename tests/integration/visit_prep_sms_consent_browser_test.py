@@ -14,13 +14,23 @@ from app.server import api_app
 from app.services import visit_prep_access
 
 from tests.integration.visit_prep_sms_consent_test import _rows
+from tests.integration.visit_prep_sms_suppression_test import _event, _record, _routing
 from tests.services.visit_prep_interviews_test import _fixture
 
 
-@pytest.mark.parametrize("width,role", [(1440, "patient"), (390, "caregiver")])
+@pytest.mark.parametrize(
+    "width,role,stopped",
+    [
+        (1440, "patient", False),
+        (390, "caregiver", False),
+        (1440, "patient", True),
+        (390, "caregiver", True),
+    ],
+)
 def test_actual_sms_choice_does_not_reconfirm_identity_or_block_answers(
-    monkeypatch, owned_rate_limit_redis, width, role
+    monkeypatch, owned_rate_limit_redis, width, role, stopped
 ):
+    stop_event = _event(_routing(monkeypatch)) if stopped else None
     fixture = _fixture(
         monkeypatch, "sms-browser", recipient_role=role, phone="+12025550123"
     )
@@ -164,6 +174,35 @@ def test_actual_sms_choice_does_not_reconfirm_identity_or_block_answers(
                 page.get_by_text("Permission choice recorded at last load", exact=False)
             ).to_be_visible()
             expect(page.get_by_label("Recipient first name")).to_have_count(0)
+            if stop_event is not None:
+                _record(stop_event)
+                page.get_by_role(
+                    "button", name="Back to preparation", exact=True
+                ).click()
+                page.get_by_role(
+                    "button", name="Optional SMS choices", exact=True
+                ).click()
+                expect(
+                    page.get_by_text(
+                        "A phone-wide text opt-out is recorded", exact=False
+                    )
+                ).to_be_visible()
+                expect(
+                    page.get_by_role(
+                        "button", name="Record permission choice", exact=True
+                    )
+                ).to_have_count(0)
+                expect(
+                    page.get_by_label("I reviewed these disclosures", exact=False)
+                ).to_have_count(0)
+                expect(page.get_by_label("Recipient first name")).to_have_count(0)
+                page.screenshot(
+                    path=str(root / "tmp" / f"visit-prep-sms-stop-{width}.png"),
+                    full_page=True,
+                )
+                assert page.evaluate(
+                    "document.documentElement.scrollWidth <= window.innerWidth"
+                )
             page.get_by_role(
                 "button", name="Do not allow / withdraw SMS texts", exact=True
             ).click()

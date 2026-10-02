@@ -405,6 +405,7 @@ class VisitPrepPatientSMSConsentResponse(_PatientConsentResponse):
         "visit_prep.patient_sms_consent.v1"
     )
     contact_available: bool
+    phone_suppression_status: Literal["not_connected", "not_recorded", "stopped"]
 
 
 class VisitPrepPatientEmailConsentDecisionRequest(VisitPrepConfirmationRequest):
@@ -1238,6 +1239,7 @@ def visit_prep_public_read_sms_consent(
         can_grant=value.can_grant,
         checked_at=value.checked_at,
         contact_available=value.contact_available,
+        phone_suppression_status=value.phone_suppression_status,
     )
 
 

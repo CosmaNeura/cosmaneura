@@ -42,10 +42,30 @@ describe("patient email public contract", () => {
       contract: "visit_prep.patient_sms_consent.v1",
       disclosure_version: "visit_prep_sms_consent_v1",
       contact_available: true,
+      phone_suppression_status: "not_connected",
     }
     expect(visitPrepPatientSMSConsent.safeParse(choice).success).toBe(false)
     expect(visitPrepPatientEmailConsent.safeParse(sms).success).toBe(false)
     expect(visitPrepPatientSMSConsent.safeParse(sms).success).toBe(true)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({
+        ...sms,
+        phone_suppression_status: "stopped",
+      }).success,
+    ).toBe(false)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({
+        ...sms,
+        phone_suppression_status: "stopped",
+        can_grant: false,
+      }).success,
+    ).toBe(true)
+    expect(
+      visitPrepPatientSMSConsent.safeParse({
+        ...sms,
+        phone_suppression_status: "cleared",
+      }).success,
+    ).toBe(false)
     expect(
       visitPrepPatientSMSConsent.safeParse({ ...sms, contact_available: false })
         .success,

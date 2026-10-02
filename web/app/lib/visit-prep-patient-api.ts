@@ -239,6 +239,11 @@ export const visitPrepPatientSMSConsent = emailConsentShape
     contract: z.literal("visit_prep.patient_sms_consent.v1"),
     disclosure_version: z.literal("visit_prep_sms_consent_v1"),
     contact_available: z.boolean(),
+    phone_suppression_status: z.enum([
+      "not_connected",
+      "not_recorded",
+      "stopped",
+    ]),
   })
   .superRefine((value, context) => {
     validateConsent(
@@ -250,8 +255,11 @@ export const visitPrepPatientSMSConsent = emailConsentShape
       context,
     )
     if (
-      !value.contact_available &&
-      (value.can_grant || value.event_sequence !== 0)
+      (!value.contact_available &&
+        (value.can_grant ||
+          value.event_sequence !== 0 ||
+          value.phone_suppression_status !== "not_connected")) ||
+      (value.phone_suppression_status === "stopped" && value.can_grant)
     )
       context.addIssue({
         code: z.ZodIssueCode.custom,
