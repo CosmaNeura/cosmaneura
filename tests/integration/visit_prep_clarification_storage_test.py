@@ -311,7 +311,51 @@ def test_populated_expand_preserves_all_patient_synthesis_and_email_columns(
     command.upgrade(Config("alembic.ini"), "4f6c6893dbe7")
     assert snapshot() == before
     _, proposal, row = _proposal(monkeypatch, fixture)
-    row.save()
+    # Exercise this rung's original writer, not the latest ORM: source_turn_id
+    # is deliberately absent until the separate patient-turn expand.
+    assert row.source_turn_id is None
+    with get_session() as session:
+        session.execute(
+            text("""
+                INSERT INTO public.visit_prep_clarification_proposal
+                (id, visit_prep_id, owner_practice_member_id,
+                 question_set_version_id, question_id, credential_generation,
+                 actor_role, basis_response_count, basis_event_sequence,
+                 source_version, source_response_id, source_contribution_id,
+                 operation_id, envelope_format_version, evidence_ciphertext,
+                 payload_hmac_sha256)
+                VALUES
+                (:id, :visit_prep_id, :owner_practice_member_id,
+                 :question_set_version_id, :question_id, :credential_generation,
+                 :actor_role, :basis_response_count, :basis_event_sequence,
+                 :source_version, :source_response_id, :source_contribution_id,
+                 :operation_id, :envelope_format_version, :evidence_ciphertext,
+                 :payload_hmac_sha256)
+            """),
+            {
+                "id": row.id.uuid,
+                "visit_prep_id": row.visit_prep_id.uuid,
+                "owner_practice_member_id": row.owner_practice_member_id.uuid,
+                "question_set_version_id": row.question_set_version_id.uuid,
+                "question_id": row.question_id.uuid,
+                "credential_generation": row.credential_generation,
+                "actor_role": row.actor_role,
+                "basis_response_count": row.basis_response_count,
+                "basis_event_sequence": row.basis_event_sequence,
+                "source_version": row.source_version,
+                "source_response_id": row.source_response_id.uuid
+                if row.source_response_id is not None
+                else None,
+                "source_contribution_id": row.source_contribution_id.uuid
+                if row.source_contribution_id is not None
+                else None,
+                "operation_id": row.operation_id,
+                "envelope_format_version": row.envelope_format_version,
+                "evidence_ciphertext": row.evidence_ciphertext,
+                "payload_hmac_sha256": row.payload_hmac_sha256,
+            },
+        )
+        session.commit()
     _, decision = _decision(proposal)
     decision.save()
     assert _selected(fixture) == selected
