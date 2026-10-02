@@ -19,7 +19,7 @@ from app.routes.visit_prep_synthesis import (
     VisitPrepSynthesisResponse,
     _synthesis_response,
 )
-from app.services import authority, visit_prep_companion
+from app.services import authority, visit_prep_companion, visit_prep_companion_list
 from app.services.companion_record_contract import Closed, Digest
 from app.services.companion_records import (
     RecordBudget,
@@ -65,6 +65,63 @@ class VisitPrepCompanionResponse(Closed):
     request_nonce: UUID
     checked_at: AwareDatetime
     package: VisitPrepSynthesisResponse = Field(repr=False)
+
+
+class VisitPrepSelection(Closed):
+    preparation_ref: PreparationRef
+    recipient_first_name: str = Field(min_length=1, max_length=120, repr=False)
+    recipient_role: Literal["patient", "caregiver"]
+    scheduled_at: AwareDatetime
+    timezone_name: str = Field(min_length=1, max_length=64)
+    lifecycle_state: Literal[
+        "invited", "confirmed", "in_progress", "completed", "misdirected"
+    ]
+    chart_linked: bool
+    available_to_open: bool
+    created_at: AwareDatetime | None
+
+
+class VisitPrepSelectionResponse(Closed):
+    contract_version: Literal["1"] = "1"
+    connection_sha256: Digest
+    workspace_id: UUID
+    request_nonce: UUID
+    checked_at: AwareDatetime
+    preparations: list[VisitPrepSelection] = Field(max_length=20)
+    next_before_ref: PreparationRef | None
+
+
+def serialize_selections(request, result, at):
+    return (
+        VisitPrepSelectionResponse(
+            connection_sha256=request.connection_sha256,
+            workspace_id=request.workspace_id,
+            request_nonce=request.request_nonce,
+            checked_at=at,
+            preparations=[
+                VisitPrepSelection(
+                    preparation_ref=str(p.id),
+                    recipient_first_name=recipient[0],
+                    recipient_role=recipient[1],
+                    scheduled_at=p.scheduled_at,
+                    timezone_name=p.timezone_name,
+                    lifecycle_state=p.lifecycle_state,
+                    chart_linked=p.patient_id is not None,
+                    available_to_open=p.revoked_at is None
+                    and p.lifecycle_state in {"confirmed", "in_progress", "completed"},
+                    created_at=p.created_at,
+                )
+                for p, recipient in zip(
+                    result.preparations, result.recipients, strict=True
+                )
+            ],
+            next_before_ref=str(result.next_before_id)
+            if result.next_before_id
+            else None,
+        )
+        .model_dump_json()
+        .encode("utf-8")
+    )
 
 
 def serialize_package(request, result, at) -> bytes:
@@ -117,7 +174,7 @@ def _bearer(headers, name):
     return token
 
 
-async def read_body(request):
+async def read_body(request, model: type[Closed] = VisitPrepCompanionRequest):
     headers = request.headers
     if (
         request.scope.get("query_string")
@@ -143,7 +200,7 @@ async def read_body(request):
         body.extend(chunk)
     if length is not None and int(length) != len(body):
         raise ValueError("invalid_request")
-    return VisitPrepCompanionRequest.model_validate(
+    return model.model_validate(
         json.loads(
             body.decode("utf-8"),
             object_pairs_hook=_closed_pairs,
@@ -155,6 +212,9 @@ async def read_body(request):
 
 
 @router.post(PATH, response_model=None, include_in_schema=False)
+@router.post(
+    visit_prep_companion_list.PATH, response_model=None, include_in_schema=False
+)
 async def read_companion_visit_prep(request: Request) -> Response:
     deadline = getattr(request.state, "visit_prep_companion_deadline", None)
     settings = service_auth.COMPANION_VISIT_PREP_AUTH_SETTINGS
@@ -173,7 +233,13 @@ async def read_companion_visit_prep(request: Request) -> Response:
         physician_token = _bearer(
             request.headers, "x-cosmaneura-provider-authorization"
         )
-        data = await read_body(request)
+        is_list = request.scope["path"] == visit_prep_companion_list.PATH
+        data = await read_body(
+            request,
+            visit_prep_companion_list.VisitPrepCompanionListRequest
+            if is_list
+            else VisitPrepCompanionRequest,
+        )
         check_deadline(deadline)
     except CompanionAuthenticationRejected as error:
         return problem(error.status_code)
@@ -193,6 +259,16 @@ async def read_companion_visit_prep(request: Request) -> Response:
             physician = clerk.verify_visit_prep_physician(
                 physician_token, remaining_seconds=check_deadline(deadline) / 1000
             )
+            if is_list:
+                return visit_prep_companion_list.read_visit_prep_companion_list(
+                    workload=workload,
+                    physician=physician,
+                    request=data,
+                    deadline=deadline,
+                    serialize=lambda result, at: serialize_selections(data, result, at),
+                )
+            if not isinstance(data, VisitPrepCompanionRequest):
+                raise RecordUnavailable
             return visit_prep_companion.read_visit_prep_companion(
                 workload=workload,
                 physician=physician,
@@ -224,7 +300,7 @@ class VisitPrepBoundary(RecordBoundary):
     """Reuse bounded settling-task ownership, with Visit Prep's private wire."""
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"].rstrip("/") != PATH:
+        if scope["type"] != "http" or scope["path"].rstrip("/") != self.path:
             await self.app(scope, receive, send)
             return
         deadline = RecordBudget(monotonic() + 15)
@@ -242,7 +318,12 @@ class VisitPrepBoundary(RecordBoundary):
                 if (
                     start is None
                     or finished
-                    or len(body) + len(message.get("body", b"")) > MAX_RESPONSE_BYTES
+                    or len(body) + len(message.get("body", b""))
+                    > (
+                        visit_prep_companion_list.MAX_RESPONSE_BYTES
+                        if self.path == visit_prep_companion_list.PATH
+                        else MAX_RESPONSE_BYTES
+                    )
                 ):
                     raise RecordUnavailable
                 body.extend(message.get("body", b""))
@@ -259,7 +340,7 @@ class VisitPrepBoundary(RecordBoundary):
                 pass
 
         try:
-            if scope["path"] != PATH or scope["method"] != "POST":
+            if scope["path"] != self.path or scope["method"] != "POST":
                 await fail(422)
                 return
             try:
@@ -275,7 +356,12 @@ class VisitPrepBoundary(RecordBoundary):
                         status if status in {401, 403, 413, 422, 426, 503, 504} else 503
                     )
                     return
-                VisitPrepCompanionResponse.model_validate_json(body)
+                model = (
+                    VisitPrepSelectionResponse
+                    if self.path == visit_prep_companion_list.PATH
+                    else VisitPrepCompanionResponse
+                )
+                model.model_validate_json(body)
             except (TimeoutError, RecordDeadline):
                 await fail(504)
                 return
@@ -313,3 +399,4 @@ class VisitPrepBoundary(RecordBoundary):
 def install(app: FastAPI):
     app.include_router(router, include_in_schema=False)
     app.add_middleware(VisitPrepBoundary, path=PATH)
+    app.add_middleware(VisitPrepBoundary, path=visit_prep_companion_list.PATH)

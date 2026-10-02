@@ -193,6 +193,38 @@ def list_visit_preps(
     if type(limit) is not int or not 1 <= limit <= 50:
         raise VisitPrepValidation("Visit Prep list limit is invalid")
     with _visit_prep_session() as session:
+        result = list_visit_preps_in_session(
+            session,
+            owner_practice_member_id=owner_practice_member_id,
+            owner_doctor_id=owner_doctor_id,
+            practice_id=practice_id,
+            expected_clerk_subject=expected_clerk_subject,
+            limit=limit,
+            before_id=before_id,
+        )
+        _commit(session)
+        return result
+
+
+def list_visit_preps_in_session(
+    session: Session,
+    *,
+    owner_practice_member_id: TypeIDType,
+    owner_doctor_id: TypeIDType,
+    practice_id: TypeIDType,
+    expected_clerk_subject: str,
+    limit: int = 20,
+    before_id: TypeIDType | None = None,
+    audit: bool = True,
+) -> VisitPrepList:
+    """Shared dashboard/picker list under the caller's owned transaction.
+
+    No patient words, recipient contact decryption or model work. The caller
+    retains owner/root/lineage locks and commits the staged projection/audit.
+    """
+    if type(limit) is not int or not 1 <= limit <= 50:
+        raise VisitPrepValidation("Visit Prep list limit is invalid")
+    with session.no_autoflush:
         owner, practice = _owner(
             session,
             owner_practice_member_id=owner_practice_member_id,
@@ -239,8 +271,8 @@ def list_visit_preps(
             ),
             next_before_id=rows[limit - 1].id if len(rows) > limit else None,
         )
-        _audit(session, owner=owner, prep_id=None, at=now)
-        _commit(session)
+        if audit:
+            _audit(session, owner=owner, prep_id=None, at=now)
         return result
 
 

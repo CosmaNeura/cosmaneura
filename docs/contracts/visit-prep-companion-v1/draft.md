@@ -199,6 +199,43 @@ Transient buffers are discarded after use.
 
 ## Qualification and activation
 
+### Branch extension for preparation selection
+
+The follow-on implementation adds
+`POST /service/v1/companion/visit-prep/preparations` so the physician can choose
+a preparation in CosmaBot without copying an internal reference. This additive
+extension belongs to the approved product plan; the previously ratified v1.0.1
+package contract remains unchanged. Canonical architecture reconciliation of
+the list wire is still a release gate, not a reason to activate the draft.
+
+The list uses the same headers, current dual credentials, reviewed connection,
+owner/capability/cohort/legal checks, private errors and 15-second budget as the
+package endpoint. Its closed request has `contract_version: "1"`,
+`action: "visit-prep.list"`, `purpose: "provider_previsit_review"`, the same
+actor/tenant/connection/workspace/request assertions, `before_ref` (null or an
+owner-scoped preparation reference), and integer `limit` from 1 through 20.
+It accepts no package reference, search string, contact or model text.
+
+The closed receipt echoes the version, connection digest, workspace/request
+UUIDs and checked time. `preparations` contains at most the requested number
+of rows, in the dashboard's newest-created order. Each closed row contains
+`preparation_ref`, `recipient_first_name`, `recipient_role`, `scheduled_at`,
+`timezone_name`, `lifecycle_state`, `chart_linked`, `available_to_open` and
+`created_at`. `next_before_ref` is null or the last displayed reference.
+No email, phone, bearer, patient/appointment ID, answer, synthesis or chart fact
+is returned. The invitation first name comes from Core's encrypted recipient
+snapshot and is not verified patient identity. Names and schedule metadata are
+private patient information and use the same no-store/plain-text/clearing rules.
+
+Core shares the dashboard's same-session list projection, retains its owner,
+root and schedule/credential locks, records content-free list/action audits,
+rechecks the staged list and current authority, and returns no metadata before
+commit acknowledgment. A listed row is only an untrusted selector; package
+opening independently enforces current preparation/contribution/retention
+validity. A former list receipt cannot grant access or substitute for a read.
+The list response has a 32,768-byte cap and does not initiate a package/model
+read. Merely opening the panel performs neither operation.
+
 Architecture is ratified. A synthetic-qualified receiver precedes the companion
 adapter; neither is qualified solely by design approval or these schemas.
 Acceptance covers actual database lock waits,
