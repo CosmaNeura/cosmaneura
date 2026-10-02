@@ -164,7 +164,7 @@ class BillingHeaderSource(Closed):
 
 
 class BillingTransportState(Closed):
-    state: Literal["not_configured"] = "not_configured"
+    state: Literal["not_configured", "configured"] = "not_configured"
 
 
 class BillingHeaderOperation(Closed):

@@ -76,24 +76,34 @@ def billing_database():
 
     engine = create_engine(dsn)
     operation_table = BillingHeaderPreparedOperation.__table__
+    from app.models.billing_header_action import BillingHeaderAction
+
+    action_table = BillingHeaderAction.__table__
     # Local source-model prerequisites only; no configured-environment migration.
     with engine.begin() as connection:
         SQLModel.metadata.create_all(
             connection,
             tables=[
-                t for t in SQLModel.metadata.sorted_tables if t is not operation_table
+                t
+                for t in SQLModel.metadata.sorted_tables
+                if t not in (operation_table, action_table)
             ],
         )
-        path = (
-            ROOT
-            / "migrations/versions/2026_10_02_f5efcbb27acd_add_billing_header_prepared_operation.py"
-        )
-        spec = importlib.util.spec_from_file_location("billing_test_expand", path)
-        migration = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(migration)
-        if not connection.dialect.has_table(connection, operation_table.name):
-            with Operations.context(MigrationContext.configure(connection)):
-                migration.upgrade()
+        migrations = [
+            (
+                operation_table,
+                "2026_10_02_f5efcbb27acd_add_billing_header_prepared_operation.py",
+            ),
+            (action_table, "2026_10_02_211aefdf709b_add_billing_header_action.py"),
+        ]
+        for table, filename in migrations:
+            path = ROOT / "migrations/versions" / filename
+            spec = importlib.util.spec_from_file_location("billing_test_expand", path)
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            if not connection.dialect.has_table(connection, table.name):
+                with Operations.context(MigrationContext.configure(connection)):
+                    migration.upgrade()
     manager = SessionManager.get_instance()
     original_engine = manager._engine
     manager._engine = engine

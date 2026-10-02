@@ -416,6 +416,64 @@
         }
       }
     },
+    "/internal/v1/billing-header-operations/{operation_id}/cab": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Cab",
+        "operationId": "billing_header_cab",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/note-schemas/{schema_id}/fields": {
       "get": {
         "tags": [
@@ -3705,7 +3763,10 @@
         "properties": {
           "state": {
             "type": "string",
-            "const": "not_configured",
+            "enum": [
+              "not_configured",
+              "configured"
+            ],
             "title": "State",
             "default": "not_configured"
           }
@@ -3744,6 +3805,88 @@
         "additionalProperties": false,
         "type": "object",
         "title": "BillingVisitSuggestions"
+      },
+      "CabActionRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "read",
+              "generate",
+              "save"
+            ],
+            "title": "Action"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "command"
+        ],
+        "title": "CabActionRequest"
+      },
+      "CabActionResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-result.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "completed-note.accept",
+              "header.read",
+              "header.generate",
+              "header.save"
+            ],
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "requestSha256",
+          "result",
+          "source"
+        ],
+        "title": "CabActionResult"
       },
       "ClaimOrganizationAccessBody": {
         "properties": {
