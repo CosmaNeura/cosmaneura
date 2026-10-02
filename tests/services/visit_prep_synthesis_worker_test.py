@@ -55,7 +55,7 @@ from tests.services.visit_prep_synthesis_publication_test import (
     _selected,
     _view,
 )
-from tests.services.visit_prep_synthesis_test import _brief, _fake
+from tests.services.visit_prep_synthesis_test import _brief, _fake, _protected
 from tests.services.visit_prep_synthesis_usage_test import _events, _started, _usage
 from tests.services.visit_preps_test import _withdraw_seat
 
@@ -257,13 +257,18 @@ def test_publication_replays_a_prior_valid_artifact_and_atomically_finishes_job(
         selected,
         _brief(selected).model_copy(update={"visit_priorities": []}),
         intent_id=intent_id,
+        protected=_protected(selected),
     )
     assert result.disposition == "replayed" and result.artifact_id == first.artifact_id
     assert _build(fixture).state == "ready" and len(_rows(fixture)) == 1
     assert _rows(fixture)[0].payload_ciphertext == ciphertext
     with pytest.raises(VisitPrepBuildDiscarded):
         publish_claimed_synthesis(
-            claim, selected, _brief(selected), intent_id=intent_id
+            claim,
+            selected,
+            _brief(selected),
+            intent_id=intent_id,
+            protected=_protected(selected),
         )
 
 
@@ -367,7 +372,11 @@ def test_publication_rolls_back_artifact_ready_state_and_audit_together(
         VisitPrepBuildDiscarded if failure == "final_lease" else EncryptionError
     ):
         publish_claimed_synthesis(
-            claim, selected, _brief(selected), intent_id=intent_id
+            claim,
+            selected,
+            _brief(selected),
+            intent_id=intent_id,
+            protected=_protected(selected),
         )
     assert not _rows(fixture) and not _audits(fixture)
     assert (
@@ -461,7 +470,11 @@ def test_time_dependent_entitlement_expiry_after_audit_flush_rolls_back_publicat
 
     with pytest.raises(VisitPrepNotFound):
         publish_claimed_synthesis(
-            claim, selected, _brief(selected), intent_id=intent_id
+            claim,
+            selected,
+            _brief(selected),
+            intent_id=intent_id,
+            protected=_protected(selected),
         )
     assert not _rows(fixture) and not _audits(fixture)
     assert _build(fixture).state == "running" and len(_events(fixture)) == 2
@@ -478,7 +491,11 @@ def test_expired_attempt_keeps_uncertain_usage_and_does_not_publish_over_new_cla
     record_synthesis_usage(intent_id, _usage())
     with pytest.raises(VisitPrepBuildDiscarded):
         publish_claimed_synthesis(
-            claim, selected, _brief(selected), intent_id=intent_id
+            claim,
+            selected,
+            _brief(selected),
+            intent_id=intent_id,
+            protected=_protected(selected),
         )
     assert not fail_visit_prep_synthesis_claim(claim, code="generation_failed")
     assert _build(fixture).attempts == 2 and _build(fixture).state == "running"

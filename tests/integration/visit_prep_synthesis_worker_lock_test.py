@@ -28,7 +28,7 @@ from tests.services.visit_prep_synthesis_publication_test import (
     _rows,
     _selected,
 )
-from tests.services.visit_prep_synthesis_test import _brief, _fake
+from tests.services.visit_prep_synthesis_test import _brief, _fake, _protected
 from tests.services.visit_prep_synthesis_usage_test import _events
 from tests.services.visit_prep_synthesis_worker_test import _accounted
 
@@ -89,7 +89,11 @@ def test_two_workers_on_one_claim_publish_one_artifact_and_one_ready_transition(
         barrier.wait(timeout=5)
         try:
             return publish_claimed_synthesis(
-                claim, selected, _brief(selected), intent_id=intent_id
+                claim,
+                selected,
+                _brief(selected),
+                intent_id=intent_id,
+                protected=_protected(selected),
             )
         except VisitPrepBuildDiscarded:
             return None
@@ -109,8 +113,8 @@ def test_atomic_publication_blocks_correction_until_artifact_job_and_audit_commi
     staged, release = Event(), Event()
     original = worker._publish_locked
 
-    def paused_publication(*args):
-        result = original(*args)
+    def paused_publication(*args, **kwargs):
+        result = original(*args, **kwargs)
         staged.set()
         assert release.wait(timeout=5)
         return result
@@ -134,6 +138,7 @@ def test_atomic_publication_blocks_correction_until_artifact_job_and_audit_commi
             selected,
             _brief(selected),
             intent_id=intent_id,
+            protected=_protected(selected),
         )
         try:
             assert staged.wait(timeout=5)

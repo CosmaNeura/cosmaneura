@@ -118,8 +118,8 @@ const value = {
   artifact_id: null,
   version: null,
   recorded_at: null,
-  generator_version: "patient_sources_v1",
-  prompt_version: "patient_report_only_v1",
+  generator_version: "protected_patient_sources_v2",
+  prompt_version: "protected_patient_report_only_v2",
   model_profile: "synthetic_model",
 }
 function ready() {

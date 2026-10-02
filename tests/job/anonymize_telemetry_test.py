@@ -91,3 +91,39 @@ def test_deidentification_logs_no_provider_exception_details() -> None:
     assert provider_error not in serialized
     assert logs[-1]["event_code"] == "deidentification_request_failed"
     assert logs[-1]["credential_mode"] == "client_secret"
+
+
+def test_optional_bounded_call_preserves_core_identity_and_stable_operation():
+    with (
+        patch("app.jobs.anonymize.ClientSecretCredential"),
+        patch("app.jobs.anonymize.DeidentificationClient") as client_class,
+    ):
+        client_class.return_value.deidentify.return_value = SimpleNamespace(
+            output_text="Invented protected words"
+        )
+        assert (
+            deidentify("Invented source", timeout_seconds=12.0)
+            == "Invented protected words"
+        )
+    options = client_class.call_args.kwargs
+    assert options["api_version"] == "2024-11-15"
+    assert options["retry_total"] == 0
+    assert options["connection_timeout"] == 3.0 and options["read_timeout"] == 12.0
+    assert options["logging_enable"] is False
+    args = client_class.return_value.deidentify.call_args
+    assert args.args[0].operation == "Surrogate"
+    assert args.kwargs["retry_total"] == 0 and args.kwargs["timeout"] == 12.0
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 16, True, float("nan"), float("inf"), "12"])
+def test_invalid_bound_is_rejected_before_any_credential_or_request(timeout):
+    with (
+        patch("app.jobs.anonymize.ClientSecretCredential") as credential,
+        patch("app.jobs.anonymize.ManagedIdentityCredential") as identity,
+        patch("app.jobs.anonymize.DeidentificationClient") as client,
+        pytest.raises(ValueError, match="Invalid deidentification timeout"),
+    ):
+        deidentify("Invented source", timeout_seconds=timeout)
+    credential.assert_not_called()
+    identity.assert_not_called()
+    client.assert_not_called()

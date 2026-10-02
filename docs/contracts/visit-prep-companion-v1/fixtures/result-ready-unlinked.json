@@ -132,8 +132,8 @@
     "artifact_id": "visit_prep_brief_01h45ytscbebyvny4gc8cr8ma2",
     "version": 1,
     "recorded_at": "2026-10-01T11:30:00Z",
-    "generator_version": "patient_sources_v1",
-    "prompt_version": "patient_report_only_v1",
+    "generator_version": "protected_patient_sources_v2",
+    "prompt_version": "protected_patient_report_only_v2",
     "model_profile": "synthetic_fixture",
     "brief": {
       "headline": {

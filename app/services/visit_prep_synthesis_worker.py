@@ -12,6 +12,11 @@ from __future__ import annotations
 from typing import Literal
 
 from app.services.visit_prep_packages import _audit, _authorize, _database_now
+from app.services.visit_prep_protected_analysis import (
+    VisitPrepProtectedAnalysis,
+    VisitPrepProtectionFailed,
+    protect_patient_analysis,
+)
 from app.services.visit_prep_synthesis_builds import (
     VisitPrepBuildClaim,
     VisitPrepBuildDiscarded,
@@ -64,6 +69,7 @@ def publish_claimed_synthesis(
     prepared: VisitPrepPreparedBrief,
     *,
     intent_id: TypeIDType | None,
+    protected: VisitPrepProtectedAnalysis | None = None,
 ) -> VisitPrepPublicationReceipt:
     """Commit artifact, ready job and audit together under the original fence."""
     if intent_id is not None and getattr(intent_id, "prefix", None) != "model_usage":
@@ -108,7 +114,9 @@ def publish_claimed_synthesis(
             # are allowed; a missing/uncommitted result is never allowed.
         elif intent_id is not None:
             raise VisitPrepUsageUnavailable()
-        receipt = _publish_locked(session, locked, selection, prepared)
+        receipt = _publish_locked(
+            session, locked, selection, prepared, protected=protected
+        )
         # Check AFTER encryption/flush, before clearing the running lease.
         now = _database_now(session)
         if not _matches(build, claim, now):
@@ -169,12 +177,22 @@ def run_one_build() -> WorkerOutcome:
 
     try:
         selection = load_claimed_synthesis_sources(claim)
+        protected = protect_patient_analysis(selection)
+        # The provider operation holds no database locks. Reacquire current
+        # source/identity/time/lease fences before a model intent and request.
+        current = load_claimed_synthesis_sources(claim)
+        if current != selection:
+            raise VisitPrepSynthesisStale()
         if selection.sources:
             intent_id = begin_synthesis_usage(claim, selection)
-        prepared = generate_patient_brief(selection, record_usage=record)
+        prepared = generate_patient_brief(
+            selection, record_usage=record, protected=protected
+        )
         if selection.sources and (recording_failed or not result_recorded):
             raise VisitPrepUsageUnavailable()
-        publish_claimed_synthesis(claim, selection, prepared, intent_id=intent_id)
+        publish_claimed_synthesis(
+            claim, selection, prepared, intent_id=intent_id, protected=protected
+        )
         return "ready"
     except VisitPrepSynthesisStale:
         # Reacquire current authority and requeue the corrected source epoch.
@@ -188,7 +206,11 @@ def run_one_build() -> WorkerOutcome:
         return "discarded"
     except VisitPrepUsageUnavailable:
         return _fail(claim, "usage_unavailable")
-    except (VisitPrepGenerationFailed, VisitPrepSynthesisInvalid):
+    except (
+        VisitPrepGenerationFailed,
+        VisitPrepSynthesisInvalid,
+        VisitPrepProtectionFailed,
+    ):
         if recording_failed or (intent_id is not None and not result_recorded):
             return _fail(claim, "usage_unavailable")
         return _fail(claim, "generation_failed")
