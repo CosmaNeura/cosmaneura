@@ -4,7 +4,8 @@ Confirmation/contact data never create consent. This command separately
 captures a displayed disclosure, deadline and explicit recipient/caregiver
 attestations. Core records an independent audit of the capture interaction.
 Bearer attribution and self-attestation are not verified legal identity or
-caregiver authority. No route, qualified source verifier or sender is mounted.
+caregiver authority. Public capture has a separate default-off control; no
+qualified source verifier or sender is installed.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from typeid import TypeID
 
 from app.configuration.visit_prep import VisitPrepSettings
 from app.services import visit_prep_access
+from app.services.visit_prep_contributions import _require_recipient
 from app.services.visit_prep_email_contract import VisitPrepEmailInvalid
 from app.services.visit_prep_email_evidence import (
     EmailConsentEvidence,
@@ -170,6 +172,17 @@ class PatientEmailConsentSource:
 
 def _attestations(role: str, event_kind: str) -> tuple[bool, bool]:
     return event_kind == "granted", role == "caregiver" and event_kind == "granted"
+
+
+def require_patient_email_consent_control() -> None:
+    """Public capture must stay independently dark until its evidence is qualified."""
+    settings = visit_prep_access.VISIT_PREP_SETTINGS
+    if (
+        type(settings) is not VisitPrepSettings
+        or settings.configuration_valid is not True
+        or settings.email_consent_capture_enabled is not True
+    ):
+        raise VisitPrepEmailInvalid()
 
 
 def _actor_digest(
@@ -374,11 +387,18 @@ def _capture_context(
 
 
 def _record(
-    session: Session, *, access_token: str, decision: PatientEmailConsentInput
+    session: Session,
+    *,
+    access_token: str,
+    decision: PatientEmailConsentInput,
+    first_name: str | None = None,
 ) -> PatientEmailConsentReceipt:
     authorized = _capture_context(
         session, access_token=access_token, role=decision.role
     )
+    if first_name is not None:
+        require_patient_email_consent_control()
+        _require_recipient(authorized, first_name=first_name, role=decision.role)
     prep, credential = authorized.visit_prep, authorized.credential
     recipient_digest = invitation_recipient_digest(stored_email_recipient(prep))
     latest_row = session.exec(
@@ -499,6 +519,9 @@ def _record(
         sequence = row.event_sequence
         disposition = "recorded"
     checked = _capture_context(session, access_token=access_token, role=decision.role)
+    if first_name is not None:
+        require_patient_email_consent_control()
+        _require_recipient(checked, first_name=first_name, role=decision.role)
     if not hmac.compare_digest(
         decision.disclosure_fingerprint,
         email_consent_disclosure_fingerprint(
@@ -529,6 +552,7 @@ def record_patient_email_consent(
     access_token: str,
     decision: PatientEmailConsentInput,
     view_as_active: bool = False,
+    first_name: str | None = None,
 ) -> PatientEmailConsentReceipt:
     """Capture an explicit choice; never infer it from opening or confirming.
 
@@ -543,6 +567,10 @@ def record_patient_email_consent(
         if (
             type(decision) is not PatientEmailConsentInput
             or view_as_active is not False
+            or (
+                first_name is not None
+                and (type(first_name) is not str or not 1 <= len(first_name) <= 120)
+            )
             or not _uuid(decision.operation_id)
             or type(decision.expected_event_sequence) is not int
             or not 0 <= decision.expected_event_sequence < 2_147_483_647
@@ -570,7 +598,12 @@ def record_patient_email_consent(
             raise VisitPrepEmailInvalid()
         with _visit_prep_session() as session:
             try:
-                result = _record(session, access_token=access_token, decision=decision)
+                result = _record(
+                    session,
+                    access_token=access_token,
+                    decision=decision,
+                    first_name=first_name,
+                )
             except _ERRORS:
                 session.rollback()
                 raise
@@ -579,3 +612,27 @@ def record_patient_email_consent(
     if result is None:
         raise VisitPrepEmailInvalid()
     return result
+
+
+def record_confirmed_patient_email_consent(
+    *,
+    access_token: str,
+    first_name: str,
+    decision: PatientEmailConsentInput,
+    view_as_active: bool = False,
+) -> PatientEmailConsentReceipt:
+    """Public capture requires fresh matching confirmation in the write lock.
+
+    Name/role checking neither claims a patient record nor verifies identity.
+    The internal bearer command remains available to its existing callers;
+    the public adapter must use this required-confirmation entry point.
+    """
+    if type(first_name) is not str or not 1 <= len(first_name) <= 120:
+        raise VisitPrepEmailInvalid()
+    require_patient_email_consent_control()
+    return record_patient_email_consent(
+        access_token=access_token,
+        first_name=first_name,
+        decision=decision,
+        view_as_active=view_as_active,
+    )
