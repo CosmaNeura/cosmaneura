@@ -19,9 +19,12 @@ await build({
     contents: `import React from "react";
       import { createRoot } from "react-dom/client";
       import { VisitPrepPackages } from "./app/components/visit-prep/VisitPrepPackages";
-      createRoot(document.getElementById("root")).render(<VisitPrepPackages
+      import { VisitPrepEmailPolicy } from "./app/components/visit-prep/VisitPrepEmailPolicy";
+      createRoot(document.getElementById("root")).render(<><VisitPrepPackages
         access={{eligible:true,can_manage:true,can_send_email:false,can_send_sms:false}}
-        scopeKey="synthetic_provider_harness" />);`,
+        scopeKey="synthetic_provider_harness" /><VisitPrepEmailPolicy
+        access={{eligible:true,can_manage:true,can_send_email:false,can_send_sms:false}}
+        scopeKey="synthetic_provider_harness" /></>);`,
     resolveDir: web,
     sourcefile: "visit-prep-package-harness.tsx",
     loader: "tsx",
@@ -48,7 +51,9 @@ await build({
         export const visitPrepList = ({query}) => read("/internal/v1/visit-prep/preps?" + new URLSearchParams(query));
         const synthesisPath = (path) => "/internal/v1/visit-prep/preps/" + encodeURIComponent(path.prep_id) + "/synthesis";
         export const visitPrepSynthesis = ({path}) => read(synthesisPath(path));
-        export const visitPrepSynthesisRequest = ({path,body}) => read(synthesisPath(path), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});`,
+        export const visitPrepSynthesisRequest = ({path,body}) => read(synthesisPath(path), {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+        export const visitPrepEmailPolicyRead = () => read("/internal/v1/visit-prep/email-policy");
+        export const visitPrepEmailPolicyDecide = ({body,headers}) => read("/internal/v1/visit-prep/email-policy", {method:"POST",headers:{"Content-Type":"application/json",...headers},body:JSON.stringify(body)});`,
             loader: "js",
           }
         })

@@ -672,3 +672,36 @@ delivery status remain open. Consent captured after opening a link cannot
 authorize the first booking email; that requires separately verified prior
 consent. No schema, mounted route, job, dependency or release control changes
 in this increment. Final revision-specific validation belongs in its draft PR.
+
+The physician email-policy control now has an authenticated API and a dashboard
+panel in the existing Visit Prep workspace. The API derives scope and subject
+from the current account, locks Core authority, displays the actual fixed
+invitation with a nonworking link placeholder, and commits a content-free read
+audit before disclosure. Its states distinguish no approval, approval at the
+last read, withdrawal, expiry and changed policy. Decisions require one canonical
+operation key, the displayed policy and stream sequence, and an explicit
+timezone-aware expiry for approval. There is no recipient, actor or ownership
+override in the request.
+
+The dashboard requires explicit review and a UTC expiry. Withdrawal targets the
+previously decided policy even when the current template changed. A decision
+receipt is never displayed as current approval; the physician must reload Core
+state after success or an uncertain acknowledgment. The screen does not retry
+mutations automatically, persist policy state in the browser, or enable sending.
+Scope, access, focus, concealment and support-view changes clear displayed state
+and invalidate late replies.
+
+Owned PostgreSQL tests verify committed withdrawal and BAA changes during real
+lock waits, elapsed policy/seat expiry, atomic audit failure, strict/redacted
+requests, current-owner denials and exact lost-acknowledgment replay. Desktop and
+mobile acceptance use the real component and API, including stale decisions,
+an actual committed approval with its HTTP acknowledgment discarded, read-only
+recovery and BAA denial. Synthetic screenshots were visually inspected with no
+horizontal overflow. No consent or email-delivery rows were created. Final
+commit-specific regression and build results belong in the draft PR.
+
+This completes the physician policy control, not invitation delivery. Qualified
+consent disclosure and retention, patient consent controls, trusted prior-consent
+intake, atomic enqueue, dispatch, cleanup and delivery status remain open. Email,
+SMS and public release controls remain off; no schema, dependency, external
+provider, deployment or cohort activation changes are included.

@@ -2,6 +2,7 @@ import { AppSidebar } from "~/components/app-sidebar"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { SidebarInset, SidebarProvider } from "~/components/ui/sidebar"
 import { VisitPrepCreator } from "~/components/visit-prep/VisitPrepCreator"
+import { VisitPrepEmailPolicy } from "~/components/visit-prep/VisitPrepEmailPolicy"
 import { VisitPrepPackages } from "~/components/visit-prep/VisitPrepPackages"
 import { useVisitPrepAccess } from "~/configuration/visit-prep-access"
 
@@ -34,6 +35,7 @@ export default function VisitPrepsPage() {
             physicianDisplayName={user?.fullName ?? ""}
           />
           <VisitPrepPackages access={access} scopeKey={user?.id ?? ""} />
+          <VisitPrepEmailPolicy access={access} scopeKey={user?.id ?? ""} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>
