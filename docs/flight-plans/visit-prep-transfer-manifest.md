@@ -1044,3 +1044,41 @@ control or cross-repository change occurs. Durable clarification/action evidence
 choice supplemental sources, patient UI, the ratified conversational boundary,
 clinical quality, CosmaBot, qualified booking/email/SMS/reminders, retention,
 monitoring and clinical/operational release acceptance remain required.
+
+## Encrypted clarification proposal and decision storage
+
+Two dormant Core tables retain an exact bounded proposal and one final decision.
+The encrypted proposal binds the current single-topic answer, neutral clarification
+turns, quoted reply, question identity, contribution basis, recipient role,
+credential generation and model/prompt profile. A separate encrypted decision
+binds the exact proposal fingerprint and explicit confirm, edit, keep-original or
+dismiss choice. Plaintext, ciphertext and keyed fingerprints are excluded from
+ordinary model representations and serialization.
+
+The generated additive migration checks current preparation, credential and
+source lineage under database locks. A text acceptance must reference the exact
+next attributable correction for that topic; keeping or dismissing requires an
+unchanged contribution basis. Database time is captured after lock acquisition.
+Both streams are immutable, cannot be truncated and delete only through the
+existing aggregate retention and legal-hold boundary. Recovery leaves the expand
+structures dormant and uses a forward fix; no existing column or guard changes.
+
+Synthetic PostgreSQL checks cover patient/caregiver attribution, exact encrypted
+round trips, duplicate decisions, stale or different-topic sources, actual lock
+waits for corrections/rotation/quarantine/expiry, rollback, named truncate guards,
+retention, holds and an approved synthetic aggregate cleanup. A populated
+pre-expand rehearsal compares every column of existing patient, synthesis,
+usage and email streams before and after migration. Existing response-retention
+tests include the new referencing tables so they still reach the original guard.
+Exact final regression and reviewed revision belong in the draft PR.
+
+These storage guards and codecs do not verify a model, authenticate a patient
+action, prove browser receipt or compare correction plaintext with the accepted
+proposal. The next writer must freshly authorize the patient, load the saved
+proposal rather than accepting a client replacement, and commit exact decision,
+matching correction and audit together before acknowledging success. Choice
+supplemental sources, patient UI and the ratified conversational-service boundary
+remain open. Reuse stays within Core's existing encrypted contribution domain;
+no route, wire contract, dependency, provider call, runtime flag, deployment or
+retirement changes. CosmaBot, booking/email/SMS/reminders, retention qualification,
+monitoring and clinical/operational acceptance remain full-goal requirements.

@@ -79,7 +79,9 @@ def test_truncate_cannot_bypass_response_retention() -> None:
             session.execute(
                 text(
                     "TRUNCATE TABLE public.visit_prep_question_response, "
-                    "public.visit_prep_contribution_event"
+                    "public.visit_prep_contribution_event, "
+                    "public.visit_prep_clarification_proposal, "
+                    "public.visit_prep_clarification_decision"
                 )
             )
         assert getattr(rejected.value.orig, "sqlstate", None) == "55000"
@@ -88,7 +90,7 @@ def test_truncate_cannot_bypass_response_retention() -> None:
         # Either child guard may run first during aggregate TRUNCATE CASCADE.
         with pytest.raises(
             DBAPIError,
-            match="responses cannot be truncated|contribution events cannot be truncated",
+            match="responses cannot be truncated|contribution events cannot be truncated|clarification evidence cannot be truncated",
         ) as rejected:
             session.execute(text("TRUNCATE TABLE public.visit_prep CASCADE"))
         assert getattr(rejected.value.orig, "sqlstate", None) == "55000"
