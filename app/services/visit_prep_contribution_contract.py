@@ -24,7 +24,7 @@ from app.utils.encryption import EncryptionError, pseudonymous_digest
 from activemodel.types import TypeIDType
 
 ContributionRole = Literal["patient", "caregiver"]
-ContributionEventKind = Literal["correction", "review", "topic_answer"]
+ContributionEventKind = Literal["correction", "review", "topic_answer", "explanation"]
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,9 @@ class ContributionTopic:
     additional_answer: str | None = field(default=None, repr=False)
     additional_response_kind: ResponseKind | None = None
     additional_recorded_at: datetime | None = None
+    explanation_id: TypeIDType | None = None
+    explanation_words: str | None = field(default=None, repr=False)
+    explanation_recorded_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -100,14 +103,20 @@ def contribution_payload_hmac(
     original_response_id: TypeIDType | None = None,
     question_id: TypeIDType | None = None,
     response: _CanonicalResponse | None = None,
+    target_revision_id: TypeIDType | None = None,
 ) -> str:
     """Bind operation, source, actor, answer and exact basis; never plain SHA."""
 
     if (
         actor_role not in {"patient", "caregiver"}
-        or event_kind not in {"correction", "review", "topic_answer"}
+        or event_kind not in {"correction", "review", "topic_answer", "explanation"}
+        or (event_kind != "explanation" and target_revision_id is not None)
         or not isinstance(basis, ContributionBasis)
         or basis.original_response_count == 0
+        or (
+            event_kind == "explanation"
+            and (question_id is None or not isinstance(response, _CanonicalResponse))
+        )
         or (
             event_kind == "correction"
             and (
@@ -152,6 +161,16 @@ def contribution_payload_hmac(
             **(
                 {"question_id": str(question_id)}
                 if event_kind == "topic_answer"
+                else {}
+            ),
+            **(
+                {
+                    "question_id": str(question_id),
+                    "target_revision_id": str(target_revision_id)
+                    if target_revision_id
+                    else None,
+                }
+                if event_kind == "explanation"
                 else {}
             ),
         },

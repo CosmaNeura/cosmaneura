@@ -107,14 +107,19 @@ export function validSynthesis(
         item.evidence.length &&
       item.evidence.every((e) => {
         const topic = answered.find(
-          (candidate) => currentRef(candidate) === e?.source_ref,
+          (candidate) =>
+            currentRef(candidate) === e?.source_ref ||
+            candidate.explanation_source_id === e?.source_ref,
         )
         return (
           topic &&
           typeof e.quote === "string" &&
           e.quote.length > 0 &&
           e.quote.length <= 300 &&
-          reportedWords(topic).includes(e.quote)
+          (topic.explanation_source_id === e.source_ref
+            ? (topic.explanation_words ?? "")
+            : reportedWords(topic)
+          ).includes(e.quote)
         )
       }),
   )
@@ -136,7 +141,9 @@ function CitedItem({
         <summary>Supporting patient words</summary>
         {item.evidence.map((evidence) => {
           const topic = topics.find(
-            (candidate) => currentRef(candidate) === evidence.source_ref,
+            (candidate) =>
+              currentRef(candidate) === evidence.source_ref ||
+              candidate.explanation_source_id === evidence.source_ref,
           )!
           return (
             <figure

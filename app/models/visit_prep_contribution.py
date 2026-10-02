@@ -28,7 +28,7 @@ class VisitPrepContributionEvent(
 
     __table_args__ = (
         sa.CheckConstraint(
-            "event_kind IN ('correction', 'review', 'topic_answer')",
+            "event_kind IN ('correction', 'review', 'topic_answer', 'explanation')",
             name="event_kind_allowed",
         ),
         sa.CheckConstraint(
@@ -47,12 +47,19 @@ class VisitPrepContributionEvent(
         sa.CheckConstraint(
             "(event_kind = 'review' AND response_id IS NULL AND question_id IS NULL "
             "AND response_kind IS NULL AND answer_ciphertext IS NULL "
-            "AND answer_format_version IS NULL) OR "
-            "(event_kind IN ('correction', 'topic_answer') AND "
+            "AND answer_format_version IS NULL AND target_revision_id IS NULL) OR "
+            "(event_kind IN ('correction', 'topic_answer') AND target_revision_id IS NULL AND "
             "((event_kind = 'correction' AND response_id IS NOT NULL "
             "AND question_id IS NULL) OR (event_kind = 'topic_answer' "
             "AND response_id IS NULL AND question_id IS NOT NULL)) "
             "AND response_kind IS NOT NULL AND "
+            "((response_kind = 'answered' AND answer_ciphertext IS NOT NULL "
+            "AND answer_format_version IS NOT DISTINCT FROM 1 "
+            "AND octet_length(answer_ciphertext) BETWEEN 1 AND 32768) OR "
+            "(response_kind = 'skipped' AND answer_ciphertext IS NULL "
+            "AND answer_format_version IS NULL))) OR "
+            "(event_kind = 'explanation' AND question_id IS NOT NULL AND "
+            "response_kind IS NOT NULL AND "
             "((response_kind = 'answered' AND answer_ciphertext IS NOT NULL "
             "AND answer_format_version IS NOT DISTINCT FROM 1 "
             "AND octet_length(answer_ciphertext) BETWEEN 1 AND 32768) OR "
@@ -70,6 +77,14 @@ class VisitPrepContributionEvent(
         ),
         sa.CheckConstraint(
             "recorded_at >= created_at", name="recorded_at_not_before_creation"
+        ),
+        sa.ForeignKeyConstraint(
+            ["target_revision_id"],
+            ["visit_prep_contribution_event.id"],
+            name="fk_visit_prep_explanation_revision",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         sa.ForeignKeyConstraint(
             ["visit_prep_id", "owner_practice_member_id", "question_set_version_id"],
@@ -145,6 +160,10 @@ class VisitPrepContributionEvent(
         sa_column=Column(TypeIDType("visit_prep_question"), nullable=True),
     )
     response_kind: str | None = Field(default=None, max_length=16)
+    target_revision_id: TypeIDType | None = Field(
+        default=None,
+        sa_column=Column(TypeIDType("visit_prep_contribution"), nullable=True),
+    )
     answer_ciphertext: str | None = Field(
         default=None,
         repr=False,

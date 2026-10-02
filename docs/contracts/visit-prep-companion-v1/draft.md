@@ -1,6 +1,6 @@
 # Draft Visit Prep package read for CosmaBot
 
-**Status:** Draft for owner review; not ratified · **Version:** 1.0.0
+**Status:** Owner approved for branch implementation; governing architecture ratification pending · **Version:** 1.0.1
 
 This proposed boundary lets a physician explicitly open the same Core-owned Visit
 Prep package on the Cosmaneura dashboard or in CosmaBot, including a preparation
@@ -8,10 +8,11 @@ without a chart or encounter. Core owns patient words, corrections, review,
 synthesis, access and retention. CosmaBot renders that package; it does not create
 a second clinical record or rewrite the brief through another model.
 
-This is a proposal on the Visit Prep branch, not a ratified architecture contract.
-Its schemas and fixtures authorize no implementation, deployment, patient contact
-or live processing. Normative words below describe the proposed design, not
-currently available behavior.
+John approved this first read-only contract for branch implementation on October 2,
+2026. This document is not a ratified architecture amendment or evidence that a
+receiver is operational. Schemas and fixtures are test material, not authorization
+for deployment, patient contact or live processing. Normative words below describe
+the approved design, not currently available receiver behavior.
 
 ## Architecture decision under review
 
@@ -116,6 +117,12 @@ claim of permanent access. `package` is `visit_prep.patient_synthesis.v1`:
   as the dashboard at that observation.
 - Applicable physician topics with current and initial patient/caregiver words
   and attributable revisions/source references; hidden topics disclose nothing.
+- Separately attributed current explanations for coded answers, with
+  `explanation_words`, `explanation_source_id` and `explanation_recorded_at`.
+  These do not replace selected codes or add physician topics. Changing the
+  answer revision invalidates its prior explanation; current reads omit it.
+  A withdrawal returns null words and source ID while retaining its recorded
+  time and underlying evidence in Core.
 - Explicit missing/skipped topics and completion/review flags. Original interview
   completion is distinct from current answer completion.
 - Same current artifact ID/version, generation profile and exact brief. Stale
@@ -129,7 +136,8 @@ Both implementations MUST check closed schemas and these semantic relationships:
 package IDs match; topic keys/positions are unique and ordered; topic states
 determine missing/skipped sets and completion; reviewed answers are complete with
 current review reference/time; citations resolve only to current answered sources
-and quote their exact words (choice values use the physician's current label);
+and quote their exact words (choice values use the physician's current label;
+explanations cite their own separate source and words, never the code source);
 and brief/artifact fields obey ready versus stale/missing rules. Core's source
 digest and grounding validation remain authoritative. Schema-valid fixtures
 alone prove no authorization, database, clinical-quality or operational property.
@@ -187,8 +195,9 @@ Transient buffers are discarded after use.
 
 ## Qualification and activation
 
-Ratification precedes receiver implementation; a synthetic-qualified receiver
-precedes the companion adapter. Acceptance covers actual database lock waits,
+The owner-approved branch implementation must reconcile the governing architecture
+before activation. A synthetic-qualified receiver precedes the companion adapter.
+Acceptance covers actual database lock waits,
 BAA/member withdrawal, credentials expiring during waits, wrong workload/account/
 workspace, commit acknowledgment loss, correction, no chart link, partial
 caregiver reports, all-skipped reports, hostile wire input, late results and exact

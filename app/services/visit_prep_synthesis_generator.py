@@ -83,6 +83,11 @@ def source_payload(selection: VisitPrepSynthesisSelection) -> str:
                 "kind": source.kind,
                 "source_ref": source.source_ref,
                 "reported_text": source.reported_text,
+                **(
+                    {"explains_source_ref": source.explains_source_ref}
+                    if source.explains_source_ref is not None
+                    else {}
+                ),
             }
             for source in selection.sources
         ],

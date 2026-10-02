@@ -53,6 +53,7 @@ function setup(continuedRole: "patient" | "caregiver" | null = null) {
     dispose: vi.fn(),
     readContribution: vi.fn().mockResolvedValue(initial),
     correctContribution: vi.fn(),
+    explainContribution: vi.fn(),
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
     decideClarification: vi.fn(),
@@ -88,6 +89,112 @@ const receipt = (sequence: number, complete = true, reviewed = false) => ({
 })
 
 describe("saved patient contribution review", () => {
+  it("saves and withdraws an explanation separately without changing the selected code", async () => {
+    const { client } = setup("caregiver")
+    const choice = {
+      ...initial.topics[0],
+      question: {
+        ...question("adherence", 3),
+        kind: "choice" as const,
+        choices: [{ value: "yes", label: "Yes, as prescribed" }],
+      },
+      answer: "yes",
+      initial_answer: "yes",
+    }
+    const withChoice = { ...initial, topics: [choice, initial.topics[1]] }
+    client.readContribution.mockResolvedValue(withChoice)
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    fireEvent(window, new Event("blur"))
+    fireEvent.click(screen.getByRole("button", { name: "Show saved answers" }))
+    await screen.findByRole("button", { name: "Explain: Synthetic adherence" })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Explain: Synthetic adherence" }),
+    )
+    fireEvent.change(
+      screen.getByLabelText("What would you like your provider to understand?"),
+      { target: { value: "My invented explanation." } },
+    )
+    client.explainContribution.mockResolvedValue(receipt(1))
+    client.readContribution.mockResolvedValue({
+      ...withChoice,
+      basis: receipt(1).basis,
+      topics: [
+        {
+          ...choice,
+          explanation_words: "My invented explanation.",
+          explanation_recorded_at: "2099-01-01T12:01:00Z",
+        },
+        initial.topics[1],
+      ],
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save my explanation" }))
+    await screen.findByText("My invented explanation.")
+    expect(client.explainContribution).toHaveBeenCalledWith(
+      {
+        role: "caregiver",
+        basis: initial.basis,
+        question_key: "adherence",
+        patient_words: "My invented explanation.",
+      },
+      expect.any(String),
+    )
+    expect(client.correctContribution).not.toHaveBeenCalled()
+    expect(
+      screen.queryByLabelText("Recipient first name"),
+    ).not.toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Explain: Synthetic adherence" }),
+    )
+    client.explainContribution.mockResolvedValue(receipt(2))
+    client.readContribution.mockResolvedValue({
+      ...withChoice,
+      basis: receipt(2).basis,
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Withdraw my explanation" }),
+    )
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.explainContribution.mock.calls[1][0].patient_words).toBeNull()
+    expect(screen.getByText("Yes, as prescribed")).toBeInTheDocument()
+    expect(
+      screen.queryByText("My invented explanation."),
+    ).not.toBeInTheDocument()
+  })
+  it("keeps the exact explanation save and UUID for a lost-ack retry", async () => {
+    const { client } = setup()
+    const choice = {
+      ...initial.topics[0],
+      question: {
+        ...question("adherence", 3),
+        kind: "choice" as const,
+        choices: [{ value: "yes", label: "Yes" }],
+      },
+      answer: "yes",
+      initial_answer: "yes",
+    }
+    client.readContribution.mockResolvedValue({
+      ...initial,
+      topics: [choice, initial.topics[1]],
+    })
+    await open()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Explain: Synthetic adherence" }),
+    )
+    fireEvent.change(
+      screen.getByLabelText("What would you like your provider to understand?"),
+      { target: { value: "Invented retry words." } },
+    )
+    client.explainContribution
+      .mockRejectedValueOnce(new VisitPrepPatientFailure("temporary"))
+      .mockResolvedValue(receipt(1))
+    fireEvent.click(screen.getByRole("button", { name: "Save my explanation" }))
+    await screen.findByRole("alert")
+    fireEvent.click(screen.getByRole("button", { name: "Retry same save" }))
+    await screen.findByRole("heading", { name: "Your saved answers" })
+    expect(client.explainContribution.mock.calls[1]).toEqual(
+      client.explainContribution.mock.calls[0],
+    )
+  })
   it("uses remembered confirmation without asking for names again, including after concealment", async () => {
     const { client } = setup("caregiver")
     await screen.findByRole("heading", { name: "Your saved answers" })

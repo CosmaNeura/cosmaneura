@@ -8,6 +8,7 @@ an API, persist clinical content, generate a synthesis or call a model.
 from __future__ import annotations
 
 import hmac
+import json
 from dataclasses import replace
 from typing import Any, cast
 
@@ -28,6 +29,8 @@ from app.services.visit_prep_interview_contract import (
     VisitPrepInterviewValidation,
     _answer_envelope,
     _canonical_idempotency_key,
+    _CanonicalResponse,
+    _normalized_answer,
     _normalized_confirmation_name,
     _validated_response_input,
 )
@@ -46,7 +49,12 @@ from app.services.visit_prep_interviews import (
     _visit_prep_session,
 )
 from app.services.visit_prep_patient_continuation import ConfirmedVisitPrepAccess
-from app.utils.encryption import EncryptionError, encrypt_value
+from app.utils.encryption import (
+    DecryptionError,
+    EncryptionError,
+    decrypt_value,
+    encrypt_value,
+)
 
 from activemodel.types import TypeIDType
 from app.models.visit_prep import VisitPrep
@@ -58,6 +66,37 @@ from sqlmodel import Session, select
 
 def _unavailable() -> VisitPrepInterviewUnavailable:
     return VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
+
+
+def _explanation_words(event: VisitPrepContributionEvent) -> str | None:
+    if (
+        event.response_kind == "skipped"
+        and event.answer_ciphertext is None
+        and event.answer_format_version is None
+    ):
+        return None
+    if (
+        event.response_kind != "answered"
+        or event.answer_format_version != 1
+        or not event.answer_ciphertext
+    ):
+        raise _unavailable()
+    try:
+        envelope = json.loads(decrypt_value(event.answer_ciphertext))
+        if (
+            not isinstance(envelope, dict)
+            or set(envelope) != {"version", "kind", "value"}
+            or type(envelope["version"]) is not int
+            or envelope["version"] != 1
+            or envelope["kind"] != "story"
+        ):
+            raise _unavailable()
+        words = _normalized_answer(envelope["value"])
+        if words != envelope["value"]:
+            raise _unavailable()
+        return words
+    except (DecryptionError, ValueError, TypeError, VisitPrepInterviewValidation):
+        raise _unavailable() from None
 
 
 def _applicable_topics(
@@ -194,7 +233,46 @@ def _load_contribution(
             event.basis_response_count, event.basis_event_sequence
         )
         _applicable_topics(questions, topics)
-        if event.event_kind in {"correction", "topic_answer"}:
+        if event.event_kind == "explanation":
+            if event.question_id is None:
+                raise _unavailable()
+            question = questions_by_id.get(event.question_id)
+            topic = topics.get(event.question_id)
+            if (
+                question is None
+                or topic is None
+                or question.kind != "choice"
+                or not topic.applicable
+                or topic.response_kind != "answered"
+                or event.response_id != topic.original_response_id
+                or event.target_revision_id != topic.current_correction_id
+            ):
+                raise _unavailable()
+            words = _explanation_words(event)
+            fingerprint = contribution_payload_hmac(
+                visit_prep_id=visit_prep.id,
+                actor_role=role,
+                event_kind="explanation",
+                basis=basis,
+                original_response_id=topic.original_response_id,
+                question_id=question.id,
+                target_revision_id=topic.current_correction_id,
+                response=_CanonicalResponse(
+                    question.question_key,
+                    cast(ResponseKind, event.response_kind),
+                    words,
+                ),
+            )
+            topics[question.id] = replace(
+                topic,
+                explanation_id=event.id,
+                explanation_words=words,
+                explanation_recorded_at=event.recorded_at,
+            )
+            current_review = None
+        elif event.event_kind in {"correction", "topic_answer"}:
+            if event.target_revision_id is not None:
+                raise _unavailable()
             original = None
             if event.event_kind == "correction":
                 if event.response_id is None or event.question_id is not None:
@@ -277,6 +355,9 @@ def _load_contribution(
                 response_kind=canonical.response_kind,
                 current_correction_id=event.id,
                 recorded_at=event.recorded_at,
+                explanation_id=None,
+                explanation_words=None,
+                explanation_recorded_at=None,
                 **additional,
             )
             current_review = None
@@ -288,6 +369,7 @@ def _load_contribution(
                 event.response_kind,
                 event.answer_ciphertext,
                 event.answer_format_version,
+                event.target_revision_id,
             )
         ):
             fingerprint = contribution_payload_hmac(
@@ -389,6 +471,8 @@ def _append_event_in_session(
     question_id: TypeIDType | None = None,
     response_kind: ResponseKind | None = None,
     ciphertext: str | None = None,
+    explanation: bool = False,
+    target_revision_id: TypeIDType | None = None,
 ) -> PatientContribution:
     prep = authorized.visit_prep
     session.add(
@@ -399,7 +483,9 @@ def _append_event_in_session(
             credential_generation=authorized.credential.generation,
             actor_role=role,
             event_kind=(
-                "correction"
+                "explanation"
+                if explanation
+                else "correction"
                 if response_id is not None
                 else "topic_answer"
                 if question_id is not None
@@ -409,6 +495,7 @@ def _append_event_in_session(
             basis_event_sequence=basis.event_sequence,
             basis_response_count=basis.original_response_count,
             response_id=response_id,
+            target_revision_id=target_revision_id,
             question_id=question_id,
             response_kind=response_kind,
             answer_ciphertext=ciphertext,
@@ -424,6 +511,108 @@ def _append_event_in_session(
             "Visit Prep contribution state changed"
         ) from None
     return _load_contribution(session, visit_prep=prep)
+
+
+def explain_contribution(
+    *,
+    access_token: str | ConfirmedVisitPrepAccess,
+    first_name: str,
+    role: ContributionRole,
+    expected_basis: ContributionBasis,
+    question_key: str,
+    patient_words: str | None,
+    idempotency_key: str,
+) -> ContributionMutationReceipt:
+    """Save or withdraw explicit words alongside the exact current coded answer.
+
+    A null value is an attributable withdrawal, not deletion. A later choice
+    revision invalidates the explanation even if the selected code is unchanged.
+    No AI, provider verification, consent or clinical-record write is implied.
+    """
+    if type(expected_basis) is not ContributionBasis or type(question_key) is not str:
+        raise VisitPrepInterviewValidation("contribution basis is invalid")
+    words = _normalized_answer(patient_words) if patient_words is not None else None
+    key = _canonical_idempotency_key(idempotency_key)
+    with _visit_prep_session() as session:
+        try:
+            authorized = _lock_authorized_interview(session, access_token=access_token)
+            _require_recipient(authorized, first_name=first_name, role=role)
+            prep = authorized.visit_prep
+            current = _load_contribution(session, visit_prep=prep)
+            topic = next(
+                (t for t in current.topics if t.question.key == question_key), None
+            )
+            if topic is None or topic.question.kind != "choice":
+                raise VisitPrepInterviewValidation("explanation topic is invalid")
+            question = next(
+                q
+                for q in _questions(session, visit_prep=prep)
+                if q.question_key == question_key
+            )
+            # Replay binds the historical target, not today's possibly revised choice.
+            existing = session.exec(
+                select(VisitPrepContributionEvent).where(
+                    VisitPrepContributionEvent.visit_prep_id == prep.id,
+                    VisitPrepContributionEvent.idempotency_key == key,
+                )
+            ).one_or_none()
+            target = (
+                existing.target_revision_id if existing else topic.current_correction_id
+            )
+            original = existing.response_id if existing else topic.original_response_id
+            fingerprint = contribution_payload_hmac(
+                visit_prep_id=prep.id,
+                actor_role=role,
+                event_kind="explanation",
+                basis=expected_basis,
+                original_response_id=original,
+                question_id=question.id,
+                target_revision_id=target,
+                response=_CanonicalResponse(
+                    question_key, "answered" if words is not None else "skipped", words
+                ),
+            )
+            replayed = _existing_event(
+                session, prep=prep, key=key, fingerprint=fingerprint
+            )
+            if not replayed:
+                if (
+                    current.basis != expected_basis
+                    or not topic.applicable
+                    or topic.response_kind != "answered"
+                ):
+                    raise VisitPrepInterviewConflict(
+                        "Visit Prep contribution state changed"
+                    )
+                try:
+                    ciphertext = (
+                        encrypt_value(_answer_envelope(kind="story", value=words))
+                        if words is not None
+                        else None
+                    )
+                except EncryptionError:
+                    raise _unavailable() from None
+                current = _append_event_in_session(
+                    session,
+                    authorized=authorized,
+                    role=role,
+                    basis=expected_basis,
+                    key=key,
+                    fingerprint=fingerprint,
+                    response_id=original,
+                    question_id=question.id,
+                    explanation=True,
+                    target_revision_id=target,
+                    response_kind="answered" if words is not None else "skipped",
+                    ciphertext=ciphertext,
+                )
+            final = _lock_authorized_interview(session, access_token=access_token)
+            _require_recipient(final, first_name=first_name, role=role)
+            _commit(session)
+            return _receipt(current, replayed=replayed)
+        except BaseException:
+            session.rollback()
+            raise
 
 
 def correct_contribution(

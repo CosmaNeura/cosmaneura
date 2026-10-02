@@ -149,6 +149,39 @@ def test_initial_check_then_reload_reopen_and_edit_without_identity_prompts(
                 page.get_by_role("heading", name="Your saved answers")
             ).to_be_visible()
             expect(page.get_by_label("Recipient first name")).to_have_count(0)
+            adherence_prompt = "Are you taking them as prescribed?"
+            page.get_by_role(
+                "button", name=f"Explain: {adherence_prompt}", exact=True
+            ).click()
+            page.get_by_label("What would you like your provider to understand?").fill(
+                "My invented explanation for this choice."
+            )
+            page.get_by_role("button", name="Save my explanation", exact=True).click()
+            expect(
+                page.get_by_text("My invented explanation for this choice.", exact=True)
+            ).to_be_visible()
+            explanation = _topic(_projection(fixture), "adherence")
+            assert explanation.answer == explanation.original_answer == "yes"
+            assert (
+                explanation.explanation_words
+                == "My invented explanation for this choice."
+            )
+            # Another isolated browser suite may steal foreground focus. The
+            # actual privacy handler must conceal on blur; explicitly reload
+            # authorized content before capturing the explanation view.
+            page.bring_to_front()
+            show_saved = page.get_by_role(
+                "button", name="Show saved answers", exact=True
+            )
+            if show_saved.count():
+                show_saved.click()
+            expect(
+                page.get_by_text("My invented explanation for this choice.", exact=True)
+            ).to_be_visible()
+            page.screenshot(
+                path=str(root / "tmp" / f"visit-prep-explanation-{width}-{role}.png"),
+                full_page=True,
+            )
             page.get_by_role(
                 "button", name=f"Change: {story_prompt}", exact=True
             ).click()

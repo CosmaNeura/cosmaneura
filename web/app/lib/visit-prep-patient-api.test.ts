@@ -47,6 +47,92 @@ const contribution = {
 }
 
 describe("patient public API boundary", () => {
+  it("saves and withdraws explanations through a private cookie-only mutation", async () => {
+    const receipt = {
+      disposition: "accepted",
+      basis: { original_response_count: 4, event_sequence: 1 },
+      current_answers_complete: true,
+      current_answers_reviewed: false,
+    }
+    const fetcher = vi
+      .fn()
+      .mockImplementation(() => new Response(JSON.stringify(receipt)))
+    const client = createVisitPrepPatientClient(
+      "https://api.example.test",
+      null,
+      fetcher,
+    )
+    const payload = {
+      first_name: "",
+      role: "patient" as const,
+      basis: contribution.basis,
+      question_key: "adherence",
+      patient_words: "Invented explanation for the selected answer.",
+    }
+    const key = "00000000-0000-4000-8000-000000000001"
+    await client.explainContribution(payload, key)
+    await client.explainContribution({ ...payload, patient_words: null }, key)
+    for (const [url, options] of fetcher.mock.calls) {
+      expect(String(url)).toBe(
+        "https://api.example.test/external/v1/visit-prep/contribution/explanation",
+      )
+      expect(options).toMatchObject({
+        method: "POST",
+        credentials: "include",
+        cache: "no-store",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      })
+      expect(options.headers).toMatchObject({
+        "X-Visit-Prep-Continuation": "1",
+        "Idempotency-Key": key,
+      })
+      expect(options.headers).not.toHaveProperty("Authorization")
+      expect(JSON.parse(options.body).first_name).toBe("")
+    }
+    expect(JSON.parse(fetcher.mock.calls[1][1].body).patient_words).toBeNull()
+    client.dispose()
+  })
+  it.each([
+    {
+      kind: "story",
+      response_kind: "answered",
+      timestamp: "2099-01-01T12:00:00Z",
+    },
+    {
+      kind: "choice",
+      response_kind: "skipped",
+      timestamp: "2099-01-01T12:00:00Z",
+    },
+    { kind: "choice", response_kind: "answered", timestamp: null },
+  ])(
+    "rejects an explanation with an invalid coded-answer shape",
+    ({ kind, response_kind, timestamp }) => {
+      const topic = contribution.topics[0]
+      expect(
+        visitPrepPatientContribution.safeParse({
+          ...contribution,
+          topics: [
+            {
+              ...topic,
+              question: {
+                ...topic.question,
+                kind,
+                choices:
+                  kind === "choice" ? [{ value: "yes", label: "Yes" }] : [],
+              },
+              response_kind,
+              initial_response_kind: response_kind,
+              answer: response_kind === "answered" ? "yes" : null,
+              initial_answer: response_kind === "answered" ? "yes" : null,
+              explanation_words: "Invented separate explanation.",
+              explanation_recorded_at: timestamp,
+            },
+          ],
+        }).success,
+      ).toBe(false)
+    },
+  )
   it("uses cookie-only continuation after reload and never puts a cookie in JavaScript", async () => {
     const fetcher = vi
       .fn()

@@ -42,6 +42,7 @@ function setup(
     dispose: vi.fn(),
     readContribution: vi.fn(),
     correctContribution: vi.fn(),
+    explainContribution: vi.fn(),
     reviewContribution: vi.fn(),
     readClarification: vi.fn(),
     decideClarification: vi.fn(),

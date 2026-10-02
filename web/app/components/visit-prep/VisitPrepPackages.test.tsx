@@ -558,6 +558,61 @@ describe("provider current-answer package", () => {
     expect(screen.getByText("b".repeat(64))).toBeInTheDocument()
     expect(api.request).not.toHaveBeenCalled()
   })
+  it.each(["explanation", "choice"])(
+    "grounds an explanation in its own source, not the %s source",
+    async (source) => {
+      const body = ready()
+      body.sources = {
+        ...sources,
+        topics: sources.topics.map((topic) =>
+          topic.question_key === "adherence"
+            ? {
+                ...topic,
+                explanation_words: "My separately reported synthetic context.",
+                explanation_source_id: "visit_prep_contribution_explanation",
+                explanation_recorded_at: "2099-01-01T11:00:30Z",
+              }
+            : topic,
+        ),
+      }
+      const item = {
+        text: "Recipient reports context for the selected answer.",
+        evidence: [
+          {
+            source_ref:
+              source === "explanation"
+                ? "visit_prep_contribution_explanation"
+                : "visit_prep_response_adherence",
+            quote: "separately reported synthetic context",
+          },
+        ],
+      }
+      body.brief.headline = item
+      body.brief.summary = [item]
+      api.package.mockResolvedValue({ data: body })
+      render(<VisitPrepPackages access={access} scopeKey="user_synthetic" />)
+      fireEvent.click(screen.getByRole("button", { name: "Load preparations" }))
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: `Open contribution ${prep.id}`,
+        }),
+      )
+      if (source === "explanation") {
+        await screen.findByRole("heading", { name: "Pre-visit brief" })
+        expect(
+          screen.getByText("Recipient explanation for this selected answer"),
+        ).toBeInTheDocument()
+        expect(screen.getByText("Some of the time")).toBeInTheDocument()
+        expect(screen.getAllByText(item.text).length).toBeGreaterThanOrEqual(1)
+      } else {
+        await screen.findByRole("alert")
+        expect(screen.queryByText(item.text)).not.toBeInTheDocument()
+        expect(
+          screen.queryByText("My separately reported synthetic context."),
+        ).not.toBeInTheDocument()
+      }
+    },
+  )
   it.each(["unknown_source", "old_quote", "stale_output", "wrong_contract"])(
     "rejects %s synthesis instead of rendering a mismatched interpretation",
     async (failure) => {
