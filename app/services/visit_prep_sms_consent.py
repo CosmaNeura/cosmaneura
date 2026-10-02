@@ -40,6 +40,11 @@ from app.services.visit_prep_patient_continuation import (
     ConfirmedVisitPrepAccess,
     valid_confirmation_name,
 )
+from app.services.visit_prep_sms_suppression import (
+    SMSSuppressionUnavailable,
+    configured_sms_sender_digest,
+    read_locked_sms_suppression,
+)
 from app.services.visit_preps import _visit_prep_session
 from app.utils.encryption import (
     DecryptionError,
@@ -59,7 +64,7 @@ Kind = Literal["granted", "withdrawn"]
 VERSION = "visit_prep_sms_consent_v1"
 PURPOSE = "visit_prep_sms_invitation_and_reminders"
 _CONTEXT = "visit-prep-sms-consent-evidence-v1"
-_FAILURES = _ERRORS + (DecryptionError, RecursionError)
+_FAILURES = _ERRORS + (DecryptionError, RecursionError, SMSSuppressionUnavailable)
 
 
 @contextmanager
@@ -210,6 +215,20 @@ class PatientSMSConsentView:
     can_grant: bool
     checked_at: datetime
     contact_available: bool
+    phone_suppression_status: Literal["not_connected", "not_recorded", "stopped"]
+
+
+def _suppression(session: Session, prep: VisitPrep):
+    sender = configured_sms_sender_digest()
+    if sender is None or prep.has_sms_contact is not True:
+        return "not_connected"
+    return (
+        "stopped"
+        if read_locked_sms_suppression(
+            session, sender_digest=sender, recipient_digest=_recipient(prep)
+        )
+        else "not_recorded"
+    )
 
 
 def _manifest(
@@ -414,6 +433,7 @@ def get_patient_sms_consent_view(
                 )
             )
             session.flush()
+            suppression = _suppression(session, prep)
             checked = _checked(session, access_token, first_name, role)
             maximum = min(checked.credential.expires_at, checked.schedule.scheduled_at)
             status: Literal[
@@ -440,9 +460,13 @@ def get_patient_sms_consent_view(
                 row.recorded_at if row else None,
                 row.expires_at if row else None,
                 maximum,
-                contact and prep.completed_at is None and maximum > checked.event_at,
+                contact
+                and suppression != "stopped"
+                and prep.completed_at is None
+                and maximum > checked.event_at,
                 checked.event_at,
                 contact,
+                suppression,
             )
             if grant != sms_consent_disclosure_fingerprint(
                 role=role, event_kind="granted"
@@ -526,7 +550,8 @@ def record_patient_sms_consent(
                     raise VisitPrepEmailInvalid()
                 now = _database_now(session)
                 if decision.event_kind == "granted" and (
-                    prep.completed_at is not None
+                    _suppression(session, prep) == "stopped"
+                    or prep.completed_at is not None
                     or expiry is None
                     or not now
                     < expiry
@@ -583,6 +608,12 @@ def record_patient_sms_consent(
                 session.flush()
                 _verify(session, row, prep)
                 sequence, disposition = row.event_sequence, "recorded"
+            if (
+                disposition == "recorded"
+                and decision.event_kind == "granted"
+                and _suppression(session, prep) == "stopped"
+            ):
+                raise VisitPrepEmailInvalid()
             checked = _checked(session, access_token, first_name, decision.role)
             if decision.disclosure_fingerprint != sms_consent_disclosure_fingerprint(
                 role=decision.role, event_kind=decision.event_kind

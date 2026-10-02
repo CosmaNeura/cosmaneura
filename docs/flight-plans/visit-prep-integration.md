@@ -669,6 +669,41 @@ application change while retaining consent records and schema; use a forward fix
 for schema faults. Consent retention and legal-hold cleanup require qualification.
 No live message, account, environment control, model or deployment is changed.
 
+### Sender wide SMS opt out storage
+
+Core now retains terminal STOP evidence independently of any preparation, patient
+chart, practice or invitation. The scope is the canonical adapter namespace,
+provider account resource and sender number, paired with a keyed recipient digest.
+Preparations and practices sharing that sender share the suppression. Credential
+and connection rotation must retain the same canonical resource identity; moving
+a number to another provider or account requires suppression migration before
+activation, not a fresh empty registry. No browser grant or reschedule clears STOP.
+
+The optional patient screen reports a phone-wide opt-out when sender routing is
+configured and rejects new preparation-specific grants. Historical consent remains
+visible and exact retries retain their original receipt without clearing STOP.
+Withdrawal and patient answers remain available; email choices remain independent.
+Absent routing is honestly reported as not connected, and malformed partial
+routing fails closed. Routing contains no transport credentials and enables no send.
+
+Generated expansion `79601b0047dc` follows `5789bd0d277e`, adding only the STOP
+table, lookup index and its own immutability guard. Evidence and its content-free
+audit commit atomically after a trusted Core adapter verifies the exact normalized
+source twice. The shared recipient transaction lock also fences concurrent checks;
+contention and stale isolation levels deny rather than return an unsafe negative.
+STOP admission does not depend on send or patient consent-capture flags. Retained
+fields contain no raw number, message text, name, answer or provider credential.
+
+No authenticated provider STOP adapter or public callback is installed by this
+increment. Synthetic verifiers prove domain behavior, not provider authentication.
+Actual SMS transport, callback admission and retry wiring, sender approval, delivery
+receipts and reminder dispatch remain required. Future workers must hold this same
+transaction through their final suppression check; absence of STOP is not consent
+or sending authority. STOP record retention and legal-hold cleanup require separate
+qualification and must not silently restore messaging. Recovery leaves the schema
+and suppression evidence in place and uses a forward fix; no destructive downgrade.
+All messaging remains disabled. No live account, message, deployment or model is used.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

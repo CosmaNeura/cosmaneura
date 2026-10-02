@@ -359,6 +359,16 @@ export function PatientEmailConsent({
               continue without texts.
             </p>
           )}
+          {sms &&
+            "phone_suppression_status" in value &&
+            value.phone_suppression_status === "stopped" && (
+              <p className="mt-6" role="status">
+                A phone-wide text opt-out is recorded for this sender and mobile
+                number. You cannot clear it by allowing texts for this
+                preparation. You can continue preparing for your visit without
+                texts; email choices are separate.
+              </p>
+            )}
           {value.can_grant ? (
             <>
               {sms ? (
@@ -398,7 +408,11 @@ export function PatientEmailConsent({
             <p className="mt-6">
               {sms && "contact_available" in value && !value.contact_available
                 ? "Text permission is unavailable because no mobile number was provided."
-                : "New permission cannot be recorded for this completed or expired preparation. You can still withdraw through a valid invitation."}
+                : sms &&
+                    "phone_suppression_status" in value &&
+                    value.phone_suppression_status === "stopped"
+                  ? "New text permission cannot be recorded while this phone-wide opt-out is in place."
+                  : "New permission cannot be recorded for this completed or expired preparation. You can still withdraw through a valid invitation."}
             </p>
           )}
           <div className="mt-4 flex flex-wrap gap-3">
