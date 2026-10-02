@@ -1,34 +1,38 @@
-# Draft Visit Prep package read for CosmaBot
+# Visit Prep package read for CosmaBot
 
-**Status:** Owner approved for branch implementation; governing architecture ratification pending · **Version:** 1.0.1
+**Status:** Ratified design; receiver qualification pending · **Version:** 1.0.1
 
-This proposed boundary lets a physician explicitly open the same Core-owned Visit
+This boundary lets a physician explicitly open the same Core-owned Visit
 Prep package on the Cosmaneura dashboard or in CosmaBot, including a preparation
 without a chart or encounter. Core owns patient words, corrections, review,
 synthesis, access and retention. CosmaBot renders that package; it does not create
 a second clinical record or rewrite the brief through another model.
 
-John approved this first read-only contract for branch implementation on October 2,
-2026. This document is not a ratified architecture amendment or evidence that a
-receiver is operational. Schemas and fixtures are test material, not authorization
+John approved implementation and architecture on October 2, 2026. Architecture
+v3.6 and ADR 0028 ratify this design at
+`6b879150205f275612d1a3fd2318530dfa331857`, merged through
+[architecture PR 21](https://github.com/CosmaNeura/cosmaneura-architecture/pull/21).
+The [governing contract](https://github.com/CosmaNeura/cosmaneura-architecture/blob/6b879150205f275612d1a3fd2318530dfa331857/contracts/visit-prep-companion-v1.md)
+is authoritative; this branch copy tracks implementation requirements. Ratification
+is not evidence that a receiver is operational. Schemas and fixtures are test material, not authorization
 for deployment, patient contact or live processing. Normative words below describe
 the approved design, not currently available receiver behavior.
 
-## Architecture decision under review
+## Ratified architecture decision
 
-The proposed design verifies two credentials on every read: CosmaBot's Entra
+The ratified design verifies two credentials on every read: CosmaBot's Entra
 app-only workload token and the physician's current Core Clerk session token.
 The preparation must belong to that physician. No persistent preparation bearer
 or mount grant is added. Session Prep's encounter-bound mount and permission are
 not used as Visit Prep authority.
 
 An alternative is a new short-lived opaque preparation grant, with issuance,
-revocation, expiry and replay storage. Direct per-read authentication is proposed
+revocation, expiry and replay storage. Direct per-read authentication was selected
 for this read-only operation because the companion already supports authenticated
 Core connection reads. Physician authentication needs a designated adapter;
 domain code must not parse Clerk claims.
 
-Ratification requires an architecture ADR and corresponding governing updates:
+ADR 0028 and the corresponding governing updates:
 
 - Recognize CosmaBot as a companion presentation surface for Visit Prep without
   replacing Sovereign or changing Session Prep.
@@ -37,23 +41,23 @@ Ratification requires an architecture ADR and corresponding governing updates:
 - Govern a dedicated read with explicit physician-action audit, not a generic
   conversational Agent API invocation.
 
-The reference is architecture v3.5 at commit
-`2b542addfc6d6d38198b0dedbfd03c45ad73e551`: principles 4–6, 12 and 16, sections
-4, 7 and 11, and ADRs 0001, 0021 and 0025. This proposal does not amend them.
+ADR 0028 narrowly amends ADRs 0001 and 0008 for this Core-owned, chart-free
+pre-visit display. Sovereign remains the conversational brain; Session Prep
+retains its encounter-bound authority and sole approved provider action rail.
 The broader approved Visit Prep scope still includes patient AI clarification,
 bot actions and booking/email/SMS/reminders. This first read contract neither
 authorizes those actions nor removes them from the delivery goal.
 
 ## Endpoint and credentials
 
-Proposed endpoint: `POST /service/v1/companion/visit-prep/package`. It accepts one
+Endpoint: `POST /service/v1/companion/visit-prep/package`. It accepts one
 JSON request and returns one fully buffered JSON response. It MUST NOT stream
 clinical content, redirect, use query parameters or invoke a model. Merely opening
 a workspace MUST NOT perform a read.
 
-| Header                                | Proposed rule                                                                                                                            |
+| Header                                | Rule                                                                                                                                     |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `Authorization`                       | Entra app-only bearer for the explicitly allowlisted CosmaBot workload, configured Core audience/issuer/tenant and `AgentApiAccess` role |
+| `Authorization`                       | Entra app-only bearer for the explicitly allowlisted CosmaBot workload, configured Core audience/issuer/tenant and `AgentApi.Access` role |
 | `X-Cosmaneura-Provider-Authorization` | Current physician Core Clerk session bearer, verified by Core's designated auth adapter                                                  |
 | `X-Cosmaneura-Visit-Prep-Version`     | Exact value `1`                                                                                                                          |
 | `Content-Type` and `Accept`           | `application/json`                                                                                                                       |
@@ -195,15 +199,15 @@ Transient buffers are discarded after use.
 
 ## Qualification and activation
 
-The owner-approved branch implementation must reconcile the governing architecture
-before activation. A synthetic-qualified receiver precedes the companion adapter.
+Architecture is ratified. A synthetic-qualified receiver precedes the companion
+adapter; neither is qualified solely by design approval or these schemas.
 Acceptance covers actual database lock waits,
 BAA/member withdrawal, credentials expiring during waits, wrong workload/account/
 workspace, commit acknowledgment loss, correction, no chart link, partial
 caregiver reports, all-skipped reports, hostile wire input, late results and exact
 dashboard/bot package and artifact version parity.
 
-All release controls stay default-off. This proposal grants no merge, deployment,
+All release controls stay default-off. This contract grants no application merge, deployment,
 real messaging, PHI/model/provider processing, cohort activation or workspace
 retirement. Design ratification is separate from clinical, delivery and release
 acceptance.

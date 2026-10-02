@@ -1,4 +1,4 @@
-// Offline checks of a draft only. No runtime receiver or dependency is installed.
+// Offline shape checks only; neither schemas nor ratification prove runtime authority.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -247,9 +247,10 @@ test("schemas are not mistaken for semantic authority validation", () => {
   value.preparation_ref = "visit_prep_01h45ytscbebyvny4gc8cr8ma3";
   assert.equal(result(value), true);
   const draft = readFileSync(join(directory, "draft.md"), "utf8");
-  assert.match(draft, /Owner approved for branch implementation; governing architecture ratification pending/);
+  assert.match(draft, /Ratified design; receiver qualification pending/);
   assert.match(draft, /package IDs match/);
-  assert.match(draft, /reconcile the governing architecture/);
+  assert.match(draft, /6b879150205f275612d1a3fd2318530dfa331857/);
+  assert.match(draft, /AgentApi\.Access/);
 });
 
 test("coded explanations use bounded separate source fields and withdrawals", () => {

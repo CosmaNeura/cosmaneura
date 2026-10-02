@@ -181,6 +181,42 @@ Encrypted synthesis artifacts retain the exact protected input and protection pr
 
 Synthetic qualification exercises the actual Azure SDK serialization and stable operation through a local simulated transport, including a non-retried provider failure. It also covers failed protection before any model call or usage intent, current-source lineage, separate explanations, concurrent corrections and authority changes, substituted-value rejection, and encrypted evidence recovery. Full regression results are recorded with the final review commit. No real patient information or live provider was used. Live Surrogate framing behavior and representative clinical fidelity remain operational acceptance work before activation, along with protected conversational clarification and subsequent bot reasoning.
 
+## Companion authentication implementation October 2 2026
+
+John authorized the architecture amendment. Architecture v3.6 and ADR 0028 are
+ratified at `6b879150205f275612d1a3fd2318530dfa331857` through
+[architecture PR 21](https://github.com/CosmaNeura/cosmaneura-architecture/pull/21).
+The narrow exception permits Core-owned chart-free Visit Prep display in CosmaBot,
+not a parallel clinical store, conversational runtime or generic tool permission.
+
+This Tier 2 authentication increment adds a separate default-off
+`COMPANION_VISIT_PREP_ENABLED` policy using the existing configured companion
+identity. Only that app-only Entra caller with `AgentApi.Access` and the correct
+tenant, audience and issuer is admitted. Physician verification is a designated
+Clerk adapter using only the configured issuer's public signing keys. Both
+adapters return normalized identity and verified credential time bounds for the
+receiver's final database-time check. Neither accepts the browser test bearer,
+cookies, support impersonation or a pending physician session.
+
+Public signing-key reads send no credential and use bounded transport with no
+redirect, proxy environment or retry. Existing Scribe, Sovereign and Session Prep
+auth paths are unchanged. These transport limits do not replace the receiver's
+15-second outer deadline or prove immediate interruption of a blocked thread.
+
+Receiver-first sequence remains: qualify this auth foundation; implement the
+caller-owned package/audit transaction and private wire boundary; then implement
+and qualify the CosmaBot display adapter. No route, model call, schema migration,
+environment mutation, live processing or activation is added by this increment.
+Recovery is to leave the new flag unset/off and revert this additive commit;
+existing auth behavior remains unchanged. Credential expiry, persisted view-as,
+current reviewed connection and practice/preparation authority must still be
+checked by the package receiver before commit and disclosure. Application work
+stays on the integration branch until ready; deployment remains founder-only.
+
+Local synthetic signed-token and existing identity/workload regressions and
+implementer review are recorded at the final commit in the stacked draft PR.
+This is not independent review, GitHub approval or operational acceptance.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
