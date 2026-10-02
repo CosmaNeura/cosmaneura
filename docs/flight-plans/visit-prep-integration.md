@@ -704,6 +704,37 @@ qualification and must not silently restore messaging. Recovery leaves the schem
 and suppression evidence in place and uses a forward fix; no destructive downgrade.
 All messaging remains disabled. No live account, message, deployment or model is used.
 
+### Separate durable SMS queue
+
+Core now has a separate SMS outbox for booking invitations and the 48-hour unopened
+and 12-hour unfinished reminders. It uses current appointment timing and distinct
+SMS history rather than inferring SMS state from email. A sender and recipient
+fence also applies spacing across preparations that share the sender. Quiet hours
+and at least four-hour spacing remain centrally controlled and read-only to providers.
+Messages contain a private link and fixed administrative wording, not patient answers
+or clinical facts. The approval fingerprint covers the actual templates and policy.
+
+Queue admission requires separately qualified SMS standing approval, the exact
+current SMS consent and source verification, current owner and invitation authority,
+and no sender-wide STOP. No verifier is installed by default. Patient-screen
+self-attestation does not supply independent qualification or permission for the
+first booking contact. That initial-contact source integration remains unfinished.
+Exact retries recover the retained receipt without creating a new intent.
+
+Generated expansion `950a65bbfa96` follows `79601b0047dc`. It adds only the SMS
+outbox, indexes and its own guards. Retained encrypted evidence and content-free
+audit commit atomically; contact and link ciphertext has an absolute 24-hour ceiling,
+bounded further by consent, approval, invitation and appointment deadlines.
+The populated predecessor rehearsal preserves existing patient answers, synthesis,
+consent and all prior tables and guards. Recovery retains this expansion and evidence,
+keeps sends disabled and uses a forward fix for schema faults.
+
+The irreversible submission states and recipient fence support the separate worker
+increment; storage alone does not dispatch a text. Real SMS transport, authenticated
+STOP callbacks and receipts, initial booking consent, automated source wiring,
+retention and operational qualification remain required. No live service, message,
+model, account, deployment or release configuration is changed.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).

@@ -1,6 +1,6 @@
 """Actual locked cadence evidence and timed handoff; invented consent only.
 
-No provider, real contact, runtime job, enabled setting or SMS history is used.
+No provider, real contact, runtime job or live enabled setting is used.
 Independent PostgreSQL connections exercise current changes and atomic retries.
 """
 
@@ -124,12 +124,13 @@ def test_actual_current_plan_is_value_free_and_sms_history_is_not_invented(
     plan = _plan(fixture)
     assert plan.snapshot.first_party_open_state == "unopened"
     assert plan.snapshot.schedule_generation == plan.snapshot.credential_generation == 1
-    assert plan.email_history == () and plan.sms_history_available is False
-    assert plan.decisions[0].action == "candidate"
-    assert {d.reason for d in plan.decisions[1:]} == {"channel_history_unavailable"}
-    assert all(
-        d.action == "wait" and d.next_check_at is None for d in plan.decisions[1:]
+    assert (
+        plan.email_history == plan.sms_history == ()
+        and plan.sms_history_available is True
     )
+    assert plan.decisions[0].action == "candidate"
+    assert plan.decisions[1].action == "candidate"
+    assert all(d.action == "wait" for d in plan.decisions[2:])
     assert _rows(fixture) == []
     assert repr(plan) == "CurrentTimingPlan(<redacted>)"
     private = (
