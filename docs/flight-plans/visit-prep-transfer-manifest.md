@@ -912,3 +912,39 @@ evidence retention, creation/booking composition, dispatch registration,
 monitoring and controlled provider acceptance still remain. The full goal also
 retains patient AI clarification, shared Core/CosmaBot packages, Acuity,
 SMS/STOP/reminders and clinical/operational release acceptance.
+
+## Shared package read within a receiver transaction
+
+Core's existing dashboard synthesis getter now uses
+`read_visit_prep_synthesis_in_session`. The shared domain function reacquires
+the same current owner authority, preparation lineage, contribution and artifact
+in the caller's SQL session. It flushes the content-free synthesis-read audit
+and rechecks time-dependent access without opening another session, committing,
+rolling back or invoking a model. The dashboard wrapper still commits before
+returning its unchanged response.
+
+The returned snapshot is staged private data, not an authorized external
+response. A future receiver must perform its own permission and final Core
+authority checks and commit successfully before disclosure. Later denial or an
+uncertain commit requires discarding the snapshot. This allows receiver and
+package audits to share one transaction; it does not grant a CosmaBot capability
+or reuse Session Prep permission.
+
+Independent synthetic PostgreSQL checks compare the exact package, source and
+artifact versions with the dashboard for complete patient and partial caregiver
+reports without chart links. Observers see no read audit before the caller
+commits. Enclosing denial rolls it back; a committed operation with a lost
+acknowledgment discloses nothing. Actual correction and owner-authority lock
+waits verify retained custody and refreshed sources. Expiry after audit staging
+fails closed, and stale ciphertext is never decrypted. Existing denial tests
+also exercise the shared read directly. Final revision-specific regression and
+implementer review are recorded in the stacked draft PR.
+
+Reuse is limited to the existing Core package, artifact and audit domain. No
+schema, route, wire contract, identity configuration, release control or
+cross-repository source changes. The distinct Core Visit Prep receiver and
+matching CosmaBot adapter remain unimplemented. Their preparation-scoped
+authorization must support a new patient without fabricating a chart or encounter;
+the existing encounter-bound Session Prep mount does not provide that authority.
+The broader patient AI, delivery, scheduling, SMS/reminder, retention and release
+milestones remain open.
