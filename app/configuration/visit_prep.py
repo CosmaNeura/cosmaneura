@@ -32,6 +32,7 @@ class VisitPrepSettings:
     enabled_practice_ids: frozenset[str] = field(default_factory=frozenset)
     email_send_enabled: bool = False
     sms_send_enabled: bool = False
+    sms_schedule_enabled: bool = False
     configuration_valid: bool = True
 
 
@@ -109,6 +110,9 @@ def load_visit_prep_settings(
         )
         email_send_enabled = _parse_bool(read("VISIT_PREP_EMAIL_SEND_ENABLED", "false"))
         sms_send_enabled = _parse_bool(read("VISIT_PREP_SMS_SEND_ENABLED", "false"))
+        sms_schedule_enabled = _parse_bool(
+            read("VISIT_PREP_SMS_SCHEDULE_ENABLED", "false")
+        )
     except (AttributeError, TypeError, TypeIDException, ValueError):
         # Configuration is authorization input. A typo must make every Visit
         # Prep capability false, not partially preserve a permissive value.
@@ -124,6 +128,7 @@ def load_visit_prep_settings(
         enabled_practice_ids=enabled_practice_ids,
         email_send_enabled=email_send_enabled,
         sms_send_enabled=sms_send_enabled,
+        sms_schedule_enabled=sms_schedule_enabled,
     )
 
 

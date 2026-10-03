@@ -4,6 +4,8 @@ No browser/source selector, default consent verifier, transport or installed
 booking job. A booking contact alone cannot enter this trusted composition.
 """
 
+from contextlib import nullcontext
+
 from app.services import visit_prep_sms_outbox as sms
 from app.services.visit_prep_delivery_links import (
     DeliveryLinkIntent,
@@ -28,8 +30,14 @@ def enqueue_linked_sms(
     settings,
     approval_verifier=None,
     consent_verifier=None,
+    _session: Session | None = None,
 ) -> sms.SMSQueueResult:
-    """Return only a committed queue receipt, never a bearer or recipient."""
+    """Return only metadata, never a bearer or recipient.
+
+    The ordinary entry point owns and commits its transaction. The private
+    scheduler composition joins its outer transaction; its receipt must not be
+    published until that caller commits checkpoint, link and queue together.
+    """
     try:
         if (
             type(intent) is not DeliveryLinkIntent
@@ -37,7 +45,13 @@ def enqueue_linked_sms(
             or step not in STEPS
         ):
             raise VisitPrepSMSUnavailable()
-        with Session(get_engine()) as session:
+        # The private scheduler composition keeps checkpoint and queue in one
+        # transaction. No caller-supplied session is exposed by a route.
+        with (
+            nullcontext(_session)
+            if _session is not None
+            else Session(get_engine()) as session
+        ):
 
             def authority():
                 locked = sms.resolve_locked_sms_authority(
@@ -140,7 +154,8 @@ def enqueue_linked_sms(
                     # A late state/timing change cannot commit an orphaned alias.
                     raise VisitPrepSMSUnavailable()
             authority()
-            session.commit()
+            if _session is None:
+                session.commit()
             return result
     except Exception:
         raise VisitPrepSMSUnavailable() from None
