@@ -965,6 +965,49 @@ booking/reminder scheduler, initial booking-consent source, SMS vendor or callba
 Email linkage, live service acceptance, retention qualification and rollout remain
 required. All release controls stay off; no merge, deployment or real message occurs.
 
+### Recurring SMS queue planning
+
+The recurring Core job now evaluates the booking SMS, unopened forty-eight-hour
+reminder and unfinished twelve-hour reminder against existing current timing
+rules. It queues at most one eligible step per preparation in a bounded scan of
+ten preparations. It never calls an SMS provider. A default-off scheduling control
+and separately installed sender-source and patient-permission verifiers are
+required; both verifiers remain absent from the production composition.
+
+The generated expansion `34f75ffd5135` follows `898301cffd5c` and adds one
+operational scan checkpoint. It contains no patient words, contact information,
+link or sending authority. Each scan filters the configured cohort, advances past
+unavailable preparations and wraps to recheck waiting work. Savepoints join each
+link issuance and queue entry to the checkpoint transaction. Concurrent jobs share
+one scan lock. A failure before commit retains no new link or queue; a lost commit
+acknowledgment is resolved from the actual retained outbox without minting another
+secret. Core's SQL-deadline helper bounds the batch and individual preparation
+work; non-cooperative Python and connection acquisition still require the separate
+worker execution limit.
+
+Focused synthetic qualification exercises actual queue and worker consumption,
+quiet-hour waiting, source and consent rejection, STOP and physician withdrawal,
+cohort exclusion, concurrency, late disablement, unavailable first-page recovery,
+and lost acknowledgments. The twelve-hour reminder test uses explicitly aged
+fixtures in an owned disposable database, not a live elapsed-time qualification.
+The populated predecessor rehearsal preserves every previous table row and Visit
+Prep guard definition, including five answers, a published package and an existing
+short-lived link. Exact final results belong in the draft PR.
+
+This does not solve first-booking permission. The current consent-capture screen
+requires the patient to open the preparation, so that evidence cannot establish
+permission for an unopened initial invitation or qualify the forty-eight-hour
+unopened journey. A separately verified prior-contact or booking consent source
+remains necessary. Actual SMS transport, authenticated callbacks and receipts,
+email link composition, live automation acceptance, alert routing, retention
+qualification and the controlled rollout remain unfinished.
+
+Recovery disables new scheduling and sending, retains checkpoint and delivery
+evidence, and keeps secret maintenance active. Revert the additive job/service
+only after preserving an approved cleanup path; repair schema forward rather than
+drop retained structures. No settings, live account, deployment or recipient was
+changed or activated.
+
 ## Source references
 
 - [Original Visit Prep requirements, issue 135](https://github.com/CosmaNeura/cosmaneura/issues/135) and [approved old-stack plan](https://github.com/CosmaNeura/cosmaneura/blob/d80a37012526d96991db25920797457c392231a8/docs/flight-plans/visit-prep.md).
