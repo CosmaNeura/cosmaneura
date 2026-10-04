@@ -38,7 +38,7 @@ def _shell_array(source: str, name: str) -> str:
 def _assert_watchdog_disabled_in_secret_overrides(source: str) -> None:
     overrides = [
         _hcl_block(source[match.start() :], "override_data")
-        for match in re.finditer(r"^override_data\s*\{", source, re.MULTILINE)
+        for match in re.finditer(r"^[ \t]*override_data\s*\{", source, re.MULTILINE)
     ]
     secret_overrides = [
         block
@@ -58,17 +58,25 @@ def _assert_watchdog_disabled_in_secret_overrides(source: str) -> None:
 @pytest.mark.parametrize(
     "unsafe_value", ['"true"', "", '"false"\nZOOM_WATCHDOG_ENABLED = "false"']
 )
+@pytest.mark.parametrize("indent", ["", "  "])
 def test_watchdog_scenario_guard_rejects_enabled_missing_or_duplicate_flags(
     unsafe_value: str,
+    indent: str,
 ) -> None:
     def scenario(value: str) -> str:
         declaration = f"{FLAG} = {value}" if value else ""
         return f"override_data {{\ntarget = data.external.secrets\nvalues = {{\n{declaration}\n}}\n}}\n"
 
     safe = scenario('"false"')
-    _assert_watchdog_disabled_in_secret_overrides(safe + safe)
+
+    def second_scenario(value: str) -> str:
+        return "\n".join(indent + line for line in scenario(value).splitlines()) + "\n"
+
+    _assert_watchdog_disabled_in_secret_overrides(safe + second_scenario('"false"'))
     with pytest.raises(AssertionError):
-        _assert_watchdog_disabled_in_secret_overrides(safe + scenario(unsafe_value))
+        _assert_watchdog_disabled_in_secret_overrides(
+            safe + second_scenario(unsafe_value)
+        )
 
 
 def _workflow_job(source: str, name: str) -> str:
