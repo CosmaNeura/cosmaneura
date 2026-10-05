@@ -33,9 +33,13 @@ refuses to open the portal unless:
 - `login_page.enabled` is `false`, so the pinned configuration is never a
   standing no-code entry point;
 - `features` names only `customer_update`, `invoice_history`,
-  `payment_method_update`, `subscription_cancel`, and `subscription_update`,
+  `payment_method_update`, `subscription_cancel`, `subscription_pause`, and
+  `subscription_update`,
   each as an object. A feature Stripe adds later is refused until it has been
   reviewed and added to the allowlist in `app/services/stripe_billing.py`;
+- optional `features.subscription_pause`, when returned, has `enabled: false`
+  exactly. Missing, null, numeric, string, or enabled values inside a returned
+  pause feature are refused; omission of the entire feature remains compatible;
 - `features.subscription_update` is present with `enabled: false`, so quantity
   and plan changes happen only through Core;
 - `features.subscription_cancel` is present with either `enabled: false` or
