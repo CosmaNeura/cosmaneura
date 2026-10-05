@@ -137,6 +137,7 @@ async def test_revoked_caller_cannot_read_save_status(admission_case, monkeypatc
     await edits.save_capture_note(**request)
     with Session(f.engine) as session:
         identity = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+        assert identity is not None
         identity.revoked_at = datetime.now(UTC)
         session.add(identity)
         session.commit()

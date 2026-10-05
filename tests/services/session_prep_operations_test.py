@@ -28,6 +28,7 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
     _doctor, _target, _note, token, record = scope
     runtime_tests._read(token, record, runtime_tests._action(token))
     recent = SessionPrepReadReceipt.first()
+    assert recent is not None
     audit_count = AuthorityAuditEvent.count()
     old_time = datetime.now(UTC) - timedelta(days=2)
     with get_session() as session:
@@ -65,6 +66,7 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
 
 def test_queue_health_reports_only_counts_and_detects_stuck_work(scope):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.requested_at = datetime.now(UTC) - timedelta(minutes=3)
     build.save()
     health = operations.runtime_health()
@@ -99,6 +101,7 @@ def test_health_distinguishes_recent_outages_from_terminal_scope_changes(
     scope, failure_code, age, expected_status
 ):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.state = "failed"
     build.failure_code = failure_code
     build.retry_at = datetime.now(UTC) - age
@@ -153,6 +156,7 @@ def test_worker_configuration_failure_remains_visible_in_health(scope, drift):
         settings=settings,
     ) == "failed"
     build = SessionPrepBuild.first()
+    assert build is not None
     assert build.state == "failed"
     assert build.failure_code == "scope_unavailable"
     assert operations.runtime_health()["status"] == "degraded"

@@ -342,11 +342,15 @@ def test_final_mount_does_not_reuse_known_status(native, engine, monkeypatch, ch
             transcript = session.get(AIVisitTranscript, transcript_id)
             note = session.get(AIVisitNote, note_id)
             if change == "deleted_and_superseded":
+                assert note is not None
+                assert transcript is not None
                 transcript.deleted_at = note.superseded_at = datetime.now(UTC)
                 note.supersession_reason = "invented-status-fixture"
             else:
                 # Different existing synthetic doctor, never another real row.
                 other = case(engine)
+                assert note is not None
+                assert transcript is not None
                 transcript.doctor_id = note.doctor_id = other["doctor_id"]
             session.add_all([transcript, note])
             session.commit()
@@ -398,8 +402,11 @@ def test_committed_revocation_still_wins_after_remote_read(
                 row = session.get(
                     Appointment, TypeID.from_string(native.row["appointment_ref"])
                 )
+                assert other is not None
+                assert row is not None
                 row.doctor_id = other["doctor_id"]
             if change != "record_owner":
+                assert row is not None
                 row.revoked_at = datetime.now(UTC)
             session.add(row)
             session.commit()

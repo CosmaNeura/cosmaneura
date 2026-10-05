@@ -321,6 +321,7 @@ def test_pending_ready_retry_correction_and_new_review(flow):
     )
     with get_session() as s:
         note = s.get(AIVisitNote, f.note_id)
+        assert note is not None
         note.note = {"Plan": "Corrected synthetic goals."}
         s.add(note)
         s.commit()
@@ -330,6 +331,7 @@ def test_pending_ready_retry_correction_and_new_review(flow):
     )
     with get_session() as s:
         note = s.get(AIVisitNote, f.note_id)
+        assert note is not None
         finalize_note_for_session_prep(
             session=s,
             doctor_id=f.doctor_id,
@@ -372,6 +374,7 @@ def test_current_human_permissions_are_rechecked_on_retry(flow, monkeypatch, rev
                 row.revoked_at = datetime.now(UTC)
             else:
                 row = s.get(PracticeMember, f.member_id)
+                assert row is not None
                 assert lock_practice_seats(s, row.practice_id) is not None
                 row.seat_state = "inactive"
             s.add(row)

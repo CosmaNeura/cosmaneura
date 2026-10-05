@@ -282,6 +282,7 @@ def test_revocation_denies_retry_and_listing(engine, workflow):
     invoke(value)
     with session_for(engine) as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         link.revoked_at = datetime.now(UTC)
         session.add(link)
         session.commit()
