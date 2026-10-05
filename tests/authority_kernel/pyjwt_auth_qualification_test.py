@@ -1,5 +1,6 @@
 """Real token/JWKS verification; only synthetic JWKS HTTP I/O is replaced."""
 
+import hashlib
 import json
 import time
 from http.client import IncompleteRead
@@ -74,6 +75,7 @@ def boundary(monkeypatch):
             keys=keys,
             fetches=fetches,
             decoder=decoder,
+            authenticator=authenticator,
             client=client,
         )
 
@@ -120,6 +122,18 @@ def test_signed_service_request_and_cached_key(boundary):
             "client_id": next(iter(boundary.settings.allowed_client_ids))
         }
     assert len(boundary.fetches) == 1
+
+
+def test_default_request_path_refetches_and_accepts_rotated_key(boundary):
+    # Production globals inject no decoder: each request owns a fresh client.
+    boundary.authenticator.decoder = None
+    assert _request(boundary).status_code == 200
+    assert _request(boundary).status_code == 200
+    assert len(boundary.fetches) == 2
+    rotated = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    boundary.keys.append(_jwk(rotated, "rotated-key"))
+    assert _request(boundary, key=rotated, kid="rotated-key").status_code == 200
+    assert len(boundary.fetches) == 3
 
 
 @pytest.mark.parametrize("claim", ["exp", "iat", "nbf"])
@@ -273,7 +287,7 @@ def test_clerk_sdk_verification_preserves_session_boundary(boundary, mutation):
         )
         assert session.subject == "user_synthetic"
         assert session.issuer == boundary.settings.issuer
-        assert "sess_synthetic" not in session.session_sha256
+        assert session.session_sha256 == hashlib.sha256(b"sess_synthetic").hexdigest()
         with pytest.raises(ValueError, match="provider_session_invalid"):
             verified_provider_session(
                 SimpleNamespace(payload=payload, is_signed_in=True),

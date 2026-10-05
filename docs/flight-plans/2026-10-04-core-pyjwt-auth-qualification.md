@@ -32,10 +32,15 @@ Clerk identity or authentication setting is changed.
   accepted while non-alphabet junk is rejected.
 - Existing Core behavior maps JWKS lookup errors to sanitized 401, not Scribe's
   503. Keep this behavior explicit; the dependency update does not redesign it.
-- Unknown signing keys are refresh-throttled; a new key can receive 401 until
-  the existing 30-second cooldown elapses. Tests advance the client clock marker
-  without sleeping, recover the new key, and confirm the known key still works.
-  Existing per-key LRU caching has no time-based revocation guarantee.
+- For a reused decoder instance, unknown signing keys are refresh-throttled;
+  a new key can receive 401 until its 30-second cooldown elapses. Tests advance
+  that client's clock marker without sleeping and verify recovery. This is SDK
+  instance qualification, not a production cross-request caching guarantee.
+- Core's normal authenticators have no injected decoder and construct a fresh
+  decoder/JWKS client per request. A separate HTTP test verifies a new fetch for
+  each valid request and immediate acceptance of a newly published signing key.
+  The existing path therefore has no cross-request cache/throttle guarantee;
+  this PR does not introduce caching or a time-based key-revocation guarantee.
 - Clerk verification accepts a signed synthetic session and rejects expired,
   wrong-party, wrong-signature and malformed-expiration tokens. Core normalization
   checks the expected issuer and keeps the raw session identifier out of its hash.
