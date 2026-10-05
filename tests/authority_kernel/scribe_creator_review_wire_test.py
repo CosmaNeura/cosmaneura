@@ -21,6 +21,9 @@ from app.routes.scribe_capture import (
 )
 from app.services.scribe_workflow import HttpScribeWorkflowClient
 
+from activemodel.session_manager import _session_context, aglobal_session
+from sqlmodel import Session
+
 from tests.authority_kernel.scribe_capture_admission_test import (
     admission_case as _admission_case,
 )
@@ -129,12 +132,18 @@ async def test_core_to_scribe_review_and_lost_reply(admission_case, tmp_path, de
                         calls.append(
                             (request.method, dict(request.headers), request.content)
                         )
-                        response = await loopback.request(
-                            request.method,
-                            request.url.raw_path.decode(),
-                            headers=request.headers,
-                            content=request.content,
-                        )
+                        # The facade runs in a private worker event loop. The
+                        # probe client above already owns connections on the
+                        # test loop, so it cannot also serve worker requests.
+                        async with httpx.AsyncClient(
+                            base_url=origin, trust_env=False, timeout=10
+                        ) as receiver:
+                            response = await receiver.request(
+                                request.method,
+                                request.url.raw_path.decode(),
+                                headers=request.headers,
+                                content=request.content,
+                            )
                         if (
                             request.method == "POST"
                             and response.status_code == 200
@@ -161,6 +170,18 @@ async def test_core_to_scribe_review_and_lost_reply(admission_case, tmp_path, de
 
                     app = client().app
                     assert isinstance(app, FastAPI)
+
+                    async def request_session():
+                        # Capture workers inherit no ambient session. Own the
+                        # synthetic database session inside this request.
+                        with Session(f.engine, expire_on_commit=False) as session:
+                            token = _session_context.set(session)
+                            try:
+                                yield session
+                            finally:
+                                _session_context.reset(token)
+
+                    app.dependency_overrides[aglobal_session] = request_session
                     app.dependency_overrides[get_admission_client_factory] = (
                         lambda: remote
                     )
