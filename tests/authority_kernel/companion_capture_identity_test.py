@@ -71,8 +71,10 @@ def test_companion_cannot_alias_an_existing_caller_or_broaden_its_allowlist(
 
 @pytest.mark.parametrize("path", CAPTURE_PATHS)
 def test_companion_requires_explicit_capture_admission(
-    workload_client, monkeypatch, path
-):  # noqa: F811 -- imported pytest fixture
+    workload_client,  # noqa: F811 -- imported pytest fixture
+    monkeypatch,
+    path,
+):
     headers = {"Authorization": f"Bearer {COMPANION}"}
     response = workload_client.post(path, headers=headers, content=b"private sentinel")
     assert response.status_code == 403
