@@ -57,16 +57,26 @@ def engine():
     if not raw:
         pytest.skip("Explicit disposable companion PostgreSQL required")
     url = make_url(raw)
-    assert (url.host, url.database, url.username) == (
-        "127.0.0.1", "cosmabot_companion_test", "cosmabot_companion_test",
-    ) and url.port is not None and 1024 < url.port < 65536
+    assert (
+        (url.host, url.database, url.username)
+        == (
+            "127.0.0.1",
+            "cosmabot_companion_test",
+            "cosmabot_companion_test",
+        )
+        and url.port is not None
+        and 1024 < url.port < 65536
+    )
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)
     result = create_engine(url)
     with result.connect() as connection:
-        assert connection.execute(text("SELECT current_database(), current_user")).one() == (
-            "cosmabot_companion_test", "cosmabot_companion_test",
+        assert connection.execute(
+            text("SELECT current_database(), current_user")
+        ).one() == (
+            "cosmabot_companion_test",
+            "cosmabot_companion_test",
         )
     SQLModel.metadata.create_all(result)
     yield result

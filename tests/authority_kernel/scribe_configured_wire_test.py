@@ -210,7 +210,9 @@ async def test_configured_admission_review_and_existing_soap_routes(
                             ADMISSION_PATH, json=body, headers=headers
                         )
                         assert first.status_code == 503, first.text
-                        assert not lost, "Admission did not reach the injected lost reply"
+                        assert not lost, (
+                            "Admission did not reach the injected lost reply"
+                        )
                         path.with_suffix(".restart").touch()
                         await wait_for_file(path.with_suffix(".restarted"), process)
                         saved = await browser.post(

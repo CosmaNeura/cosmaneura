@@ -35,7 +35,16 @@ class RecordingWindowPayload(ProtectedWindowContract):
 
     @model_validator(mode="after")
     def distinct_keys(self) -> RecordingWindowPayload:
-        if len({self.bind_idempotency_key, self.lease_idempotency_key, self.reserve_idempotency_key}) != 3:
+        if (
+            len(
+                {
+                    self.bind_idempotency_key,
+                    self.lease_idempotency_key,
+                    self.reserve_idempotency_key,
+                }
+            )
+            != 3
+        ):
             raise ValueError("Invalid recording request keys")
         return self
 

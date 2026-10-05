@@ -104,7 +104,9 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
 
 
 @pytest.mark.parametrize("via_http", [False, True])
-def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypatch, via_http):
+def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
+    monkeypatch, via_http
+):
     doctor = DoctorFactory.build().save()
     practice = provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
@@ -135,8 +137,12 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
             ISSUER, doctor.clerk_id, "sess_synthetic_race"
         )
 
-    api.dependency_overrides[embed_context.authenticate_embed_platform_session] = verified_identity
-    api.dependency_overrides[embed_context.get_authority_kernel_settings] = lambda: AUTHORITY_SETTINGS
+    api.dependency_overrides[embed_context.authenticate_embed_platform_session] = (
+        verified_identity
+    )
+    api.dependency_overrides[embed_context.get_authority_kernel_settings] = (
+        lambda: AUTHORITY_SETTINGS
+    )
 
     def exchange():
         if via_http:
@@ -144,7 +150,10 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
                 response = client.post(
                     "/embed/v1/context-tokens/exchange",
                     headers={"X-Cosmaneura-Embed-Version": "1.0"},
-                    json={"requested_surface": "provider_assistant", "record_ref": str(appointment.id)},
+                    json={
+                        "requested_surface": "provider_assistant",
+                        "record_ref": str(appointment.id),
+                    },
                 )
             assert response.status_code == 403, response.text
             assert response.json()["code"] == "REQUEST_DENIED"

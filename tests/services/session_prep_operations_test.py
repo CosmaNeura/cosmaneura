@@ -145,13 +145,20 @@ def test_worker_configuration_failure_remains_visible_in_health(scope, drift):
 
     settings = replace(
         runtime_tests.AUTHORITY_SETTINGS,
-        **({"enabled": False} if drift == "disabled" else {"clerk_issuer": "https://wrong.invalid"}),
+        **(
+            {"enabled": False}
+            if drift == "disabled"
+            else {"clerk_issuer": "https://wrong.invalid"}
+        ),
     )
-    assert run_one_build(
-        generate=runtime_tests._brief,
-        clock=lambda: runtime_tests.NOW,
-        settings=settings,
-    ) == "failed"
+    assert (
+        run_one_build(
+            generate=runtime_tests._brief,
+            clock=lambda: runtime_tests.NOW,
+            settings=settings,
+        )
+        == "failed"
+    )
     build = SessionPrepBuild.first()
     assert build.state == "failed"
     assert build.failure_code == "scope_unavailable"

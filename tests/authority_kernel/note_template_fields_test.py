@@ -26,7 +26,9 @@ capture_engine = _capture_engine
 @pytest.fixture
 def endpoint(capture_engine, monkeypatch):
     with Session(capture_engine) as session:
-        owner = Doctor(clerk_id=f"user_synthetic-template-owner-{uuid4()}", biography=None)
+        owner = Doctor(
+            clerk_id=f"user_synthetic-template-owner-{uuid4()}", biography=None
+        )
         session.add(owner)
         session.flush()
         schema = DoctorNoteSchema(

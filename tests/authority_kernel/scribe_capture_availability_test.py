@@ -81,8 +81,11 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
 
     monkeypatch.setattr(admission, "get_session", database)
     monkeypatch.setattr(
-        admission.CaptureCaller, "authorize",
-        lambda *args: SimpleNamespace(id="scribe_capture_binding_01j00000000000000000000000"),
+        admission.CaptureCaller,
+        "authorize",
+        lambda *args: SimpleNamespace(
+            id="scribe_capture_binding_01j00000000000000000000000"
+        ),
     )
 
     class Client:
@@ -99,6 +102,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=target), base_url="http://testserver"
     ) as connection:
+
         async def capture(sequence):
             return await connection.post(
                 "/service/v1/agent/scribe/capture-operations",
@@ -114,7 +118,8 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
                     "workspace_id": str(UUID(int=42)),
                     "request_nonce": str(UUID(int=sequence + 201)),
                     "operation": {
-                        "kind": "chunk_receipt", "object_id": str(UUID(int=sequence + 301)),
+                        "kind": "chunk_receipt",
+                        "object_id": str(UUID(int=sequence + 301)),
                     },
                 },
             )
@@ -130,8 +135,12 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
                 second = asyncio.run_coroutine_threadsafe(capture(8), loop)
                 read = asyncio.run_coroutine_threadsafe(unrelated(), loop)
                 done, _ = concurrent.futures.wait([read, second], timeout=0.2)
-                observer["read_before_release"] = read in done and read.result().status_code
-                observer["second_before_release"] = second in done and second.result().status_code
+                observer["read_before_release"] = (
+                    read in done and read.result().status_code
+                )
+                observer["second_before_release"] = (
+                    second in done and second.result().status_code
+                )
                 release.wait(0.4)
                 release.set()
                 read.result(timeout=3)

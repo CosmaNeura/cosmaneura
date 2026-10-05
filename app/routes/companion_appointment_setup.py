@@ -44,14 +44,25 @@ def setup_settings():
 
 async def _body(request):
     headers = request.headers
-    if (any(len(headers.getlist(name)) != 1 for name in ("authorization", "content-type"))
-        or headers["content-type"].split(";", 1)[0].strip().lower() != "application/json"
-        or request.query_params or headers.getlist("content-encoding")
-        or len(headers.getlist("content-length")) > 1):
+    if (
+        any(
+            len(headers.getlist(name)) != 1
+            for name in ("authorization", "content-type")
+        )
+        or headers["content-type"].split(";", 1)[0].strip().lower()
+        != "application/json"
+        or request.query_params
+        or headers.getlist("content-encoding")
+        or len(headers.getlist("content-length")) > 1
+    ):
         raise ValueError("invalid_request")
     length = headers.get("content-length")
-    if length is not None and (not length.isascii() or not length.isdigit()
-                               or len(length) > 4 or int(length) > MAX_REQUEST_BYTES):
+    if length is not None and (
+        not length.isascii()
+        or not length.isdigit()
+        or len(length) > 4
+        or int(length) > MAX_REQUEST_BYTES
+    ):
         raise ValueError("invalid_length")
     data = bytearray()
     async for chunk in request.stream():
@@ -60,15 +71,23 @@ async def _body(request):
         data.extend(chunk)
     if length is not None and len(data) != int(length):
         raise ValueError("invalid_length")
-    return AppointmentSetupRequest.model_validate(json.loads(
-        bytes(data).decode("utf-8"), object_pairs_hook=_closed_pairs,
-        parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_number"))))
+    return AppointmentSetupRequest.model_validate(
+        json.loads(
+            bytes(data).decode("utf-8"),
+            object_pairs_hook=_closed_pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(
+                ValueError("invalid_number")
+            ),
+        )
+    )
 
 
 @router.post(PATH, response_model=None, include_in_schema=False)
 async def setup_existing_appointments(
     request: Request,
-    identity: Annotated[VerifiedClerkIdentity, Depends(authenticate_embed_platform_session)],
+    identity: Annotated[
+        VerifiedClerkIdentity, Depends(authenticate_embed_platform_session)
+    ],
     auth: Annotated[AuthorityKernelSettings, Depends(get_authority_kernel_settings)],
 ) -> Response:
     budget = getattr(request.state, "companion_record_deadline", None)
@@ -83,11 +102,25 @@ async def setup_existing_appointments(
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return problem(422)
     try:
-        result = await asyncio.to_thread(Context().run, service.setup_appointments,
-            issuer=identity.issuer, subject=identity.subject, session_id=identity.clerk_session_id,
-            request=data, settings_provider=setup_settings, authority_settings=auth, deadline=budget)
-        return Response(result.model_dump_json(), media_type="application/json",
-                        headers={"Cache-Control": "no-store", "X-Cosmaneura-Appointment-Setup-Version": "1"})
+        result = await asyncio.to_thread(
+            Context().run,
+            service.setup_appointments,
+            issuer=identity.issuer,
+            subject=identity.subject,
+            session_id=identity.clerk_session_id,
+            request=data,
+            settings_provider=setup_settings,
+            authority_settings=auth,
+            deadline=budget,
+        )
+        return Response(
+            result.model_dump_json(),
+            media_type="application/json",
+            headers={
+                "Cache-Control": "no-store",
+                "X-Cosmaneura-Appointment-Setup-Version": "1",
+            },
+        )
     except RecordDeadline:
         return problem(504)
     except service.AppointmentSetupChanged:
