@@ -77,7 +77,9 @@ def scenario(engine, name):
     with session_for(engine) as session:
         doctor = session.get(Doctor, args["doctor_id"])
         practice = session.get(Practice, args["practice_id"])
+        assert practice is not None
         lock_practice_seats(session, practice.id)
+        assert doctor is not None
         member = session.exec(
             select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
         ).one()
@@ -220,6 +222,7 @@ def test_entitlement_projection_counts_and_decisions_preserved(
     args, at = scenario(engine, "normal")
     with session_for(engine) as session:
         practice = session.get(Practice, args["practice_id"])
+        assert practice is not None
         practice.billing_exempt = False
         practice.subscription_status = state
         practice.trial_ends_at = at + timedelta(seconds=1)
@@ -239,6 +242,7 @@ def test_late_grant_preserves_cardinality_and_invalid_doctor_short_circuit(
     with session_for(engine) as session:
         doctor = session.get(Doctor, args["doctor_id"])
         if invalid_doctor:
+            assert doctor is not None
             doctor.email = "invalid-" + doctor.clerk_id
             session.add(doctor)
             session.commit()
@@ -320,9 +324,11 @@ def test_unlocked_committed_mutation_at_retained_stage_has_same_denial(
             with Session(engine) as writer:
                 if boundary == "membership":
                     practice = writer.get(Practice, args["practice_id"])
+                    assert practice is not None
                     practice.baa_version = "synthetic-obsolete-version"
                     writer.add(practice)
                 elif boundary == "late_grant":
+                    assert doctor is not None
                     row = writer.exec(
                         select(PilotAccessGrandfatherGrant).where(
                             PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id
@@ -331,6 +337,7 @@ def test_unlocked_committed_mutation_at_retained_stage_has_same_denial(
                     revoke(row, at)
                     writer.add(row)
                 else:
+                    assert doctor is not None
                     owner = writer.get(Doctor, doctor.id)
                     practice = writer.get(Practice, args["practice_id"])
                     grant(writer, owner, practice, at, revoked=at)
@@ -370,7 +377,9 @@ def test_identity_map_refresh_behavior_remains_explicit(engine):
         # Existing helper respects its caller's identity map. Both query shapes
         # must have identical behavior, including explicit subsequent refresh.
         with Session(engine) as writer:
+            assert doctor is not None
             current = writer.get(Doctor, doctor.id)
+            assert current is not None
             current.email = f"changed-{doctor.id}@synthetic.invalid"
             writer.add(current)
             writer.commit()
@@ -410,9 +419,11 @@ def test_unlocked_interquery_mutation_cannot_turn_old_denial_into_allow(
                     with Session(engine) as writer:
                         practice = writer.get(Practice, args["practice_id"])
                         if boundary == "membership":
+                            assert practice is not None
                             practice.baa_version = "synthetic-obsolete-version"
                             writer.add(practice)
                         elif boundary == "late_grant":
+                            assert doctor is not None
                             row = writer.exec(
                                 select(PilotAccessGrandfatherGrant).where(
                                     PilotAccessGrandfatherGrant.clerk_id
@@ -424,6 +435,7 @@ def test_unlocked_interquery_mutation_cannot_turn_old_denial_into_allow(
                             revoke(row, at)
                             writer.add(row)
                         else:
+                            assert doctor is not None
                             owner = writer.get(Doctor, doctor.id)
                             grant(writer, owner, practice, at, revoked=at)
                         writer.commit()

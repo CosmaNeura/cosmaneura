@@ -74,6 +74,7 @@ def test_nullable_expand_preserves_known_dates_and_retains_unknown_dates():
         )
         spec = importlib.util.spec_from_file_location("optional_dob_migration", path)
         module = importlib.util.module_from_spec(spec)
+        assert spec is not None
         spec.loader.exec_module(module)
         with engine.begin() as connection:
             context = MigrationContext.configure(

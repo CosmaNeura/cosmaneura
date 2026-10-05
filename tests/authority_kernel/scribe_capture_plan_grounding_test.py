@@ -64,6 +64,7 @@ async def physical_case(f, monkeypatch, contents=None, *, role="unknown", refs=N
         schema = session.get(DoctorNoteSchema, f.schema_ref)
         # Exact deployed shape, not a two-field stand-in. Guidance is deliberately
         # adversarial here: template instructions cannot establish a plan.
+        assert schema is not None
         schema.fields = {
             heading: "Extract supported source content" for heading in FIELDS
         }
@@ -171,6 +172,7 @@ async def test_configured_spanish_uses_only_admitted_reviewed_english(
     args = await note_setup(f)
     with Session(f.engine) as session:
         schema = session.get(DoctorNoteSchema, args["schema_ref"])
+        assert schema is not None
         schema.fields = {heading: "Only supported source content" for heading in FIELDS}
         session.add(schema)
         session.commit()

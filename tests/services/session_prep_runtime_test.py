@@ -190,6 +190,7 @@ def test_pending_read_does_not_generate_and_ready_receipt_survives_new_sessions(
     assert SessionPrepArtifact.count() == 1
     assert SessionPrepReadReceipt.count() == 2
     artifact = SessionPrepArtifact.first()
+    assert artifact is not None
     assert ready.response.result.brief_ref == f"brief_{artifact.id}"
     assert ready.response.result.snapshot_ref == f"snapshot_{artifact.id}"
     assert ready.response.tool_call_ref.startswith("prep_read_")
@@ -271,6 +272,7 @@ def test_unsafe_generation_is_never_persisted(scope, unsafe):
 
 def test_expired_worker_lease_is_reclaimed_and_failure_backoff_is_bounded(scope):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.state, build.attempts, build.lease_until = (
         "running",
         1,
@@ -291,6 +293,7 @@ def test_model_failures_do_not_leave_running_jobs_or_store_exception_text(scope)
     assert _work(fails, now=NOW + timedelta(seconds=16)) == "failed"
     assert _work(fails, now=NOW + timedelta(seconds=47)) == "failed"
     failed = SessionPrepBuild.first()
+    assert failed is not None
     assert failed.state == "failed" and failed.attempts == 3
     assert failed.lease_until is None
     assert "private-error" not in failed.model_dump_json()

@@ -135,6 +135,7 @@ def test_owned_entitlement_matches_original(engine, state, public):
     args, at = owned_case(engine)
     with session_for(engine) as session:
         practice = session.get(Practice, args["practice_id"])
+        assert practice is not None
         practice.billing_exempt = False
         practice.subscription_status = state
         practice.trial_ends_at = at + timedelta(seconds=1)
@@ -142,6 +143,7 @@ def test_owned_entitlement_matches_original(engine, state, public):
         session.add(practice)
         session.commit()
     with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
         assert decision(session, args, at, locked[3]) == previous.resolve_doctor_access(
             locked[1], at=at
         )
@@ -153,10 +155,12 @@ def test_owned_late_grant_validates_doctor_before_cardinality(engine, invalid):
     with session_for(engine) as session:
         if invalid:
             doctor = session.get(Doctor, args["doctor_id"])
+            assert doctor is not None
             doctor.email = "invalid-" + doctor.clerk_id
             session.add(doctor)
             session.commit()
         with owner(session, args) as locked:
+            assert locked is not None
             doctor, proof = locked[1], locked[3]
             for function, options in [
                 (previous.active_pilot_access_grant, {}),
@@ -172,6 +176,7 @@ def test_owned_late_grant_validates_doctor_before_cardinality(engine, invalid):
 def test_owned_lookup_preserves_loaded_identity_map(engine):
     args, at = owned_case(engine, "pilot")
     with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
         doctor, proof = locked[1], locked[3]
         set_committed_value(doctor, "email", "different@synthetic.invalid")
         assert previous.active_pilot_access_grant(doctor, at=at) is None
@@ -189,6 +194,7 @@ def test_changed_loaded_membership_identity_falls_back_without_implicit_proof_sq
     args, at = owned_case(engine)
     other, _ = owned_case(engine)
     with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
         doctor, member, proof = locked[1], locked[2], locked[3]
         set_committed_value(member, "practice_id", other["practice_id"])
         with query_counts(engine) as proof_counts:
@@ -204,6 +210,7 @@ def test_changed_loaded_membership_identity_falls_back_without_implicit_proof_sq
 def test_expired_owner_rows_cannot_trigger_sql_during_proof_validation(engine, expired):
     args, _at = owned_case(engine)
     with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
         doctor, member, proof = locked[1], locked[2], locked[3]
         session.expire(doctor if expired == "doctor" else member)
         with query_counts(engine) as counts:
@@ -235,6 +242,7 @@ def test_invalid_or_reused_proof_uses_all_original_queries(engine, invalid):
     other, _ = owned_case(engine)
     with session_for(engine) as session:
         with owner(session, args) as locked:
+            assert locked is not None
             proof = locked[3]
             if invalid == "absent":
                 proof = None
@@ -315,6 +323,7 @@ def test_valid_proof_has_three_fresh_queries_and_default_clock_stays_at_same_sta
         event.listen(engine, "before_cursor_execute", selected)
         try:
             with query_counts(engine) as counts:
+                assert locked is not None
                 assert decision(session, args, None, locked[3]).allowed
         finally:
             event.remove(engine, "before_cursor_execute", selected)
@@ -341,10 +350,12 @@ def test_factory_keeps_original_post_wait_denial(engine, mismatch):
         else:
             doctor = session.get(Doctor, args["doctor_id"])
             if mismatch == "disabled":
+                assert doctor is not None
                 doctor.deleted_at = at
                 session.add(doctor)
             else:
                 lock_practice_seats(session, args["practice_id"])
+                assert doctor is not None
                 session.delete(
                     session.exec(
                         select(PracticeMember).where(

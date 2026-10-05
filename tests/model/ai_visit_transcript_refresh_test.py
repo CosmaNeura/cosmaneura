@@ -49,6 +49,7 @@ def test_entries_remain_typed_after_database_lifecycle(transcript, operation):
             session.expire(transcript)
         else:
             transcript.save()
+        assert transcript is not None
         assert [entry.model_dump() for entry in transcript.transcript_data] == expected
         assert not inspect(transcript).attrs.transcript_data.history.has_changes()
 

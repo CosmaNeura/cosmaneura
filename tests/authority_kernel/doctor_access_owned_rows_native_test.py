@@ -116,6 +116,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
     with session_for(engine) as setup:
         doctor = setup.get(Doctor, native.args["doctor_id"])
         practice = lock_practice_seats(setup, native.args["practice_id"])
+        assert doctor is not None
         member = setup.exec(
             select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
         ).one()
@@ -132,6 +133,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
             )
             setup.add(practice_owner)
             setup.flush()
+            assert practice is not None
             owner = PracticeMember(
                 practice_id=practice.id,
                 doctor_id=practice_owner.id,
@@ -193,6 +195,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
                 assert check.get(Practice, native.args["practice_id"]).billing_exempt
                 assert check.get(Doctor, native.args["doctor_id"]).deleted_at is None
                 unchanged = check.get(PracticeMember, member_id)
+                assert unchanged is not None
                 assert (
                     unchanged.access_revoked_at is None
                     and unchanged.access_ends_at is None

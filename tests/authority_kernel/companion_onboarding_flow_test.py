@@ -201,6 +201,7 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
     )
     with session_for(engine) as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         link.revoked_at = datetime.now(UTC)
         session.add(link)
         session.commit()

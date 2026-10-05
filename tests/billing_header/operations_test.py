@@ -245,6 +245,7 @@ def test_changed_or_superseded_note_rejects_old_retry(case):
     service.prepare_operation(case.actor, case.note_id, cmd)
     with get_session() as s:
         note = s.get(AIVisitNote, case.note_id)
+        assert note is not None
         note.note = NOTE | {"Plan": "Changed source."}
         s.add(note)
         s.commit()
@@ -252,6 +253,7 @@ def test_changed_or_superseded_note_rejects_old_retry(case):
         service.prepare_operation(case.actor, case.note_id, cmd)
     with get_session() as s:
         note = s.get(AIVisitNote, case.note_id)
+        assert note is not None
         note.superseded_at = datetime.now(UTC)
         note.supersession_reason = "test"
         s.add(note)
@@ -268,6 +270,7 @@ def test_map_uses_exact_displayed_ordered_snapshot_and_does_not_refresh_it(
         assert str(case.note_id) in service.admitted_source_map(case.actor, [note])
         s.rollback()  # release source locks before independent source update
         note = s.get(AIVisitNote, case.note_id)
+        assert note is not None
         original = dict(note.note)
         with billing_database.begin() as c:
             c.execute(
@@ -358,6 +361,7 @@ def test_patient_reassignment_denies_old_receipt_and_capability(case):
         s.add(replacement)
         s.flush()
         appointment = s.get(Appointment, case.appointment_id)
+        assert appointment is not None
         appointment.patient_id = replacement.id
         s.add(appointment)
         s.commit()

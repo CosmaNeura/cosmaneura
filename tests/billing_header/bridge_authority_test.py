@@ -76,6 +76,7 @@ def test_actual_grant_binds_original_projection_and_explicit_confirmation(case):
     )
     with get_session() as s:
         row = s.get(Action, action_id)
+        assert row is not None
         assert row.actor["sessionSha256"] == case.actor.session_sha256
         assert (row.expires_at - row.created_at).total_seconds() <= 120
     bridge.finish_action(action_id)

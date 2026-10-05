@@ -138,6 +138,7 @@ def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
     other_doctor = DoctorFactory.build().save()
     next_practice = provision_practice_in_force(other_doctor)
     member = PracticeMember.get(doctor_id=doctor.id)
+    assert member is not None
     member.practice_id = next_practice.id
     save_practice_member(member)
     next_appointment = AppointmentFactory.build(
@@ -224,6 +225,7 @@ def test_other_selected_provider_cannot_exchange_or_reuse_record(
     provision_practice_in_force(outsider)
     if same_practice:
         member = PracticeMember.get(doctor_id=outsider.id)
+        assert member is not None
         member.practice_id = practice.id
         save_practice_member(member)
     monkeypatch.setattr(
@@ -262,6 +264,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
     token = _token(doctor, str(appointment.id))
     assert _context(token).session_prep_context_ref
     record = _record(appointment)
+    assert record is not None
     binding = AuthorityPersonBinding.one(id=record.binding_id)
     member = PracticeMember.get(doctor_id=doctor.id)
     if change == "cohort":
@@ -274,6 +277,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         doctor.deleted_at = datetime.now(UTC)
         doctor.save()
     elif change == "member":
+        assert member is not None
         member.access_revoked_at = datetime.now(UTC)
         member.access_revoked_by_ref = str(doctor.id)
         member.access_revocation_reason = "Synthetic access revocation"
@@ -282,10 +286,12 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         )
         save_practice_member(member)
     elif change == "seat":
+        assert member is not None
         member.seat_state = "inactive"
         save_practice_member(member)
     elif change == "practice":
         other = DoctorFactory.build().save()
+        assert member is not None
         member.practice_id = provision_practice_in_force(other).id
         save_practice_member(member)
     elif change == "patient":
@@ -306,6 +312,7 @@ def test_existing_mount_and_new_exchange_recheck_current_scope(
         actor.save()
     elif change == "identity":
         identity = AuthorityActorExternalIdentity.get(actor_id=binding.actor_id)
+        assert identity is not None
         identity.revoked_at = datetime.now(UTC)
         identity.save()
     elif change == "tenant":
@@ -348,6 +355,7 @@ def test_wrong_issuer_and_expired_token_are_denied(scope):
     assert ProviderRecordAuthority.count() == 0
     token = _token(doctor, str(appointment.id))
     stored = MountContextToken.get(session_id=_context(token).session_id)
+    assert stored is not None
     stored.expires_at = datetime.now(UTC) - timedelta(seconds=1)
     stored.save()
     with pytest.raises(authority.ContextTokenExpiredError):

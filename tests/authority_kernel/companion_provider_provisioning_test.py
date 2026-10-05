@@ -196,6 +196,7 @@ def test_plan_writes_nothing_apply_and_lost_reply_retry_reuse_one_link(
         ).one()
         assert mapping.tenant_id == args["tenant_id"]
         doctor = session.get(Doctor, args["doctor_id"])
+        assert doctor is not None
         result = _provider(
             session,
             issuer=SETTINGS.clerk_issuer,
@@ -259,6 +260,7 @@ def test_changed_confirmation_and_processing_revocation_are_denied(engine):
         apply(engine, args, "f" * 64)
     with session_for(engine) as session:
         doctor = session.get(Doctor, args["doctor_id"])
+        assert doctor is not None
         doctor.deleted_at = datetime.now(UTC)
         session.add(doctor)
         session.commit()
@@ -280,6 +282,7 @@ def test_revoked_link_and_identity_cannot_be_reactivated(engine):
                 ).one()
             else:
                 doctor = session.get(Doctor, args["doctor_id"])
+                assert doctor is not None
                 row = session.exec(
                     select(AuthorityActorExternalIdentity).where(
                         AuthorityActorExternalIdentity.subject == doctor.clerk_id
@@ -416,6 +419,7 @@ def test_existing_authority_tenant_without_links_cannot_cross_practices(engine):
         tenant = AuthorityTenant(id=original["tenant_id"])
         session.add_all([actor, tenant])
         session.flush()
+        assert doctor is not None
         session.add_all(
             [
                 AuthorityActorExternalIdentity(
@@ -446,9 +450,11 @@ def test_cached_doctor_cannot_hide_identity_change_after_verification(engine):
     before = count(engine, ScribeCaptureProviderLink)
     with session_for(engine) as cached_session:
         cached = cached_session.get(Doctor, args["doctor_id"])
+        assert cached is not None
         assert cached.clerk_id == args["verified_clerk_subject"]
         with Session(engine) as updater:
             doctor = updater.get(Doctor, args["doctor_id"])
+            assert doctor is not None
             doctor.clerk_id = "user_w78_rebound_" + uuid4().hex
             updater.add(doctor)
             updater.commit()

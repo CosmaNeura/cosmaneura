@@ -100,6 +100,7 @@ def billing_database():
             path = ROOT / "migrations/versions" / filename
             spec = importlib.util.spec_from_file_location("billing_test_expand", path)
             migration = importlib.util.module_from_spec(spec)
+            assert spec is not None
             spec.loader.exec_module(migration)
             if not connection.dialect.has_table(connection, table.name):
                 with Operations.context(MigrationContext.configure(connection)):
