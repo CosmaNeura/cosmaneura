@@ -4,8 +4,8 @@ import base64
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import cast
-from uuid import uuid4
+from typing import TypedDict, cast
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_capture_protocol as p
-from app.services.scribe_capture_admission import CaptureCaller
+from app.services.scribe_capture_admission import AdmittedCaptureScope, CaptureCaller
 from app.services.scribe_capture_deadline import (
     CaptureBudget,
     DeadlineScribeClient,
@@ -28,6 +28,15 @@ from app.services.scribe_workflow import HttpScribeWorkflowClient, ScribeWorkflo
 
 from tests.authority_kernel.scribe_recording_window_test import selected_scope
 from tests.services.scribe_workflow_test import StaticCredential
+
+
+class ContinuationWindowArguments(TypedDict):
+    caller: CaptureCaller
+    binding_ref: str
+    workspace_id: UUID
+    operation: PrepareContinuationWindow
+    client_request_key: str
+    client: ScribeWorkflowClient
 
 
 def fixture(count=1):
@@ -50,9 +59,17 @@ def fixture(count=1):
     return selected, operation, reply
 
 
-def arguments(selected, operation, remote):
-    return dict(caller=cast(CaptureCaller, None), binding_ref="synthetic", workspace_id=uuid4(), operation=operation,
-        client_request_key="original-continuation-key", client=cast(ScribeWorkflowClient, remote))
+def arguments(
+    selected: AdmittedCaptureScope, operation: PrepareContinuationWindow, remote: object
+) -> ContinuationWindowArguments:
+    return {
+        "caller": cast(CaptureCaller, None),
+        "binding_ref": "synthetic",
+        "workspace_id": uuid4(),
+        "operation": operation,
+        "client_request_key": "original-continuation-key",
+        "client": cast(ScribeWorkflowClient, remote),
+    }
 
 
 @pytest.mark.parametrize("mutation", ["bool_sequence", "channel", "component_alias", "client_count", "session", "profile"])
