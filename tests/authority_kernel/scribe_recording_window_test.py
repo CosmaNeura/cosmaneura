@@ -3,16 +3,17 @@
 import hashlib
 import json
 from dataclasses import replace
-from typing import cast
-from uuid import uuid4
+from typing import TypedDict, cast
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
 from app.services import scribe_capture_gateway as gateway
+from app.services import scribe_capture_protocol as protocol
 from app.services import scribe_recording_window as window
-from app.services.scribe_capture_admission import CaptureCaller
+from app.services.scribe_capture_admission import AdmittedCaptureScope, CaptureCaller
 from app.services.scribe_capture_deadline import (
     CaptureBudget,
     CaptureDeadlineExceeded,
@@ -27,7 +28,17 @@ from tests.authority_kernel.scribe_gateway_receiver_test import scope
 from tests.services.scribe_workflow_test import StaticCredential
 
 
-def selected_scope():
+class RecordingWindowArguments(TypedDict):
+    caller: CaptureCaller
+    binding_ref: str
+    workspace_id: UUID
+    scope: AdmittedCaptureScope
+    operation: PrepareRecordingWindow
+    client_request_key: str
+    client: ScribeWorkflowClient
+
+
+def selected_scope() -> AdmittedCaptureScope:
     old = scope()
     return replace(old, creator_actor_id="actor_synthetic", session_request=ConfiguredSessionCreate(
         schema_version="1.0", language_mode="en-US", id=old.session_id,
@@ -35,7 +46,7 @@ def selected_scope():
     ))
 
 
-def operation():
+def operation() -> PrepareRecordingWindow:
     return PrepareRecordingWindow.model_validate(dict(kind="prepare_recording_window", payload=dict(
         schema_version="1.0", binding=dict(key_version="synthetic-key", wrapped_dek="a" * 512),
         bind_idempotency_key="original-bind-key", lease_idempotency_key="original-lease-key",
@@ -46,13 +57,22 @@ def operation():
 def receipts(selected):
     binding = pair("bind_key", selected)[1]
     lease = pair("issue_lease", selected)[1]
+    assert isinstance(binding, protocol.KeyReceipt)
+    assert isinstance(lease, protocol.LeaseReceipt)
     reservations = pair("reserve_chunks", selected)[1].model_copy(update={"capture_authorized_until": lease.expires_at})
     return {"bind_key": binding, "issue_lease": lease, "reserve_chunks": reservations}
 
 
-def arguments(selected):
-    return dict(caller=cast(CaptureCaller, None), binding_ref="synthetic", workspace_id=uuid4(), scope=selected,
-        operation=operation(), client_request_key="original-window-key", client=cast(ScribeWorkflowClient, None))
+def arguments(selected: AdmittedCaptureScope) -> RecordingWindowArguments:
+    return {
+        "caller": cast(CaptureCaller, None),
+        "binding_ref": "synthetic",
+        "workspace_id": uuid4(),
+        "scope": selected,
+        "operation": operation(),
+        "client_request_key": "original-window-key",
+        "client": cast(ScribeWorkflowClient, None),
+    }
 
 
 @pytest.mark.parametrize("mutation", ["same_keys", "bool_count", "large_count", "scope", "binding", "unknown"])
@@ -165,7 +185,9 @@ async def test_outer_key_cannot_alias_a_component(monkeypatch):
     selected = selected_scope()
     monkeypatch.setattr(gateway, "execute_capture_operation", lambda **_: pytest.fail("mutation reached"))
     with pytest.raises(gateway.CaptureReceiptInvalid):
-        await window.execute_recording_window(**{**arguments(selected), "client_request_key": "original-bind-key"})
+        kwargs = arguments(selected)
+        kwargs["client_request_key"] = "original-bind-key"
+        await window.execute_recording_window(**kwargs)
 
 
 @pytest.mark.asyncio
@@ -198,7 +220,13 @@ async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(monk
         remote = HttpScribeWorkflowClient(base_url="https://scribe.invalid", scope="api://scribe/.default",
             credential=StaticCredential(), timeout_seconds=3, client=transport)
         kwargs = arguments(selected)
-        del kwargs["scope"]
-        result = await gateway.execute_capture_operation(**{**kwargs, "client": remote})
+        result = await gateway.execute_capture_operation(
+            caller=kwargs["caller"],
+            binding_ref=kwargs["binding_ref"],
+            workspace_id=kwargs["workspace_id"],
+            operation=kwargs["operation"],
+            client_request_key=kwargs["client_request_key"],
+            client=remote,
+        )
     assert isinstance(result, window.PreparedRecordingWindow)
     assert len(calls) == 4
