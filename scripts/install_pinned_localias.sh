@@ -11,17 +11,25 @@ LOCALIAS_SHA256="e7e8ae3a6cf2b1d7b637b6d871ea615b66509096f35ed8f4cc2c370a812193a
 LOCALIAS_URL="https://github.com/peterldowns/localias/releases/download/v3.0.0%2Bcommit.43c3619/${LOCALIAS_ASSET}"
 LOCALIAS_INSTALL_PATH="/usr/local/bin/localias"
 
+localias_install_is_exact() {
+  local installed_metadata installed_sha256
+
+  [[ ! -L "${LOCALIAS_INSTALL_PATH}" && -f "${LOCALIAS_INSTALL_PATH}" && -x "${LOCALIAS_INSTALL_PATH}" ]] \
+    || return 1
+  installed_metadata="$(stat -c '%u:%a' -- "${LOCALIAS_INSTALL_PATH}")"
+  [[ "${installed_metadata}" == "0:755" ]] || return 1
+  installed_sha256="$(sha256sum "${LOCALIAS_INSTALL_PATH}" | awk '{print $1}')"
+  [[ "${installed_sha256}" == "${LOCALIAS_SHA256}" ]]
+}
+
 if [[ "$(uname -s)" != "Linux" || "$(uname -m)" != "x86_64" ]]; then
   echo "Unsupported Localias platform: $(uname -s)/$(uname -m)" >&2
   exit 1
 fi
 
-if [[ -x "${LOCALIAS_INSTALL_PATH}" ]]; then
-  installed_sha256="$(sha256sum "${LOCALIAS_INSTALL_PATH}" | awk '{print $1}')"
-  if [[ "${installed_sha256}" == "${LOCALIAS_SHA256}" ]]; then
-    echo "Localias ${LOCALIAS_VERSION} is already installed with the expected digest."
-    exit 0
-  fi
+if localias_install_is_exact; then
+  echo "Localias ${LOCALIAS_VERSION} is already installed with the expected digest and metadata."
+  exit 0
 fi
 
 localias_tmp_dir="$(mktemp -d)"
@@ -41,4 +49,7 @@ curl \
 
 printf '%s  %s\n' "${LOCALIAS_SHA256}" "${localias_download}" | sha256sum --check --strict
 sudo install -m 0755 "${localias_download}" "${LOCALIAS_INSTALL_PATH}"
-printf '%s  %s\n' "${LOCALIAS_SHA256}" "${LOCALIAS_INSTALL_PATH}" | sha256sum --check --strict
+if ! localias_install_is_exact; then
+  echo "Installed Localias artifact did not retain the required digest and metadata." >&2
+  exit 1
+fi

@@ -15,10 +15,12 @@ source "$SCRIPT_DIR/database.sh"
 ensure_dockerd
 ensure_infra
 
-# Apply any migrations introduced on the current branch (no-op when at head).
-# Seed data persists in the postgres docker volume captured by the snapshot.
-echo "== [start] alembic upgrade head =="
+# Apply migrations to both local databases after every branch change. Seed data
+# persists in the postgres docker volume captured by the snapshot.
+echo "== [start] development alembic upgrade head =="
 cursor_database_dev "$CURSOR_UV_BIN" run --no-sync alembic upgrade head
+echo "== [start] test alembic upgrade head =="
+cursor_database_test "$CURSOR_UV_BIN" run --no-sync alembic upgrade head
 
 ensure_localias
 
