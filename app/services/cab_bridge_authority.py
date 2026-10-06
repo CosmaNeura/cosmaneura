@@ -17,7 +17,7 @@ from app.models.billing_header_action import BillingHeaderAction as Action
 from app.models.billing_header_operation import (
     BillingHeaderPreparedOperation as Operation,
 )
-from sqlmodel import func, select
+from sqlmodel import col, func, select
 
 require = preparation._require
 
@@ -30,6 +30,7 @@ def _current(session, actor, operation_id):
     row = session.exec(
         select(Operation).where(Operation.operation_id == operation_id)
     ).one_or_none()
+    row = preparation._present(row)
     require(
         row is not None
         and row.actor.get("issuer") == actor.issuer
@@ -53,8 +54,7 @@ def _current(session, actor, operation_id):
         row.ordered_content == json.loads(scope[6]) and row.projected_text == scope[7]
     )
     ConfirmedBillingVisit.model_validate(row.visit)
-    admission = preparation._admission(scope, actor)
-    require(admission is not None)
+    admission = preparation._present(preparation._admission(scope, actor))
     keys = ("admissionId", "dataClass", "reviewRef", "contentSha256")
     require(all(admission.model_dump()[k] == row.admission[k] for k in keys))
     now = _now(session)
@@ -111,13 +111,14 @@ def authorize_action(operation_id, request):
                 Action.operation_id == operation_id,
                 Action.purpose == request.purpose,
                 Action.request_sha256 == request.requestSha256,
-                Action.finished_at.is_(None),
+                col(Action.finished_at).is_(None),
                 Action.created_at <= now,
                 Action.expires_at > now,
             )
-            .order_by(Action.created_at.desc())
+            .order_by(col(Action.created_at).desc())
             .limit(1)
         ).first()
+        action = preparation._present(action)
         require(
             action is not None
             and action.actor.get("issuer") == request.actor.issuer

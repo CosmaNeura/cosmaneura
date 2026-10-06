@@ -28,6 +28,12 @@ def require(condition):
         raise ValueError("invalid_core_cab_runtime_configuration")
 
 
+def string(value: object) -> str:
+    if not isinstance(value, str) or type(value) is not str:
+        raise ValueError("invalid_core_cab_runtime_configuration")
+    return value
+
+
 def unique(pairs):
     value = {}
     for key, item in pairs:
@@ -122,15 +128,15 @@ def validate(values, *, now=None):
         require(all(type(row[key]) is str for key in fields))
         require(
             all(
-                REF.fullmatch(row[key])
+                REF.fullmatch(string(row[key]))
                 for key in fields - {"expiresAt", "contentSha256", "dataClass"}
             )
         )
-        require(DIGEST.fullmatch(row["contentSha256"]))
+        require(DIGEST.fullmatch(string(row["contentSha256"])))
         require(row["dataClass"] in {"synthetic", "deidentified"})
         require(row["noteId"] not in seen)
         seen.add(row["noteId"])
-        expiry = datetime.fromisoformat(row["expiresAt"].replace("Z", "+00:00"))
+        expiry = datetime.fromisoformat(string(row["expiresAt"]).replace("Z", "+00:00"))
         require(expiry.tzinfo is not None)
         if policy["enabled"]:
             require(expiry > now)

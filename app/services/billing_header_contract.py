@@ -81,7 +81,7 @@ class BillingSource(Closed):
     noteSchemaId: Ref
     contentSha256: Digest
     textSha256: Digest
-    projectionVersion: Literal[PROJECTION] = PROJECTION
+    projectionVersion: Literal["ordered-note-markdown.v1"] = PROJECTION
     excludedRecordingTime: bool
 
 

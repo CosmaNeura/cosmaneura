@@ -103,10 +103,14 @@ def verified_provider_session(
         raise ValueError("provider_session_invalid")
     issuer, subject, sid = (payload.get(k) for k in ("iss", "sub", "sid"))
     if (
+        not isinstance(issuer, str)
+        or not isinstance(subject, str)
+        or not isinstance(sid, str)
+    ):
+        raise ValueError("provider_session_invalid")
+    if (
         not all(
-            isinstance(v, str)
-            and 1 <= len(v) <= 512
-            and not any(ord(c) < 32 or ord(c) == 127 for c in v)
+            1 <= len(v) <= 512 and not any(ord(c) < 32 or ord(c) == 127 for c in v)
             for v in (issuer, subject, sid)
         )
         or not subject.startswith("user_")

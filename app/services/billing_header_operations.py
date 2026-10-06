@@ -11,6 +11,7 @@ from app.services.billing_header_contract import (
     BillingHeaderOperation,
     BillingHeaderSource,
     BillingSource,
+    BillingTransportState,
     PrepareBillingHeaderOperation,
     PreparedSummary,
     digest,
@@ -33,7 +34,8 @@ from app.models.practice import (
     lock_practice_seats,
     member_access_state,
 )
-from sqlmodel import func, select
+from sqlalchemy import select as select_columns
+from sqlmodel import col, func, select
 
 
 class BillingPreparationError(ValueError):
@@ -47,18 +49,24 @@ def _require(ok, code="billing_source_unavailable", status=404):
         raise BillingPreparationError(code, status)
 
 
+def _present[T](value: T | None, code="billing_source_unavailable", status=404) -> T:
+    if value is None:
+        raise BillingPreparationError(code, status)
+    return value
+
+
 def _scope(session, actor, note_id):
     _require(isinstance(actor, VerifiedProviderSession))
     doctor = session.exec(
         select(Doctor).where(Doctor.clerk_id == actor.subject)
     ).one_or_none()
-    _require(doctor is not None)
+    doctor = _present(doctor)
     member = session.exec(
         select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
     ).one_or_none()
-    _require(member is not None)
+    member = _present(member)
     practice = lock_practice_seats(session, member.practice_id)
-    _require(practice is not None)
+    practice = _present(practice)
     doctor = session.exec(
         select(Doctor)
         .where(Doctor.id == doctor.id)
@@ -83,39 +91,41 @@ def _scope(session, actor, note_id):
     )
     # Select source columns, not an ORM entity: capability reads must never
     # refresh/mutate the note snapshot already being returned by note_detail.
-    note_query = select(
-        AIVisitNote.id,
-        AIVisitNote.doctor_id,
-        AIVisitNote.appointment_id,
-        AIVisitNote.doctor_note_schema_id,
-        AIVisitNote.superseded_at,
-        AIVisitNote.note,
+    note_query = select_columns(
+        col(AIVisitNote.id),
+        col(AIVisitNote.doctor_id),
+        col(AIVisitNote.appointment_id),
+        col(AIVisitNote.doctor_note_schema_id),
+        col(AIVisitNote.superseded_at),
+        col(AIVisitNote.note),
     )
-    note = session.exec(note_query.where(AIVisitNote.id == note_id)).one_or_none()
-    _require(note is not None and note.doctor_id == doctor.id)
+    note = session.execute(note_query.where(AIVisitNote.id == note_id)).one_or_none()
+    note = _present(note)
+    _require(note.doctor_id == doctor.id)
     appointment = session.exec(
         select(Appointment)
         .where(Appointment.id == note.appointment_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
-    _require(appointment is not None and appointment.doctor_id == doctor.id)
+    appointment = _present(appointment)
+    _require(appointment.doctor_id == doctor.id)
     patient = session.exec(
         select(Patient)
         .where(Patient.id == appointment.patient_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
-    note = session.exec(
+    note = session.execute(
         note_query.where(AIVisitNote.id == note_id).with_for_update()
     ).one()
     schema = session.get(DoctorNoteSchema, note.doctor_note_schema_id)
+    patient = _present(patient)
+    schema = _present(schema)
     _require(
-        patient is not None
-        and patient.doctor_id == doctor.id
+        patient.doctor_id == doctor.id
         and note.doctor_id == doctor.id
         and note.appointment_id == appointment.id
-        and schema is not None
         and schema.doctor_id == doctor.id
     )
     _require(note.superseded_at is None, "billing_source_changed", 409)
@@ -158,7 +168,9 @@ def _receipt(row, source, *, replayed):
     from app.services.cab_bridge_client import configured
 
     return BillingHeaderOperation(
-        transport={"state": "configured" if configured() else "not_configured"},
+        transport=BillingTransportState(
+            state="configured" if configured() else "not_configured"
+        ),
         operationId=str(row.operation_id),
         sourceRevision=row.source_revision,
         source=source,
@@ -184,7 +196,7 @@ def read_source(actor, note_id, *, displayed_source=None):
                 Operation.practice_id == scope[1].id,
                 Operation.patient_id == scope[3].id,
             )
-            .order_by(Operation.source_revision.desc())
+            .order_by(col(Operation.source_revision).desc())
             .limit(1)
         ).first()
         if latest is not None and (
@@ -243,8 +255,9 @@ def prepare_operation(actor, note_id, command: PrepareBillingHeaderOperation):
                 409,
             )
             return _receipt(existing, source, replayed=True)
-        admission = _admission(scope, actor)
-        _require(admission is not None, "billing_source_not_configured", 403)
+        admission = _present(
+            _admission(scope, actor), "billing_source_not_configured", 403
+        )
         last = session.exec(
             select(func.max(Operation.source_revision)).where(
                 Operation.appointment_id == appointment.id,
@@ -297,9 +310,9 @@ def read_operation(actor, operation_id):
         row = session.exec(
             select(Operation).where(Operation.operation_id == operation_id)
         ).one_or_none()
+        row = _present(row)
         _require(
-            row is not None
-            and row.actor.get("issuer") == actor.issuer
+            row.actor.get("issuer") == actor.issuer
             and row.actor.get("subject") == actor.subject
         )
         scope = _scope(session, actor, row.note_id)

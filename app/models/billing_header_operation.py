@@ -19,7 +19,6 @@ from sqlmodel import Field
 class BillingHeaderPreparedOperation(
     BaseModel, TypeIDMixin("billing_operation"), table=True
 ):
-    __tablename__ = "billing_header_prepared_operation"
     __table_args__ = (
         sa.UniqueConstraint("operation_id", name="uq_billing_operation_id"),
         sa.UniqueConstraint(
@@ -49,4 +48,6 @@ class BillingHeaderPreparedOperation(
     projected_text: str = Field(sa_type=sa.Text, exclude=True, repr=False)
     visit: dict = Field(sa_type=JSONB, exclude=True, repr=False)
     admission: dict = Field(sa_type=JSONB, exclude=True, repr=False)
-    completed_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    completed_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False)
+    )
