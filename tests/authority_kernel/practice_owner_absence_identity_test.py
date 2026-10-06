@@ -130,9 +130,11 @@ def test_returned_objects_including_none_are_not_absence(probe, response):
 def test_untyped_lookalike_and_generic_sdk_404_are_not_absence(probe):
     get, _ = probe
     lookalike = RuntimeError("synthetic private detail")
-    lookalike.status_code = 404
-    lookalike.data = SimpleNamespace(
-        errors=[SimpleNamespace(code="resource_not_found")]
+    setattr(lookalike, "status_code", 404)
+    setattr(
+        lookalike,
+        "data",
+        SimpleNamespace(errors=[SimpleNamespace(code="resource_not_found")]),
     )
     for error in (
         lookalike,
@@ -161,17 +163,19 @@ def test_malformed_typed_errors_are_not_absence(probe, malformation):
     get, _ = probe
     error = missing_error()
     if malformation == "status_string":
-        error.status_code = "404"
+        setattr(error, "status_code", "404")
     elif malformation == "status_boolean":
         error.status_code = True
     elif malformation == "data_none":
-        error.data = None
+        setattr(error, "data", None)
     elif malformation == "data_untyped":
-        error.data = SimpleNamespace(
-            errors=[SimpleNamespace(code="resource_not_found")]
+        setattr(
+            error,
+            "data",
+            SimpleNamespace(errors=[SimpleNamespace(code="resource_not_found")]),
         )
     elif malformation == "errors_none":
-        error.data = ClerkErrorsData.model_construct(errors=None)
+        setattr(error, "data", ClerkErrorsData.model_construct(errors=None))
     else:
         error.data = ClerkErrorsData.model_construct(
             errors=[SimpleNamespace(code="resource_not_found")]

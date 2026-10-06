@@ -50,7 +50,7 @@ workflow = _workflow
 
 class InventedScribe(FakeScribe):
     async def create_configured_session(
-        self, tenant, payload, *, creator_actor_id, idempotency_key
+        self, tenant_id, payload, *, creator_actor_id, idempotency_key
     ):
         receipt = ConfiguredSessionReceipt(
             **payload.model_dump(),
@@ -64,16 +64,18 @@ class InventedScribe(FakeScribe):
             created_at=datetime.now(UTC),
         )
         self.sessions[idempotency_key] = receipt
-        self.tenant = tenant
+        self.tenant = tenant_id
         return receipt
 
-    async def capture_operation(self, tenant, session, operation, **kwargs):
-        saved = next(value for value in self.sessions.values() if value.id == session)
-        assert tenant == self.tenant
+    async def capture_operation(self, tenant_id, session_id, operation, **kwargs):
+        saved = next(
+            value for value in self.sessions.values() if value.id == session_id
+        )
+        assert tenant_id == self.tenant
         if operation.kind == "creator_review":
             assert kwargs["creator_actor_id"] == saved.creator_actor_id
             return CreatorReviewView(
-                schema_version="1.0", session_id=session, status="created"
+                schema_version="1.0", session_id=session_id, status="created"
             )
         assert operation.kind == "capabilities"
         return capabilities(1000, 67108864)
@@ -146,7 +148,7 @@ def native(engine, workflow, monkeypatch):
         return await original(**kwargs)
 
     def body(kind="mount"):
-        value = dict(
+        value: dict[str, object] = dict(
             action="mount" if kind == "mount" else "operation",
             workspace_id=row["workspace_id"],
             request_nonce=str(uuid4()),
@@ -255,12 +257,15 @@ def test_real_facade_keeps_all_authority_selects_and_removes_only_unused_status(
 
 def save_status(engine, native, *, draft=False):
     with Session(engine) as session:
-        transcript = AIVisitTranscript(
-            doctor_id=native.args["doctor_id"],
-            appointment_id=TypeID.from_string(native.row["appointment_ref"]),
-            patient_id=TypeID.from_string(native.row["patient_ref"]),
-            duration=0,
-            transcript_data=[],
+        transcript = AIVisitTranscript.model_validate(
+            dict(
+                id=TypeID("ai_visit_transcript"),
+                doctor_id=native.args["doctor_id"],
+                appointment_id=TypeID.from_string(native.row["appointment_ref"]),
+                patient_id=TypeID.from_string(native.row["patient_ref"]),
+                duration=0,
+                transcript_data=[],
+            )
         )
         session.add(transcript)
         session.flush()

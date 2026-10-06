@@ -26,7 +26,7 @@ from sqlmodel import Session
 def test_calendar_upload_preserves_day_and_reuses_existing_patient(monkeypatch):
     queued = []
     monkeypatch.setattr(app.jobs.transcribe, "queue", queued.append)
-    doctor = Doctor(clerk_id="user_synthetic_calendar_test").save()
+    doctor = Doctor(clerk_id="user_synthetic_calendar_test", biography=None).save()
     patient = Patient(
         doctor_id=doctor.id,
         name="Synthetic calendar patient",
@@ -56,7 +56,7 @@ def test_two_same_day_uploads_keep_the_earlier_reviewed_visit_as_a_prep_source(
     monkeypatch,
 ):
     monkeypatch.setattr(app.jobs.transcribe, "queue", lambda _file_id: None)
-    doctor = Doctor(clerk_id="user_synthetic_same_day_test").save()
+    doctor = Doctor(clerk_id="user_synthetic_same_day_test", biography=None).save()
     appointments = []
     for hour in (13, 19):
         file_name = f"synthetic_same_day_{hour}.wav"
@@ -100,14 +100,18 @@ def test_two_same_day_uploads_keep_the_earlier_reviewed_visit_as_a_prep_source(
             expected_content_sha256=note_content_sha256(note.note),
             observed_at=observed_at,
         )
-        args = dict(
+        sources = load_reviewed_note_sources(
+            session=session,
+            doctor_id=doctor.id,
+            target_appointment_id=target.id,
+            observed_at=observed_at,
+        ).sources
+        overview = prior_note_overview(
             session=session,
             doctor_id=doctor.id,
             target_appointment_id=target.id,
             observed_at=observed_at,
         )
-        sources = load_reviewed_note_sources(**args).sources
-        overview = prior_note_overview(**args)
         assert [source.source_ref for source in sources] == [str(note.id)]
         assert overview.included_count == 1
         assert overview.notes[0].status == "included"

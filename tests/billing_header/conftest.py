@@ -28,7 +28,7 @@ if ISOLATED:
     decouple.config = decouple.Config(decouple.RepositoryEmpty())
     package = types.ModuleType("app")
     package.__path__ = [str(ROOT / "app")]
-    package.root, package.log = ROOT, structlog.get_logger()
+    vars(package).update(root=ROOT, log=structlog.get_logger())
     sys.modules["app"] = package
     import activemodel
 
@@ -71,14 +71,12 @@ def billing_database():
     from alembic.operations import Operations
 
     from activemodel.session_manager import SessionManager
-    from app.models.billing_header_operation import BillingHeaderPreparedOperation
     from sqlmodel import SQLModel, create_engine
 
     engine = create_engine(dsn)
-    operation_table = BillingHeaderPreparedOperation.__table__
-    from app.models.billing_header_action import BillingHeaderAction
+    operation_table = SQLModel.metadata.tables["billing_header_prepared_operation"]
 
-    action_table = BillingHeaderAction.__table__
+    action_table = SQLModel.metadata.tables["billing_header_action"]
     # Local source-model prerequisites only; no configured-environment migration.
     with engine.begin() as connection:
         SQLModel.metadata.create_all(

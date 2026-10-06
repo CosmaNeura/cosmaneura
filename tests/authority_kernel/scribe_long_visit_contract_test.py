@@ -1,6 +1,7 @@
 """Receiver compatibility for larger visits; no live capture or service calls."""
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -113,13 +114,23 @@ def test_out_of_range_or_noninteger_positions_rejected(sequence):
 
 
 def test_reservation_end_and_batch_bounds_remain_enforced():
-    base = dict(
-        capture_lease_id=uuid4(), capture_lease_generation=1, channel="microphone"
+    lease_id = uuid4()
+    p.ReservePayload(
+        capture_lease_id=lease_id,
+        capture_lease_generation=1,
+        channel="microphone",
+        first_sequence_number=2047,
+        count=1,
     )
-    p.ReservePayload(**base, first_sequence_number=2047, count=1)
     for first, count in [(2047, 2), (2000, 90), (0, 91)]:
         with pytest.raises(ValidationError):
-            p.ReservePayload(**base, first_sequence_number=first, count=count)
+            p.ReservePayload(
+                capture_lease_id=lease_id,
+                capture_lease_generation=1,
+                channel="microphone",
+                first_sequence_number=first,
+                count=count,
+            )
 
 
 def test_late_native_resume_and_continuity_remain_recoverable():
@@ -130,20 +141,22 @@ def test_late_native_resume_and_continuity_remain_recoverable():
         lease_id=uuid4(),
         lease_receipt_id=uuid4(),
         lease_generation=13,
-        capture_authorized_until="2026-09-25T15:15:00Z",
+        capture_authorized_until=datetime(2026, 9, 25, 15, 15, tzinfo=UTC),
         first_sequence_number=1080,
     )
     assert NativeStartPayload.model_validate_json(payload.model_dump_json()) == payload
     legacy = payload.model_copy(update={"first_sequence_number": 0})
     assert "first_sequence_number" not in legacy.model_dump()
-    evidence = CaptureContinuity(
-        schema_version="1.0",
-        continuity="interrupted_or_unconfirmed",
-        missing_audio="unknown",
-        starts=(
-            {"source_start_id": uuid4(), "first_sequence_number": 0},
-            {"source_start_id": uuid4(), "first_sequence_number": 1080},
-        ),
+    evidence = CaptureContinuity.model_validate(
+        dict(
+            schema_version="1.0",
+            continuity="interrupted_or_unconfirmed",
+            missing_audio="unknown",
+            starts=(
+                {"source_start_id": uuid4(), "first_sequence_number": 0},
+                {"source_start_id": uuid4(), "first_sequence_number": 1080},
+            ),
+        )
     )
     assert evidence.starts[1].first_sequence_number == 1080
 

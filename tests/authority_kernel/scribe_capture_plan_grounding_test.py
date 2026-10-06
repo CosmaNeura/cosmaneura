@@ -3,10 +3,10 @@
 import hashlib
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from typeid import TypeID
 
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_plan_grounding as plans
@@ -14,7 +14,8 @@ from app.services.scribe_capture_notebook import ScratchNotes
 from app.services.scribe_workflow import CaptureTranscript
 
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.note_type_customization import NoteTypeCustomization
 from sqlmodel import Session
@@ -101,10 +102,14 @@ async def test_actual_iphone55_shape_unspoken_plan_cannot_be_saved(
         in notes._validated_note(json.dumps(FIELDS), FIELDS)["P - PLAN"]
     )
     result = await notes.capture_note(**args)
+    assert result.fields is not None
     assert tuple(result.fields) == tuple(FIELDS) and len(result.fields) == 27
     assert plans.prospective_fields(FIELDS) == PROSPECTIVE
+    assert result.fields is not None
     assert all(result.fields[heading] == plans.NOT_MENTIONED for heading in PROSPECTIVE)
+    assert result.fields is not None
     assert result.fields["S - SUBJECTIVE"] == FIELDS["S - SUBJECTIVE"]
+    assert result.fields is not None
     assert result.fields["Patient"] == "Avery Morgan"
     assert len(model.calls) == 1
     assert "complaint, symptom, question, current medication/history" in model.calls[0]
@@ -159,7 +164,9 @@ async def test_explicit_negated_conditional_and_translated_plans_keep_complete_s
         admission_case, monkeypatch, [utterance], role=role, refs=refs
     )
     result = await notes.capture_note(**args)
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == f"Transcript — {label}:\n{utterance}"
+    assert result.fields is not None
     assert "Seek medical attention" not in result.fields["P - PLAN"]
     assert len(model.calls) == 1
 
@@ -178,9 +185,11 @@ async def test_configured_spanish_uses_only_admitted_reviewed_english(
         session.commit()
     model = Model()
     result = await notes.capture_note(**{**args, "model": model})
+    assert result.reviewed_source is not None
     assert result.reviewed_source.kind == "reviewed_english"
     assert "No tengo fiebre" not in model.calls[0]
     assert "I do not have a fever." in model.calls[0]
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
     assert len(model.calls) == 1
 
@@ -201,6 +210,7 @@ async def test_history_complaints_and_questions_do_not_authorize_generated_advic
         admission_case, monkeypatch, [content], role="patient"
     )
     result = await notes.capture_note(**args)
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
 
 
@@ -216,6 +226,7 @@ async def test_wrongly_selected_complaint_cannot_become_invented_advice(
     result = await notes.capture_note(**args)
     # Classification can still be wrong; source attribution makes that visible.
     # A model cannot transform this reference into an unspoken recommendation.
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == "Transcript — Patient:\nI have a cough."
 
 
@@ -237,6 +248,7 @@ async def test_saved_scratch_decision_is_not_labeled_as_recorded_speech(
         content_sha256=hashlib.sha256(content.encode()).hexdigest(),
     )
     result = await notes.capture_note(**args, scratch_notes=scratch)
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == "Clinician's saved scratch notes:\n" + content
     assert result.notebook_source == scratch.reference()
     assert model.calls[0].count(json.dumps(content)[1:-1]) == 1
@@ -320,24 +332,38 @@ async def test_small_model_reference_list_cannot_publish_oversized_source_text(
 
 
 def test_default_builder_bytes_preserved_and_indexing_preserves_speaker_labels():
-    transcript = SimpleNamespace(
-        transcript_data=[
-            SimpleNamespace(speaker="Unknown", content=value)
-            for value in FIXTURE["transcript"]
-        ]
+    doctor = Doctor(
+        clerk_id="user_synthetic_prompt",
+        biography="Synthetic primary care clinician.",
     )
-    schema = SimpleNamespace(
-        fields={key: "Supported source content only." for key in FIELDS}
+    # Retain the legacy nullable terminology used to capture the prompt golden.
+    setattr(doctor, "terminology", None)
+    setattr(doctor, "id", TypeID("doctor"))
+    transcript = AIVisitTranscript.model_validate(
+        dict(
+            id=TypeID("ai_visit_transcript"),
+            doctor_id=doctor.id,
+            patient_id=TypeID("patient"),
+            appointment_id=TypeID("appointment"),
+            duration=None,
+            transcript_data=[
+                TranscriptEntry(
+                    speaker="Unknown", content=value, startTime=0, endTime=0
+                )
+                for value in FIXTURE["transcript"]
+            ],
+        )
     )
-    doctor = SimpleNamespace(
-        biography="Synthetic primary care clinician.", terminology=None
+    schema = DoctorNoteSchema(
+        doctor_id=doctor.id,
+        note_type="Synthetic prompt",
+        fields={key: "Supported source content only." for key in FIELDS},
     )
     customization = NoteTypeCustomization(
         require_plan_reason=False, custom_instructions="Use the supplied sources."
     )
-    kwargs = dict(action_items="", doctor=doctor)
     plain = notes.summarize.build_structured_prompt(
-        transcript, None, schema, customization, **kwargs
+        transcript, None, schema, customization, action_items="", doctor=doctor
     )
     # Captured by executing the unchanged c48b940 builder against these exact
     # synthetic inputs; no live model, database or dynamic Git read in this test.
@@ -346,7 +372,13 @@ def test_default_builder_bytes_preserved_and_indexing_preserves_speaker_labels()
         == "3867749b0eb78ec61889f10c43a09fc7a046a4283084283fa20596b0962c5557"
     )
     indexed = notes.summarize.build_structured_prompt(
-        transcript, None, schema, customization, **kwargs, source_indexes=True
+        transcript,
+        None,
+        schema,
+        customization,
+        action_items="",
+        doctor=doctor,
+        source_indexes=True,
     )
     for index, text in enumerate(FIXTURE["transcript"], 1):
         assert f"Unknown: [source {index}] {text}" in indexed
@@ -366,6 +398,7 @@ async def test_long_capture_prompt_contains_each_complete_utterance_once(
     ]
     args, model = await physical_case(admission_case, monkeypatch, contents)
     result = await notes.capture_note(**args)
+    assert result.fields is not None
     assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
     prompt = model.calls[0]
     assert all(prompt.count(text) == 1 for text in contents)

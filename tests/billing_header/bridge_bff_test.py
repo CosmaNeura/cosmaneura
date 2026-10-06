@@ -18,6 +18,7 @@ from app.services import billing_header_operations as prepared
 from app.services import cab_bridge_authority as authority
 from app.services import cab_bridge_client as wire
 from app.services.cab_bridge_contract import (
+    CabActor,
     CabAuthorizationRequest,
     canonical,
     digest,
@@ -111,7 +112,7 @@ def bridge(case, monkeypatch):
         req = CabAuthorizationRequest(
             schemaVersion="core-cab-authorization-request.v1",
             purpose=payload["purpose"],
-            actor={"issuer": case.actor.issuer, "subject": case.actor.subject},
+            actor=CabActor(issuer=case.actor.issuer, subject=case.actor.subject),
             requestSha256=digest(payload),
             sourceContentSha256=op["source"]["contentSha256"],
             sourceTextSha256=op["source"]["textSha256"],
@@ -201,7 +202,7 @@ def bridge(case, monkeypatch):
 
 
 def call(bridge, action="accept", **changes):
-    command = (
+    command: dict[str, object] = (
         {"expectedSource": None}
         if action == "accept"
         else {"encounterId": bridge.pin["encounterId"], "expectedSource": bridge.pin}
@@ -235,7 +236,9 @@ def test_actual_current_provider_routes_all_purposes_release_locks_and_finish_gr
             select(Action).where(Action.operation_id == bridge.op_id)
         ).all()
         assert len(actions) == 4 and all(a.finished_at is not None for a in actions)
-        assert s.get(AIVisitNote, bridge.case.note_id).note == NOTE
+        stored_a_i_visit_note = s.get(AIVisitNote, bridge.case.note_id)
+        assert stored_a_i_visit_note is not None
+        assert stored_a_i_visit_note.note == NOTE
         row = s.exec(
             select(Operation).where(Operation.operation_id == bridge.op_id)
         ).one()

@@ -122,6 +122,7 @@ def fixture(monkeypatch):
 async def test_mount_composes_existing_services_and_keeps_original_intent(monkeypatch):
     data, calls, _, invoke = fixture(monkeypatch)
     result = await invoke()
+    assert isinstance(result["result"], dict)
     assert [c if isinstance(c, str) else c[0] for c in calls] == [
         "lookup",
         "exchange",
@@ -229,10 +230,12 @@ async def test_revocation_after_each_service_boundary_prevents_publication(
     original = getattr(owner, name)
     if phase == "operation":
 
-        async def changed(**kwargs):
+        async def changed_async(**kwargs):
             result = await original(**kwargs)
             state["revoked"] = True
             return result
+
+        changed = changed_async
     else:
 
         def changed(**kwargs):
@@ -329,9 +332,11 @@ async def test_real_core_created_mount_preserves_binding_and_current_record_chec
             )
 
     result = await call()
+    assert isinstance(result["result"], dict)
     assert result["result"]["opening_review"]["receipt"]["status"] == "not_prepared"
     assert result["result"]["appointment_ref"] == row["appointment_ref"]
     repeated = await call(data.model_copy(update={"request_nonce": uuid4()}))
+    assert isinstance(repeated["result"], dict)
     assert repeated["result"]["binding_ref"] == result["result"]["binding_ref"]
     with session_for(engine) as session:
         bindings = list(
@@ -397,6 +402,7 @@ def test_actual_router_closes_phase_transactions_before_read_and_sees_revocation
         assert session_manager._session_context.get() is None
         assert engine.pool.checkedout() == 0
         result = await original(**kwargs)
+        assert isinstance(result, ProviderEncounter)
         assert result.status == "not_prepared"
         assert session_manager._session_context.get() is None
         assert engine.pool.checkedout() == 0

@@ -178,17 +178,25 @@ def test_missing_auth_default_off_and_missing_boundary_fail_closed(transport):
 def test_strict_body_and_header_bounds_never_call_source(transport, kind, status):
     _, client, calls, headers, request, _ = transport
     path = PATH
+    outgoing_headers: dict[str, str] | list[tuple[str, str]] = headers
     kwargs = {"json": request}
     if kind == "missing-version":
         headers.pop("X-Cosmaneura-Record-Version")
     if kind == "wrong-version":
         headers["X-Cosmaneura-Record-Version"] = "2"
     if kind == "duplicate-version":
-        headers = [*headers.items(), ("X-Cosmaneura-Record-Version", "1")]
+        outgoing_headers = [*headers.items(), ("X-Cosmaneura-Record-Version", "1")]
     if kind == "duplicate-auth":
-        headers = [*headers.items(), ("Authorization", headers["Authorization"])]
+        outgoing_headers = [
+            *headers.items(),
+            ("Authorization", headers["Authorization"]),
+        ]
     if kind == "duplicate-length":
-        headers = [*headers.items(), ("Content-Length", "2"), ("Content-Length", "2")]
+        outgoing_headers = [
+            *headers.items(),
+            ("Content-Length", "2"),
+            ("Content-Length", "2"),
+        ]
     if kind == "query":
         path += "?patient_ref=forbidden"
     if kind == "encoding":
@@ -209,7 +217,7 @@ def test_strict_body_and_header_bounds_never_call_source(transport, kind, status
         kwargs = {"content": json.dumps(request).encode("utf-16")}
     if kind == "wrong-length":
         headers["Content-Length"] = "0"
-    response = client.post(path, headers=headers, **kwargs)
+    response = client.post(path, headers=outgoing_headers, **kwargs)
     assert_private(response, status)
     assert calls == []
 
@@ -264,7 +272,7 @@ def test_deadline_includes_auth_dependency_and_dispatch_never_starts(
 
 def test_late_worker_cannot_disclose_or_borrow_request_context(transport, monkeypatch):
     _, client, _, headers, request, _ = transport
-    marker = ContextVar("invented_request_session", default=None)
+    marker = ContextVar[str | None]("invented_request_session", default=None)
     marker.set("must not be borrowed")
     started, release, finished = Event(), Event(), Event()
     observed = []

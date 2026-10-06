@@ -156,6 +156,7 @@ def scenario(engine, name):
 def decide(engine, args, at, **kwargs):
     with session_for(engine) as session:
         doctor = session.get(Doctor, args["doctor_id"])
+        assert doctor is not None
         return access.resolve_doctor_access(doctor, at=at, **kwargs)
 
 
@@ -281,6 +282,7 @@ def test_unlocked_no_pilot_keeps_original_read_boundaries(
                         access, "resolve_doctor_access", previous.resolve_doctor_access
                     )
                 with query_counts(engine) as counts:
+                    assert doctor is not None
                     decision = access.resolve_doctor_access(doctor, at=at)
                 values.append((decision, counts["all_selects"]))
     assert values[0][0] == values[1][0]
@@ -366,6 +368,7 @@ def test_unlocked_committed_mutation_at_retained_stage_has_same_denial(
                     access, "resolve_doctor_access", previous.resolve_doctor_access
                 )
             with mutate_before_read(engine, target, mutate) as fired:
+                assert doctor is not None
                 result = access.resolve_doctor_access(doctor, at=at)
             assert fired == [True] and not result.allowed
 
@@ -460,6 +463,7 @@ def test_unlocked_interquery_mutation_cannot_turn_old_denial_into_allow(
                     )
                 event.listen(engine, "after_cursor_execute", after)
                 try:
+                    assert doctor is not None
                     result = access.resolve_doctor_access(doctor, at=at)
                 finally:
                     event.remove(engine, "after_cursor_execute", after)

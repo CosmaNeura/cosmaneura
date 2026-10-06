@@ -24,7 +24,11 @@ from app.routes.dependencies.entra_service import (
 )
 from app.services.authority_conversation import write_conversation_turn
 from app.services.provider_record_authority import validate_provider_record_scope
-from app.services.session_prep import SessionPrepPreparedBrief
+from app.services.session_prep import (
+    SessionPrepBriefText,
+    SessionPrepPreparedBrief,
+    SessionPrepRecap,
+)
 from app.services.session_prep_note_sources import (
     finalize_note_for_session_prep,
     note_content_sha256,
@@ -280,12 +284,11 @@ def read(f, a, key="companion-prep-read-0001", context=None):
 
 def build():
     def generate(selection):
-        cited = {
-            "text": "Discuss the synthetic goals.",
-            "source_refs": [selection.sources[0].source_ref],
-        }
+        text = "Discuss the synthetic goals."
+        source_refs = [selection.sources[0].source_ref]
+        cited = SessionPrepBriefText(text=text, source_refs=source_refs)
         return SessionPrepPreparedBrief(
-            recap=cited,
+            recap=SessionPrepRecap(text=text, source_refs=source_refs),
             trajectory_and_material_changes=[],
             talking_points=[cited],
             open_threads=[],

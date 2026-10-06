@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from typeid import TypeID
 
 import app.configuration.session_prep as configuration
 import app.services.authority as authority
@@ -36,6 +37,7 @@ from app.models.provider_record_authority import (
 )
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+from sqlmodel import col
 
 from tests.factories import (
     AppointmentFactory,
@@ -104,6 +106,7 @@ def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(sc
     token = _token(doctor, str(appointment.id))
     context = _context(token)
     assert "session-prep:read" in context.capabilities
+    assert context.session_prep_context_ref is not None
     assert context.session_prep_context_ref.startswith("context_prep_")
     assert set(context.public_body()) == {
         "surface",
@@ -125,7 +128,7 @@ def test_verified_exchange_binds_actual_record_and_reuses_practice_and_person(sc
     assert ProviderPracticeAuthority.count() == 1
     assert (
         AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type == "authority.provider_record.bound"
+            col(AuthorityAuditEvent.event_type) == "authority.provider_record.bound"
         ).count()
         == 2
     )
@@ -148,24 +151,25 @@ def test_practice_move_replaces_prior_membership_without_ambiguous_actor(scope):
     assert new_context.actor_id == old_context.actor_id
     assert new_context.tenant_id != old_context.tenant_id
     memberships = AuthorityTenantMembership.where(
-        AuthorityTenantMembership.actor_id == new_context.actor_id
+        col(AuthorityTenantMembership.actor_id) == new_context.actor_id
     ).all()
-    assert [
-        (str(row.tenant_id), row.status)
-        for row in memberships
-        if row.status == "active"
-    ] == [(new_context.tenant_id, "active")]
-    assert (
-        AuthorityTenantMembership.get(
-            actor_id=old_context.actor_id, tenant_id=old_context.tenant_id
-        ).status
-        == "revoked"
+    active_memberships = []
+    for row in memberships:
+        assert isinstance(row, AuthorityTenantMembership)
+        if row.status == "active":
+            active_memberships.append((str(row.tenant_id), row.status))
+    assert active_memberships == [(new_context.tenant_id, "active")]
+    stored_authority_tenant_membership = AuthorityTenantMembership.get(
+        actor_id=old_context.actor_id, tenant_id=old_context.tenant_id
     )
+    assert stored_authority_tenant_membership is not None
+    assert stored_authority_tenant_membership.status == "revoked"
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _context(old_token)
     assert (
         AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+            col(AuthorityAuditEvent.event_type)
+            == "authority.provider_membership.replaced"
         ).count()
         == 1
     )
@@ -175,18 +179,24 @@ def test_existing_staff_membership_is_not_silently_reassigned(scope):
     doctor, _practice, _patient, appointment = scope
     context = _context(_token(doctor, str(appointment.id)))
     other_tenant = AuthorityTenant(status="active").save()
-    staff = AuthorityTenantMembership(
-        tenant_id=other_tenant.id,
-        actor_id=context.actor_id,
-        membership_kind="staff",
-        status="active",
+    staff = AuthorityTenantMembership.model_validate(
+        dict(
+            id=TypeID("tenant_membership"),
+            tenant_id=other_tenant.id,
+            actor_id=context.actor_id,
+            membership_kind="staff",
+            status="active",
+        )
     ).save()
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _token(doctor, str(appointment.id))
-    assert AuthorityTenantMembership.get(id=staff.id).status == "active"
+    stored_authority_tenant_membership_2 = AuthorityTenantMembership.get(id=staff.id)
+    assert stored_authority_tenant_membership_2 is not None
+    assert stored_authority_tenant_membership_2.status == "active"
     assert (
         AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
+            col(AuthorityAuditEvent.event_type)
+            == "authority.provider_membership.replaced"
         ).count()
         == 0
     )
@@ -195,8 +205,11 @@ def test_existing_staff_membership_is_not_silently_reassigned(scope):
 def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scope):
     doctor, _practice, _patient, appointment = scope
     _token(doctor, str(appointment.id))
-    binding = AuthorityPersonBinding.one(id=_record(appointment).binding_id)
+    stored_appointment = _record(appointment)
+    assert stored_appointment is not None
+    binding = AuthorityPersonBinding.one(id=stored_appointment.binding_id)
     fixture_tenant = AuthorityTenant(status="active").save()
+    assert binding.actor_id is not None
     fixture_membership = AuthorityTenantMembership(
         actor_id=binding.actor_id,
         tenant_id=fixture_tenant.id,
@@ -205,14 +218,25 @@ def test_unmapped_fixture_membership_is_not_retired_by_real_record_exchange(scop
     ).save()
     with pytest.raises(authority.AuthorityRequestDeniedError):
         _token(doctor, str(appointment.id))
-    assert AuthorityTenantMembership.get(id=fixture_membership.id).status == "active"
-    assert AuthorityTenantMembership.where(
-        AuthorityTenantMembership.actor_id == binding.actor_id,
-        AuthorityTenantMembership.status == "active",
-    ).count() == 2
-    assert AuthorityAuditEvent.where(
-        AuthorityAuditEvent.event_type == "authority.provider_membership.replaced"
-    ).count() == 0
+    stored_authority_tenant_membership_3 = AuthorityTenantMembership.get(
+        id=fixture_membership.id
+    )
+    assert stored_authority_tenant_membership_3 is not None
+    assert stored_authority_tenant_membership_3.status == "active"
+    assert (
+        AuthorityTenantMembership.where(
+            col(AuthorityTenantMembership.actor_id) == binding.actor_id,
+            col(AuthorityTenantMembership.status) == "active",
+        ).count()
+        == 2
+    )
+    assert (
+        AuthorityAuditEvent.where(
+            col(AuthorityAuditEvent.event_type)
+            == "authority.provider_membership.replaced"
+        ).count()
+        == 0
+    )
 
 
 @pytest.mark.parametrize("same_practice", [False, True])
@@ -376,7 +400,7 @@ def test_record_scope_cannot_be_retargeted_or_removed_to_enable_fallback(
     _token(doctor, str(appointment.id))
     with get_session() as session:
         with pytest.raises(DBAPIError):
-            session.exec(text(operation))
+            session.execute(text(operation))
             session.flush()
         session.rollback()
 

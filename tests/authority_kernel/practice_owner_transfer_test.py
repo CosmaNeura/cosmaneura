@@ -153,7 +153,7 @@ def call(f, **overrides):
     return transfer_practice_owner(**(f.args | overrides))
 
 
-def orphan_args(f, proof=None):
+def orphan_args(f, proof=None) -> dict[str, object]:
     proof = proof or OwnerIdentityAbsence(f.old.clerk_id, "staging", "a" * 64)
 
     def prove(subject):

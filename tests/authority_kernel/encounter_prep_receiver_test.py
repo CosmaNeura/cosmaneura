@@ -17,6 +17,7 @@ from app.routes.scribe_capture import (
 )
 from app.services import encounter_prep
 
+from tests.authority_kernel.companion_provider_provisioning_test import session_for
 from tests.authority_kernel.encounter_prep_test import admission_case as _admission_case
 from tests.authority_kernel.encounter_prep_test import capture_engine as _capture_engine
 from tests.authority_kernel.encounter_prep_test import intake
@@ -27,9 +28,12 @@ capture_engine = _capture_engine
 PATH = "/service/v1/agent/scribe/encounter-context"
 
 
-def test_real_scoped_read_on_the_facade_and_os_client(admission_case):
+def test_real_scoped_read_on_the_facade_and_os_client(admission_case, monkeypatch):
     f = admission_case
     intake(f)
+    # The capture worker owns a fresh context, so use an actual connection to
+    # the fixture database rather than relying on the test thread's session.
+    monkeypatch.setattr(encounter_prep, "get_session", lambda: session_for(f.engine))
     connection = client()
     assert isinstance(connection.app, FastAPI)
     connection.app.dependency_overrides[get_capture_settings] = lambda: replace(

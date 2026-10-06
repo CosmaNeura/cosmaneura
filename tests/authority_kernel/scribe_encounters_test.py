@@ -92,14 +92,14 @@ def workflow(engine, monkeypatch):
     )
     provisioned = apply(engine, args, plan(engine, args).plan_sha256)
     with session_for(engine) as session:
-        actor_ref = str(
-            session.get(
-                ScribeCaptureProviderLink, provisioned.provider_link_ref
-            ).actor_id
+        stored_scribe_capture_provider_link = session.get(
+            ScribeCaptureProviderLink, provisioned.provider_link_ref
         )
+        assert stored_scribe_capture_provider_link is not None
+        actor_ref = str(stored_scribe_capture_provider_link.actor_id)
 
     def request(action="create", **values):
-        body = dict(
+        body: dict[str, object] = dict(
             action=action,
             expected_actor_ref=actor_ref,
             expected_tenant_ref=str(args["tenant_id"]),
@@ -200,10 +200,9 @@ def test_unknown_birth_date_persists_and_retries_same_patient(
     )
     assert invoke(retry)["encounter"] == first
     with session_for(engine) as session:
-        assert (
-            session.get(Patient, TypeID.from_string(first["patient_ref"])).date_of_birth
-            is None
-        )
+        stored_patient = session.get(Patient, TypeID.from_string(first["patient_ref"]))
+        assert stored_patient is not None
+        assert stored_patient.date_of_birth is None
     patients = invoke(request("patients", query="Invented unknown birthday"))[
         "patients"
     ]
