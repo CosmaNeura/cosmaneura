@@ -42,3 +42,21 @@ If metadata or behavior equivalence fails, stop that change and revise it rather
 than introducing a migration or widening scope. Actions remains disabled.
 Nothing in this qualification authorizes merging or deployment; the approved
 operator release path and final integrated-candidate checks still apply.
+
+## Diagnostic image evidence
+
+The Linux probe typing change invalidated the recorded copied-file hash.
+Rebuild only the three-file diagnostic image from exact source
+`30aa89db5855d04d5a78a48c7e97f8c62fe12bac`, retaining the existing pinned base.
+The Dockerfile has no RUN instructions; neither the image nor the probe runs,
+and nothing is published. Canonicalize only the OCI archive envelope to satisfy
+the existing strict receiver; preserve every manifest, config and layer byte.
+
+Record the new archive, manifest, config, layer and source-file hashes in
+`infra/runtime_capability/image-candidate.json`. Verify decompressed layer hashes,
+file contents, ownership, permissions and the unchanged Python executable.
+Independent review must inspect the retained complete archive, not just metadata.
+This is source/artifact qualification, never runtime or deployment acceptance.
+The September 14 image pins remain historical, not pins for this rebuilt image.
+Recovery is restoring the earlier source and its matching metadata together;
+never substitute either image for an approved execution artifact.
