@@ -1870,8 +1870,12 @@ def provision_companion_provider_command(
     practice_id: str = typer.Option(...),
     authority_tenant_id: str = typer.Option(...),
     scribe_tenant_id: str = typer.Option(...),
-    review_ref: str = typer.Option(..., help="Opaque reference to reviewed practice correspondence."),
-    operator_ref: str = typer.Option(..., help="Opaque accountable operator reference."),
+    review_ref: str = typer.Option(
+        ..., help="Opaque reference to reviewed practice correspondence."
+    ),
+    operator_ref: str = typer.Option(
+        ..., help="Opaque accountable operator reference."
+    ),
     create_missing_authority: bool = typer.Option(False, "--create-missing-authority"),
     confirm_plan_sha256: str | None = typer.Option(None, "--confirm-plan-sha256"),
     apply: bool = typer.Option(False, "--apply"),
@@ -1891,7 +1895,9 @@ def provision_companion_provider_command(
     from sqlalchemy.exc import SQLAlchemyError
 
     if apply and not confirm_plan_sha256:
-        raise typer.BadParameter("--apply requires --confirm-plan-sha256 from the reviewed plan")
+        raise typer.BadParameter(
+            "--apply requires --confirm-plan-sha256 from the reviewed plan"
+        )
     doctor_ref = _typeid(doctor_id, "doctor")
     practice_ref = _typeid(practice_id, "practice")
     tenant_ref = _typeid(authority_tenant_id, "authority_tenant")
@@ -1907,14 +1913,20 @@ def provision_companion_provider_command(
             verified = verified_primary_email(verified_subject)
             with get_session() as session:
                 result = provision_companion_provider(
-                    session, doctor_id=doctor_ref, practice_id=practice_ref,
-                    tenant_id=tenant_ref, scribe_tenant_id=scribe_ref,
-                    verified_primary_email=verified, verified_clerk_subject=verified_subject,
+                    session,
+                    doctor_id=doctor_ref,
+                    practice_id=practice_ref,
+                    tenant_id=tenant_ref,
+                    scribe_tenant_id=scribe_ref,
+                    verified_primary_email=verified,
+                    verified_clerk_subject=verified_subject,
                     email_confirmation=email,
-                    review_ref=review_ref, operator_ref=operator_ref,
+                    review_ref=review_ref,
+                    operator_ref=operator_ref,
                     settings=AUTHORITY_KERNEL_SETTINGS,
                     create_missing_authority=create_missing_authority,
-                    apply=apply, confirm_plan_sha256=confirm_plan_sha256,
+                    apply=apply,
+                    confirm_plan_sha256=confirm_plan_sha256,
                 )
                 if not apply:
                     session.rollback()

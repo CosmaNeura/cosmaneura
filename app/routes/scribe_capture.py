@@ -141,7 +141,9 @@ class NoteRequest(NoteScopeRequest):
     def template_selection(self) -> NoteRequest:
         if (self.action == "templates") != (self.schema_ref is None):
             raise ValueError("invalid_template_selection")
-        if (self.action in {"save", "resolve", "save_status"}) != (self.edit is not None):
+        if (self.action in {"save", "resolve", "save_status"}) != (
+            self.edit is not None
+        ):
             raise ValueError("invalid_note_edit_selection")
         if self.scratch_notes is not None and (
             self.action not in {"read", "prepare"}

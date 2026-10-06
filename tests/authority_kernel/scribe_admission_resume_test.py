@@ -104,7 +104,10 @@ async def test_resume_reuses_saved_family_and_rejects_wrong_session_before_io(
         await admission.admit_capture(**wrong, expected_session_id=uuid4())
     assert len(f.client.calls) == calls_before
     assert len(getattr(f, "configured_calls", [])) == configured_calls_before
-    for expected_session_id, resume_current in ((None, True), (saved.session_id, False)):
+    for expected_session_id, resume_current in (
+        (None, True),
+        (saved.session_id, False),
+    ):
         resumed = await admission.admit_capture(
             **call_arguments(f, resume=True),
             expected_session_id=expected_session_id,

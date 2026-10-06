@@ -21,13 +21,16 @@ def test_mail_can_send_repeatedly_from_a_worker_without_an_event_loop(monkeypatc
 
     with ThreadPoolExecutor(max_workers=1) as worker:
         for _ in range(2):
-            assert worker.submit(
-                emailer.mail,
-                to="invitee@synthetic.invalid",
-                subject="Synthetic invitation",
-                template_path="unused.md",
-                context={},
-            ).result(timeout=5) == "synthetic-delivery"
+            assert (
+                worker.submit(
+                    emailer.mail,
+                    to="invitee@synthetic.invalid",
+                    subject="Synthetic invitation",
+                    template_path="unused.md",
+                    context={},
+                ).result(timeout=5)
+                == "synthetic-delivery"
+            )
 
     assert len(messages) == 2
     assert len(loops) == 2 and loops[0] is not loops[1]

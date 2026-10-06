@@ -26,19 +26,25 @@ def validate_prepared_continuation_window(
     )
 
     try:
-        result = PreparedContinuationWindow.model_validate(receipt.model_dump(mode="json"))
+        result = PreparedContinuationWindow.model_validate(
+            receipt.model_dump(mode="json")
+        )
         body = operation.payload
         count = len(result.reservations.reservations)
         renew = protocol.RenewLease(
-            kind="renew_lease", lease_id=body.previous_lease_id,
-            payload=protocol.RenewPayload(expected_generation=body.previous_lease_generation),
+            kind="renew_lease",
+            lease_id=body.previous_lease_id,
+            payload=protocol.RenewPayload(
+                expected_generation=body.previous_lease_generation
+            ),
         )
         reserve = protocol.ReserveChunks(
             kind="reserve_chunks",
             payload=protocol.ReservePayload(
                 capture_lease_id=result.lease.lease_id,
                 capture_lease_generation=result.lease.generation,
-                channel=body.channel, first_sequence_number=body.first_sequence_number,
+                channel=body.channel,
+                first_sequence_number=body.first_sequence_number,
                 count=count,
             ),
         )

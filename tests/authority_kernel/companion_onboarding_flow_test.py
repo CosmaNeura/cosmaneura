@@ -76,8 +76,12 @@ class CaptureArguments(TypedDict):
 def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypatch):  # noqa: F811
     # Route services own their session; direct only that factory to the dedicated
     # local PostgreSQL engine, retaining their real transactions and commit path.
-    monkeypatch.setattr(companion_encounters, "global_session", lambda: session_for(engine))
-    monkeypatch.setattr(companion_appointment_setup, "global_session", lambda: session_for(engine))
+    monkeypatch.setattr(
+        companion_encounters, "global_session", lambda: session_for(engine)
+    )
+    monkeypatch.setattr(
+        companion_appointment_setup, "global_session", lambda: session_for(engine)
+    )
     monkeypatch.setattr(authority, "validate_provider_record_scope", REAL_RECORD_GUARD)
     monkeypatch.setattr(
         view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD
@@ -140,7 +144,9 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
         "expected_tenant_ref": connection.tenant_ref,
         "expected_actor_ref": connection.actor_ref,
         "connection_sha256": connection.connection_sha256,
-        "window": EncounterWindow(start_date=date(2026, 9, 25), end_date=date(2026, 9, 26)),
+        "window": EncounterWindow(
+            start_date=date(2026, 9, 25), end_date=date(2026, 9, 26)
+        ),
     }
     setup_arguments = {
         **arguments,

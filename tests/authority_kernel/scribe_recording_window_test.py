@@ -40,18 +40,33 @@ class RecordingWindowArguments(TypedDict):
 
 def selected_scope() -> AdmittedCaptureScope:
     old = scope()
-    return replace(old, creator_actor_id="actor_synthetic", session_request=ConfiguredSessionCreate(
-        schema_version="1.0", language_mode="en-US", id=old.session_id,
-        **old.session_request.model_dump(),
-    ))
+    return replace(
+        old,
+        creator_actor_id="actor_synthetic",
+        session_request=ConfiguredSessionCreate(
+            schema_version="1.0",
+            language_mode="en-US",
+            id=old.session_id,
+            **old.session_request.model_dump(),
+        ),
+    )
 
 
 def operation() -> PrepareRecordingWindow:
-    return PrepareRecordingWindow.model_validate(dict(kind="prepare_recording_window", payload=dict(
-        schema_version="1.0", binding=dict(key_version="synthetic-key", wrapped_dek="a" * 512),
-        bind_idempotency_key="original-bind-key", lease_idempotency_key="original-lease-key",
-        reserve_idempotency_key="original-reserve-key", channel="microphone", reservation_count=1,
-    )))
+    return PrepareRecordingWindow.model_validate(
+        dict(
+            kind="prepare_recording_window",
+            payload=dict(
+                schema_version="1.0",
+                binding=dict(key_version="synthetic-key", wrapped_dek="a" * 512),
+                bind_idempotency_key="original-bind-key",
+                lease_idempotency_key="original-lease-key",
+                reserve_idempotency_key="original-reserve-key",
+                channel="microphone",
+                reservation_count=1,
+            ),
+        )
+    )
 
 
 def receipts(selected):
@@ -59,7 +74,9 @@ def receipts(selected):
     lease = pair("issue_lease", selected)[1]
     assert isinstance(binding, protocol.KeyReceipt)
     assert isinstance(lease, protocol.LeaseReceipt)
-    reservations = pair("reserve_chunks", selected)[1].model_copy(update={"capture_authorized_until": lease.expires_at})
+    reservations = pair("reserve_chunks", selected)[1].model_copy(
+        update={"capture_authorized_until": lease.expires_at}
+    )
     return {"bind_key": binding, "issue_lease": lease, "reserve_chunks": reservations}
 
 
@@ -75,7 +92,10 @@ def arguments(selected: AdmittedCaptureScope) -> RecordingWindowArguments:
     }
 
 
-@pytest.mark.parametrize("mutation", ["same_keys", "bool_count", "large_count", "scope", "binding", "unknown"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["same_keys", "bool_count", "large_count", "scope", "binding", "unknown"],
+)
 def test_closed_window_rejects_malformed_or_injected_recipe(mutation):
     data = operation().model_dump()
     payload = data["payload"]
@@ -120,21 +140,36 @@ async def test_partial_commit_replays_the_same_component_receipts(monkeypatch, l
     with pytest.raises(gateway.CaptureOperationUnconfirmed):
         await window.execute_recording_window(**kwargs)
     returned = await window.execute_recording_window(**kwargs)
-    assert returned.binding == values["bind_key"] and returned.lease == values["issue_lease"]
+    assert (
+        returned.binding == values["bind_key"]
+        and returned.lease == values["issue_lease"]
+    )
     assert returned.reservations == values["reserve_chunks"] and len(committed) == 3
-    for kind, key in (("bind_key", "original-bind-key"), ("issue_lease", "original-lease-key"), ("reserve_chunks", "original-reserve-key")):
+    for kind, key in (
+        ("bind_key", "original-bind-key"),
+        ("issue_lease", "original-lease-key"),
+        ("reserve_chunks", "original-reserve-key"),
+    ):
         matching = [op for op, saved_key in calls if saved_key == key]
-        assert matching and all(op == matching[0] and op.kind == kind for op in matching)
+        assert matching and all(
+            op == matching[0] and op.kind == kind for op in matching
+        )
     reserve = calls[-1][0].payload
     assert reserve.capture_lease_id == returned.lease.lease_id
     assert reserve.capture_lease_generation == returned.lease.generation
-    assert (reserve.channel, reserve.first_sequence_number, reserve.count) == ("microphone", 0, 1)
+    assert (reserve.channel, reserve.first_sequence_number, reserve.count) == (
+        "microphone",
+        0,
+        1,
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("check", range(1, 7))
 @pytest.mark.parametrize("failure", ["revoked", "changed_scope"])
-async def test_every_component_checks_scope_before_and_after_io(monkeypatch, check, failure):
+async def test_every_component_checks_scope_before_and_after_io(
+    monkeypatch, check, failure
+):
     selected = selected_scope()
     values, calls = receipts(selected), []
     count = 0
@@ -183,7 +218,11 @@ async def test_cancelled_budget_cannot_advance_or_publish(monkeypatch, cancel_af
 @pytest.mark.asyncio
 async def test_outer_key_cannot_alias_a_component(monkeypatch):
     selected = selected_scope()
-    monkeypatch.setattr(gateway, "execute_capture_operation", lambda **_: pytest.fail("mutation reached"))
+    monkeypatch.setattr(
+        gateway,
+        "execute_capture_operation",
+        lambda **_: pytest.fail("mutation reached"),
+    )
     with pytest.raises(gateway.CaptureReceiptInvalid):
         kwargs = arguments(selected)
         kwargs["client_request_key"] = "original-bind-key"
@@ -191,34 +230,62 @@ async def test_outer_key_cannot_alias_a_component(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(monkeypatch):
+async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(
+    monkeypatch,
+):
     selected = selected_scope()
     values, calls = receipts(selected), []
-    view = {"schema_version": "1.0", "session_id": str(selected.session_id), "status": "created"}
+    view = {
+        "schema_version": "1.0",
+        "session_id": str(selected.session_id),
+        "status": "created",
+    }
 
     def handler(request):
         calls.append(request)
         assert request.headers["x-tenant-id"] == str(selected.tenant_id)
         if request.url.path.endswith("/review"):
-            assert request.headers["x-scribe-creator-actor-id"] == selected.creator_actor_id
+            assert (
+                request.headers["x-scribe-creator-actor-id"]
+                == selected.creator_actor_id
+            )
             return httpx.Response(200, json=view)
-        position = len([call for call in calls if not call.url.path.endswith("/review")]) - 1
+        position = (
+            len([call for call in calls if not call.url.path.endswith("/review")]) - 1
+        )
         kind = ["bind_key", "issue_lease", "reserve_chunks"][position]
-        key = ["original-bind-key", "original-lease-key", "original-reserve-key"][position]
-        expected = "core-capture-" + hashlib.sha256(json.dumps(
-            [selected.operation_ref, kind, key], separators=(",", ":")
-        ).encode()).hexdigest()
+        key = ["original-bind-key", "original-lease-key", "original-reserve-key"][
+            position
+        ]
+        expected = (
+            "core-capture-"
+            + hashlib.sha256(
+                json.dumps(
+                    [selected.operation_ref, kind, key], separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+        )
         assert request.headers["idempotency-key"] == expected
         if kind != "bind_key":
             assert f"/captured-sessions/{selected.session_id}/" in request.url.path
-            assert request.headers["x-scribe-creator-actor-id"] == selected.creator_actor_id
+            assert (
+                request.headers["x-scribe-creator-actor-id"]
+                == selected.creator_actor_id
+            )
         return httpx.Response(200, json=values[kind].model_dump(mode="json"))
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
     monkeypatch.setattr(window, "authorize_admitted_capture", lambda *_: selected)
-    async with httpx.AsyncClient(base_url="https://scribe.invalid", transport=httpx.MockTransport(handler)) as transport:
-        remote = HttpScribeWorkflowClient(base_url="https://scribe.invalid", scope="api://scribe/.default",
-            credential=StaticCredential(), timeout_seconds=3, client=transport)
+    async with httpx.AsyncClient(
+        base_url="https://scribe.invalid", transport=httpx.MockTransport(handler)
+    ) as transport:
+        remote = HttpScribeWorkflowClient(
+            base_url="https://scribe.invalid",
+            scope="api://scribe/.default",
+            credential=StaticCredential(),
+            timeout_seconds=3,
+            client=transport,
+        )
         kwargs = arguments(selected)
         result = await gateway.execute_capture_operation(
             caller=kwargs["caller"],

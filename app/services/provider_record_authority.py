@@ -254,11 +254,15 @@ def ensure_provider_record_scope(
     # A fixture/import tenant is outside this practice-move mechanism. Deny
     # the exchange rather than revoking it or mixing it into a real cohort.
     for row in active_memberships:
-        if row.tenant_id != tenant.id and session.exec(
-            select(ProviderPracticeAuthority).where(
-                ProviderPracticeAuthority.tenant_id == row.tenant_id
-            )
-        ).one_or_none() is None:
+        if (
+            row.tenant_id != tenant.id
+            and session.exec(
+                select(ProviderPracticeAuthority).where(
+                    ProviderPracticeAuthority.tenant_id == row.tenant_id
+                )
+            ).one_or_none()
+            is None
+        ):
             raise ProviderRecordScopeDenied
     for stale in active_memberships:
         if stale.tenant_id != tenant.id:

@@ -103,14 +103,18 @@ def bound_json(filename: str, digest: str):
 def validate_runtime(runtime: dict[str, str]) -> None:
     # Historical Scribe-only plans remain valid. Companion admission is an
     # explicit, complete group, including an empty caller for full withdrawal.
-    require(type(runtime) is dict and set(runtime) in (FIELDS, FIELDS | COMPANION_FIELDS))
+    require(
+        type(runtime) is dict and set(runtime) in (FIELDS, FIELDS | COMPANION_FIELDS)
+    )
     require(all(type(value) is str and len(value) < 2048 for value in runtime.values()))
     require(all(runtime[key] in {"true", "false"} for key in FLAGS))
     if COMPANION_FIELDS <= runtime.keys():
         require(all(runtime[key] in {"true", "false"} for key in COMPANION_FLAGS))
         caller = runtime["AGENT_API_COMPANION_CLIENT_ID"]
         if caller:
-            require(re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", caller))
+            require(
+                re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", caller)
+            )
             require(caller != "00000000-0000-0000-0000-000000000000")
             require(caller != runtime["AGENT_API_SCRIBE_RECEIVER_CLIENT_ID"])
         else:

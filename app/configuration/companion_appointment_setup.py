@@ -15,7 +15,8 @@ class CompanionAppointmentSetupSettings:
         if type(self.enabled) is not bool:
             raise ValueError("invalid_companion_appointment_setup_settings")
         if self.enabled and (
-            not AUTHORITY_KERNEL_SETTINGS.enabled or not AUTHORITY_KERNEL_SETTINGS.is_complete()
+            not AUTHORITY_KERNEL_SETTINGS.enabled
+            or not AUTHORITY_KERNEL_SETTINGS.is_complete()
         ):
             raise ValueError("companion_appointment_setup_authority_required")
 

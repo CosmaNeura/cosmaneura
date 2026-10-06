@@ -56,11 +56,18 @@ def make_app(monkeypatch, behavior="success"):
 
 def scope(path, method="POST"):
     return {
-        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
-        "method": method, "scheme": "http", "path": path,
-        "raw_path": path.encode(), "query_string": b"", "root_path": "",
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": "",
         "headers": [(b"host", b"testserver")],
-        "server": ("127.0.0.1", 1), "client": ("127.0.0.1", 2),
+        "server": ("127.0.0.1", 1),
+        "client": ("127.0.0.1", 2),
     }
 
 
@@ -95,7 +102,9 @@ async def test_actual_middleware_final_send_is_bounded(
         assert len([m for m in messages if m["type"] == "http.response.start"]) == 1
         assert not any(b"never disclose" in m.get("body", b"") for m in messages)
         if stalled_type == "http.response.start":
-            assert len(messages) == 1, "no subsequent private or static body after timeout"
+            assert len(messages) == 1, (
+                "no subsequent private or static body after timeout"
+            )
     finally:
         blocked.set()
         if not task.done():
@@ -156,7 +165,8 @@ async def test_known_output_and_headers_survive_actual_middleware(
     assert b"no-store" in dict(messages[0]["headers"])[b"cache-control"]
     body = b"".join(m.get("body", b"") for m in messages)
     assert json.loads(body) == (
-        {"content": "synthetic private output"} if status == 200
+        {"content": "synthetic private output"}
+        if status == 200
         else {"detail": "synthetic denial"}
     )
 
@@ -236,9 +246,13 @@ async def test_worker_start_failure_uses_bounded_static_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path,method,status", [
-    (PATHS[0], "GET", 405), ("/unrelated", "GET", 200),
-])
+@pytest.mark.parametrize(
+    "path,method,status",
+    [
+        (PATHS[0], "GET", 405),
+        ("/unrelated", "GET", 200),
+    ],
+)
 async def test_unselected_requests_do_not_borrow_capture_capacity(
     monkeypatch, path, method, status
 ):
