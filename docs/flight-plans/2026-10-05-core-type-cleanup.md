@@ -60,3 +60,14 @@ This is source/artifact qualification, never runtime or deployment acceptance.
 The September 14 image pins remain historical, not pins for this rebuilt image.
 Recovery is restoring the earlier source and its matching metadata together;
 never substitute either image for an approved execution artifact.
+
+## Test database reset guards
+
+Add the two billing evidence mutation guards to the existing test-only reset
+helper. Its cleaner deletes rows; the separate action TRUNCATE guard stays
+enabled. Restore every named guard in the existing finally block, including
+when cleanup raises. Production triggers, migrations and billing behavior are
+unchanged. Qualify successful cleanup, failed cleanup and non-test rejection
+without importing the global identity-cleanup hooks, then rerun the database-only
+provider authority and invitation races on the isolated migrated database.
+Recovery is reverting this test-only commit.
