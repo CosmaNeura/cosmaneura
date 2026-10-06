@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import app.configuration.session_prep as configuration
 import app.routes.embed_context as embed_context
+import app.services.provider_context_exchange as provider_context_exchange
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.services.authority import AuthorityRequestDeniedError, exchange_context_token
 from app.services.session_prep_note_sources import (
@@ -119,7 +120,7 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
         SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
     )
     monkeypatch.setattr(
-        embed_context,
+        provider_context_exchange,
         "configured_superadmin_capability_environment",
         lambda: SuperadminCapabilityEnvironment.staging,
     )
