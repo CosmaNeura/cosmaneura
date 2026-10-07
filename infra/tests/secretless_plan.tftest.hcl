@@ -321,6 +321,8 @@ run "core_cab_api_only_configured_projection" {
         CORE_CAB_AUTHORIZE_AUDIENCE                = "22222222-2222-2222-2222-222222222222"
         CORE_CAB_AUTHORIZE_CALLER_ID               = "33333333-3333-3333-3333-333333333333"
         CORE_CAB_BRIDGE_ENABLED                    = "true"
+        CORE_CAB_ASYNC_ENABLED                     = "true"
+        CORE_CAB_CONTINUATION_ENABLED              = "true"
         CORE_CAB_ORIGIN                            = "https://cab.example.invalid"
         CORE_CAB_AUDIENCE                          = "44444444-4444-4444-4444-444444444444"
         CORE_CAB_MANAGED_IDENTITY_CLIENT_ID        = "55555555-5555-5555-5555-555555555555"
@@ -390,6 +392,11 @@ run "core_cab_api_only_configured_projection" {
   assert {
     condition     = one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.secret_name if entry.name == "BILLING_SOURCE_POLICY_JSON"]) == "billing-source-policy-json" && contains([for secret in azurerm_container_app.app.secret : secret.name], "billing-source-policy-json")
     error_message = "The policy must be an API-only secret reference"
+  }
+  assert {
+    condition = alltrue([for name in ["CORE_CAB_ASYNC_ENABLED", "CORE_CAB_CONTINUATION_ENABLED"] :
+    one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == "true"])
+    error_message = "Explicit async and continuation flags must reach only the API"
   }
   assert {
     condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
