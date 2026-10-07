@@ -396,15 +396,19 @@ async def test_cancelled_request_never_releases_private_late_response(monkeypatc
 def test_expired_sql_has_no_statement_or_commit_and_does_not_affect_other_context():
     sent = []
     connection = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-    cursor = SimpleNamespace(execute=sent.append)
+    cursor = SimpleNamespace(execute=lambda query, values: sent.append((query, values)))
     budget = CaptureBudget(2)
     with capture_budget(budget):
         before_capture_statement(
             connection, cursor, "SELECT retained", None, None, False
         )
-        assert len(sent) == 2 and all(
-            command.startswith("SET LOCAL ") for command in sent
+        assert len(sent) == 1
+        query, values = sent[0]
+        assert query == (
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)"
         )
+        assert 0 < int(values[1]) <= int(values[0]) <= 2000
         budget.cancel()
         with pytest.raises(CaptureDeadlineExceeded):
             before_capture_statement(
@@ -412,7 +416,7 @@ def test_expired_sql_has_no_statement_or_commit_and_does_not_affect_other_contex
             )
         with Session() as session, pytest.raises(CaptureDeadlineExceeded):
             session.commit()
-    assert len(sent) == 2
+    assert len(sent) == 1
     with Session() as session:
         session.commit()  # No SQL; global hook is inert outside capture context.
 

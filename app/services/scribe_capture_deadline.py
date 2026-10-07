@@ -109,10 +109,16 @@ def before_capture_statement(
         raise CaptureDeadlineExceeded("capture_database_unavailable")
     # Raw cursor calls avoid recursion. Only this request's current transaction
     # gets these settings; pool acquisition/pre-ping may settle before this hook.
-    milliseconds = max(1, int(budget.check() * 1000))
-    cursor.execute(f"SET LOCAL statement_timeout = {milliseconds}")
-    milliseconds = max(1, min(2000, int(budget.check() * 1000)))
-    cursor.execute(f"SET LOCAL lock_timeout = {milliseconds}")
+    statement_ms = max(1, int(budget.check() * 1000))
+    lock_ms = max(1, min(2000, int(budget.check() * 1000)))
+    # One parameterized round trip sets both transaction-local values. Every
+    # statement still refreshes the remaining budget and checks cancellation
+    # after the settings return, before its actual SQL can be dispatched.
+    cursor.execute(
+        "SELECT set_config('statement_timeout', %s, true), "
+        "set_config('lock_timeout', %s, true)",
+        (str(statement_ms), str(lock_ms)),
+    )
     budget.check()
 
 

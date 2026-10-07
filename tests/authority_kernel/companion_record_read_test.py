@@ -378,21 +378,22 @@ def test_statement_guard_refuses_late_sql_and_restores_listener(monkeypatch):
         service.event, "remove", lambda *_: listener.update(removed=True)
     )
     commands = []
-    cursor = SimpleNamespace(execute=lambda sql: commands.append(sql))
+    cursor = SimpleNamespace(execute=lambda sql, values: commands.append((sql, values)))
     with service.transaction_budget(session, time.monotonic() + 10):
         listener["callback"](None, cursor, None, None, None, None)
-        assert commands[0].startswith("SET LOCAL statement_timeout")
+        assert commands[0][0] == (
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)"
+        )
+        assert 0 < int(commands[0][1][1]) <= 2000
         monkeypatch.setattr(service.time, "monotonic", lambda: 1_000_000_000_000.0)
         with pytest.raises(service.RecordDeadline):
             listener["callback"](None, cursor, None, None, None, None)
-        assert len(commands) == 2
+        assert len(commands) == 1
     assert listener["removed"]
 
 
-@pytest.mark.parametrize("cancel_after", [1, 2])
-def test_cancelled_sql_setting_never_admits_following_statement(
-    monkeypatch, cancel_after
-):
+def test_cancelled_sql_setting_never_admits_following_statement(monkeypatch):
     listener, commands = {}, []
     budget = service.RecordBudget(time.monotonic() + 10)
     connection = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
@@ -407,10 +408,9 @@ def test_cancelled_sql_setting_never_admits_following_statement(
         service.event, "remove", lambda *_: listener.update(removed=True)
     )
 
-    def execute(sql):
-        commands.append(sql)
-        if len(commands) == cancel_after:
-            budget.cancel()
+    def execute(sql, values):
+        commands.append((sql, values))
+        budget.cancel()
 
     with (
         service.transaction_budget(session, budget),
@@ -420,7 +420,7 @@ def test_cancelled_sql_setting_never_admits_following_statement(
             None, SimpleNamespace(execute=execute), None, None, None, None
         )
         commands.append("forbidden-original-statement")
-    assert len(commands) == cancel_after and listener["removed"]
+    assert len(commands) == 1 and listener["removed"]
 
 
 def test_cancelled_budget_refuses_session_acquisition(monkeypatch):
