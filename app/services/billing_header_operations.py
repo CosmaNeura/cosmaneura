@@ -165,11 +165,13 @@ def _admission(scope, actor):
 
 
 def _receipt(row, source, *, replayed):
+    from app.configuration.cab_bridge import CAB_BRIDGE_SETTINGS
     from app.services.cab_bridge_client import configured
 
     return BillingHeaderOperation(
         transport=BillingTransportState(
-            state="configured" if configured() else "not_configured"
+            state="configured" if configured() else "not_configured",
+            asyncGeneration=configured() and CAB_BRIDGE_SETTINGS.async_enabled,
         ),
         operationId=str(row.operation_id),
         sourceRevision=row.source_revision,

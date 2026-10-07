@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime, timedelta
+from uuid import UUID
 
 from app.configuration.clerk import VerifiedProviderSession
 from app.services import billing_header_operations as preparation
@@ -59,6 +60,7 @@ def _current(session, actor, operation_id):
     require(all(admission.model_dump()[k] == row.admission[k] for k in keys))
     now = _now(session)
     require(now < datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")))
+    require(actor.expires_at is None or now < actor.expires_at)
     return row, now, admission
 
 
@@ -81,6 +83,7 @@ def begin_action(actor, operation_id, purpose, command):
             created_at=now,
             expires_at=min(
                 now + timedelta(seconds=120),
+                actor.expires_at or now + timedelta(seconds=120),
                 datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
             ),
         )
@@ -89,6 +92,101 @@ def begin_action(actor, operation_id, purpose, command):
         result = (payload, str(action.id))
         session.commit()  # Release Core source locks before the CAB callback.
         return result
+
+
+def begin_async_action(actor, operation_id, command):
+    """Claim the exact Generate intent before HTTP; retry only reads its status."""
+    with get_session() as session:
+        row, now, admission = _current(session, actor, operation_id)
+        operation = minimized_operation(row)
+        payload = workload_request(operation, "header.generate", command)
+        generation_id = UUID(command["operationId"])
+        # _current holds the source/scope locks, serializing the first local claim.
+        action = session.exec(
+            select(Action).where(
+                Action.operation_id == row.operation_id,
+                Action.generation_id == generation_id,
+            )
+        ).one_or_none()
+        if action is not None:
+            require(
+                action.request_sha256 == digest(payload)
+                and action.operation_sha256 == digest(operation)
+                and action.actor.get("issuer") == actor.issuer
+                and action.actor.get("subject") == actor.subject
+            )
+            session.commit()
+            return payload, str(action.id), True
+        provider_expiry = preparation._present(actor.expires_at)
+        require(provider_expiry > now)
+        expiry = min(
+            now + timedelta(seconds=360),
+            provider_expiry,
+            datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
+        )
+        action = Action(
+            operation_id=row.operation_id,
+            purpose="header.generate",
+            generation_id=generation_id,
+            request_sha256=digest(payload),
+            operation_sha256=digest(operation),
+            actor={
+                "issuer": actor.issuer,
+                "subject": actor.subject,
+                "sessionSha256": actor.session_sha256,
+            },
+            created_at=now,
+            expires_at=expiry,
+        )
+        session.add(action)
+        session.flush()
+        result = payload, str(action.id), False
+        session.commit()
+        return result
+
+
+def complete_generation(operation_id, request):
+    """A trusted, exact terminal receipt closes authority; it never grants any."""
+    with get_session() as session:
+        action = session.exec(
+            select(Action)
+            .where(
+                Action.operation_id == operation_id,
+                Action.purpose == "header.generate",
+                col(Action.generation_id).is_not(None),
+                Action.request_sha256 == request.requestSha256,
+            )
+            .with_for_update()
+        ).one_or_none()
+        row = session.exec(
+            select(Operation).where(
+                Operation.operation_id == operation_id,
+            )
+        ).one_or_none()
+        require(
+            action is not None
+            and row is not None
+            and action.actor.get("issuer") == request.actor.issuer
+            and action.actor.get("subject") == request.actor.subject
+            and action.operation_sha256 == digest(minimized_operation(row))
+            and row.source["contentSha256"] == request.sourceContentSha256
+            and row.source["textSha256"] == request.sourceTextSha256
+        )
+        action = preparation._present(action)
+        if action.finished_at is not None:
+            require(action.completion_status == request.status)
+        else:
+            action.finished_at = _now(session)
+            action.completion_status = request.status
+            session.add(action)
+            session.commit()
+        return {
+            "schemaVersion": "core-cab-generation-completion-receipt.v1",
+            "operationId": str(operation_id),
+            "requestSha256": request.requestSha256,
+            "status": request.status,
+            "closed": True,
+        }
 
 
 def finish_action(action_id):
@@ -127,7 +225,7 @@ def authorize_action(operation_id, request):
         actor = VerifiedProviderSession(
             request.actor.issuer, request.actor.subject, action.actor["sessionSha256"]
         )
-        row, now, _ = _current(session, actor, operation_id)
+        row, now, admission = _current(session, actor, operation_id)
         # Practice/source locks precede the action lock, including the BFF finish path.
         action = session.exec(
             select(Action)
@@ -144,7 +242,7 @@ def authorize_action(operation_id, request):
             and request.sourceContentSha256 == row.source["contentSha256"]
             and request.sourceTextSha256 == row.source["textSha256"]
         )
-        return {
+        result = {
             "schemaVersion": "core-cab-authorization.v1",
             "allowed": True,
             "operationId": str(row.operation_id),
@@ -157,6 +255,12 @@ def authorize_action(operation_id, request):
             "admission": operation["admission"],
             "authorizedAt": now.isoformat(),
             "expiresAt": min(
-                now + timedelta(seconds=30), action.expires_at
+                now + timedelta(seconds=30),
+                action.expires_at,
+                datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
             ).isoformat(),
         }
+
+        if action.generation_id is not None:
+            result["generationExpiresAt"] = action.expires_at.isoformat()
+        return result

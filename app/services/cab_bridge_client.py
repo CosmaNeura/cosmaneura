@@ -110,6 +110,11 @@ class CabClient:
             if purpose == "completed-note.accept"
             else "/api/core/v1/header/" + purpose.split(".")[1]
         )
+        asynchronous = purpose == "header.generation-status" or (
+            purpose == "header.generate"
+            and payload["command"].get("responseMode") == "async"
+        )
+        deadline = 75 if purpose == "header.generate" and not asynchronous else 30
         try:
             started = time.monotonic()
             if self.token_provider is None:
@@ -133,7 +138,7 @@ class CabClient:
                 raise ValueError()
             with httpx.Client(
                 transport=self.transport,
-                timeout=httpx.Timeout(75, connect=3),
+                timeout=httpx.Timeout(deadline, connect=3),
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
@@ -164,7 +169,10 @@ class CabClient:
                     data = bytearray()
                     for chunk in response.iter_bytes():
                         data.extend(chunk)
-                        if len(data) > 1_500_000 or time.monotonic() - started > 75:
+                        if (
+                            len(data) > 1_500_000
+                            or time.monotonic() - started > deadline
+                        ):
                             raise ValueError()
 
             def unique(pairs):
@@ -241,6 +249,28 @@ class CabClient:
                     or any(
                         receipt[k] != value["source"][k]
                         for k in ("headerSource", "encounterId", "encounterVersion")
+                    )
+                ):
+                    raise ValueError()
+            elif asynchronous:
+                generation = result.get("generation")
+                if (
+                    set(result) != {"generation", "view", "created"}
+                    or type(generation) is not dict
+                    or set(generation) != {"operationId", "status"}
+                    or generation["operationId"] != payload["command"]["operationId"]
+                    or generation["status"]
+                    not in {"running", "succeeded", "failed", "unknown"}
+                    or type(result["created"]) is not bool
+                    or (
+                        generation["status"] == "succeeded"
+                        and type(result["view"]) is not dict
+                    )
+                    or (
+                        generation["status"] != "succeeded"
+                        and (
+                            result["view"] is not None or result["created"] is not False
+                        )
                     )
                 ):
                     raise ValueError()

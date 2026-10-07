@@ -70,7 +70,14 @@ def bridge(case, monkeypatch):
     monkeypatch.setattr(config, "CAB_BRIDGE_SETTINGS", settings)
     monkeypatch.setattr(config, "CAB_AUTHORIZE_POLICY", policy)
     state = SimpleNamespace(
-        signed_in=True, view_as=None, calls=[], proofs=[], fail=False, alter=None
+        signed_in=True,
+        view_as=None,
+        calls=[],
+        proofs=[],
+        fail=False,
+        alter=None,
+        async_exp=None,
+        async_status="running",
     )
     pin = {
         "encounterId": "source-encounter-local",
@@ -147,6 +154,20 @@ def bridge(case, monkeypatch):
                 "launchPath": None,
                 "generation": "not_started",
             }
+        elif payload["purpose"] == "header.generation-status" or (
+            payload["purpose"] == "header.generate"
+            and payload["command"].get("responseMode") == "async"
+        ):
+            result = {
+                "generation": {
+                    "operationId": payload["command"]["operationId"],
+                    "status": state.async_status,
+                },
+                "view": {"syntheticWireFixture": True}
+                if state.async_status == "succeeded"
+                else None,
+                "created": state.async_status == "succeeded",
+            }
         elif payload["purpose"] != "header.read":
             result = {"view": {"syntheticWireFixture": True}, "created": True}
         body = {
@@ -184,6 +205,7 @@ def bridge(case, monkeypatch):
                 "iss": ISSUER,
                 "sub": case.actor.subject,
                 "sid": "synthetic-session",
+                **({"exp": state.async_exp} if state.async_exp is not None else {}),
             },
         )
         request.state.doctor = SimpleNamespace(clerk_id=case.actor.subject)
@@ -349,3 +371,98 @@ def test_header_response_must_preserve_the_requested_source_pin(bridge):
     )
     assert response.status_code == 503
     assert len(bridge.state.calls) == 1
+
+
+def test_async_bff_keeps_original_authority_and_retry_only_reads_status(
+    bridge, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setattr(
+        config,
+        "CAB_BRIDGE_SETTINGS",
+        replace(config.CAB_BRIDGE_SETTINGS, async_enabled=True),
+    )
+    bridge.state.async_exp = int(
+        (datetime.now(UTC) + timedelta(seconds=55)).timestamp()
+    )
+    command = {
+        "encounterId": bridge.pin["encounterId"],
+        "expectedSource": bridge.pin,
+        "operationId": str(uuid4()),
+        "responseMode": "async",
+    }
+    first = bridge.client.post(
+        bridge.path, json={"action": "generate", "command": command}
+    )
+    assert first.status_code == 200
+    assert first.json()["result"]["generation"]["status"] == "running"
+    original = bridge.state.calls[-1]
+    original_proof = bridge.state.proofs[-1]
+    assert "generationExpiresAt" in original_proof
+    bridge.state.async_status = "succeeded"
+    repeated = bridge.client.post(
+        bridge.path, json={"action": "generate", "command": command}
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["purpose"] == "header.generate"
+    assert repeated.json()["requestSha256"] == digest(original)
+    assert (
+        repeated.json()["result"]["generation"]["operationId"] == command["operationId"]
+    )
+    assert [item["purpose"] for item in bridge.state.calls] == [
+        "header.generate",
+        "header.generation-status",
+    ]
+    assert "generationExpiresAt" not in bridge.state.proofs[-1]
+    with get_session() as session:
+        original_action = session.exec(
+            select(Action).where(Action.generation_id == UUID(command["operationId"]))
+        ).one()
+        assert original_action.finished_at is None
+        assert (
+            original_action.expires_at.isoformat()
+            == original_proof["generationExpiresAt"]
+        )
+
+
+def test_lost_async_submission_retry_cannot_start_another_inference(
+    bridge, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setattr(
+        config,
+        "CAB_BRIDGE_SETTINGS",
+        replace(config.CAB_BRIDGE_SETTINGS, async_enabled=True),
+    )
+    bridge.state.async_exp = int(
+        (datetime.now(UTC) + timedelta(seconds=55)).timestamp()
+    )
+    command = {
+        "encounterId": bridge.pin["encounterId"],
+        "expectedSource": bridge.pin,
+        "operationId": str(uuid4()),
+        "responseMode": "async",
+    }
+    bridge.state.fail = True
+    assert (
+        bridge.client.post(
+            bridge.path, json={"action": "generate", "command": command}
+        ).status_code
+        == 503
+    )
+    bridge.state.async_status = "unknown"
+    repeated = bridge.client.post(
+        bridge.path, json={"action": "generate", "command": command}
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["result"] == {
+        "generation": {"operationId": command["operationId"], "status": "unknown"},
+        "view": None,
+        "created": False,
+    }
+    assert [item["purpose"] for item in bridge.state.calls] == [
+        "header.generate",
+        "header.generation-status",
+    ]

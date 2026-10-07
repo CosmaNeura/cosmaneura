@@ -7,7 +7,11 @@ from pydantic import Field
 from app.services.billing_header_contract import Closed, Digest
 
 Purpose = Literal[
-    "completed-note.accept", "header.read", "header.generate", "header.save"
+    "completed-note.accept",
+    "header.read",
+    "header.generate",
+    "header.save",
+    "header.generation-status",
 ]
 
 
@@ -23,6 +27,15 @@ class CabAuthorizationRequest(Closed):
     requestSha256: Digest
     sourceContentSha256: Digest
     sourceTextSha256: Digest
+
+
+class CabGenerationCompletion(Closed):
+    schemaVersion: Literal["core-cab-generation-completion.v1"]
+    actor: CabActor
+    requestSha256: Digest
+    sourceContentSha256: Digest
+    sourceTextSha256: Digest
+    status: Literal["succeeded", "failed", "unknown"]
 
 
 def canonical(value):
@@ -74,6 +87,7 @@ def workload_request(operation, purpose, command):
             "header.read",
             "header.generate",
             "header.save",
+            "header.generation-status",
         )
         or type(command) is not dict
     ):
@@ -88,6 +102,10 @@ def workload_request(operation, purpose, command):
             keys.add("operationId")
         if purpose == "header.save":
             keys |= {"headerId", "expectedRevision", "draft", "reason"}
+        if purpose == "header.generate" and "responseMode" in command:
+            keys.add("responseMode")
+            if command["responseMode"] != "async":
+                raise ValueError("invalid_cab_action")
         if set(command) != keys:
             raise ValueError("invalid_cab_action")
         body = {

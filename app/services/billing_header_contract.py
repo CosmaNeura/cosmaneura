@@ -164,6 +164,7 @@ class BillingHeaderSource(Closed):
 
 
 class BillingTransportState(Closed):
+    asyncGeneration: bool = False
     state: Literal["not_configured", "configured"] = "not_configured"
 
 

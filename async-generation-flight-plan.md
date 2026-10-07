@@ -1,0 +1,9 @@
+Tier 2: durable provider generation with unchanged synchronous compatibility.
+
+Receiver-first: expand the dormant CAB generation claim/status schema and Core action schema; release compatible CAB receiver before Core or standalone clients opt into `responseMode: async`. Hosted identity/source admission/model permissions remain separate and unchanged.
+
+Generate first persists immutable operation/source/provider/request bindings; its authority ends at the earliest of 360 seconds, verified provider JWT expiration, or source-admission expiration. Same operation retries use read-only status and never renew or resubmit inference. Fresh callbacks recheck current membership and note source before model egress and insertion. Short callback leases remain at most 30 seconds. Status cannot grant or extend generation. A dedicated app-only exact terminal receipt closes the original action; a late receipt can close expired authority but cannot restore it. Current local membership and verified JWT expiration are checked; upstream Clerk session revocation is not separately queried.
+
+Schema expand preserves synchronous 120-second actions and immutable receipts. The nullable generation UUID and partial uniqueness bind one immutable async intent per prepared source operation and generation UUID. CAB separately enforces one durable generation claim per encounter/source version and binds any new UUID to a read-only alias. Completion is write-once. Rollback disables async clients, retains additive schema and evidence, and leaves legacy synchronous routes intact. No destructive downgrade or automatic retry on interrupted work.
+
+Verification: focused offline contract/client/UI checks; isolated migration rehearsal is still required before hosted activation. No global test bootstrap, vendor calls, deployment, credentials, or shared database changes.

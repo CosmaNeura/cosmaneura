@@ -17,12 +17,30 @@ class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
             name="ck_billing_action_hashes",
         ),
         sa.CheckConstraint(
-            "purpose IN ('completed-note.accept','header.read','header.generate','header.save')",
+            "purpose IN ('completed-note.accept','header.read','header.generate','header.save','header.generation-status')",
             name="ck_billing_action_purpose",
         ),
         sa.CheckConstraint(
-            "expires_at > created_at AND expires_at <= created_at + interval '120 seconds'",
+            "expires_at > created_at AND expires_at <= created_at + "
+            "CASE WHEN generation_id IS NULL THEN interval '120 seconds' "
+            "ELSE interval '360 seconds' END",
             name="ck_billing_action_lifetime",
+        ),
+        sa.CheckConstraint(
+            "generation_id IS NULL OR purpose = 'header.generate'",
+            name="ck_billing_action_generation",
+        ),
+        sa.CheckConstraint(
+            "completion_status IS NULL OR (generation_id IS NOT NULL AND finished_at IS NOT NULL "
+            "AND completion_status IN ('succeeded','failed','unknown'))",
+            name="ck_billing_action_completion",
+        ),
+        sa.Index(
+            "uq_billing_action_generation",
+            "operation_id",
+            "generation_id",
+            unique=True,
+            postgresql_where=sa.text("generation_id IS NOT NULL"),
         ),
         sa.Index(
             "ix_billing_action_request", "operation_id", "request_sha256", "purpose"
@@ -41,6 +59,8 @@ class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
     expires_at: datetime = Field(
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False)
     )
+    generation_id: UUID | None = Field(default=None, sa_type=sa.Uuid)
+    completion_status: str | None = Field(default=None, max_length=16)
     finished_at: datetime | None = Field(
         default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
     )
