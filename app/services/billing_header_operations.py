@@ -172,6 +172,11 @@ def _receipt(row, source, *, replayed):
         transport=BillingTransportState(
             state="configured" if configured() else "not_configured",
             asyncGeneration=configured() and CAB_BRIDGE_SETTINGS.async_enabled,
+            generationContinuation=(
+                configured()
+                and CAB_BRIDGE_SETTINGS.async_enabled
+                and CAB_BRIDGE_SETTINGS.continuation_enabled
+            ),
         ),
         operationId=str(row.operation_id),
         sourceRevision=row.source_revision,

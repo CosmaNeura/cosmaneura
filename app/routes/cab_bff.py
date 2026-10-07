@@ -50,6 +50,10 @@ class CabActionRequest(Closed):
             keys.add("responseMode")
             if c["responseMode"] != "async":
                 raise ValueError("invalid_response_mode")
+        if self.action == "generate" and "continuationConsent" in c:
+            keys.add("continuationConsent")
+            if c.get("responseMode") != "async" or c["continuationConsent"] is not True:
+                raise ValueError("invalid_continuation_consent")
         if set(c) != keys or len(canonical(c).encode()) > 1_400_000:
             raise ValueError("invalid_cab_command")
         if type(c["expectedSource"]) is not dict and not (
@@ -105,19 +109,30 @@ def billing_header_cab(
         raise HTTPException(
             409, "cab_async_not_configured", headers={"Cache-Control": "no-store"}
         )
+    if body.command.get("continuationConsent") is True and not (
+        transport.configuration.CAB_BRIDGE_SETTINGS.async_enabled
+        and transport.configuration.CAB_BRIDGE_SETTINGS.continuation_enabled
+    ):
+        raise HTTPException(
+            409,
+            "cab_continuation_not_configured",
+            headers={"Cache-Control": "no-store"},
+        )
     action_id = None
     asynchronous = (
         body.action == "generate" and body.command.get("responseMode") == "async"
     )
     try:
         if asynchronous:
-            original, _, replay = authority.begin_async_action(
+            original, generation_action_id, replay = authority.begin_async_action(
                 actor, operation_id, body.command
             )
             if replay:
                 # An existing local intent never resubmits inference, even if acceptance was lost.
                 status_command = {
-                    k: v for k, v in body.command.items() if k != "responseMode"
+                    k: v
+                    for k, v in body.command.items()
+                    if k not in ("responseMode", "continuationConsent")
                 }
                 payload, action_id = authority.begin_action(
                     actor, operation_id, "header.generation-status", status_command
@@ -144,6 +159,16 @@ def billing_header_cab(
             authority._current(
                 session, actor, operation_id
             )  # Do not display data after local scope loss.
+        if asynchronous and body.command.get("continuationConsent") is True:
+            result = {
+                **result,
+                "result": {
+                    **result["result"],
+                    "continuation": authority.continuation_receipt(
+                        generation_action_id
+                    ),
+                },
+            }
         return CabActionResult.model_validate(result)
     except transport.CabUnavailable as exc:
         raise HTTPException(
@@ -169,3 +194,82 @@ def billing_header_cab(
                     "cab_action_not_confirmed",
                     headers={"Cache-Control": "no-store"},
                 ) from None
+
+
+class CabGenerationContinueRequest(Closed):
+    purpose: Literal["header.generation-continue"]
+    command: dict[str, Any]
+
+    @model_validator(mode="after")
+    def shape(self):
+        if set(self.command) != {
+            "encounterId",
+            "expectedSource",
+            "operationId",
+            "requestSha256",
+        }:
+            raise ValueError("invalid_generation_continuation")
+        from pydantic import TypeAdapter
+
+        from app.services.billing_header_contract import Ref
+
+        TypeAdapter(Ref).validate_python(self.command["encounterId"], strict=True)
+        TypeAdapter(Digest).validate_python(self.command["requestSha256"], strict=True)
+        c = self.command
+        if (
+            type(c["expectedSource"]) is not dict
+            or type(c["operationId"]) is not str
+            or str(UUID(c["operationId"])) != c["operationId"]
+            or len(canonical(c).encode()) > 100_000
+        ):
+            raise ValueError("invalid_generation_continuation")
+        return self
+
+
+class CabGenerationContinueResult(Closed):
+    schemaVersion: Literal["core-cab-generation-continuation.v1"]
+    purpose: Literal["header.generation-continue"]
+    sourceOperationId: str
+    operationId: str
+    requestSha256: Digest
+    generationExpiresAt: str
+    generationAuthorizedUntil: str
+
+
+@router.post(
+    "/billing-header-operations/{operation_id}/generation-continue",
+    response_model=CabGenerationContinueResult,
+)
+def billing_header_generation_continue(
+    request: Request,
+    response: Response,
+    operation_id: UUID,
+    body: CabGenerationContinueRequest,
+) -> CabGenerationContinueResult:
+    actor = current_billing_actor(request)
+    response.headers["Cache-Control"] = "no-store"
+    settings = transport.configuration.CAB_BRIDGE_SETTINGS
+    if (
+        not transport.configured()
+        or not settings.async_enabled
+        or not settings.continuation_enabled
+    ):
+        raise HTTPException(
+            409,
+            "cab_continuation_not_configured",
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        return CabGenerationContinueResult.model_validate(
+            authority.continue_generation(actor, operation_id, body.command)
+        )
+    except (authority.preparation.BillingPreparationError, ValueError, KeyError):
+        raise HTTPException(
+            409, "generation_continuation_denied", headers={"Cache-Control": "no-store"}
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            503,
+            "generation_continuation_not_confirmed",
+            headers={"Cache-Control": "no-store"},
+        ) from None

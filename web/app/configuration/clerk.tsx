@@ -40,7 +40,10 @@ type ClerkClient = {
   load: () => Promise<void>
   user?: ClerkUser
   session?: {
-    getToken: (options?: { template?: string }) => Promise<string | null>
+    getToken: (options?: {
+      template?: string
+      skipCache?: boolean
+    }) => Promise<string | null>
   }
   redirectToSignIn: () => Promise<void>
 }
