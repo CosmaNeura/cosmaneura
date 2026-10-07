@@ -291,7 +291,16 @@ export const cabSource = z
 export type CabDraft = z.infer<typeof cabDraft>
 export type CabView = z.infer<typeof cabView>
 export type CabSource = z.infer<typeof cabSource>
-export type CabAction = "accept" | "read" | "generate" | "save"
+export type CabAction =
+  | "accept"
+  | "read"
+  | "generate"
+  | "save"
+  | "generation-status"
+export type CabGeneration = {
+  operationId: string
+  status: "running" | "succeeded" | "failed" | "unknown"
+}
 export type CabCommand = {
   expectedSource: z.infer<typeof cabSourcePin> | null
   encounterId?: string
@@ -300,6 +309,7 @@ export type CabCommand = {
   expectedRevision?: number
   draft?: CabDraft
   reason?: string
+  responseMode?: "async"
 }
 export type CabRequest = (
   action: CabAction,
@@ -325,6 +335,7 @@ export async function readCabResponse(
   operationId: string,
   expected: BillingHeaderSource["source"],
   pin?: CabSource["headerSource"],
+  generationId?: string,
 ) {
   const wrapper = z
     .object({
@@ -378,13 +389,36 @@ export async function readCabResponse(
         typeof wrapper.result.replayed === "boolean" &&
         sameCabValue(receipt.headerSource, source.headerSource),
     )
-    return { source, view: null }
+    return { source, view: null, generation: null }
+  }
+  const generation =
+    wrapper.result.generation === undefined
+      ? null
+      : z
+          .object({
+            operationId: z.string().uuid(),
+            status: z.enum(["running", "succeeded", "failed", "unknown"]),
+          })
+          .strict()
+          .parse(wrapper.result.generation)
+  requireValue(action !== "generation-status" || generation)
+  if (generation) {
+    requireValue(
+      (action === "generate" || action === "generation-status") &&
+        generation.operationId === generationId &&
+        typeof wrapper.result.created === "boolean",
+    )
+    requireValue(
+      generation.status === "succeeded"
+        ? wrapper.result.view !== null
+        : wrapper.result.view === null && wrapper.result.created === false,
+    )
   }
   const view =
     wrapper.result.view === null ? null : cabView.parse(wrapper.result.view)
-  if (action === "generate" || action === "save")
+  if ((action === "generate" && !generation) || action === "save")
     requireValue(view && typeof wrapper.result.created === "boolean")
-  if (!view) return { source, view }
+  if (!view) return { source, view, generation }
   const h = view.header
   requireValue(sameCabValue(h.expectedSource, source.headerSource))
   const refs = new Set(h.evidence.map((row) => row.id))
@@ -454,7 +488,7 @@ export async function readCabResponse(
       !view.signoff &&
         view.previousSignoff.headerRevision < view.revisionNumber,
     )
-  return { source, view }
+  return { source, view, generation }
 }
 
 export function cabReviewSections(view: CabView) {

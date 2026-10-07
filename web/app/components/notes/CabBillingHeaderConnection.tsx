@@ -31,6 +31,7 @@ export function CabBillingHeaderConnection({
   const [state, setState] = useState<
     "loading" | "configured" | "not_configured" | "error"
   >("loading")
+  const [asyncEnabled, setAsyncEnabled] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const active = useRef(true)
   const [scope] = useState(() => ({
@@ -71,8 +72,10 @@ export function CabBillingHeaderConnection({
           )
         )
           throw new Error("Invalid operation")
-        if (active.current && !controller.signal.aborted && !revoked.current)
+        if (active.current && !controller.signal.aborted && !revoked.current) {
+          setAsyncEnabled(receipt.transport?.asyncGeneration === true)
           setState(receipt.transport!.state as "configured" | "not_configured")
+        }
       } catch {
         if (active.current && !controller.signal.aborted && !revoked.current)
           setState("error")
@@ -119,6 +122,7 @@ export function CabBillingHeaderConnection({
         expectedSource={scope.source}
         sourceStale={revoked.current}
         request={request}
+        asyncEnabled={asyncEnabled}
         onLocked={onLocked}
         onUpdateVisit={onUpdateVisit}
       />

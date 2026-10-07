@@ -10,7 +10,12 @@ from app.routes.billing_header import current_billing_actor
 from app.services import cab_bridge_authority as authority
 from app.services import cab_bridge_client as transport
 from app.services.billing_header_contract import Closed, Digest
-from app.services.cab_bridge_contract import Purpose, canonical, minimized_operation
+from app.services.cab_bridge_contract import (
+    Purpose,
+    canonical,
+    digest,
+    minimized_operation,
+)
 
 from activemodel.session_manager import get_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -21,11 +26,12 @@ PURPOSE = {
     "read": "header.read",
     "generate": "header.generate",
     "save": "header.save",
+    "generation-status": "header.generation-status",
 }
 
 
 class CabActionRequest(Closed):
-    action: Literal["accept", "read", "generate", "save"]
+    action: Literal["accept", "read", "generate", "save", "generation-status"]
     command: dict[str, Any]
 
     @model_validator(mode="after")
@@ -35,11 +41,15 @@ class CabActionRequest(Closed):
             if self.action == "accept"
             else {"encounterId", "expectedSource"}
         )
-        if self.action in ("generate", "save"):
+        if self.action in ("generate", "save", "generation-status"):
             keys.add("operationId")
         if self.action == "save":
             keys |= {"headerId", "expectedRevision", "draft", "reason"}
         c = self.command
+        if self.action == "generate" and "responseMode" in c:
+            keys.add("responseMode")
+            if c["responseMode"] != "async":
+                raise ValueError("invalid_response_mode")
         if set(c) != keys or len(canonical(c).encode()) > 1_400_000:
             raise ValueError("invalid_cab_command")
         if type(c["expectedSource"]) is not dict and not (
@@ -88,16 +98,48 @@ def billing_header_cab(
         raise HTTPException(
             503, "cab_not_configured", headers={"Cache-Control": "no-store"}
         )
-    action_id = None
-    try:
-        payload, action_id = authority.begin_action(
-            actor, operation_id, PURPOSE[body.action], body.command
+    if (
+        body.command.get("responseMode") == "async"
+        and not transport.configuration.CAB_BRIDGE_SETTINGS.async_enabled
+    ):
+        raise HTTPException(
+            409, "cab_async_not_configured", headers={"Cache-Control": "no-store"}
         )
+    action_id = None
+    asynchronous = (
+        body.action == "generate" and body.command.get("responseMode") == "async"
+    )
+    try:
+        if asynchronous:
+            original, _, replay = authority.begin_async_action(
+                actor, operation_id, body.command
+            )
+            if replay:
+                # An existing local intent never resubmits inference, even if acceptance was lost.
+                status_command = {
+                    k: v for k, v in body.command.items() if k != "responseMode"
+                }
+                payload, action_id = authority.begin_action(
+                    actor, operation_id, "header.generation-status", status_command
+                )
+            else:
+                payload = original
+        else:
+            payload, action_id = authority.begin_action(
+                actor, operation_id, PURPOSE[body.action], body.command
+            )
+
         with get_session() as session:
             row, _, _ = authority._current(session, actor, operation_id)
             operation = minimized_operation(row)
             session.commit()  # No Core row locks during CAB's callback.
         result = transport.CabClient().invoke(payload, operation)
+        if asynchronous and replay:
+            result = {
+                **result,
+                "purpose": "header.generate",
+                "requestSha256": digest(original),
+            }
         with get_session() as session:
             authority._current(
                 session, actor, operation_id

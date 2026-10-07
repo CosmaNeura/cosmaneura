@@ -13,7 +13,7 @@ import {
 import { CabBillingHeaderPanel } from "./CabBillingHeaderPanel"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
-function mount(request: ReturnType<typeof vi.fn>) {
+function mount(request: ReturnType<typeof vi.fn>, asyncEnabled = false) {
   const locked = vi.fn()
   const router = createMemoryRouter([
     {
@@ -23,6 +23,7 @@ function mount(request: ReturnType<typeof vi.fn>) {
           operationId={op}
           expectedSource={expected}
           request={request}
+          asyncEnabled={asyncEnabled}
           onLocked={locked}
         />
       ),
@@ -130,4 +131,119 @@ describe("inline provider billing header", () => {
       "read",
     ])
   })
+})
+
+describe("durable provider generation", () => {
+  it("resumes a terminal unknown operation using status, never a second Generate", async () => {
+    let generationId = ""
+    const request = vi.fn(
+      async (
+        action: string,
+        body: { operationId?: string; responseMode?: string },
+      ) => {
+        if (action === "generate") {
+          generationId = body.operationId!
+          expect(body.responseMode).toBe("async")
+        }
+        const value: ReturnType<typeof reply> & {
+          result: Record<string, unknown>
+        } = reply(
+          action,
+          action === "generation-status" ? header() : null,
+        ) as ReturnType<typeof reply> & { result: Record<string, unknown> }
+        if (["generate", "generation-status"].includes(action))
+          value.result = {
+            generation: {
+              operationId: generationId,
+              status: action === "generate" ? "unknown" : "succeeded",
+            },
+            view: action === "generate" ? null : header(),
+            created: action === "generation-status",
+          }
+        return value
+      },
+    )
+    const { locked } = mount(request, true)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Generate billing header" }),
+    )
+    const resume = await screen.findByRole("button", { name: "Resume status" })
+    expect(
+      screen.queryByRole("button", { name: "Retry same request" }),
+    ).toBeNull()
+    expect(locked).toHaveBeenLastCalledWith(false)
+    fireEvent.click(resume)
+    expect(
+      await screen.findByRole("button", { name: "Edit header" }),
+    ).toBeEnabled()
+    expect(
+      request.mock.calls.filter(([action]) => action === "generate"),
+    ).toHaveLength(1)
+    expect(
+      request.mock.calls.find(([action]) => action === "generation-status")?.[1]
+        .operationId,
+    ).toBe(generationId)
+  })
+  it("retains the exact async submission through a lost acceptance", async () => {
+    const generates: unknown[] = []
+    const request = vi.fn(async (action: string, body: unknown) => {
+      if (action === "generate") {
+        generates.push(structuredClone(body))
+        throw new Error("lost acceptance")
+      }
+      return reply(action, null)
+    })
+    mount(request, true)
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Generate billing header" }),
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Retry same request" }),
+    )
+    await waitFor(() => expect(generates).toHaveLength(2))
+    expect(generates[1]).toEqual(generates[0])
+  })
+})
+
+it("allows an independent read after terminal unknown while keeping Generate disabled", async () => {
+  let id = "",
+    reads = 0
+  const request = vi.fn(
+    async (action: string, body: { operationId?: string }) => {
+      if (action === "generate") {
+        id = body.operationId!
+        return {
+          ...reply(action),
+          result: {
+            generation: { operationId: id, status: "unknown" },
+            view: null,
+            created: false,
+          },
+        }
+      }
+      if (action === "read") reads++
+      return reply(action, action === "read" && reads > 1 ? header() : null)
+    },
+  )
+  const { locked, router } = mount(request, true)
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Generate billing header" }),
+  )
+  await screen.findByRole("button", { name: "Resume status" })
+  expect(
+    screen.getByRole("button", { name: "Generate billing header" }),
+  ).toBeDisabled()
+  expect(locked).toHaveBeenLastCalledWith(false)
+  fireEvent.click(screen.getByRole("button", { name: "Reload header" }))
+  expect(
+    await screen.findByRole("button", { name: "Edit header" }),
+  ).toBeEnabled()
+  expect(
+    request.mock.calls.filter(([action]) => action === "generate"),
+  ).toHaveLength(1)
+  fireEvent.click(screen.getByRole("button", { name: "Edit header" }))
+  await router.navigate("/elsewhere")
+  expect(
+    await screen.findByRole("button", { name: "Discard edits and leave" }),
+  ).toBeEnabled()
 })

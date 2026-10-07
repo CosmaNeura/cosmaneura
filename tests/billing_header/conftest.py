@@ -104,6 +104,21 @@ def billing_database():
             if not connection.dialect.has_table(connection, table.name):
                 with Operations.context(MigrationContext.configure(connection)):
                     migration.upgrade()
+        if not any(
+            column["name"] == "generation_id"
+            for column in connection.dialect.get_columns(connection, action_table.name)
+        ):
+            path = (
+                ROOT
+                / "migrations/versions/2026_10_07_4c5b17148cff_add_async_billing_action.py"
+            )
+            spec = importlib.util.spec_from_file_location(
+                "billing_test_async_expand", path
+            )
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
     manager = SessionManager.get_instance()
     original_engine = manager._engine
     manager._engine = engine

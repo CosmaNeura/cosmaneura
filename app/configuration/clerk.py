@@ -1,6 +1,7 @@
 import hashlib
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from clerk_backend_api import Clerk
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
@@ -92,6 +93,7 @@ class VerifiedProviderSession:
     issuer: str
     subject: str
     session_sha256: str
+    expires_at: datetime | None = None
 
 
 def verified_provider_session(
@@ -117,6 +119,15 @@ def verified_provider_session(
         or (expected_issuer and issuer != expected_issuer)
     ):
         raise ValueError("provider_session_invalid")
+    exp = payload.get("exp")
+    if exp is not None and (type(exp) is not int or exp <= 0):
+        raise ValueError("provider_session_invalid")
+    try:
+        expires_at = (
+            datetime.fromtimestamp(exp, timezone.utc) if exp is not None else None
+        )
+    except (ValueError, OverflowError, OSError):
+        raise ValueError("provider_session_invalid") from None
     return VerifiedProviderSession(
-        issuer, subject, hashlib.sha256(sid.encode()).hexdigest()
+        issuer, subject, hashlib.sha256(sid.encode()).hexdigest(), expires_at
     )

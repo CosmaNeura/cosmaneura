@@ -30,12 +30,14 @@ export function CabBillingHeaderPanel({
   onLocked,
   sourceStale = false,
   onUpdateVisit,
+  asyncEnabled = false,
 }: {
   operationId: string
   expectedSource: BillingHeaderSource["source"]
   request: CabRequest
   onLocked: (locked: boolean) => void
   sourceStale?: boolean
+  asyncEnabled?: boolean
   onUpdateVisit?: (visit: CabSource["visitContext"]) => void
 }) {
   const [source, setSource] = useState<CabSource | null>(null)
@@ -44,6 +46,7 @@ export function CabBillingHeaderPanel({
   const [reason, setReason] = useState("")
   const [busy, setBusy] = useState(false)
   const [ready, setReady] = useState(false)
+  const [generation, setGeneration] = useState<Command | null>(null)
   const [retry, setRetry] = useState<Command | null>(null)
   const [stale, setStale] = useState(false)
   const [error, setError] = useState("")
@@ -80,6 +83,7 @@ export function CabBillingHeaderPanel({
     if (!sourceStale) return
     setStale(true)
     setRetry(null)
+    setGeneration(null)
     setView(null)
     setError(
       "The source or billing confirmation changed. Your unsaved inputs are retained. Cancel edits and reload the note before continuing.",
@@ -98,6 +102,7 @@ export function CabBillingHeaderPanel({
     setBusy(true)
     setError("")
     setNotice("")
+    let observingStatus = command.action === "generation-status"
     try {
       const raw = await request(command.action, command.body)
       if (!mounted.current || !current.current) return
@@ -107,11 +112,78 @@ export function CabBillingHeaderPanel({
         operationId,
         expectedSource,
         source?.headerSource,
+        command.body.operationId,
       )
       if (!mounted.current || !current.current) return
       exactCommand.current = null
       setRetry(null)
       setSource(received.source)
+      if (received.generation) {
+        if (received.generation.status === "running") {
+          const status = {
+            action: "generation-status" as const,
+            body: {
+              encounterId: received.source.encounterId,
+              expectedSource: received.source.headerSource,
+              operationId: received.generation.operationId,
+            },
+          }
+          setGeneration(status)
+          observingStatus = true
+          // Polling only observes the same job; every HTTP call keeps its short deadline.
+          const until = Date.now() + 300_000
+          while (Date.now() < until && mounted.current && current.current) {
+            await new Promise((resolve) => setTimeout(resolve, 2_000))
+            if (!mounted.current || !current.current) return
+            const polled = await readCabResponse(
+              await request(status.action, status.body),
+              status.action,
+              operationId,
+              expectedSource,
+              received.source.headerSource,
+              status.body.operationId,
+            )
+            if (!mounted.current || !current.current) return
+            setSource(polled.source)
+            if (polled.generation?.status === "running") continue
+            if (polled.view) setView(polled.view)
+            if (polled.generation?.status === "succeeded") {
+              setGeneration(null)
+              setNotice("Header generated. Code proposals await coder review.")
+            } else
+              setError(
+                polled.generation?.status === "failed"
+                  ? "Generation failed. Resume status to check the same operation."
+                  : "Generation was interrupted or its outcome is unknown. Resume status for this operation.",
+              )
+            setReady(true)
+            return
+          }
+          if (mounted.current && current.current)
+            setError(
+              "Generation is still pending. Resume status to check this operation.",
+            )
+          return
+        }
+        if (received.generation.status !== "succeeded") {
+          setGeneration({
+            action: "generation-status",
+            body: {
+              encounterId: received.source.encounterId,
+              expectedSource: received.source.headerSource,
+              operationId: received.generation.operationId,
+            },
+          })
+          setError(
+            received.generation.status === "failed"
+              ? "Generation failed. Resume status to check the same operation."
+              : "Generation was interrupted or its outcome is unknown. Resume status for this operation.",
+          )
+          setReady(true)
+          return
+        }
+        setGeneration(null)
+      }
       if (command.action === "accept") {
         // Acceptance is acknowledged before a separate read. No model call on opening.
         const reading = {
@@ -130,7 +202,10 @@ export function CabBillingHeaderPanel({
         if (!mounted.current || !current.current) return
         setSource(loaded.source)
         setView(loaded.view)
-      } else setView(received.view)
+      } else {
+        setView(received.view)
+        if (received.view && command.action === "read") setGeneration(null)
+      }
       setReady(true)
       if (command.action === "save") {
         setDraft(null)
@@ -142,16 +217,23 @@ export function CabBillingHeaderPanel({
     } catch (failure) {
       if (!mounted.current || !current.current) return
       const status = (failure as { status?: number }).status
-      const mutation = command.action !== "read"
+      const mutation =
+        command.action !== "read" && command.action !== "generation-status"
+      const statusFailure = observingStatus
       // Retain the exact operation through network loss or an unconfirmed receipt.
       const ambiguous = mutation && (!status || status >= 500 || status === 429)
-      exactCommand.current = ambiguous ? command : null
+      exactCommand.current = ambiguous && !statusFailure ? command : null
       setRetry(exactCommand.current)
       if ([401, 403, 404, 409].includes(status ?? 0)) {
         setStale(true)
+        setGeneration(null)
         setView(null)
         setError(
           "The source, header, or your access changed. Your unsaved inputs are retained. Reload the note before continuing.",
+        )
+      } else if (statusFailure) {
+        setError(
+          "Status could not be confirmed. Resume status for the same operation.",
         )
       } else if (status === 422) {
         setError(
@@ -179,6 +261,9 @@ export function CabBillingHeaderPanel({
         encounterId: source.encounterId,
         expectedSource: source.headerSource,
         ...(action === "read" ? {} : { operationId: crypto.randomUUID() }),
+        ...(action === "generate" && asyncEnabled
+          ? { responseMode: "async" as const }
+          : {}),
         ...extra,
       },
     })
@@ -291,6 +376,17 @@ export function CabBillingHeaderPanel({
               Retry same request
             </Button>
           )}
+          {generation && !stale && (
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-2"
+              disabled={busy}
+              onClick={() => void run(generation)}
+            >
+              Resume status
+            </Button>
+          )}
           {!retry && !stale && (
             <Button
               type="button"
@@ -339,7 +435,11 @@ export function CabBillingHeaderPanel({
           </p>
           <Button
             type="button"
-            disabled={disabled || !source?.inferencePolicy.allowed}
+            disabled={
+              disabled ||
+              Boolean(generation) ||
+              !source?.inferencePolicy.allowed
+            }
             onClick={() => act("generate")}
           >
             Generate billing header

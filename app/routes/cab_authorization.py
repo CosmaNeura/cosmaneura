@@ -11,8 +11,11 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
 )
 from app.services.billing_header_operations import BillingPreparationError
-from app.services.cab_bridge_authority import authorize_action
-from app.services.cab_bridge_contract import CabAuthorizationRequest
+from app.services.cab_bridge_authority import authorize_action, complete_generation
+from app.services.cab_bridge_contract import (
+    CabAuthorizationRequest,
+    CabGenerationCompletion,
+)
 
 from activemodel.session_manager import aglobal_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -43,4 +46,27 @@ def authorize_cab_operation(
             503,
             "billing_authorization_unavailable",
             headers={"Cache-Control": "no-store"},
+        ) from None
+
+
+@router.post("/internal/cab/v1/operations/{operation_id}/complete-generation")
+def complete_cab_generation(
+    operation_id: UUID,
+    body: CabGenerationCompletion,
+    response: Response,
+    principal: Annotated[EntraServicePrincipal, Depends(authenticate_cab)],
+):
+    del principal
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        return complete_generation(operation_id, body)
+    except (BillingPreparationError, ValueError, KeyError):
+        raise HTTPException(
+            403,
+            "billing_operation_not_authorized",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except SQLAlchemyError:
+        raise HTTPException(
+            503, "cab_action_not_confirmed", headers={"Cache-Control": "no-store"}
         ) from None
