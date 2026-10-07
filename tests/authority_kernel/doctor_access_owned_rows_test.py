@@ -17,7 +17,7 @@ from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from sqlalchemy import event, text
 from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.orm.attributes import set_committed_value
-from sqlmodel import select
+from sqlmodel import col, select
 
 from tests.authority_kernel import doctor_access_previous_queries as previous
 from tests.authority_kernel.companion_provider_provisioning_test import session_for
@@ -33,7 +33,9 @@ def owned_case(engine, name="normal"):
     with session_for(engine) as session:
         lock_practice_seats(session, args["practice_id"])
         member = session.exec(
-            select(PracticeMember).where(PracticeMember.doctor_id == args["doctor_id"])
+            select(PracticeMember).where(
+                col(PracticeMember.doctor_id) == args["doctor_id"]
+            )
         ).one_or_none()
         # _provider always has membership; cover pilot-grant variants in that
         # eligible shape. Unlocked/missing-member parity is tested separately.
@@ -359,7 +361,7 @@ def test_factory_keeps_original_post_wait_denial(engine, mismatch):
                 session.delete(
                     session.exec(
                         select(PracticeMember).where(
-                            PracticeMember.doctor_id == doctor.id
+                            col(PracticeMember.doctor_id) == doctor.id
                         )
                     ).one()
                 )
@@ -383,7 +385,7 @@ def test_factory_rechecks_owner_after_waiting_for_actual_row_lock(engine, change
 
     def reader():
         with session_for(engine) as session:
-            session.exec(text("SET LOCAL lock_timeout = '2s'"))
+            session.execute(text("SET LOCAL lock_timeout = '2s'"))
             with owner(session, args) as locked:
                 return locked is None
 
@@ -391,7 +393,7 @@ def test_factory_rechecks_owner_after_waiting_for_actual_row_lock(engine, change
         lock_practice_seats(writer, args["practice_id"])
         lock_practice_seats(writer, other["practice_id"])
         doctor = writer.exec(
-            select(Doctor).where(Doctor.id == args["doctor_id"]).with_for_update()
+            select(Doctor).where(col(Doctor.id) == args["doctor_id"]).with_for_update()
         ).one()
         event.listen(engine, "before_cursor_execute", waiting)
         try:
@@ -409,7 +411,7 @@ def test_factory_rechecks_owner_after_waiting_for_actual_row_lock(engine, change
                 else:
                     member = writer.exec(
                         select(PracticeMember).where(
-                            PracticeMember.doctor_id == doctor.id
+                            col(PracticeMember.doctor_id) == doctor.id
                         )
                     ).one()
                     member.practice_id = other["practice_id"]

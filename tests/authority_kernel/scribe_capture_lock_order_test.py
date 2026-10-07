@@ -34,6 +34,7 @@ from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from app.models.view_as import ViewAsSession
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.elements import BindParameter, BooleanClauseList, Null
+from sqlmodel import Session
 
 REAL_VIEW_AS_GUARD = view_as.mount_context_session_blocked_by_view_as
 TOKEN = "mctx_synthetic_lock_order_00000001"
@@ -80,6 +81,9 @@ class Transaction:
         self.rows = rows
         self.locks = []
         self.on_lock = lambda model, row: None
+        self.session = Session()
+        setattr(self.session, "exec", self.exec)
+        setattr(self.session, "get", self.get)
 
     def get(self, model, identifier, **_):
         return next(
@@ -210,7 +214,9 @@ def case(monkeypatch):
         SimpleNamespace(allows=lambda _: True),
     )
     context = authority._context_for_session(
-        transaction, mount, clerk_issuer=SETTINGS.clerk_issuer
+        transaction.session,
+        MountContextSession(**vars(mount)),
+        clerk_issuer=SETTINGS.clerk_issuer,
     )
     turn = uuid4()
     row(
@@ -245,7 +251,7 @@ def case(monkeypatch):
 def test_capture_and_exchange_use_the_same_owner_lock_order(case):
     exchange = Transaction(case.transaction.rows)
     provider_record_authority.lock_provider_record_owner(
-        session=exchange, clerk_subject=case.doctor.clerk_id
+        session=exchange.session, clerk_subject=case.doctor.clerk_id
     )
     result = capture._authorized_scope(**case.arguments)
     assert result["doctor_id"] == case.doctor.id

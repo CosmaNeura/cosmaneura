@@ -77,9 +77,9 @@ def test_missing_dob_fills_once_and_retry_preserves_exact_visit(engine, workflow
         and "Invented missing" not in receipts[0].model_dump_json()
     )
     with session_for(engine) as session:
-        assert session.get(
-            Patient, TypeID.from_string(visit["patient_ref"])
-        ).date_of_birth == datetime(1980, 2, 3)
+        stored_patient = session.get(Patient, TypeID.from_string(visit["patient_ref"]))
+        assert stored_patient is not None
+        assert stored_patient.date_of_birth == datetime(1980, 2, 3)
 
 
 @pytest.mark.parametrize("changed", ["date", "patient", "visit"])
@@ -115,13 +115,16 @@ def test_retained_dob_key_cannot_change_payload(engine, workflow, changed):
         invoke(altered)
     assert len(audit_receipts(engine, update.change_key)) == 1
     with session_for(engine) as session:
-        assert session.get(
+        stored_patient_2 = session.get(
             Patient, TypeID.from_string(visit["patient_ref"])
-        ).date_of_birth == datetime(1980, 2, 3)
-        assert (
-            session.get(Patient, TypeID.from_string(other["patient_ref"])).date_of_birth
-            is None
         )
+        assert stored_patient_2 is not None
+        assert stored_patient_2.date_of_birth == datetime(1980, 2, 3)
+        stored_patient_3 = session.get(
+            Patient, TypeID.from_string(other["patient_ref"])
+        )
+        assert stored_patient_3 is not None
+        assert stored_patient_3.date_of_birth is None
 
 
 def test_new_key_does_not_overwrite_known_birth_date(engine, workflow):
@@ -134,9 +137,11 @@ def test_new_key_does_not_overwrite_known_birth_date(engine, workflow):
         invoke(changed)
     assert not audit_receipts(engine, changed.change_key)
     with session_for(engine) as session:
-        assert session.get(
+        stored_patient_4 = session.get(
             Patient, TypeID.from_string(visit["patient_ref"])
-        ).date_of_birth == datetime(1980, 2, 3)
+        )
+        assert stored_patient_4 is not None
+        assert stored_patient_4.date_of_birth == datetime(1980, 2, 3)
 
 
 @pytest.mark.parametrize(
@@ -154,10 +159,11 @@ def test_unmatched_or_foreign_scope_cannot_update_dob(engine, workflow, field, v
         invoke(update.model_copy(update={field: value}))
     assert not audit_receipts(engine, update.change_key)
     with session_for(engine) as session:
-        assert (
-            session.get(Patient, TypeID.from_string(visit["patient_ref"])).date_of_birth
-            is None
+        stored_patient_5 = session.get(
+            Patient, TypeID.from_string(visit["patient_ref"])
         )
+        assert stored_patient_5 is not None
+        assert stored_patient_5.date_of_birth is None
 
 
 @pytest.mark.parametrize("birth_date", ["1899-12-31", "2999-01-01"])
@@ -171,7 +177,8 @@ def test_add_dob_range_checks_leave_unknown_data_untouched(
         invoke(changed)
     assert not audit_receipts(engine, update.change_key)
     with session_for(engine) as session:
-        assert (
-            session.get(Patient, TypeID.from_string(visit["patient_ref"])).date_of_birth
-            is None
+        stored_patient_6 = session.get(
+            Patient, TypeID.from_string(visit["patient_ref"])
         )
+        assert stored_patient_6 is not None
+        assert stored_patient_6.date_of_birth is None

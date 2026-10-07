@@ -16,6 +16,7 @@ from app.routes import internal
 from app.services import practice_invitations
 from app.services.doctor_access import resolve_doctor_access
 from app.services.doctor_account_closure import (
+    DoctorAccountClosureResult,
     close_doctor_account,
     plan_doctor_account_closure,
 )
@@ -200,6 +201,7 @@ def test_owner_invitation_queued_behind_account_closure_is_refused():
         ],
     )
 
+    assert isinstance(outcomes[0], DoctorAccountClosureResult)
     assert outcomes[0].changed is True
     assert isinstance(outcomes[1], practice_invitations.InvitationNotFound)
     doctor.refresh()

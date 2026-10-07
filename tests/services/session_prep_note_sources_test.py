@@ -41,7 +41,7 @@ def _scope():
     return doctor, patient, target
 
 
-def _note(doctor, patient, *, days_ago=1, content=None):
+def _note(doctor, patient, *, days_ago: float = 1, content=None):
     appointment = AppointmentFactory.build(
         doctor_id=doctor.id,
         patient_id=patient.id,
@@ -181,13 +181,13 @@ def test_source_selection_uses_utc_independent_of_database_session_timezone():
     with get_session() as managed:
         session = cast(Session, managed)
         _finalize(session, doctor, note)
-        session.exec(text("SET LOCAL TIME ZONE 'America/New_York'"))
+        session.execute(text("SET LOCAL TIME ZONE 'America/New_York'"))
         try:
             assert [
                 s.source_ref for s in _sources(session, doctor, target).sources
             ] == [str(note.id)]
         finally:
-            session.exec(text("SET LOCAL TIME ZONE 'UTC'"))
+            session.execute(text("SET LOCAL TIME ZONE 'UTC'"))
 
 
 def test_earlier_unordered_snapshot_requires_new_explicit_review():

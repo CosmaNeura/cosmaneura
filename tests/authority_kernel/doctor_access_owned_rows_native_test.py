@@ -18,7 +18,7 @@ from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGran
 from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from sqlalchemy import event
 from sqlalchemy.exc import DBAPIError
-from sqlmodel import Session, select, text
+from sqlmodel import Session, col, select, text
 
 from tests.authority_kernel.companion_provider_provisioning_test import session_for
 from tests.authority_kernel.doctor_access_query_equivalence_test import grant
@@ -72,7 +72,16 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
             assert original_matches(
                 proof, proof._session, doctor, practice_id=kwargs["_practice_id"]
             )
-            assert inspect.currentframe().f_back.f_back.f_code.co_name == "_provider"
+            caller_frame = inspect.currentframe()
+            assert caller_frame is not None
+            try:
+                assert caller_frame.f_back is not None
+                assert caller_frame.f_back.f_back is not None
+                assert caller_frame.f_back.f_back.f_code.co_name == "_provider"
+            finally:
+                # Retaining our own frame creates a cycle and keeps ORM rows
+                # alive, changing the SQLAlchemy identity-map query counts.
+                del caller_frame
         observed[proof is not None] += 1
         return original(doctor, **kwargs)
 
@@ -118,7 +127,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
         practice = lock_practice_seats(setup, native.args["practice_id"])
         assert doctor is not None
         member = setup.exec(
-            select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
+            select(PracticeMember).where(col(PracticeMember.doctor_id) == doctor.id)
         ).one()
         member_id = member.id
         owner_id = member.id
@@ -151,21 +160,25 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
     def mutate(*, bounded):
         with session_for(engine) as writer:
             if bounded:
-                writer.exec(text("SET LOCAL lock_timeout = '150ms'"))
+                writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
             if writer_kind == "billing":
+                practice = writer.get(Practice, native.args["practice_id"])
+                assert practice is not None
                 return set_billing_exemption(
-                    writer.get(Practice, native.args["practice_id"]),
+                    practice,
                     operator_ref="synthetic-owned-proof",
                     reason="Synthetic lock proof",
                     expires_at=None,
                     clear=True,
                 )
             if writer_kind == "membership":
+                owner = writer.get(PracticeMember, owner_id)
+                assert owner is not None
                 # The real scheduling policy remains; use an invented earlier
                 # clock so the scheduled cutoff has passed at the next request.
                 return revoke_member_access(
                     writer,
-                    owner_member=writer.get(PracticeMember, owner_id),
+                    owner_member=owner,
                     member_id=member_id,
                     clock=lambda: at - timedelta(days=2),
                 )
@@ -189,11 +202,16 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
         if not observed and kwargs.get("_ownership") is not None:
             with pytest.raises(DBAPIError) as error:
                 mutate(bounded=True)
-            assert error.value.orig.sqlstate == "55P03"
+            assert error.value.orig is not None
+            assert getattr(error.value.orig, "sqlstate", None) == "55P03"
             # Independently inspect side effects after the writer rolled back.
             with Session(engine) as check:
-                assert check.get(Practice, native.args["practice_id"]).billing_exempt
-                assert check.get(Doctor, native.args["doctor_id"]).deleted_at is None
+                stored_practice_2 = check.get(Practice, native.args["practice_id"])
+                assert stored_practice_2 is not None
+                assert stored_practice_2.billing_exempt
+                stored_doctor = check.get(Doctor, native.args["doctor_id"])
+                assert stored_doctor is not None
+                assert stored_doctor.deleted_at is None
                 unchanged = check.get(PracticeMember, member_id)
                 assert unchanged is not None
                 assert (
@@ -204,7 +222,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
                     assert (
                         check.exec(
                             select(PilotAccessGrandfatherGrant).where(
-                                PilotAccessGrandfatherGrant.clerk_id
+                                col(PilotAccessGrandfatherGrant.clerk_id)
                                 == native.args["verified_clerk_subject"]
                             )
                         )
@@ -225,15 +243,22 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
     mutate(bounded=False)
     with Session(engine) as check:
         if writer_kind == "billing":
-            assert not check.get(Practice, native.args["practice_id"]).billing_exempt
+            stored_practice = check.get(Practice, native.args["practice_id"])
+            assert stored_practice is not None
+            assert not stored_practice.billing_exempt
         elif writer_kind == "membership":
-            assert check.get(PracticeMember, member_id).access_ends_at < at
+            stored_practice_member = check.get(PracticeMember, member_id)
+            assert stored_practice_member is not None
+            assert stored_practice_member.access_ends_at is not None
+            assert stored_practice_member.access_ends_at < at
         else:
-            assert check.get(Doctor, native.args["doctor_id"]).deleted_at == at
+            stored_doctor_2 = check.get(Doctor, native.args["doctor_id"])
+            assert stored_doctor_2 is not None
+            assert stored_doctor_2.deleted_at == at
             assert (
                 check.exec(
                     select(PilotAccessGrandfatherGrant).where(
-                        PilotAccessGrandfatherGrant.clerk_id
+                        col(PilotAccessGrandfatherGrant.clerk_id)
                         == native.args["verified_clerk_subject"]
                     )
                 )

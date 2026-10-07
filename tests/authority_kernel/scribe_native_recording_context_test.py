@@ -153,12 +153,14 @@ async def exercise(
             calls.append((tenant, session, operation, kwargs))
             if failure == "lost":
                 raise ScribeWorkflowRetryableError("private_synthetic_sentinel")
-            return CreatorReviewView(
-                schema_version="1.0",
-                session_id=uuid4() if failure == "wrong_session" else session,
-                status=failure
-                if failure in {"uploaded", "processing", "speech_failed"}
-                else status,
+            return CreatorReviewView.model_validate(
+                {
+                    "schema_version": "1.0",
+                    "session_id": uuid4() if failure == "wrong_session" else session,
+                    "status": failure
+                    if failure in {"uploaded", "processing", "speech_failed"}
+                    else status,
+                }
             )
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
@@ -166,7 +168,7 @@ async def exercise(
         caller=cast(CaptureCaller, None),
         binding_ref="synthetic-binding",
         workspace_id=workspace,
-        operation=protocol.ReadOperation(kind=kind),
+        operation=protocol.ReadOperation.model_validate({"kind": kind}),
         client_request_key="synthetic-native-context",
         client=cast(ScribeWorkflowClient, Remote()),
     )

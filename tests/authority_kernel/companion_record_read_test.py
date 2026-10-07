@@ -4,6 +4,7 @@ import time
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from companion_record_contract_test import ref, sample
@@ -18,6 +19,7 @@ from app.services.companion_record_contract import (
 )
 
 from sqlalchemy.dialects import postgresql
+from sqlmodel import Session
 
 
 def fixtures():
@@ -71,13 +73,14 @@ def fixtures():
         superseded_at=None,
         created_at=stamp,
     )
-    return binding, {
+    rows: dict[type, SimpleNamespace | None] = {
         service.Patient: patient,
         service.Appointment: appointment,
         service.DoctorNoteSchema: schema,
         service.AIVisitTranscript: transcript,
         service.AIVisitNote: note,
     }
+    return binding, rows
 
 
 class Result:
@@ -93,6 +96,9 @@ class Result:
 
 class Repository:
     def __init__(self, rows):
+        self.session = Session()
+        # Inject only the query executor; production still receives a real Session.
+        setattr(self.session, "exec", self.exec)
         self.rows, self.sql = rows, []
         self.new, self.dirty, self.deleted = set(), set(), set()
         self.rollbacks = 0
@@ -131,7 +137,7 @@ class Repository:
 def test_real_query_projection_uses_saved_order_no_admission_and_metadata_only_sources():
     binding, rows = fixtures()
     repository = Repository(rows)
-    value = service.project_record(repository, binding)
+    value = service.project_record(repository.session, binding)
     assert tuple(value.notes[0].fields) == ("Plan", "History")
     assert value.transcript_sources[0].availability == "retained"
     assert "session_id" not in value.model_dump_json()
@@ -167,31 +173,35 @@ def test_cross_scope_source_denied(target, field):
     binding, rows = fixtures()
     setattr(rows[target], field, "different_scope")
     with pytest.raises(service.RecordUnavailable):
-        service.project_record(Repository(rows), binding)
+        service.project_record(Repository(rows).session, binding)
 
 
 def test_deletion_preserved_and_empty_notes_do_not_read_or_invent_transcript():
     binding, rows = fixtures()
-    rows[service.AIVisitTranscript].deleted_at = datetime(2021, 1, 1, tzinfo=UTC)
-    rows[service.DoctorNoteSchema].deleted_at = datetime(2021, 1, 1, tzinfo=UTC)
-    value = service.project_record(Repository(rows), binding)
+    transcript, schema = rows[service.AIVisitTranscript], rows[service.DoctorNoteSchema]
+    assert transcript is not None and schema is not None
+    transcript.deleted_at = datetime(2021, 1, 1, tzinfo=UTC)
+    schema.deleted_at = datetime(2021, 1, 1, tzinfo=UTC)
+    value = service.project_record(Repository(rows).session, binding)
     assert (
         value.notes[0].schema_deleted
         and value.transcript_sources[0].availability == "deleted"
     )
     rows[service.AIVisitNote] = None
     repository = Repository(rows)
-    empty = service.project_record(repository, binding)
+    empty = service.project_record(repository.session, binding)
     assert empty.notes == empty.transcript_sources == ()
     assert not any("FROM ai_visit_transcript" in s for s in repository.sql)
 
 
 def test_oversized_stored_document_refused_before_full_text_query():
     binding, rows = fixtures()
-    rows[service.AIVisitNote].note = {"Plan": "x" * (MAX_NOTE_BYTES + 1)}
+    note = rows[service.AIVisitNote]
+    assert note is not None
+    note.note = {"Plan": "x" * (MAX_NOTE_BYTES + 1)}
     repository = Repository(rows)
     with pytest.raises(service.RecordUnavailable):
-        service.project_record(repository, binding)
+        service.project_record(repository.session, binding)
     assert len(repository.sql) == 3
 
 
@@ -199,7 +209,7 @@ def test_current_selection_change_is_not_silently_accepted(monkeypatch):
     binding, rows = fixtures()
     monkeypatch.setattr(service, "_current", lambda *_: [])
     with pytest.raises(service.RecordUnavailable):
-        service.project_record(Repository(rows), binding)
+        service.project_record(Repository(rows).session, binding)
 
 
 def admitted(monkeypatch):
@@ -228,7 +238,7 @@ def admitted(monkeypatch):
         "interaction": RecordInteraction(
             mount_context_token="invented-token-only",
             interaction_ref="invented-interaction",
-            client_turn_id="00000000-0000-4000-8000-000000000003",
+            client_turn_id=UUID("00000000-0000-4000-8000-000000000003"),
         ),
         "request": request,
         "settings": CompanionRecordSettings(True),
@@ -350,14 +360,15 @@ def test_over_capacity_selection_never_loads_full_note_text():
 
     repository = TooMany(rows)
     with pytest.raises(service.RecordUnavailable):
-        service.project_record(repository, binding)
+        service.project_record(repository.session, binding)
     assert len(repository.sql) == 3
 
 
 def test_statement_guard_refuses_late_sql_and_restores_listener(monkeypatch):
     listener = {}
     connection = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-    session = SimpleNamespace(connection=lambda: connection)
+    session = Session()
+    monkeypatch.setattr(session, "connection", lambda: connection)
     monkeypatch.setattr(
         service.event,
         "listen",
@@ -385,7 +396,8 @@ def test_cancelled_sql_setting_never_admits_following_statement(
     listener, commands = {}, []
     budget = service.RecordBudget(time.monotonic() + 10)
     connection = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-    session = SimpleNamespace(connection=lambda: connection)
+    session = Session()
+    monkeypatch.setattr(session, "connection", lambda: connection)
     monkeypatch.setattr(
         service.event,
         "listen",

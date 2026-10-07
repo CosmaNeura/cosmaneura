@@ -17,7 +17,9 @@ from tests.routes.utils import get_clerk_dev_user
 def test_missing_and_other_provider_visits_have_identical_safe_response(
     authenticated_client: TestClient,
 ):
-    other_doctor = Doctor(clerk_id="user_synthetic_other_visit_owner").save()
+    other_doctor = Doctor(
+        clerk_id="user_synthetic_other_visit_owner", biography=None
+    ).save()
     patient = Patient(
         doctor_id=other_doctor.id,
         name="Synthetic private source",

@@ -57,6 +57,7 @@ def test_nullable_expand_preserves_known_dates_and_retains_unknown_dates():
             doctor = Doctor(
                 clerk_id="user_synthetic_dob_migration",
                 email="dob-migration@example.test",
+                biography=None,
             )
             session.add(doctor)
             session.flush()
@@ -100,7 +101,9 @@ def test_nullable_expand_preserves_known_dates_and_retains_unknown_dates():
                 module.upgrade()
             assert compare_metadata(context, SQLModel.metadata) == []
         with Session(engine) as session:
-            assert session.get(Patient, patient_id).date_of_birth == birthday
+            stored_patient = session.get(Patient, patient_id)
+            assert stored_patient is not None
+            assert stored_patient.date_of_birth == birthday
             unknown = Patient(
                 doctor_id=doctor_id,
                 name="Invented unknown birthday",
@@ -124,7 +127,11 @@ def test_nullable_expand_preserves_known_dates_and_retains_unknown_dates():
                 is True
             )
         with Session(engine) as session:
-            assert session.get(Patient, patient_id).date_of_birth == birthday
-            assert session.get(Patient, unknown_id).date_of_birth is None
+            stored_patient_2 = session.get(Patient, patient_id)
+            assert stored_patient_2 is not None
+            assert stored_patient_2.date_of_birth == birthday
+            stored_patient_3 = session.get(Patient, unknown_id)
+            assert stored_patient_3 is not None
+            assert stored_patient_3.date_of_birth is None
     finally:
         engine.dispose()

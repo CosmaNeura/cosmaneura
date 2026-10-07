@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from app.services.scribe_capture_protocol import OPERATION_ADAPTER
+from app.services.scribe_capture_protocol import OPERATION_ADAPTER, EditTranscript
 from app.services.scribe_creator_review_contract import CreatorReviewView
 
 from tests.authority_kernel.scribe_creator_review_test import view_document
@@ -68,8 +68,11 @@ def edited_view():
 def test_explicit_edit_history_projects_without_changing_source():
     value = edited_view()
     parsed = CreatorReviewView.model_validate(value)
+    assert parsed.source is not None
     assert parsed.source.segments[0].content == "Synthetic wrist soreness."
+    assert parsed.working is not None
     assert parsed.working.segments[0].content == "Synthetic mild wrist soreness."
+    assert parsed.working is not None
     assert parsed.working.segments[0].speaker_role == "clinician"
     assert (
         OPERATION_ADAPTER.validate_python(
@@ -130,7 +133,9 @@ async def test_edit_transport_preserves_creator_scope_key_and_receipt(monkeypatc
 
     from app.services import scribe_capture_gateway as gateway
     from app.services.scribe_capture_admission import CaptureCaller
-    from app.services.scribe_creator_edit_contract import CreatorTranscriptEditReceiptV1
+    from app.services.scribe_creator_edit_contract import (
+        CreatorTranscriptEditReceiptV1,
+    )
     from app.services.scribe_workflow import HttpScribeWorkflowClient
 
     from tests.authority_kernel.scribe_gateway_receiver_test import scope
@@ -148,6 +153,7 @@ async def test_edit_transport_preserves_creator_scope_key_and_receipt(monkeypatc
         working_transcript_version=2,
     )
     calls = []
+    assert isinstance(operation, EditTranscript)
 
     def handler(request):
         calls.append(request)

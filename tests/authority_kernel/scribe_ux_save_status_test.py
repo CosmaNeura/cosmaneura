@@ -63,6 +63,7 @@ async def test_old_save_status_returns_exact_receipt_after_a_later_save(
     f = admission_case
     _, request = await editable(f, monkeypatch)
     first = await edits.save_capture_note(**request)
+    assert first.note_ref is not None and first.note_sha256 is not None
     second_request = {
         **request,
         "edit": edits.NoteEdit(

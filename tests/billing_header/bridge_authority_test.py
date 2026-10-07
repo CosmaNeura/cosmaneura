@@ -130,7 +130,9 @@ def test_current_source_admission_revocation_invalidates_active_action(
 def test_expired_action_has_no_grace(case, monkeypatch):
     operation_id, _, action_id, request = setup_action(case)
     with get_session() as s:
-        expires = s.get(Action, action_id).expires_at
+        stored_action = s.get(Action, action_id)
+        assert stored_action is not None
+        expires = stored_action.expires_at
     monkeypatch.setattr(bridge, "_now", lambda session: expires)
     with pytest.raises(prepared.BillingPreparationError):
         bridge.authorize_action(operation_id, request)
@@ -146,7 +148,9 @@ def test_finish_is_idempotent_and_bindings_cannot_be_rewritten(case, billing_dat
     bridge.finish_action(action_id)
     bridge.finish_action(action_id)
     with get_session() as s:
-        assert s.get(Action, action_id).finished_at is not None
+        stored_action_2 = s.get(Action, action_id)
+        assert stored_action_2 is not None
+        assert stored_action_2.finished_at is not None
     with pytest.raises(Exception, match="immutable"):
         with billing_database.begin() as c:
             c.execute(text("TRUNCATE billing_header_action"))
@@ -164,7 +168,9 @@ def test_exact_retry_needs_new_provider_action_but_preserves_remote_request(case
         payload
     )
     with get_session() as s:
-        assert s.get(Action, new_id).actor["sessionSha256"] == "a" * 64
+        stored_action_3 = s.get(Action, new_id)
+        assert stored_action_3 is not None
+        assert stored_action_3.actor["sessionSha256"] == "a" * 64
 
 
 def test_real_app_only_route_requires_signed_token_role_and_active_provider_grant(case):

@@ -28,7 +28,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.practice import Practice, PracticeMember, lock_practice_seats
 from sqlalchemy import text
-from sqlmodel import select
+from sqlmodel import SQLModel, select
 
 VISIT = {
     "patientAge": 31,
@@ -193,7 +193,9 @@ def test_actual_expand_prepare_exact_replay_and_immutable_source(
         assert row.actor["sessionSha256"] == case.actor.session_sha256
         assert row.admission["contentSha256"] == cmd.expectedContentSha256
         assert "transcript" not in row.projected_text
-        assert s.get(AIVisitNote, case.note_id).note == NOTE
+        stored_a_i_visit_note = s.get(AIVisitNote, case.note_id)
+        assert stored_a_i_visit_note is not None
+        assert stored_a_i_visit_note.note == NOTE
     for sql in [
         "UPDATE billing_header_prepared_operation SET source_revision=source_revision",
         "DELETE FROM billing_header_prepared_operation",
@@ -274,7 +276,8 @@ def test_map_uses_exact_displayed_ordered_snapshot_and_does_not_refresh_it(
         original = dict(note.note)
         with billing_database.begin() as c:
             c.execute(
-                AIVisitNote.__table__.update()
+                SQLModel.metadata.tables["ai_visit_note"]
+                .update()
                 .where(AIVisitNote.id == case.note_id)
                 .values(note=NOTE | {"Plan": "New current content."})
             )
