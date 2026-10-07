@@ -14,6 +14,8 @@ PUBLIC_DEFAULTS = {
     "CORE_CAB_AUTHORIZE_AUDIENCE": "",
     "CORE_CAB_AUTHORIZE_CALLER_ID": "",
     "CORE_CAB_BRIDGE_ENABLED": "false",
+    "CORE_CAB_ASYNC_ENABLED": "false",
+    "CORE_CAB_CONTINUATION_ENABLED": "false",
     "CORE_CAB_ORIGIN": "",
     "CORE_CAB_AUDIENCE": "",
     "CORE_CAB_MANAGED_IDENTITY_CLIENT_ID": "",
@@ -80,7 +82,12 @@ def validate(values, *, now=None):
     require(type(values) is dict)
     config = {key: values.get(key, default) for key, default in PUBLIC_DEFAULTS.items()}
     require(all(type(v) is str for v in config.values()))
-    for key in ("CORE_CAB_AUTHORIZE_ENABLED", "CORE_CAB_BRIDGE_ENABLED"):
+    for key in (
+        "CORE_CAB_AUTHORIZE_ENABLED",
+        "CORE_CAB_BRIDGE_ENABLED",
+        "CORE_CAB_ASYNC_ENABLED",
+        "CORE_CAB_CONTINUATION_ENABLED",
+    ):
         require(config[key] in {"true", "false"})
     ids = (
         "CORE_CAB_AUTHORIZE_TENANT_ID",
@@ -96,6 +103,10 @@ def validate(values, *, now=None):
     if config["CORE_CAB_BRIDGE_ENABLED"] == "true":
         require(config["CORE_CAB_AUTHORIZE_ENABLED"] == "true")
         require(all(config[key] for key in ids[3:]) and config["CORE_CAB_ORIGIN"])
+    if config["CORE_CAB_ASYNC_ENABLED"] == "true":
+        require(config["CORE_CAB_BRIDGE_ENABLED"] == "true")
+    if config["CORE_CAB_CONTINUATION_ENABLED"] == "true":
+        require(config["CORE_CAB_ASYNC_ENABLED"] == "true")
     raw = values.get(POLICY_NAME, "")
     require(type(raw) is str and len(raw.encode("utf-8")) <= 131072)
     require(not raw.endswith("\n") and "\x00" not in raw)

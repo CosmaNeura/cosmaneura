@@ -66,6 +66,37 @@ def test_defaults_and_explicit_two_way_configuration():
 
 
 @pytest.mark.parametrize(
+    "flag", ["CORE_CAB_ASYNC_ENABLED", "CORE_CAB_CONTINUATION_ENABLED"]
+)
+@pytest.mark.parametrize("value", ["TRUE", "1", True, None])
+def test_generation_flags_are_closed_booleans(flag, value):
+    with pytest.raises(ValueError):
+        MODULE["validate"](configured() | {flag: value})
+
+
+@pytest.mark.parametrize(
+    "async_enabled,continuation_enabled", [(False, False), (True, False), (True, True)]
+)
+def test_generation_flags_require_the_complete_existing_bridge(
+    async_enabled, continuation_enabled
+):
+    values = configured() | {
+        "CORE_CAB_ASYNC_ENABLED": str(async_enabled).lower(),
+        "CORE_CAB_CONTINUATION_ENABLED": str(continuation_enabled).lower(),
+    }
+    MODULE["validate"](values)
+    if async_enabled:
+        for disabled in ("CORE_CAB_BRIDGE_ENABLED", "CORE_CAB_AUTHORIZE_ENABLED"):
+            with pytest.raises(ValueError):
+                MODULE["validate"](values | {disabled: "false"})
+
+
+def test_continuation_cannot_activate_without_async():
+    with pytest.raises(ValueError):
+        MODULE["validate"](configured() | {"CORE_CAB_CONTINUATION_ENABLED": "true"})
+
+
+@pytest.mark.parametrize(
     "name,value",
     [
         ("CORE_CAB_BRIDGE_ENABLED", "TRUE"),
@@ -242,6 +273,28 @@ def test_actual_staging_projection_and_fingerprint_are_api_only():
         POLICY
         not in runtime["desired"](payload["configuration"], contracts[0])["environment"]
     )
+
+
+def test_generation_flags_change_only_the_api_effective_fingerprint():
+    contracts = json.loads(
+        shell(contract_script(), "runtime_contracts_json", configuration=configured())
+    )
+    runtime = runpy.run_path(str(ROOT / "scripts/staging_runtime_configuration.py"))
+    before = runtime["fingerprint"](
+        {"configuration": configured(), "contracts": contracts}
+    )
+    for flag in ("CORE_CAB_ASYNC_ENABLED", "CORE_CAB_CONTINUATION_ENABLED"):
+        changed = configured() | {flag: "true"}
+        assert (
+            runtime["fingerprint"]({"configuration": changed, "contracts": contracts})
+            != before
+        )
+        for contract in contracts:
+            projected = runtime["desired"](changed, contract)["environment"]
+            if contract["name"].endswith("-app"):
+                assert projected[flag] == "true"
+            else:
+                assert flag not in contract["public_names"] and flag not in projected
 
 
 @pytest.mark.parametrize(
