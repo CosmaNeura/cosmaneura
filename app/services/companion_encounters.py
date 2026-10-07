@@ -118,17 +118,35 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         ):
             raise authority.AuthorityRequestDeniedError
         doctor = session.get(Doctor, link.doctor_id)
-        member = session.exec(
-            select(PracticeMember).where(
-                PracticeMember.doctor_id == link.doctor_id,
-            )
-        ).one_or_none()
-        practice = session.exec(
-            select(col(Practice.id), col(Practice.legal_name)).where(
-                Practice.id == link.practice_id,
-                func.char_length(col(Practice.legal_name)).between(1, 200),
-            )
-        ).one_or_none()
+        if doctor is not None and ownership.matches(
+            session, doctor, practice_id=link.practice_id
+        ):
+            # Both rows remain protected by this exact Practice→Doctor lock
+            # scope. Still read current membership and display eligibility;
+            # combine only this pair, without reusing an access decision.
+            current = session.exec(
+                select(PracticeMember, col(Practice.id), col(Practice.legal_name))
+                .join(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+                .where(
+                    PracticeMember.doctor_id == link.doctor_id,
+                    Practice.id == link.practice_id,
+                    func.char_length(col(Practice.legal_name)).between(1, 200),
+                )
+            ).one_or_none()
+            member = current[0] if current is not None else None
+            practice = current[1:] if current is not None else None
+        else:
+            member = session.exec(
+                select(PracticeMember).where(
+                    PracticeMember.doctor_id == link.doctor_id,
+                )
+            ).one_or_none()
+            practice = session.exec(
+                select(col(Practice.id), col(Practice.legal_name)).where(
+                    Practice.id == link.practice_id,
+                    func.char_length(col(Practice.legal_name)).between(1, 200),
+                )
+            ).one_or_none()
         if (
             doctor is None
             or doctor.deleted_at is not None
@@ -147,8 +165,8 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             actor_ref=str(actor.id),
             tenant_ref=str(link.tenant_id),
             provider_link_ref=str(link.id),
-            practice_ref=str(practice.id),
-            practice_label=practice.legal_name,
+            practice_ref=str(practice[0]),
+            practice_label=practice[1],
             review_sha256=digest(
                 {
                     "provider_link_ref": str(link.id),
