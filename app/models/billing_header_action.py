@@ -11,7 +11,6 @@ from sqlmodel import Field
 
 
 class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
-    __tablename__ = "billing_header_action"
     __table_args__ = (
         sa.CheckConstraint(
             "request_sha256 ~ '^[a-f0-9]{64}$' AND operation_sha256 ~ '^[a-f0-9]{64}$'",
@@ -36,8 +35,12 @@ class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
     request_sha256: str = Field(max_length=64)
     operation_sha256: str = Field(max_length=64)
     actor: dict = Field(sa_type=JSONB, exclude=True, repr=False)
-    created_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
-    expires_at: datetime = Field(sa_type=sa.DateTime(timezone=True))
+    created_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False)
+    )
+    expires_at: datetime = Field(
+        sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False)
+    )
     finished_at: datetime | None = Field(
-        default=None, sa_type=sa.DateTime(timezone=True)
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
     )

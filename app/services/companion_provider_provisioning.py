@@ -34,7 +34,7 @@ from app.models.practice import Practice, PracticeMember
 from app.models.provider_record_authority import ProviderPracticeAuthority
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from sqlalchemy import or_, text
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 
 class CompanionProvisioningError(ValueError):
@@ -197,10 +197,10 @@ def provision_companion_provider(
             select(ScribeCaptureProviderLink)
             .where(
                 or_(
-                    ScribeCaptureProviderLink.doctor_id == doctor_id,
-                    ScribeCaptureProviderLink.tenant_id == tenant_id,
-                    ScribeCaptureProviderLink.practice_id == practice_id,
-                    ScribeCaptureProviderLink.scribe_tenant_id == scribe_tenant_id,
+                    col(ScribeCaptureProviderLink.doctor_id) == doctor_id,
+                    col(ScribeCaptureProviderLink.tenant_id) == tenant_id,
+                    col(ScribeCaptureProviderLink.practice_id) == practice_id,
+                    col(ScribeCaptureProviderLink.scribe_tenant_id) == scribe_tenant_id,
                 )
             )
             .execution_options(populate_existing=True)
@@ -285,19 +285,19 @@ def provision_companion_provider(
             if actor is not None and tenant_member.actor_id == actor.id:
                 continue
             providers = session.exec(
-                select(PracticeMember.practice_id)
+                select(col(PracticeMember.practice_id))
                 .join(
                     Doctor,
-                    Doctor.id == PracticeMember.doctor_id,
+                    col(Doctor.id) == PracticeMember.doctor_id,
                 )
                 .join(
                     AuthorityActorExternalIdentity,
-                    AuthorityActorExternalIdentity.subject == Doctor.clerk_id,
+                    col(AuthorityActorExternalIdentity.subject) == Doctor.clerk_id,
                 )
                 .where(
                     AuthorityActorExternalIdentity.actor_id == tenant_member.actor_id,
                     AuthorityActorExternalIdentity.issuer == settings.clerk_issuer,
-                    AuthorityActorExternalIdentity.revoked_at.is_(None),
+                    col(AuthorityActorExternalIdentity.revoked_at).is_(None),
                 )
             ).all()
             if len(providers) != 1 or providers[0] != practice_id:
@@ -362,7 +362,7 @@ def provision_companion_provider(
 
     now = datetime.now(UTC)
     if tenant is None:
-        tenant = AuthorityTenant(id=tenant_id, status="active")
+        tenant = AuthorityTenant.model_validate({"id": tenant_id, "status": "active"})
         session.add(tenant)
     if identity is None:
         actor = AuthorityActor(actor_kind="human", status="active")
@@ -375,6 +375,8 @@ def provision_companion_provider(
             verified_at=now,
         )
         session.add(identity)
+    if actor is None:
+        _fail("current_verified_authority_required")
     if not memberships:
         session.add(
             AuthorityTenantMembership(
