@@ -1,6 +1,7 @@
 """Repeat visits and current authorization on an explicitly owned local PG DB."""
 
 import importlib
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -63,7 +64,23 @@ def engine():
         55930,
         "scribe_ux_lab_owner",
     )
-    assert original_scope or ux_scope
+    desktop_scope = (url.database, url.host, url.port, url.username) == (
+        "core_ux_01_test",
+        "127.0.0.1",
+        55937,
+        "scribe_ux_lab_owner",
+    )
+    if desktop_scope:
+        marker = Path("/private/tmp/scribe-ux-latency-lab-20261007/ownership.json")
+        assert json.loads(marker.read_text()) == {
+            "created_for": "scribe-desktop-ux-20261007",
+            "host": "127.0.0.1",
+            "port": 55937,
+            "database": "core_ux_01_test",
+            "username": "scribe_ux_lab_owner",
+            "only_synthetic": True,
+        }
+    assert original_scope or ux_scope or desktop_scope
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)

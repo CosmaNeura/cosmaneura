@@ -53,9 +53,9 @@ def test_existing_companion_connection_setup_and_revocation_on_owned_database(
 @pytest.mark.parametrize(
     "kind,before,after,eligible,total",
     [
-        ("mount", 1043, 983, 20, 45),
-        ("creator_review", 821, 773, 16, 36),
-        ("capabilities", 1031, 983, 16, 44),
+        ("mount", 1043, 963, 20, 45),
+        ("creator_review", 821, 757, 16, 36),
+        ("capabilities", 1031, 967, 16, 44),
     ],
 )
 def test_real_native_reduces_only_explicit_owned_provider_queries(
