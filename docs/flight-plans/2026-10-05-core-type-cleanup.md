@@ -71,3 +71,13 @@ unchanged. Qualify successful cleanup, failed cleanup and non-test rejection
 without importing the global identity-cleanup hooks, then rerun the database-only
 provider authority and invitation races on the isolated migrated database.
 Recovery is reverting this test-only commit.
+
+## Provider exchange race fixture
+
+Set the synthetic staging capability environment on the shared provider exchange
+service, which now owns that check, rather than on the old route import. Keep
+the real request-wide session, practice-before-doctor locking and denial
+assertions unchanged. Invitation race qualification additionally requires
+isolated local Redis for the real enrollment rate limiter; it is not purely a
+PostgreSQL-only run. No runtime authorization or rate-limit code changes.
+Recovery is reverting this fixture-only commit.
