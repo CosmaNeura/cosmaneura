@@ -15,6 +15,9 @@ from app.services.cab_bridge_contract import (
 
 from activemodel.session_manager import get_session
 from app.models.billing_header_action import BillingHeaderAction as Action
+from app.models.billing_header_generation_continuation import (
+    BillingHeaderGenerationContinuation as Continuation,
+)
 from app.models.billing_header_operation import (
     BillingHeaderPreparedOperation as Operation,
 )
@@ -115,15 +118,21 @@ def begin_async_action(actor, operation_id, command):
                 and action.actor.get("issuer") == actor.issuer
                 and action.actor.get("subject") == actor.subject
             )
+            require(
+                not action.continuation_consent
+                or action.actor.get("sessionSha256") == actor.session_sha256
+            )
             session.commit()
             return payload, str(action.id), True
         provider_expiry = preparation._present(actor.expires_at)
         require(provider_expiry > now)
+        consent = command.get("continuationConsent") is True
         expiry = min(
             now + timedelta(seconds=360),
-            provider_expiry,
             datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
         )
+        if not consent:
+            expiry = min(expiry, provider_expiry)
         action = Action(
             operation_id=row.operation_id,
             purpose="header.generate",
@@ -137,6 +146,8 @@ def begin_async_action(actor, operation_id, command):
             },
             created_at=now,
             expires_at=expiry,
+            continuation_consent=consent,
+            initial_authorized_until=min(expiry, provider_expiry) if consent else None,
         )
         session.add(action)
         session.flush()
@@ -235,6 +246,8 @@ def authorize_action(operation_id, request):
         ).one()
         now = _now(session)
         require(action.finished_at is None)
+        authorized_until = _authorized_until(session, action)
+        require(now < authorized_until)
         operation = minimized_operation(row)
         require(
             action.operation_sha256 == digest(operation)
@@ -257,10 +270,113 @@ def authorize_action(operation_id, request):
             "expiresAt": min(
                 now + timedelta(seconds=30),
                 action.expires_at,
+                authorized_until,
                 datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
             ).isoformat(),
         }
 
         if action.generation_id is not None:
             result["generationExpiresAt"] = action.expires_at.isoformat()
+            if action.continuation_consent:
+                result["generationContinuationRequired"] = True
+                result["generationAuthorizedUntil"] = authorized_until.isoformat()
+        return result
+
+
+def _authorized_until(session, action):
+    if not action.continuation_consent:
+        return action.expires_at
+    latest = session.exec(
+        select(func.max(Continuation.authorized_until)).where(
+            Continuation.action_id == action.id
+        )
+    ).one()
+    return min(
+        action.expires_at,
+        latest or preparation._present(action.initial_authorized_until),
+    )
+
+
+def _continuation_receipt(session, action):
+    return {
+        "schemaVersion": "core-cab-generation-continuation.v1",
+        "purpose": "header.generation-continue",
+        "sourceOperationId": str(action.operation_id),
+        "operationId": str(action.generation_id),
+        "requestSha256": action.request_sha256,
+        "generationExpiresAt": action.expires_at.isoformat(),
+        "generationAuthorizedUntil": _authorized_until(session, action).isoformat(),
+    }
+
+
+def continuation_receipt(action_id):
+    with get_session() as session:
+        action = preparation._present(session.get(Action, action_id))
+        require(action.continuation_consent)
+        return _continuation_receipt(session, action)
+
+
+def continue_generation(actor, operation_id, command):
+    """An explicit authenticated action appends evidence; status never calls this."""
+    with get_session() as session:
+        row, now, admission = _current(session, actor, operation_id)
+        generate = {
+            k: command[k] for k in ("encounterId", "expectedSource", "operationId")
+        }
+        generate.update(responseMode="async", continuationConsent=True)
+        original = workload_request(
+            minimized_operation(row), "header.generate", generate
+        )
+        require(digest(original) == command["requestSha256"])
+        action = session.exec(
+            select(Action)
+            .where(
+                Action.operation_id == operation_id,
+                Action.generation_id == UUID(command["operationId"]),
+                Action.request_sha256 == command["requestSha256"],
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        action = preparation._present(action)
+        now = _now(session)
+        authorized_until = _authorized_until(session, action)
+        require(
+            action.continuation_consent
+            and action.finished_at is None
+            and action.actor
+            == {
+                "issuer": actor.issuer,
+                "subject": actor.subject,
+                "sessionSha256": actor.session_sha256,
+            }
+            and now < min(action.expires_at, authorized_until)
+        )
+        verified_expiry = preparation._present(actor.expires_at)
+        expiry = min(
+            verified_expiry,
+            action.expires_at,
+            datetime.fromisoformat(admission.expiresAt.replace("Z", "+00:00")),
+        )
+        require(now < expiry)
+        # A cached/equal token is a read of the current receipt, not new evidence.
+        if expiry > authorized_until:
+            count = session.exec(
+                select(func.count())
+                .select_from(Continuation)
+                .where(Continuation.action_id == action.id)
+            ).one()
+            require(count < 48)
+            session.add(
+                Continuation(
+                    action_id=action.id,
+                    request_sha256=action.request_sha256,
+                    actor=dict(action.actor),
+                    created_at=now,
+                    authorized_until=expiry,
+                )
+            )
+            session.flush()
+        result = _continuation_receipt(session, action)
+        session.commit()
         return result

@@ -310,6 +310,7 @@ export type CabCommand = {
   draft?: CabDraft
   reason?: string
   responseMode?: "async"
+  continuationConsent?: true
 }
 export type CabRequest = (
   action: CabAction,
@@ -389,7 +390,13 @@ export async function readCabResponse(
         typeof wrapper.result.replayed === "boolean" &&
         sameCabValue(receipt.headerSource, source.headerSource),
     )
-    return { source, view: null, generation: null }
+    return {
+      source,
+      view: null,
+      generation: null,
+      requestSha256: wrapper.requestSha256,
+      continuation: null,
+    }
   }
   const generation =
     wrapper.result.generation === undefined
@@ -414,11 +421,28 @@ export async function readCabResponse(
         : wrapper.result.view === null && wrapper.result.created === false,
     )
   }
+  const continuation =
+    wrapper.result.continuation === undefined
+      ? null
+      : readCabContinuation(
+          wrapper.result.continuation,
+          operationId,
+          generationId ?? "",
+          wrapper.requestSha256,
+        )
+  requireValue(!continuation || action === "generate")
   const view =
     wrapper.result.view === null ? null : cabView.parse(wrapper.result.view)
   if ((action === "generate" && !generation) || action === "save")
     requireValue(view && typeof wrapper.result.created === "boolean")
-  if (!view) return { source, view, generation }
+  if (!view)
+    return {
+      source,
+      view,
+      generation,
+      requestSha256: wrapper.requestSha256,
+      continuation,
+    }
   const h = view.header
   requireValue(sameCabValue(h.expectedSource, source.headerSource))
   const refs = new Set(h.evidence.map((row) => row.id))
@@ -488,7 +512,13 @@ export async function readCabResponse(
       !view.signoff &&
         view.previousSignoff.headerRevision < view.revisionNumber,
     )
-  return { source, view, generation }
+  return {
+    source,
+    view,
+    generation,
+    requestSha256: wrapper.requestSha256,
+    continuation,
+  }
 }
 
 export function cabReviewSections(view: CabView) {
@@ -661,4 +691,43 @@ export function cabProviderExport(view: CabView, source?: CabSource): string {
       row.text,
     )
   return lines.join("\n")
+}
+
+const continuationReceipt = z
+  .object({
+    schemaVersion: z.literal("core-cab-generation-continuation.v1"),
+    purpose: z.literal("header.generation-continue"),
+    sourceOperationId: z.string().uuid(),
+    operationId: z.string().uuid(),
+    requestSha256: hash,
+    generationExpiresAt: time,
+    generationAuthorizedUntil: time,
+  })
+  .strict()
+export type CabContinuation = z.infer<typeof continuationReceipt>
+export type CabContinueCommand = Pick<
+  CabCommand,
+  "encounterId" | "expectedSource" | "operationId"
+> & { requestSha256: string }
+export type CabContinueRequest = (
+  command: CabContinueCommand,
+  signal?: AbortSignal,
+) => Promise<unknown>
+export function readCabContinuation(
+  input: unknown,
+  sourceOperationId: string,
+  generationId: string,
+  requestSha256: string,
+  originalDeadline?: string,
+): CabContinuation {
+  const receipt = continuationReceipt.parse(input)
+  requireValue(
+    receipt.sourceOperationId === sourceOperationId &&
+      receipt.operationId === generationId &&
+      receipt.requestSha256 === requestSha256 &&
+      Date.parse(receipt.generationAuthorizedUntil) <=
+        Date.parse(receipt.generationExpiresAt) &&
+      (!originalDeadline || receipt.generationExpiresAt === originalDeadline),
+  )
+  return receipt
 }

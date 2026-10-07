@@ -106,6 +106,13 @@ def workload_request(operation, purpose, command):
             keys.add("responseMode")
             if command["responseMode"] != "async":
                 raise ValueError("invalid_cab_action")
+        if purpose == "header.generate" and "continuationConsent" in command:
+            keys.add("continuationConsent")
+            if (
+                command.get("responseMode") != "async"
+                or command["continuationConsent"] is not True
+            ):
+                raise ValueError("invalid_cab_action")
         if set(command) != keys:
             raise ValueError("invalid_cab_action")
         body = {

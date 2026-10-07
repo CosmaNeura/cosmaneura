@@ -77,6 +77,9 @@ def billing_database():
     operation_table = SQLModel.metadata.tables["billing_header_prepared_operation"]
 
     action_table = SQLModel.metadata.tables["billing_header_action"]
+    continuation_table = SQLModel.metadata.tables[
+        "billing_header_generation_continuation"
+    ]
     # Local source-model prerequisites only; no configured-environment migration.
     with engine.begin() as connection:
         SQLModel.metadata.create_all(
@@ -84,7 +87,7 @@ def billing_database():
             tables=[
                 t
                 for t in SQLModel.metadata.sorted_tables
-                if t not in (operation_table, action_table)
+                if t not in (operation_table, action_table, continuation_table)
             ],
         )
         migrations = [
@@ -115,6 +118,19 @@ def billing_database():
             spec = importlib.util.spec_from_file_location(
                 "billing_test_async_expand", path
             )
+            migration = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(migration)
+            with Operations.context(MigrationContext.configure(connection)):
+                migration.upgrade()
+        if not connection.dialect.has_table(connection, continuation_table.name):
+            path = (
+                ROOT
+                / "migrations/versions/2026_10_07_56789df3c14c_add_billing_generation_continuation.py"
+            )
+            spec = importlib.util.spec_from_file_location(
+                "billing_test_continue_expand", path
+            )
+            assert spec is not None and spec.loader is not None
             migration = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(migration)
             with Operations.context(MigrationContext.configure(connection)):

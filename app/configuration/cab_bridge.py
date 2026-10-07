@@ -19,6 +19,7 @@ class CabBridgeSettings:
     audience: str = ""
     managed_identity_client_id: str = ""
     async_enabled: bool = False
+    continuation_enabled: bool = False
 
     def is_complete(self):
         try:
@@ -57,6 +58,9 @@ CAB_AUTHORIZE_POLICY = EntraServiceAuthPolicy(
 CAB_BRIDGE_SETTINGS = CabBridgeSettings(
     enabled=config("CORE_CAB_BRIDGE_ENABLED", default=False, cast=bool),
     async_enabled=config("CORE_CAB_ASYNC_ENABLED", default=False, cast=bool),
+    continuation_enabled=config(
+        "CORE_CAB_CONTINUATION_ENABLED", default=False, cast=bool
+    ),
     origin=config("CORE_CAB_ORIGIN", default="", cast=str),
     audience=config("CORE_CAB_AUDIENCE", default="", cast=str),
     managed_identity_client_id=config(

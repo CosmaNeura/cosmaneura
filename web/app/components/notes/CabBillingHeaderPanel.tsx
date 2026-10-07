@@ -7,6 +7,8 @@ import type { BillingHeaderSource } from "~/configuration/client"
 import {
   type CabAction,
   type CabCommand,
+  type CabContinuation,
+  type CabContinueRequest,
   type CabDraft,
   type CabRequest,
   type CabSource,
@@ -15,6 +17,7 @@ import {
   cabReviewSections,
   changeCabCodes,
   editableCabHeader,
+  readCabContinuation,
   readCabResponse,
 } from "~/lib/cab-provider-header"
 
@@ -31,6 +34,8 @@ export function CabBillingHeaderPanel({
   sourceStale = false,
   onUpdateVisit,
   asyncEnabled = false,
+  continuationEnabled = false,
+  continueGeneration,
 }: {
   operationId: string
   expectedSource: BillingHeaderSource["source"]
@@ -38,6 +43,8 @@ export function CabBillingHeaderPanel({
   onLocked: (locked: boolean) => void
   sourceStale?: boolean
   asyncEnabled?: boolean
+  continuationEnabled?: boolean
+  continueGeneration?: CabContinueRequest
   onUpdateVisit?: (visit: CabSource["visitContext"]) => void
 }) {
   const [source, setSource] = useState<CabSource | null>(null)
@@ -51,6 +58,13 @@ export function CabBillingHeaderPanel({
   const [stale, setStale] = useState(false)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
+  const [continuationConsent, setContinuationConsent] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const continuationOwner = useRef<{
+    receipt: CabContinuation
+    controller: AbortController
+    timer?: ReturnType<typeof setTimeout>
+  } | null>(null)
   const inFlight = useRef(false),
     mounted = useRef(true)
   const exactCommand = useRef<Command | null>(null)
@@ -64,6 +78,7 @@ export function CabBillingHeaderPanel({
     void run({ action: "accept", body: { expectedSource: null } })
     return () => {
       mounted.current = false
+      stopContinuation()
     }
     // The parent keys this component by immutable source operation.
   }, [])
@@ -82,6 +97,7 @@ export function CabBillingHeaderPanel({
   useEffect(() => {
     if (!sourceStale) return
     setStale(true)
+    stopContinuation()
     setRetry(null)
     setGeneration(null)
     setView(null)
@@ -89,6 +105,81 @@ export function CabBillingHeaderPanel({
       "The source or billing confirmation changed. Your unsaved inputs are retained. Cancel edits and reload the note before continuing.",
     )
   }, [sourceStale])
+
+  function stopContinuation() {
+    const owner = continuationOwner.current
+    continuationOwner.current = null
+    clearTimeout(owner?.timer)
+    owner?.controller.abort()
+    if (mounted.current) setContinuing(false)
+  }
+  function startContinuation(receipt: CabContinuation, status: Command) {
+    stopContinuation()
+    if (!continueGeneration) return
+    const owner = {
+      receipt,
+      controller: new AbortController(),
+      timer: undefined as ReturnType<typeof setTimeout> | undefined,
+    }
+    continuationOwner.current = owner
+    setContinuing(true)
+    const active = () =>
+      continuationOwner.current === owner &&
+      mounted.current &&
+      current.current &&
+      !owner.controller.signal.aborted
+    const schedule = () => {
+      if (!active()) return
+      const remaining =
+        Date.parse(owner.receipt.generationAuthorizedUntil) - Date.now()
+      if (
+        remaining <= 0 ||
+        Date.now() >= Date.parse(owner.receipt.generationExpiresAt)
+      ) {
+        stopContinuation()
+        setNotice(
+          "Active generation authorization stopped. Status checks continue without renewing it.",
+        )
+        return
+      }
+      owner.timer = setTimeout(
+        () => void renew(),
+        Math.max(1_000, Math.min(10_000, remaining - 35_000)),
+      )
+    }
+    const renew = async () => {
+      if (!active()) return
+      try {
+        if (Date.now() >= Date.parse(owner.receipt.generationAuthorizedUntil))
+          throw new Error("Continuation lapsed")
+        const updated = readCabContinuation(
+          await continueGeneration(
+            { ...status.body, requestSha256: owner.receipt.requestSha256 },
+            owner.controller.signal,
+          ),
+          operationId,
+          owner.receipt.operationId,
+          owner.receipt.requestSha256,
+          owner.receipt.generationExpiresAt,
+        )
+        if (!active()) return
+        if (
+          Date.parse(updated.generationAuthorizedUntil) <
+          Date.parse(owner.receipt.generationAuthorizedUntil)
+        )
+          throw new Error("Unconfirmed continuation")
+        owner.receipt = updated
+        schedule()
+      } catch {
+        if (!active()) return
+        stopContinuation()
+        setNotice(
+          "Active generation authorization stopped. Status checks continue without renewing it.",
+        )
+      }
+    }
+    schedule()
+  }
 
   async function run(command: Command) {
     if (
@@ -115,6 +206,8 @@ export function CabBillingHeaderPanel({
         command.body.operationId,
       )
       if (!mounted.current || !current.current) return
+      if (command.body.continuationConsent && !received.continuation)
+        throw new Error("Unconfirmed continuation receipt")
       exactCommand.current = null
       setRetry(null)
       setSource(received.source)
@@ -131,7 +224,18 @@ export function CabBillingHeaderPanel({
           setGeneration(status)
           observingStatus = true
           // Polling only observes the same job; every HTTP call keeps its short deadline.
-          const until = Date.now() + 300_000
+          if (
+            command.action === "generate" &&
+            command.body.continuationConsent &&
+            received.continuation
+          )
+            startContinuation(received.continuation, status)
+          const until = Math.min(
+            Date.now() + 300_000,
+            received.continuation
+              ? Date.parse(received.continuation.generationExpiresAt)
+              : Infinity,
+          )
           while (Date.now() < until && mounted.current && current.current) {
             await new Promise((resolve) => setTimeout(resolve, 2_000))
             if (!mounted.current || !current.current) return
@@ -246,6 +350,7 @@ export function CabBillingHeaderPanel({
             : "The header could not be loaded. Retry when the connection is available.",
         )
     } finally {
+      stopContinuation()
       inFlight.current = false
       if (mounted.current) setBusy(false)
     }
@@ -262,7 +367,12 @@ export function CabBillingHeaderPanel({
         expectedSource: source.headerSource,
         ...(action === "read" ? {} : { operationId: crypto.randomUUID() }),
         ...(action === "generate" && asyncEnabled
-          ? { responseMode: "async" as const }
+          ? {
+              responseMode: "async" as const,
+              ...(continuationEnabled && continuationConsent
+                ? { continuationConsent: true as const }
+                : {}),
+            }
           : {}),
         ...extra,
       },
@@ -354,6 +464,23 @@ export function CabBillingHeaderPanel({
           )}
         </div>
       )}
+      {continuing && (
+        <div className="space-y-2 text-sm" role="status">
+          <p>
+            Keeping this generation authorized while you stay signed in, for up
+            to six minutes.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              stopContinuation()
+            }}
+          >
+            Stop renewing generation authorization
+          </Button>
+        </div>
+      )}
       {busy && (
         <p role="status" className="text-muted-foreground text-sm">
           Working on the billing header…
@@ -433,6 +560,20 @@ export function CabBillingHeaderPanel({
             Generate code proposals and visit facts for a medical coder to
             review.
           </p>
+          {asyncEnabled && continuationEnabled && continueGeneration && (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={continuationConsent}
+                disabled={disabled || Boolean(generation)}
+                onChange={(event) =>
+                  setContinuationConsent(event.target.checked)
+                }
+              />
+              Keep this generation authorized while I stay signed in, for up to
+              six minutes.
+            </label>
+          )}
           <Button
             type="button"
             disabled={

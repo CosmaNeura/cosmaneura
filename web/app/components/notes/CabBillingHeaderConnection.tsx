@@ -3,10 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import {
   type BillingHeaderSource,
+  billingContinuationAuth,
   billingHeaderCab,
+  billingHeaderGenerationContinue,
   billingHeaderOperation,
 } from "~/configuration/client"
 import {
+  type CabContinueRequest,
   type CabRequest,
   type CabSource,
   sameCabValue,
@@ -32,8 +35,10 @@ export function CabBillingHeaderConnection({
     "loading" | "configured" | "not_configured" | "error"
   >("loading")
   const [asyncEnabled, setAsyncEnabled] = useState(false)
+  const [continuationEnabled, setContinuationEnabled] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const active = useRef(true)
+  const continuationAbort = useRef<AbortController | null>(null)
   const [scope] = useState(() => ({
     operationId,
     source: structuredClone(source),
@@ -74,6 +79,10 @@ export function CabBillingHeaderConnection({
           throw new Error("Invalid operation")
         if (active.current && !controller.signal.aborted && !revoked.current) {
           setAsyncEnabled(receipt.transport?.asyncGeneration === true)
+          setContinuationEnabled(
+            receipt.transport?.asyncGeneration === true &&
+              receipt.transport?.generationContinuation === true,
+          )
           setState(receipt.transport!.state as "configured" | "not_configured")
         }
       } catch {
@@ -83,6 +92,7 @@ export function CabBillingHeaderConnection({
     })()
     return () => {
       active.current = false
+      continuationAbort.current?.abort()
       controller.abort()
     }
   }, [scope, attempt])
@@ -114,6 +124,53 @@ export function CabBillingHeaderConnection({
     [scope],
   )
 
+  useEffect(() => {
+    if (revoked.current) continuationAbort.current?.abort()
+  }, [sourceStale, operationId, source])
+
+  const continueGeneration = useCallback<CabContinueRequest>(
+    async (command, signal) => {
+      if (!active.current || revoked.current || signal?.aborted)
+        throw Object.assign(new Error("Billing source changed"), {
+          status: 409,
+        })
+      const controller = new AbortController()
+      continuationAbort.current = controller
+      let response
+      try {
+        response = await withReadDeadline(
+          (signal) =>
+            billingHeaderGenerationContinue({
+              auth: billingContinuationAuth,
+              path: { operation_id: scope.operationId },
+              body: { purpose: "header.generation-continue", command },
+              signal,
+              throwOnError: false,
+            }),
+          {
+            signal: AbortSignal.any([
+              controller.signal,
+              ...(signal ? [signal] : []),
+            ]),
+          },
+        )
+      } finally {
+        if (continuationAbort.current === controller)
+          continuationAbort.current = null
+      }
+      if (!active.current || revoked.current || signal?.aborted)
+        throw Object.assign(new Error("Billing source changed"), {
+          status: 409,
+        })
+      if (!response.response?.ok)
+        throw Object.assign(new Error("Continuation unavailable"), {
+          status: response.response?.status,
+        })
+      return response.data
+    },
+    [scope],
+  )
+
   if (state === "configured")
     return (
       <CabBillingHeaderPanel
@@ -123,6 +180,8 @@ export function CabBillingHeaderConnection({
         sourceStale={revoked.current}
         request={request}
         asyncEnabled={asyncEnabled}
+        continuationEnabled={continuationEnabled}
+        continueGeneration={continueGeneration}
         onLocked={onLocked}
         onUpdateVisit={onUpdateVisit}
       />

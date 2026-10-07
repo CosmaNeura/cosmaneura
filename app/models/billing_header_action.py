@@ -35,6 +35,12 @@ class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
             "AND completion_status IN ('succeeded','failed','unknown'))",
             name="ck_billing_action_completion",
         ),
+        sa.CheckConstraint(
+            "(NOT continuation_consent AND initial_authorized_until IS NULL) OR "
+            "(continuation_consent AND generation_id IS NOT NULL AND purpose = 'header.generate' "
+            "AND initial_authorized_until IS NOT NULL AND initial_authorized_until > created_at AND initial_authorized_until <= expires_at)",
+            name="ck_billing_action_continuation",
+        ),
         sa.Index(
             "uq_billing_action_generation",
             "operation_id",
@@ -60,6 +66,10 @@ class BillingHeaderAction(BaseModel, TypeIDMixin("billing_action"), table=True):
         sa_column=sa.Column(sa.DateTime(timezone=True), nullable=False)
     )
     generation_id: UUID | None = Field(default=None, sa_type=sa.Uuid)
+    continuation_consent: bool = Field(default=False, nullable=False)
+    initial_authorized_until: datetime | None = Field(
+        default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)
+    )
     completion_status: str | None = Field(default=None, max_length=16)
     finished_at: datetime | None = Field(
         default=None, sa_column=sa.Column(sa.DateTime(timezone=True), nullable=True)

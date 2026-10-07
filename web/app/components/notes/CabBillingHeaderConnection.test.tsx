@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest"
 
 import {
   billingHeaderCab,
+  billingHeaderGenerationContinue,
   billingHeaderOperation,
 } from "~/configuration/client"
 import {
@@ -19,6 +20,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({
   billingHeaderCab: vi.fn(),
+  billingContinuationAuth: vi.fn(),
+  billingHeaderGenerationContinue: vi.fn(),
   billingHeaderOperation: vi.fn(),
 }))
 beforeEach(() => {
