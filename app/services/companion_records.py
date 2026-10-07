@@ -86,12 +86,15 @@ def transaction_budget(session: Session, deadline: float | RecordBudget):
     def before_cursor_execute(
         _connection, cursor, _statement, _parameters, _context, _many
     ):
-        remaining = check_deadline(deadline)
+        statement_ms = check_deadline(deadline)
+        lock_ms = min(check_deadline(deadline), 2000)
         # Integers only; raw cursor avoids event recursion. Both settings are
         # transaction-local and never alter another request or database policy.
-        cursor.execute(f"SET LOCAL statement_timeout = {remaining}")
-        remaining = check_deadline(deadline)
-        cursor.execute(f"SET LOCAL lock_timeout = {min(remaining, 2000)}")
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)",
+            (str(statement_ms), str(lock_ms)),
+        )
         check_deadline(deadline)
 
     event.listen(connection, "before_cursor_execute", before_cursor_execute)
