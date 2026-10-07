@@ -80,7 +80,13 @@ class AddBirthDateRequest(Request):
     date_of_birth: date
 
 
-EncounterRequest = PatientsRequest | CatalogRequest | LookupRequest | CreateRequest | AddBirthDateRequest
+EncounterRequest = (
+    PatientsRequest
+    | CatalogRequest
+    | LookupRequest
+    | CreateRequest
+    | AddBirthDateRequest
+)
 REQUEST_ADAPTER: TypeAdapter[EncounterRequest] = TypeAdapter(
     Annotated[EncounterRequest, Field(discriminator="action")]
 )

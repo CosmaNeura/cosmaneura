@@ -50,9 +50,16 @@ async def execute_recording_window(
     )
 
     body = operation.payload
-    if not isinstance(scope.session_request, ConfiguredSessionCreate) or scope.creator_actor_id is None:
+    if (
+        not isinstance(scope.session_request, ConfiguredSessionCreate)
+        or scope.creator_actor_id is None
+    ):
         raise CaptureOperationUnavailable
-    if client_request_key in {body.bind_idempotency_key, body.lease_idempotency_key, body.reserve_idempotency_key}:
+    if client_request_key in {
+        body.bind_idempotency_key,
+        body.lease_idempotency_key,
+        body.reserve_idempotency_key,
+    }:
         raise CaptureReceiptInvalid
 
     async def invoke(component: protocol.CaptureOperation, key: str):
@@ -76,14 +83,18 @@ async def execute_recording_window(
         return result
 
     binding = await invoke(
-        protocol.BindKey(kind="bind_key", payload=protocol.KeyPayload(**body.binding.model_dump())),
+        protocol.BindKey(
+            kind="bind_key", payload=protocol.KeyPayload(**body.binding.model_dump())
+        ),
         body.bind_idempotency_key,
     )
     lease = await invoke(
         protocol.IssueLease(kind="issue_lease", payload=protocol.ProtocolPayload()),
         body.lease_idempotency_key,
     )
-    if not isinstance(binding, protocol.KeyReceipt) or not isinstance(lease, protocol.LeaseReceipt):
+    if not isinstance(binding, protocol.KeyReceipt) or not isinstance(
+        lease, protocol.LeaseReceipt
+    ):
         raise CaptureReceiptInvalid
     if binding.session_id != scope.session_id or lease.session_id != scope.session_id:
         raise CaptureReceiptInvalid
@@ -102,7 +113,12 @@ async def execute_recording_window(
     )
     if not isinstance(reservations, protocol.ReservationReceipt):
         raise CaptureReceiptInvalid
-    if reservations.session_id != lease.session_id or reservations.capture_authorized_until != lease.expires_at:
+    if (
+        reservations.session_id != lease.session_id
+        or reservations.capture_authorized_until != lease.expires_at
+    ):
         raise CaptureReceiptInvalid
     check_async_capture_deadline()
-    return PreparedRecordingWindow(binding=binding, lease=lease, reservations=reservations)
+    return PreparedRecordingWindow(
+        binding=binding, lease=lease, reservations=reservations
+    )

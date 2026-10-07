@@ -54,16 +54,28 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         raise authority.AuthorityRequestDeniedError
     # Follow current Core exchange/offboarding: Practice before Doctor, then
     # view-as and authority rows. Recheck a practice move after waiting.
-    owner = session.exec(select(Doctor).where(Doctor.clerk_id == subject)
-                         .execution_options(populate_existing=True)).one_or_none()
-    member = (session.exec(select(PracticeMember).where(PracticeMember.doctor_id == owner.id)
-                           .execution_options(populate_existing=True)).one_or_none()
-              if owner is not None else None)
+    owner = session.exec(
+        select(Doctor)
+        .where(Doctor.clerk_id == subject)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    member = (
+        session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == owner.id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if owner is not None
+        else None
+    )
     if owner is None or member is None:
         raise authority.AuthorityRequestDeniedError
     practice_id, doctor_id = member.practice_id, owner.id
     with lock_doctor_access_rows(
-        session, practice_id=practice_id, doctor_id=doctor_id, subject=subject,
+        session,
+        practice_id=practice_id,
+        doctor_id=doctor_id,
+        subject=subject,
     ) as locked:
         if locked is None:
             raise authority.AuthorityRequestDeniedError
@@ -71,8 +83,11 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         # Use the existing observational guard. Reconciliation may commit stale
         # support-session cleanup, which is outside a discovery/read transaction.
         if actor_bound_unended_view_as_exists(
-            session, actor=owner,
-            identity=ViewAsActorIdentity(issuer=issuer, subject=subject, clerk_session_id=session_id),
+            session,
+            actor=owner,
+            identity=ViewAsActorIdentity(
+                issuer=issuer, subject=subject, clerk_session_id=session_id
+            ),
         ):
             raise authority.AuthorityRequestDeniedError
         actor, identity = authority._actor_for_clerk_identity(session, issuer, subject)
@@ -122,7 +137,9 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             or member.practice_id != link.practice_id
             or practice is None
             or not doctor_access_in_force(
-                doctor, _ownership=ownership, _practice_id=link.practice_id,
+                doctor,
+                _ownership=ownership,
+                _practice_id=link.practice_id,
             )
         ):
             raise authority.AuthorityRequestDeniedError
@@ -146,7 +163,17 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         return ConnectionSnapshot(**data, connection_sha256=digest(data)), doctor.id
 
 
-def _encounters(session, request, connection, doctor_id, *, issuer, subject, settings, require_source_match=True):
+def _encounters(
+    session,
+    request,
+    connection,
+    doctor_id,
+    *,
+    issuer,
+    subject,
+    settings,
+    require_source_match=True,
+):
     if isinstance(request, ConnectionRequest):
         return (), None
     if (
@@ -222,7 +249,9 @@ def _encounters(session, request, connection, doctor_id, *, issuer, subject, set
                 ),
                 AuthorityPerson.status == "active",
             )
-            .with_for_update(read=True, of=cast(Any, (AuthorityPersonBinding, AuthorityPerson)))
+            .with_for_update(
+                read=True, of=cast(Any, (AuthorityPersonBinding, AuthorityPerson))
+            )
         ).one_or_none()
         if eligible is None:
             if isinstance(request, EncounterRequest):

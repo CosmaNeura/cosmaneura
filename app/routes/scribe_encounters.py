@@ -76,7 +76,9 @@ async def read_body(request: Request):
         str(result.creation_key)
     ]:
         raise ValueError("creation_key_required")
-    if isinstance(result, AddBirthDateRequest) and headers.getlist("idempotency-key") != [str(result.change_key)]:
+    if isinstance(result, AddBirthDateRequest) and headers.getlist(
+        "idempotency-key"
+    ) != [str(result.change_key)]:
         raise ValueError("change_key_required")
     return result
 
