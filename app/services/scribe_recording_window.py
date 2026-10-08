@@ -15,7 +15,6 @@ from app.services import scribe_capture_protocol as protocol
 from app.services.scribe_capture_admission import (
     AdmittedCaptureScope,
     CaptureCaller,
-    authorize_admitted_capture,
 )
 from app.services.scribe_capture_deadline import check_async_capture_deadline
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
@@ -66,8 +65,6 @@ async def execute_recording_window(
         check_async_capture_deadline()
         await asyncio.sleep(0)
         check_async_capture_deadline()
-        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
-            raise CaptureReceiptInvalid
         result = await execute_capture_operation(
             caller=caller,
             binding_ref=binding_ref,
@@ -76,10 +73,9 @@ async def execute_recording_window(
             client_request_key=key,
             client=client,
             upload_origins=upload_origins,
+            _expected_scope=scope,
         )
         check_async_capture_deadline()
-        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
-            raise CaptureReceiptInvalid
         return result
 
     binding = await invoke(

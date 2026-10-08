@@ -543,6 +543,7 @@ async def execute_capture_operation(
     client_request_key: str,
     client: ScribeWorkflowClient,
     upload_origins: tuple[str, ...] = (),
+    _expected_scope: AdmittedCaptureScope | None = None,
 ) -> BaseModel:
     try:
         if not re.fullmatch(r"[!-~]{8,255}", client_request_key):
@@ -564,6 +565,17 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
+    # The private compound first-window caller supplies immutable expected
+    # scope, never permission. Compare it with this component's ordinary fresh
+    # authorization before any downstream read or mutation. Each original
+    # post-I/O authorization below still checks against this same scope.
+    if _expected_scope is not None and (
+        not isinstance(
+            operation, (protocol.BindKey, protocol.IssueLease, protocol.ReserveChunks)
+        )
+        or scope != _expected_scope
+    ):
+        raise CaptureReceiptInvalid
     if isinstance(operation, protocol.PrepareRecordingWindow):
         from app.services.scribe_recording_window import execute_recording_window
 
@@ -849,7 +861,12 @@ async def execute_capture_operation(
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
     # The remote receipt/operation remains durable in Scribe if access changed.
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    # Compound components retain the wrapper's final publication fence after
+    # synchronous receipt validation instead of also checking immediately here.
+    if (
+        _expected_scope is None
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
         raise CaptureReceiptInvalid
     checked = validate_receipt(
         operation,
@@ -864,6 +881,11 @@ async def execute_capture_operation(
             checked.validate_raw(raw, scope.session_request.practitioner_id)
         except (ValueError, TypeError, AssertionError):
             raise CaptureReceiptInvalid from None
+    if (
+        _expected_scope is not None
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
+        raise CaptureReceiptInvalid
     return checked
 
 
