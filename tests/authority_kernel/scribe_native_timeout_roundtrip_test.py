@@ -136,9 +136,9 @@ def test_actual_native_uses_one_timeout_call_for_every_owned_statement(
                     )
             assert response.status_code == 200
             assert counts["owned_statements"] > 500
-            assert counts["capture_timeout_calls"] == counts["owned_statements"] * (
-                1 if optimized else 2
-            )
+            assert counts["capture_timeout_calls"] + (
+                counts["record_timeout_calls"] if optimized else 0
+            ) == counts["owned_statements"] * (1 if optimized else 2)
             results.append(dict(counts))
     finally:
         event.remove(engine, "connect", attach)
