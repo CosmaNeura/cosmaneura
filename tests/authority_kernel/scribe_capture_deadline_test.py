@@ -262,9 +262,7 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
         payload=payload,
         key="retained-consent-key",
     )
-    monkeypatch.setattr(
-        admission, "_prepare", lambda *args, **kwargs: "retained-admission"
-    )
+    monkeypatch.setattr(admission, "_prepare_and_claim", lambda *args, **kwargs: claim)
     monkeypatch.setattr(admission, "_claim", lambda *args: claim)
     monkeypatch.setattr(
         admission, "_accept_receipt", lambda *args: calls.append("published receipt")

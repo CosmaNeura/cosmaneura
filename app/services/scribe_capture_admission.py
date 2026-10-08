@@ -361,7 +361,8 @@ def validate_resume_request(
         raise ValueError("invalid_capture_resume_selection")
 
 
-def _prepare(
+@contextmanager
+def _prepared_operation(
     caller: CaptureCaller,
     binding_ref: str,
     workspace_id: UUID,
@@ -371,7 +372,7 @@ def _prepare(
     *,
     expected_session_id: UUID | None = None,
     resume_current: bool = False,
-) -> str:
+):
     try:
         validate_resume_request(
             expected_session_id, resume_current, attestation, configured_capture
@@ -472,9 +473,63 @@ def _prepare(
                 operation.configured_capture,
             ):
                 raise AdmissionConflict
+        yield session, binding, operation
+
+
+def _prepare(
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    client_request_key: str,
+    attestation: ConsentAttestation | None,
+    configured_capture: ConfiguredCaptureSelection | None = None,
+    *,
+    expected_session_id: UUID | None = None,
+    resume_current: bool = False,
+) -> str:
+    # Keep the existing prepare-only primitive for retained-work recovery.
+    with _prepared_operation(
+        caller,
+        binding_ref,
+        workspace_id,
+        client_request_key,
+        attestation,
+        configured_capture,
+        expected_session_id=expected_session_id,
+        resume_current=resume_current,
+    ) as (session, _binding, operation):
         reference = str(operation.id)
         session.commit()
         return reference
+
+
+def _prepare_and_claim(
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    client_request_key: str,
+    attestation: ConsentAttestation | None,
+    configured_capture: ConfiguredCaptureSelection | None = None,
+    *,
+    expected_session_id: UUID | None = None,
+    resume_current: bool = False,
+) -> _PhaseClaim:
+    # Fresh authority and the first durable claim share one uninterrupted local
+    # transaction. Its locks end before downstream I/O; subsequent phases still
+    # independently authorize after each response and before returning ready.
+    with _prepared_operation(
+        caller,
+        binding_ref,
+        workspace_id,
+        client_request_key,
+        attestation,
+        configured_capture,
+        expected_session_id=expected_session_id,
+        resume_current=resume_current,
+    ) as (session, binding, operation):
+        claim = _claim_locked(session, binding, operation)
+        session.commit()
+        return claim
 
 
 def _claim(
@@ -483,47 +538,53 @@ def _claim(
     with _database() as session:
         binding = caller.authorize(session, binding_ref, workspace_id)
         operation = _operation(session, operation_ref)
-        consent = _validate_operation(operation, binding)
-        now = datetime.now(UTC)
-        if operation.lease_expires_at is not None and operation.lease_expires_at > now:
-            raise AdmissionInProgress
-        if operation.consent_receipt is None:
-            phase = "consent"
-            key = f"core-consent-{operation.consent_key.hex}"
-            payload = consent
-        else:
-            try:
-                record = ConsentRecord.model_validate(operation.consent_receipt)
-            except (TypeError, ValueError):
-                raise AdmissionConflict from None
-            if record.revoked_at is not None or not record.all_parties_consented:
-                raise AdmissionConsentUnavailable
-            if record.id != operation.consent_id or not _matches(record, consent):
-                raise AdmissionConflict
-            phase = "session"
-            key = f"core-session-{operation.session_key.hex}"
-            payload = _session_request(operation, record)
-        lease_token = uuid4()
-        operation.lease_token = lease_token
-        operation.lease_phase = phase
-        operation.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
-        operation.status = f"{phase}_unconfirmed"
-        operation.last_error_code = None
-        session.add(operation)
-        claim = _PhaseClaim(
-            operation_ref=operation_ref,
-            request_sha256=operation.request_sha256,
-            scribe_tenant_id=operation.scribe_tenant_id,
-            lease_token=lease_token,
-            phase=phase,
-            key=key,
-            payload=payload,
-            creator_actor_id=str(binding.actor_id)
-            if operation.configured_capture
-            else None,
-        )
+        claim = _claim_locked(session, binding, operation)
         session.commit()
         return claim
+
+
+def _claim_locked(
+    session: Session, binding: ScribeCaptureBinding, operation: ScribeCaptureAdmission
+) -> _PhaseClaim:
+    consent = _validate_operation(operation, binding)
+    now = datetime.now(UTC)
+    if operation.lease_expires_at is not None and operation.lease_expires_at > now:
+        raise AdmissionInProgress
+    if operation.consent_receipt is None:
+        phase = "consent"
+        key = f"core-consent-{operation.consent_key.hex}"
+        payload = consent
+    else:
+        try:
+            record = ConsentRecord.model_validate(operation.consent_receipt)
+        except (TypeError, ValueError):
+            raise AdmissionConflict from None
+        if record.revoked_at is not None or not record.all_parties_consented:
+            raise AdmissionConsentUnavailable
+        if record.id != operation.consent_id or not _matches(record, consent):
+            raise AdmissionConflict
+        phase = "session"
+        key = f"core-session-{operation.session_key.hex}"
+        payload = _session_request(operation, record)
+    lease_token = uuid4()
+    operation.lease_token = lease_token
+    operation.lease_phase = phase
+    operation.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+    operation.status = f"{phase}_unconfirmed"
+    operation.last_error_code = None
+    session.add(operation)
+    return _PhaseClaim(
+        operation_ref=str(operation.id),
+        request_sha256=operation.request_sha256,
+        scribe_tenant_id=operation.scribe_tenant_id,
+        lease_token=lease_token,
+        phase=phase,
+        key=key,
+        payload=payload,
+        creator_actor_id=str(binding.actor_id)
+        if operation.configured_capture
+        else None,
+    )
 
 
 def _matches(record: BaseModel, payload: BaseModel) -> bool:
@@ -695,7 +756,7 @@ async def admit_capture(
     Even a ready operation replays session admission with the same Scribe key,
     forcing Scribe to check current consent before this receipt is returned.
     """
-    operation_ref = _prepare(
+    claim = _prepare_and_claim(
         caller,
         binding_ref,
         workspace_id,
@@ -705,8 +766,9 @@ async def admit_capture(
         expected_session_id=expected_session_id,
         resume_current=resume_current,
     )
-    for _ in range(2):
-        claim = _claim(caller, binding_ref, workspace_id, operation_ref)
+    for index in range(2):
+        if index:
+            claim = _claim(caller, binding_ref, workspace_id, claim.operation_ref)
         try:
             async with asyncio.timeout(PHASE_TIMEOUT_SECONDS):
                 if claim.phase == "consent":
@@ -738,5 +800,5 @@ async def admit_capture(
             _record_failure(claim, error)
             raise AdmissionUnconfirmed from None
         if claim.phase == "session":
-            return _finish(caller, binding_ref, workspace_id, operation_ref)
+            return _finish(caller, binding_ref, workspace_id, claim.operation_ref)
     raise AdmissionUnconfirmed
