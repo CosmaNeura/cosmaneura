@@ -95,15 +95,17 @@ def _lock_capture_owner(
 ) -> _CaptureOwner:
     # Called only after the opaque token and its stored session are validated.
     # Appointment/link input cannot choose the account whose rows are locked.
-    context = authority._context_for_session(
-        session, mount, clerk_issuer=settings.clerk_issuer
-    )
-    # Identical provider-only requirements to authorize_interaction; this early
-    # read selects locks, while that boundary still performs the full decision.
+    # Stored bearer-owned mount fields and fresh identity/roster rows select
+    # the lock owner; they never authorize a capture. The caller's complete
+    # authorize_interaction decision follows these locks, then runs again after
+    # every authority input is refreshed/locked. Do not recursively perform
+    # that complete record/access decision merely to discover the lock owner.
     if (
-        context.surface != "provider_assistant"
-        or context.auth_tier != "provider"
-        or context.person_id is None
+        mount.session_kind != "authenticated"
+        or mount.surface_ceiling != "provider_assistant"
+        or mount.auth_tier_ceiling != "provider"
+        or mount.person_binding_id is None
+        or mount.source_identity_id is None
         or mount.tenant_id is None
         or mount.actor_id is None
     ):
