@@ -9,7 +9,7 @@ from app.services.companion_appointment_setup_contract import (
     AppointmentSetupResponse,
 )
 from app.services.companion_encounter_contract import PAGE_SIZE, EncounterCursor, digest
-from app.services.companion_encounters import _provider
+from app.services.companion_encounters import _locked_provider, _provider
 from app.services.companion_records import (
     RecordUnavailable,
     check_deadline,
@@ -91,7 +91,9 @@ def _current_provider(session, args):
         .execution_options(populate_existing=True)
     ).all()
     session.expire_all()
-    current, current_doctor = _provider(session, **args)
+    current, current_doctor = _locked_provider(
+        session, expected=connection, doctor_id=doctor_id, args=args
+    )
     if current != connection or current_doctor != doctor_id:
         raise AppointmentSetupChanged
     return connection, doctor_id, link
