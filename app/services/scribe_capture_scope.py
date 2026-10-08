@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -24,6 +25,7 @@ from app.configuration.scribe_capture import (
 )
 from app.services import authority
 from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access_row_ownership import capture_doctor_access_rows
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -86,7 +88,10 @@ class _CaptureOwner:
 
 
 def _lock_capture_owner(
-    session: Session, mount: MountContextSession, settings: AuthorityKernelSettings
+    session: Session,
+    mount: MountContextSession,
+    settings: AuthorityKernelSettings,
+    ownership: ExitStack,
 ) -> _CaptureOwner:
     # Called only after the opaque token and its stored session are validated.
     # Appointment/link input cannot choose the account whose rows are locked.
@@ -135,15 +140,29 @@ def _lock_capture_owner(
         doctor.id,
         member.practice_id,
     )
-    _locked(session, Practice, owner.practice_id)
-    doctor = _locked(session, Doctor, owner.doctor_id)
+    if isinstance(session, Session):
+        locked = ownership.enter_context(
+            capture_doctor_access_rows(
+                session,
+                practice_id=owner.practice_id,
+                doctor_id=owner.doctor_id,
+                subject=owner.subject,
+            )
+        )
+        if locked is None:
+            raise CaptureScopeDenied
+        _practice, doctor, member, _proof = locked
+    else:
+        # Nontransactional test adapters cannot issue ownership evidence.
+        _locked(session, Practice, owner.practice_id)
+        doctor = _locked(session, Doctor, owner.doctor_id)
+        member = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor.id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
     # A practice move or identity rebind can win while the first lock waits.
     # Deny instead of taking a different owner's locks in the reverse order.
-    member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
     identity = session.get(
         AuthorityActorExternalIdentity, owner.identity_id, populate_existing=True
     )
@@ -178,6 +197,30 @@ def _authorized_scope(
     appointment_ref: str,
     settings: AuthorityKernelSettings,
 ) -> dict[str, Any]:
+    with ExitStack() as ownership:
+        return _authorized_scope_with_rows(
+            session,
+            workload_client_id=workload_client_id,
+            mount_context_token=mount_context_token,
+            interaction_ref=interaction_ref,
+            client_turn_id=client_turn_id,
+            appointment_ref=appointment_ref,
+            settings=settings,
+            ownership=ownership,
+        )
+
+
+def _authorized_scope_with_rows(
+    session: Session,
+    *,
+    workload_client_id: str,
+    mount_context_token: str,
+    interaction_ref: str,
+    client_turn_id: UUID,
+    appointment_ref: str,
+    settings: AuthorityKernelSettings,
+    ownership: ExitStack,
+) -> dict[str, Any]:
     arguments = {
         "session": session,
         "workload_client_id": workload_client_id,
@@ -190,7 +233,7 @@ def _authorized_scope(
 
     def lock_owner(mount: MountContextSession) -> None:
         nonlocal owner
-        owner = _lock_capture_owner(session, mount, settings)
+        owner = _lock_capture_owner(session, mount, settings, ownership)
 
     # Match exchange/offboarding's Practice -> Doctor order before the complete
     # existing view-as/token/lineage authorization; this hook grants no access.
