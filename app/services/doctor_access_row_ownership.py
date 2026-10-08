@@ -1,9 +1,11 @@
 """Private evidence of actual provider row locks, never an access decision."""
 
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from activemodel.session_manager import _session_context
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
 from sqlalchemy import event, inspect
@@ -11,6 +13,9 @@ from sqlalchemy.orm import InstanceState, SessionTransaction, object_session
 from sqlmodel import Session, select
 
 _ISSUER = object()
+_CAPTURE_ROWS: ContextVar["DoctorAccessRowOwnership | None"] = ContextVar(
+    "capture_doctor_access_rows", default=None
+)
 
 
 @dataclass(frozen=True, eq=False)
@@ -59,6 +64,47 @@ class DoctorAccessRowOwnership:
             and state.get("id") == self._doctor_id
             and practice_id == self._practice_id
         )
+
+
+def current_capture_doctor_rows(
+    session: Session, doctor: Doctor
+) -> DoctorAccessRowOwnership | None:
+    """Current locked rows only; never an earlier access decision."""
+    proof = _CAPTURE_ROWS.get()
+    if proof is not None and proof.matches(
+        session, doctor, practice_id=proof._practice_id
+    ):
+        return proof
+    return None
+
+
+@contextmanager
+def capture_doctor_access_rows(
+    session: Session, *, practice_id: Any, doctor_id: Any, subject: str
+):
+    # A detached/nontransactional adapter cannot mint row ownership. Keep its
+    # original query path instead of interpreting its row objects as locks.
+    if (
+        not isinstance(session, Session)
+        or (session.get_nested_transaction() or session.get_transaction()) is None
+    ):
+        yield None
+        return
+    previous = _session_context.get()
+    if previous is not None and previous is not session:
+        yield None
+        return
+    with lock_doctor_access_rows(
+        session, practice_id=practice_id, doctor_id=doctor_id, subject=subject
+    ) as locked:
+        proof = None if locked is None else locked[3]
+        token = _CAPTURE_ROWS.set(proof)
+        session_token = _session_context.set(session)
+        try:
+            yield locked
+        finally:
+            _session_context.reset(session_token)
+            _CAPTURE_ROWS.reset(token)
 
 
 @contextmanager

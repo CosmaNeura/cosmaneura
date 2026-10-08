@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
-from app.services.doctor_access_row_ownership import DoctorAccessRowOwnership
+from app.services.doctor_access_row_ownership import (
+    DoctorAccessRowOwnership,
+    current_capture_doctor_rows,
+)
 from app.services.organization_access import member_authorization_basis
 from app.services.pilot_access_grandfather import (
     active_pilot_access_grant,
@@ -210,8 +213,13 @@ def resolve_doctor_access(
     through the normal practice/member authorization rules.
     """
 
-    # Only the explicit lock-taking provider caller supplies these private
-    # inputs. A mismatched link/practice or expired proof uses the original SQL.
+    if _ownership is None:
+        with get_session() as session:
+            owned = current_capture_doctor_rows(session, doctor)
+            if owned is not None:
+                _ownership, _practice_id = owned, owned._practice_id
+    # Explicit provider callers and the synchronous capture lock scope supply
+    # these private inputs. Mismatched or expired ownership uses original SQL.
     if not isinstance(_ownership, DoctorAccessRowOwnership):
         _ownership = None
     if _ownership is not None:
