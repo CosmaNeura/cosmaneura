@@ -31,6 +31,7 @@ from tests.authority_kernel.scribe_native_status_enrichment_test import (
 )
 from tests.authority_kernel.scribe_recording_window_test import (
     operation,
+    prepared,
     receipts,
     selected_scope,
 )
@@ -44,12 +45,21 @@ def install_remote(native, monkeypatch, after=None):
         selected_scope(), session_id=saved.id, tenant_id=native.remote.tenant
     )
     values = receipts(selected)
+    combined = prepared(selected).model_copy(
+        update={
+            "binding": values["bind_key"],
+            "lease": values["issue_lease"],
+            "reservations": values["reserve_chunks"],
+        }
+    )
     calls = []
 
     async def capture_operation(tenant, session, component, **kwargs):
         assert tenant == selected.tenant_id and session == selected.session_id
         calls.append((component.kind, kwargs.get("idempotency_key")))
-        if component.kind == "creator_review":
+        if component.kind == "prepare_recording_window":
+            result = combined
+        elif component.kind == "creator_review":
             result = CreatorReviewView(
                 schema_version="1.0", session_id=session, status="created"
             )
@@ -87,13 +97,18 @@ async def invoke(arguments):
         return await gateway.execute_capture_operation(**arguments)
 
 
-def test_real_gateway_window_keeps_receipts_and_lock_order_with_six_fewer_transactions(
+def test_real_gateway_window_removes_requests_with_current_lock_order(
     native, engine, monkeypatch, record_property
 ):
     calls = install_remote(native, monkeypatch)
     arguments = admitted_arguments(native, monkeypatch)
+    from app.services import scribe_recording_window as window
 
-    original = gateway.execute_capture_operation
+    from tests.authority_kernel.scribe_recording_window_legacy_fixture import (
+        execute_recording_window as legacy,
+    )
+
+    current = window.execute_recording_window
     results = []
     for previous in (True, False):
         transactions = []
@@ -109,28 +124,7 @@ def test_real_gateway_window_keeps_receipts_and_lock_order_with_six_fewer_transa
         def observe(connection, _cursor, statement, *_args):
             shape = " ".join(statement.lower().split())
             if " for update" in shape:
-                # Compare the order within each authorization transaction; the
-                # removed repeated transactions are intentionally not retained.
                 connection.info["scope_fence_locks"].append(shape)
-
-        async def prior_wrapper(**kwargs):
-            # Reconstruct the six exact checks in 50b514e5 around the ordinary
-            # component gateway. No expected-scope check existed inside it.
-            expected = kwargs.pop("_expected_scope", None)
-            if expected is not None:
-                current = gateway.authorize_admitted_capture(
-                    kwargs["caller"], kwargs["binding_ref"], kwargs["workspace_id"]
-                )
-                if current != expected:
-                    raise gateway.CaptureReceiptInvalid
-            result = await original(**kwargs)
-            if expected is not None:
-                current = gateway.authorize_admitted_capture(
-                    kwargs["caller"], kwargs["binding_ref"], kwargs["workspace_id"]
-                )
-                if current != expected:
-                    raise gateway.CaptureReceiptInvalid
-            return result
 
         calls.clear()
         event.listen(engine, "begin", begin)
@@ -138,8 +132,9 @@ def test_real_gateway_window_keeps_receipts_and_lock_order_with_six_fewer_transa
         event.listen(engine, "before_cursor_execute", observe)
         try:
             with monkeypatch.context() as patch, query_counts(engine) as count:
-                if previous:
-                    patch.setattr(gateway, "execute_capture_operation", prior_wrapper)
+                patch.setattr(
+                    window, "execute_recording_window", legacy if previous else current
+                )
                 response = asyncio.run(invoke(arguments))
         finally:
             event.remove(engine, "before_cursor_execute", observe)
@@ -149,27 +144,36 @@ def test_real_gateway_window_keeps_receipts_and_lock_order_with_six_fewer_transa
             (response.model_dump(mode="json"), count, transactions, calls[:])
         )
     assert results[0][0] == results[1][0]
-    assert results[0][3] == results[1][3]
+    assert [row[0] for row in results[0][3]] == [
+        "creator_review",
+        "bind_key",
+        "issue_lease",
+        "reserve_chunks",
+    ]
+    assert [row[0] for row in results[1][3]] == ["prepare_recording_window"]
     assert results[1][1]["all_selects"] < results[0][1]["all_selects"]
-    # Every complete authorization retains the exact statement/lock order,
-    # including repeated locks. Only six whole redundant transactions disappear.
     before, after = results[0][2], results[1][2]
-    assert len(before) == len(after) + 6
+    assert len(after) == 3 and len(before) == 11
     assert all(transaction == before[0] for transaction in before + after)
     record_property("previous_selects", results[0][1]["all_selects"])
     record_property("current_selects", results[1][1]["all_selects"])
-    record_property("removed_wrapper_transactions", 6)
     record_property("previous_authorization_transactions", len(before))
     record_property("current_authorization_transactions", len(after))
+    record_property("previous_scribe_requests", len(results[0][3]))
+    record_property("current_scribe_requests", len(results[1][3]))
 
 
 @pytest.mark.parametrize(
     "phase,kind",
-    [("remote", "creator_review")]
+    [("remote", "prepare_recording_window")]
     + [
-        (phase, kind)
-        for phase in ("remote", "validation")
-        for kind in ("bind_key", "issue_lease", "reserve_chunks")
+        ("validation", kind)
+        for kind in (
+            "bind_key",
+            "issue_lease",
+            "reserve_chunks",
+            "prepare_recording_window",
+        )
     ],
 )
 def test_committed_revocation_prevents_next_component_or_final_receipt(
@@ -209,8 +213,7 @@ def test_committed_revocation_prevents_next_component_or_final_receipt(
     calls.clear()
     with pytest.raises(AuthorityKernelError):
         asyncio.run(invoke(arguments))
-    order = ["creator_review", "bind_key", "issue_lease", "reserve_chunks"]
-    assert [call[0] for call in calls] == order[: order.index(kind) + 1]
+    assert [call[0] for call in calls] == ["prepare_recording_window"]
 
 
 @pytest.mark.asyncio

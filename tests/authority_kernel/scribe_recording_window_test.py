@@ -20,7 +20,6 @@ from app.services.scribe_capture_deadline import (
     capture_budget,
 )
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
-from app.services.scribe_creator_review_contract import CreatorReviewView
 from app.services.scribe_recording_window_contract import PrepareRecordingWindow
 from app.services.scribe_workflow import HttpScribeWorkflowClient, ScribeWorkflowClient
 
@@ -117,62 +116,60 @@ def test_closed_window_rejects_malformed_or_injected_recipe(mutation):
     assert "original-bind-key" not in repr(operation())
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("lost", ["bind_key", "issue_lease", "reserve_chunks"])
-async def test_partial_commit_replays_the_same_component_receipts(monkeypatch, lost):
-    selected = selected_scope()
+def prepared(selected):
     values = receipts(selected)
-    calls, committed = [], {}
+    return window.PreparedRecordingWindow(
+        binding=values["bind_key"],
+        lease=values["issue_lease"],
+        reservations=values["reserve_chunks"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_lost_combined_reply_replays_original_component_keys(monkeypatch):
+    selected = selected_scope()
+    committed, calls = {}, []
     lose = True
 
-    async def execute(**kwargs):
-        nonlocal lose
-        component, key = kwargs["operation"], kwargs["client_request_key"]
-        assert kwargs["_expected_scope"] == selected
-        calls.append((component, key))
-        committed.setdefault(key, values[component.kind])
-        if component.kind == lost and lose:
-            lose = False
-            raise gateway.CaptureOperationUnconfirmed
-        return committed[key]
+    class Remote:
+        async def capture_operation(self, tenant, session, component, **kwargs):
+            nonlocal lose
+            assert (tenant, session) == (selected.tenant_id, selected.session_id)
+            assert kwargs["creator_actor_id"] == selected.creator_actor_id
+            calls.append((component, kwargs))
+            key = kwargs["idempotency_key"]
+            committed.setdefault(key, prepared(selected))
+            if lose:
+                lose = False
+                from app.services.scribe_workflow import ScribeWorkflowError
 
-    monkeypatch.setattr(gateway, "execute_capture_operation", execute)
-    kwargs = arguments(selected)
+                raise ScribeWorkflowError("synthetic_lost_reply")
+            return committed[key]
+
+    monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
+    args = arguments(selected) | {"client": Remote()}
     with pytest.raises(gateway.CaptureOperationUnconfirmed):
-        await window.execute_recording_window(**kwargs)
-    returned = await window.execute_recording_window(**kwargs)
-    assert (
-        returned.binding == values["bind_key"]
-        and returned.lease == values["issue_lease"]
-    )
-    assert returned.reservations == values["reserve_chunks"] and len(committed) == 3
-    for kind, key in (
-        ("bind_key", "original-bind-key"),
-        ("issue_lease", "original-lease-key"),
-        ("reserve_chunks", "original-reserve-key"),
+        await window.execute_recording_window(**args)
+    returned = await window.execute_recording_window(**args)
+    assert len(calls) == 2 and calls[0] == calls[1] and len(committed) == 1
+    assert returned == next(iter(committed.values()))
+    remote = calls[0][0]
+    for field, kind, original in (
+        ("bind_idempotency_key", "bind_key", "original-bind-key"),
+        ("lease_idempotency_key", "issue_lease", "original-lease-key"),
+        ("reserve_idempotency_key", "reserve_chunks", "original-reserve-key"),
     ):
-        matching = [op for op, saved_key in calls if saved_key == key]
-        assert matching and all(
-            op == matching[0] and op.kind == kind for op in matching
+        assert getattr(remote.payload, field) == gateway.component_request_key(
+            selected, kind, original
         )
-    reserve = calls[-1][0].payload
-    assert reserve.capture_lease_id == returned.lease.lease_id
-    assert reserve.capture_lease_generation == returned.lease.generation
-    assert (reserve.channel, reserve.first_sequence_number, reserve.count) == (
-        "microphone",
-        0,
-        1,
-    )
+    assert remote.payload.binding == operation().payload.binding
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("check", range(1, 11))
+@pytest.mark.parametrize("check", [1, 2, 3])
 @pytest.mark.parametrize("failure", ["revoked", "changed_scope"])
-async def test_every_component_checks_scope_before_and_after_io(
-    monkeypatch, check, failure
-):
-    selected = selected_scope()
-    values, calls = receipts(selected), []
+async def test_current_scope_brackets_combined_request(monkeypatch, check, failure):
+    selected, calls = selected_scope(), []
     count = 0
 
     def authorize(*_):
@@ -187,54 +184,117 @@ async def test_every_component_checks_scope_before_and_after_io(
     class Remote:
         async def capture_operation(self, _tenant, _session, component, **kwargs):
             calls.append(component.kind)
-            if component.kind == "creator_review":
-                return CreatorReviewView(
-                    schema_version="1.0",
-                    session_id=selected.session_id,
-                    status="created",
-                )
-            return values[component.kind]
+            return prepared(selected)
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
+    args = arguments(selected) | {"client": Remote()}
+    args.pop("scope")
     with pytest.raises(gateway.CaptureGatewayError):
-        await window.execute_recording_window(
-            **(arguments(selected) | {"client": Remote()})
-        )
-    # Bind retains creator-review before its mutation. Each component has its
-    # own fresh pre/post authorization; the wrapper no longer repeats those.
-    before_failure = {
-        1: [],
-        2: ["creator_review"],
-        3: ["creator_review"],
-        4: ["creator_review", "bind_key"],
-        5: ["creator_review", "bind_key"],
-        6: ["creator_review", "bind_key"],
-        7: ["creator_review", "bind_key", "issue_lease"],
-        8: ["creator_review", "bind_key", "issue_lease"],
-        9: ["creator_review", "bind_key", "issue_lease"],
-        10: ["creator_review", "bind_key", "issue_lease", "reserve_chunks"],
-    }
-    assert calls == before_failure[check]
+        await gateway.execute_capture_operation(**args)
+    assert calls == ([] if check < 3 else ["prepare_recording_window"])
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cancel_after", ["bind_key", "issue_lease", "reserve_chunks"])
-async def test_cancelled_budget_cannot_advance_or_publish(monkeypatch, cancel_after):
-    selected = selected_scope()
-    values, calls = receipts(selected), []
-    budget = CaptureBudget(30)
+@pytest.mark.parametrize(
+    "stage", ["before_dispatch", "after_remote", "during_validation"]
+)
+async def test_cancelled_budget_cannot_dispatch_or_publish(monkeypatch, stage):
+    selected, calls, budget = selected_scope(), [], CaptureBudget(30)
 
-    async def execute(**kwargs):
-        kind = kwargs["operation"].kind
-        calls.append(kind)
-        if kind == cancel_after:
+    class Remote:
+        async def capture_operation(self, _tenant, _session, component, **kwargs):
+            calls.append(component.kind)
+            if stage == "after_remote":
+                budget.cancel()
+            return prepared(selected)
+
+    original = gateway.validate_receipt
+
+    def validate(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if stage == "during_validation":
             budget.cancel()
-        return values[kind]
+        return result
 
-    monkeypatch.setattr(gateway, "execute_capture_operation", execute)
-    with capture_budget(budget), pytest.raises(CaptureDeadlineExceeded):
-        await window.execute_recording_window(**arguments(selected))
-    assert calls[-1] == cancel_after
+    monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
+    monkeypatch.setattr(gateway, "validate_receipt", validate)
+    if stage == "before_dispatch":
+        budget.cancel()
+    with pytest.raises(CaptureDeadlineExceeded), capture_budget(budget):
+        await window.execute_recording_window(
+            **(arguments(selected) | {"client": Remote()})
+        )
+    assert calls == ([] if stage == "before_dispatch" else ["prepare_recording_window"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "binding_session",
+        "key_version",
+        "lease_session",
+        "lease_generation",
+        "expired",
+        "reservation_session",
+        "count",
+        "channel",
+        "sequence",
+        "aad",
+        "lease_expiry",
+        "injected",
+    ],
+)
+async def test_each_component_receipt_is_validated(monkeypatch, mutation):
+    from datetime import UTC, datetime, timedelta
+
+    from pydantic import BaseModel
+
+    selected = selected_scope()
+    data = prepared(selected).model_dump(mode="json")
+    if mutation == "binding_session":
+        data["binding"]["session_id"] = str(uuid4())
+    elif mutation == "key_version":
+        data["binding"]["key_version"] = "different-key"
+    elif mutation == "lease_session":
+        data["lease"]["session_id"] = str(uuid4())
+    elif mutation == "lease_generation":
+        data["lease"]["generation"] = 2
+    elif mutation == "expired":
+        data["lease"]["expires_at"] = (
+            datetime.now(UTC) - timedelta(seconds=1)
+        ).isoformat()
+    elif mutation == "reservation_session":
+        data["reservations"]["session_id"] = str(uuid4())
+    elif mutation == "count":
+        data["reservations"]["reservations"] = []
+    elif mutation == "channel":
+        data["reservations"]["reservations"][0]["channel"] = "mixed"
+    elif mutation == "sequence":
+        data["reservations"]["reservations"][0]["sequence_number"] = 1
+    elif mutation == "aad":
+        data["reservations"]["reservations"][0]["additional_authenticated_data"] = (
+            "invalid-aad"
+        )
+    elif mutation == "lease_expiry":
+        data["reservations"]["capture_authorized_until"] = (
+            datetime.now(UTC) + timedelta(seconds=180)
+        ).isoformat()
+    else:
+        data["private_sentinel"] = "private_sentinel"
+
+    class Evidence(BaseModel):
+        model_config = {"extra": "allow"}
+
+    class Remote:
+        async def capture_operation(self, *_args, **_kwargs):
+            return Evidence.model_validate(data)
+
+    monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
+    with pytest.raises(gateway.CaptureReceiptInvalid):
+        await window.execute_recording_window(
+            **(arguments(selected) | {"client": Remote()})
+        )
 
 
 @pytest.mark.asyncio
@@ -252,49 +312,41 @@ async def test_outer_key_cannot_alias_a_component(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(
+async def test_real_gateway_and_http_transport_use_one_closed_creator_receiver(
     monkeypatch,
 ):
-    selected = selected_scope()
-    values, calls = receipts(selected), []
-    view = {
-        "schema_version": "1.0",
-        "session_id": str(selected.session_id),
-        "status": "created",
-    }
+    selected, calls = selected_scope(), []
 
     def handler(request):
         calls.append(request)
+        assert request.method == "POST"
+        assert (
+            request.url.path
+            == f"/v1/captured-sessions/{selected.session_id}/recording-window"
+        )
         assert request.headers["x-tenant-id"] == str(selected.tenant_id)
-        if request.url.path.endswith("/review"):
-            assert (
-                request.headers["x-scribe-creator-actor-id"]
-                == selected.creator_actor_id
-            )
-            return httpx.Response(200, json=view)
-        position = (
-            len([call for call in calls if not call.url.path.endswith("/review")]) - 1
+        assert request.headers["x-scribe-creator-actor-id"] == selected.creator_actor_id
+        assert request.headers["idempotency-key"] == gateway.component_request_key(
+            selected, "prepare_recording_window", "original-window-key"
         )
-        kind = ["bind_key", "issue_lease", "reserve_chunks"][position]
-        key = ["original-bind-key", "original-lease-key", "original-reserve-key"][
-            position
-        ]
-        expected = (
-            "core-capture-"
-            + hashlib.sha256(
-                json.dumps(
-                    [selected.operation_ref, kind, key], separators=(",", ":")
-                ).encode()
-            ).hexdigest()
-        )
-        assert request.headers["idempotency-key"] == expected
-        if kind != "bind_key":
-            assert f"/captured-sessions/{selected.session_id}/" in request.url.path
-            assert (
-                request.headers["x-scribe-creator-actor-id"]
-                == selected.creator_actor_id
+        body = json.loads(request.content)
+        assert set(body) == set(operation().payload.model_dump())
+        for field, kind in (
+            ("bind_idempotency_key", "bind_key"),
+            ("lease_idempotency_key", "issue_lease"),
+            ("reserve_idempotency_key", "reserve_chunks"),
+        ):
+            original = getattr(operation().payload, field)
+            expected = (
+                "core-capture-"
+                + hashlib.sha256(
+                    json.dumps(
+                        [selected.operation_ref, kind, original], separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
             )
-        return httpx.Response(200, json=values[kind].model_dump(mode="json"))
+            assert body[field] == expected
+        return httpx.Response(200, json=prepared(selected).model_dump(mode="json"))
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
     async with httpx.AsyncClient(
@@ -307,14 +359,7 @@ async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(
             timeout_seconds=3,
             client=transport,
         )
-        kwargs = arguments(selected)
-        result = await gateway.execute_capture_operation(
-            caller=kwargs["caller"],
-            binding_ref=kwargs["binding_ref"],
-            workspace_id=kwargs["workspace_id"],
-            operation=kwargs["operation"],
-            client_request_key=kwargs["client_request_key"],
-            client=remote,
-        )
-    assert isinstance(result, window.PreparedRecordingWindow)
-    assert len(calls) == 4
+        args = arguments(selected) | {"client": remote}
+        args.pop("scope")
+        result = await gateway.execute_capture_operation(**args)
+    assert isinstance(result, window.PreparedRecordingWindow) and len(calls) == 1

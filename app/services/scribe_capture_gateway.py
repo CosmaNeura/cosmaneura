@@ -294,6 +294,14 @@ def validate_receipt(
     capture_profile: protocol.CaptureProfileReceipt | None = None,
 ) -> BaseModel:
     """Validate even injected clients; retained or malformed receipts grant nothing."""
+    if isinstance(operation, protocol.PrepareRecordingWindow):
+        from app.services.scribe_recording_window import (
+            validate_prepared_recording_window,
+        )
+
+        return validate_prepared_recording_window(
+            operation, receipt, scope, upload_origins=upload_origins, now=now
+        )
     if operation.kind == "preparation_metadata":
         try:
             result = protocol.PreparationMetadata.model_validate(
