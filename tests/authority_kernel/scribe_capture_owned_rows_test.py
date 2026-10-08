@@ -71,8 +71,11 @@ def test_actual_native_receipts_and_lock_order_match_with_fewer_roundtrips(
         )
     assert results[0][0] == results[1][0]
     assert results[0][2] == results[1][2]
+    # Metadata now performs nine authorizations: two overlapping configured
+    # read checks were consolidated after receipt validation. Ownership still
+    # removes nine selects per authorization, with unchanged lock order.
     assert results[0][1] - results[1][1] >= (
-        99 if kind == "preparation_metadata" else 18
+        81 if kind == "preparation_metadata" else 18
     )
     assert engine.pool.checkedout() == 0
     assert session_manager._session_context.get() is None
