@@ -474,6 +474,64 @@
         }
       }
     },
+    "/internal/v1/billing-header-operations/{operation_id}/generation-continue": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Generation Continue",
+        "operationId": "billing_header_generation_continue",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabGenerationContinueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabGenerationContinueResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/note-schemas/{schema_id}/fields": {
       "get": {
         "tags": [
@@ -3761,6 +3819,16 @@
       },
       "BillingTransportState": {
         "properties": {
+          "asyncGeneration": {
+            "type": "boolean",
+            "title": "Asyncgeneration",
+            "default": false
+          },
+          "generationContinuation": {
+            "type": "boolean",
+            "title": "Generationcontinuation",
+            "default": false
+          },
           "state": {
             "type": "string",
             "enum": [
@@ -3814,7 +3882,8 @@
               "accept",
               "read",
               "generate",
-              "save"
+              "save",
+              "generation-status"
             ],
             "title": "Action"
           },
@@ -3845,7 +3914,8 @@
               "completed-note.accept",
               "header.read",
               "header.generate",
-              "header.save"
+              "header.save",
+              "header.generation-status"
             ],
             "title": "Purpose"
           },
@@ -3887,6 +3957,74 @@
           "source"
         ],
         "title": "CabActionResult"
+      },
+      "CabGenerationContinueRequest": {
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "purpose",
+          "command"
+        ],
+        "title": "CabGenerationContinueRequest"
+      },
+      "CabGenerationContinueResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-generation-continuation.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "generationExpiresAt": {
+            "type": "string",
+            "title": "Generationexpiresat"
+          },
+          "generationAuthorizedUntil": {
+            "type": "string",
+            "title": "Generationauthorizeduntil"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "operationId",
+          "requestSha256",
+          "generationExpiresAt",
+          "generationAuthorizedUntil"
+        ],
+        "title": "CabGenerationContinueResult"
       },
       "ClaimOrganizationAccessBody": {
         "properties": {
