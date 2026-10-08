@@ -678,6 +678,18 @@ class HttpScribeWorkflowClient:
             )
         except (ValueError, TypeError, AttributeError):
             raise ScribeWorkflowRejectedError("scribe_invalid_operation") from None
+        if operation.kind == "preparation_metadata":
+            if creator_actor_id is None or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
+            ):
+                raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+            return await self._get_resource(
+                tenant_id,
+                f"/v1/captured-sessions/{session_id}/preparation-metadata",
+                capture_protocol.PreparationMetadata,
+                max_bytes=MAX_CREATOR_REVIEW_BYTES + 16_384,
+                creator_actor_id=creator_actor_id,
+            )
         creator_window = creator_actor_id is not None and isinstance(
             operation,
             (
