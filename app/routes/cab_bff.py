@@ -122,11 +122,13 @@ def billing_header_cab(
     asynchronous = (
         body.action == "generate" and body.command.get("responseMode") == "async"
     )
+    async_action = None
     try:
         if asynchronous:
-            original, generation_action_id, replay = authority.begin_async_action(
+            async_action = authority.begin_async_action(
                 actor, operation_id, body.command
             )
+            original, _, replay = async_action
             if replay:
                 # An existing local intent never resubmits inference, even if acceptance was lost.
                 status_command = {
@@ -149,24 +151,22 @@ def billing_header_cab(
             operation = minimized_operation(row)
             session.commit()  # No Core row locks during CAB's callback.
         result = transport.CabClient().invoke(payload, operation)
-        if asynchronous and replay:
+        if async_action is not None and async_action[2]:
             result = {
                 **result,
                 "purpose": "header.generate",
-                "requestSha256": digest(original),
+                "requestSha256": digest(async_action[0]),
             }
         with get_session() as session:
             authority._current(
                 session, actor, operation_id
             )  # Do not display data after local scope loss.
-        if asynchronous and body.command.get("continuationConsent") is True:
+        if async_action is not None and body.command.get("continuationConsent") is True:
             result = {
                 **result,
                 "result": {
                     **result["result"],
-                    "continuation": authority.continuation_receipt(
-                        generation_action_id
-                    ),
+                    "continuation": authority.continuation_receipt(async_action[1]),
                 },
             }
         return CabActionResult.model_validate(result)
