@@ -8,6 +8,7 @@ from typeid import TypeID
 from app.services import authority, provider_record_authority
 from app.services.companion_appointment_setup import _current_provider
 from app.services.companion_encounter_contract import digest
+from app.services.companion_encounters import _locked_provider
 from app.services.companion_records import (
     RecordUnavailable,
     check_deadline,
@@ -259,9 +260,28 @@ def encounter_workflow(
         settings=authority_settings,
     )
     with global_session() as session:
+        provider_transaction = None
+        provider_locks_current = False
+
+        def transaction_changed(*_args):
+            nonlocal provider_locks_current
+            provider_locks_current = False
+
         try:
             with transaction_budget(session, deadline):
                 connection, doctor_id, link = _current_provider(session, args)
+                if isinstance(request, LookupRequest):
+                    # The initial routine individually locks the full provider
+                    # authority/link/member rows. Only this synchronous lookup
+                    # may use their existing fresh final-row validator, in the
+                    # same uninterrupted transaction. It re-reads permission;
+                    # neither a decision nor a transaction spans remote I/O.
+                    provider_transaction = (
+                        session.get_nested_transaction() or session.get_transaction()
+                    )
+                    provider_locks_current = provider_transaction is not None
+                    for name in ("after_transaction_create", "after_transaction_end"):
+                        event.listen(session, name, transaction_changed)
                 if connection.actor_ref != request.expected_actor_ref:
                     raise authority.AuthorityRequestDeniedError
                 doctor = session.get(Doctor, doctor_id)
@@ -439,7 +459,19 @@ def encounter_workflow(
                 else:
                     raise ValueError("unsupported_action")
                 session.expire_all()
-                current, current_doctor, _ = _current_provider(session, args)
+                if (
+                    isinstance(request, LookupRequest)
+                    and provider_locks_current
+                    and provider_transaction is not None
+                    and provider_transaction.is_active
+                    and (session.get_nested_transaction() or session.get_transaction())
+                    is provider_transaction
+                ):
+                    current, current_doctor = _locked_provider(
+                        session, expected=connection, doctor_id=doctor_id, args=args
+                    )
+                else:
+                    current, current_doctor, _ = _current_provider(session, args)
                 if current != connection or current_doctor != doctor_id:
                     raise authority.AuthorityRequestDeniedError
                 if changed:
@@ -457,4 +489,7 @@ def encounter_workflow(
                 available()
                 return result
         finally:
+            if isinstance(request, LookupRequest) and provider_transaction is not None:
+                for name in ("after_transaction_create", "after_transaction_end"):
+                    event.remove(session, name, transaction_changed)
             session.rollback()
