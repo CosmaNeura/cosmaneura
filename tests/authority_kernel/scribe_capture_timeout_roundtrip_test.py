@@ -70,7 +70,18 @@ def test_both_settings_are_local_and_refreshed_on_each_actual_statement(
                 < float(first[0].removesuffix("ms"))
                 <= 1000
             )
-            assert second[0] == second[1]
+            # Each limit samples the remaining deadline independently. A
+            # millisecond boundary can make the later lock limit smaller;
+            # both must stay positive, decrease and respect that deadline.
+            assert (
+                0
+                < float(second[1].removesuffix("ms"))
+                < float(first[1].removesuffix("ms"))
+                <= 1000
+            )
+            assert float(second[1].removesuffix("ms")) <= float(
+                second[0].removesuffix("ms")
+            )
             getattr(connection, ending)()
         assert (
             connection.execute(

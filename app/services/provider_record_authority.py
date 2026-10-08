@@ -41,6 +41,7 @@ from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
 )
+from sqlalchemy import select as sql_select
 from sqlmodel import Session, select
 
 
@@ -72,6 +73,19 @@ def _current_practice(session: Session, doctor: Doctor) -> Practice:
     return practice
 
 
+def _record_lineage_rows(session, scope, binding):
+    """Fresh exact-key lineage rows; never a provider access decision."""
+    return session.exec(
+        sql_select(ProviderPracticeAuthority, Appointment, Patient, AuthorityPerson)
+        .select_from(ProviderPracticeAuthority)
+        .join(Appointment, Appointment.id == scope.appointment_id)
+        .join(Patient, Patient.id == scope.patient_id)
+        .join(AuthorityPerson, AuthorityPerson.id == binding.person_id)
+        .where(ProviderPracticeAuthority.id == scope.practice_authority_id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+
+
 def validate_provider_record_scope(
     *,
     session: Session,
@@ -91,10 +105,13 @@ def validate_provider_record_scope(
     if doctor is None or doctor.clerk_id != clerk_subject:
         raise ProviderRecordScopeDenied
     practice = _current_practice(session, doctor)
-    mapping = session.get(ProviderPracticeAuthority, scope.practice_authority_id)
-    appointment = session.get(Appointment, scope.appointment_id, populate_existing=True)
-    patient = session.get(Patient, scope.patient_id, populate_existing=True)
-    person = session.get(AuthorityPerson, binding.person_id, populate_existing=True)
+    # Keep this fresh record-lineage boundary after the complete current
+    # practice/access decision. Nothing becomes cached permission, and the
+    # separate exact provenance check still follows these ownership checks.
+    current = _record_lineage_rows(session, scope, binding)
+    if current is None:
+        raise ProviderRecordScopeDenied
+    mapping, appointment, patient, person = current
     if (
         mapping is None
         or mapping.practice_id != practice.id

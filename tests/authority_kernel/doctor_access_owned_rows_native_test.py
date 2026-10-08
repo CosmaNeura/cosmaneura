@@ -10,6 +10,7 @@ import pytest
 from app.services import companion_appointment_setup, companion_encounters
 from app.services import doctor_access as access
 from app.services import pilot_access_grandfather as pilot
+from app.services import provider_record_authority as records
 from app.services.doctor_access_row_ownership import DoctorAccessRowOwnership
 from app.services.practice_access import set_billing_exemption
 from app.services.practice_member_access import revoke_member_access
@@ -23,6 +24,7 @@ from sqlmodel import Session, col, select, text
 
 from tests.authority_kernel.companion_provider_provisioning_test import session_for
 from tests.authority_kernel.doctor_access_query_equivalence_test import grant
+from tests.authority_kernel.provider_record_lineage_reads_test import original_rows
 from tests.authority_kernel.scribe_native_status_enrichment_test import (
     engine as _engine,
 )
@@ -62,6 +64,8 @@ def test_existing_companion_connection_setup_and_revocation_on_owned_database(
 def test_real_native_reduces_only_explicit_owned_provider_queries(
     native, engine, monkeypatch, kind, before, after, eligible, total, record_property
 ):
+    # Preserve this older comparison's original record-lineage baseline.
+    monkeypatch.setattr(records, "_record_lineage_rows", original_rows)
     # Isolate the older owned-access-query change in this original regression.
     # The joined final-provider path has its own response/lock/count comparison.
     monkeypatch.setattr(
