@@ -18,6 +18,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
     authenticate_scribe_capture_request,
+    request_signing_keys,
 )
 from app.routes.dependencies.view_as import view_as_browser_session_present
 from app.routes.embed_context import (
@@ -99,10 +100,11 @@ def authenticate_native_workload(request: Request) -> EntraServicePrincipal:
     credentials = HTTPAuthorizationCredentials(
         scheme="Bearer", credentials=values[0][7:]
     )
-    with phase("workload_agent"):
-        agent = authenticate_agent_api_request(credentials)
-    with phase("workload_capture"):
-        capture = authenticate_scribe_capture_request(credentials)
+    with request_signing_keys():
+        with phase("workload_agent"):
+            agent = authenticate_agent_api_request(credentials)
+        with phase("workload_capture"):
+            capture = authenticate_scribe_capture_request(credentials)
     if agent.client_id != capture.client_id:
         raise HTTPException(403, "Native capture unavailable")
     return capture

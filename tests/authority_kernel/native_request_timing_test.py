@@ -212,7 +212,10 @@ def test_jwks_observer_preserves_constructor_fetch_result_error_and_cache(
     monkeypatch.setattr(PyJWKClient, "fetch_data", fetch)
     policy = cast(
         entra.EntraAuthPolicy,
-        SimpleNamespace(jwks_url="https://identity.test.invalid/jwks"),
+        SimpleNamespace(
+            issuer="https://identity.test.invalid",
+            jwks_url="https://identity.test.invalid/jwks",
+        ),
     )
     plain = entra.EntraTokenDecoder(policy).jwks_client
     assert type(plain) is PyJWKClient
