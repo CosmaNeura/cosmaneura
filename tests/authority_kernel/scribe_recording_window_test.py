@@ -20,6 +20,7 @@ from app.services.scribe_capture_deadline import (
     capture_budget,
 )
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
+from app.services.scribe_creator_review_contract import CreatorReviewView
 from app.services.scribe_recording_window_contract import PrepareRecordingWindow
 from app.services.scribe_workflow import HttpScribeWorkflowClient, ScribeWorkflowClient
 
@@ -127,6 +128,7 @@ async def test_partial_commit_replays_the_same_component_receipts(monkeypatch, l
     async def execute(**kwargs):
         nonlocal lose
         component, key = kwargs["operation"], kwargs["client_request_key"]
+        assert kwargs["_expected_scope"] == selected
         calls.append((component, key))
         committed.setdefault(key, values[component.kind])
         if component.kind == lost and lose:
@@ -135,7 +137,6 @@ async def test_partial_commit_replays_the_same_component_receipts(monkeypatch, l
         return committed[key]
 
     monkeypatch.setattr(gateway, "execute_capture_operation", execute)
-    monkeypatch.setattr(window, "authorize_admitted_capture", lambda *_: selected)
     kwargs = arguments(selected)
     with pytest.raises(gateway.CaptureOperationUnconfirmed):
         await window.execute_recording_window(**kwargs)
@@ -165,7 +166,7 @@ async def test_partial_commit_replays_the_same_component_receipts(monkeypatch, l
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("check", range(1, 7))
+@pytest.mark.parametrize("check", range(1, 11))
 @pytest.mark.parametrize("failure", ["revoked", "changed_scope"])
 async def test_every_component_checks_scope_before_and_after_io(
     monkeypatch, check, failure
@@ -183,15 +184,37 @@ async def test_every_component_checks_scope_before_and_after_io(
             return replace(selected, creator_actor_id="actor_changed")
         return selected
 
-    async def execute(**kwargs):
-        calls.append(kwargs["operation"].kind)
-        return values[calls[-1]]
+    class Remote:
+        async def capture_operation(self, _tenant, _session, component, **kwargs):
+            calls.append(component.kind)
+            if component.kind == "creator_review":
+                return CreatorReviewView(
+                    schema_version="1.0",
+                    session_id=selected.session_id,
+                    status="created",
+                )
+            return values[component.kind]
 
-    monkeypatch.setattr(window, "authorize_admitted_capture", authorize)
-    monkeypatch.setattr(gateway, "execute_capture_operation", execute)
+    monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
     with pytest.raises(gateway.CaptureGatewayError):
-        await window.execute_recording_window(**arguments(selected))
-    assert len(calls) == check // 2
+        await window.execute_recording_window(
+            **(arguments(selected) | {"client": Remote()})
+        )
+    # Bind retains creator-review before its mutation. Each component has its
+    # own fresh pre/post authorization; the wrapper no longer repeats those.
+    before_failure = {
+        1: [],
+        2: ["creator_review"],
+        3: ["creator_review"],
+        4: ["creator_review", "bind_key"],
+        5: ["creator_review", "bind_key"],
+        6: ["creator_review", "bind_key"],
+        7: ["creator_review", "bind_key", "issue_lease"],
+        8: ["creator_review", "bind_key", "issue_lease"],
+        9: ["creator_review", "bind_key", "issue_lease"],
+        10: ["creator_review", "bind_key", "issue_lease", "reserve_chunks"],
+    }
+    assert calls == before_failure[check]
 
 
 @pytest.mark.asyncio
@@ -208,7 +231,6 @@ async def test_cancelled_budget_cannot_advance_or_publish(monkeypatch, cancel_af
             budget.cancel()
         return values[kind]
 
-    monkeypatch.setattr(window, "authorize_admitted_capture", lambda *_: selected)
     monkeypatch.setattr(gateway, "execute_capture_operation", execute)
     with capture_budget(budget), pytest.raises(CaptureDeadlineExceeded):
         await window.execute_recording_window(**arguments(selected))
@@ -275,7 +297,6 @@ async def test_real_gateway_and_http_transport_keep_existing_receipt_routes(
         return httpx.Response(200, json=values[kind].model_dump(mode="json"))
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
-    monkeypatch.setattr(window, "authorize_admitted_capture", lambda *_: selected)
     async with httpx.AsyncClient(
         base_url="https://scribe.invalid", transport=httpx.MockTransport(handler)
     ) as transport:
