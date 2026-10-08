@@ -27,7 +27,14 @@ from app.services.companion_record_contract import (
     canonical,
     ordered_note_hash,
 )
+from app.services.scribe_capture_deadline import _sql_budget
 from app.services.scribe_capture_scope import authorize_capture_binding
+from app.utils.statement_timeout_scope import (
+    acknowledge_record_timeout,
+    consume_record_timeout,
+    current_record_timeout_scope,
+    record_timeout_scope,
+)
 
 from activemodel.session_manager import global_session
 from app.models.ai_visit_note import AIVisitNote
@@ -83,11 +90,33 @@ def transaction_budget(session: Session, deadline: float | RecordBudget):
     if connection.dialect.name != "postgresql":
         raise RecordUnavailable
 
-    def before_cursor_execute(
-        _connection, cursor, _statement, _parameters, _context, _many
-    ):
+    def limits():
         statement_ms = check_deadline(deadline)
         lock_ms = min(check_deadline(deadline), 2000)
+        return statement_ms, lock_ms
+
+    def before_cursor_execute(
+        _connection, cursor, _statement, _parameters, context, _many
+    ):
+        statement_ms, lock_ms = limits()
+        capture = _sql_budget()
+        combined = (
+            capture is not None
+            and context is not None
+            and current_record_timeout_scope(connection) is scope
+        )
+        if combined and consume_record_timeout(context, scope, capture, "capture"):
+            assert capture is not None
+            # The capture hook just set the minimum of both fresh budgets for
+            # this exact statement. Both cancellation fences still run after
+            # its database call; no settings receipt survives this callback.
+            capture.check()
+            check_deadline(deadline)
+            return
+        if combined:
+            assert capture is not None
+            statement_ms = min(statement_ms, max(1, int(capture.check() * 1000)))
+            lock_ms = min(lock_ms, max(1, min(2000, int(capture.check() * 1000))))
         # Integers only; raw cursor avoids event recursion. Both settings are
         # transaction-local and never alter another request or database policy.
         cursor.execute(
@@ -96,13 +125,18 @@ def transaction_budget(session: Session, deadline: float | RecordBudget):
             (str(statement_ms), str(lock_ms)),
         )
         check_deadline(deadline)
+        if combined:
+            assert capture is not None
+            capture.check()
+            acknowledge_record_timeout(context, scope, capture, "record")
 
-    event.listen(connection, "before_cursor_execute", before_cursor_execute)
-    try:
-        check_deadline(deadline)
-        yield
-    finally:
-        event.remove(connection, "before_cursor_execute", before_cursor_execute)
+    with record_timeout_scope(connection, limits) as scope:
+        event.listen(connection, "before_cursor_execute", before_cursor_execute)
+        try:
+            check_deadline(deadline)
+            yield
+        finally:
+            event.remove(connection, "before_cursor_execute", before_cursor_execute)
 
 
 def _scope(binding) -> tuple[str, ...]:

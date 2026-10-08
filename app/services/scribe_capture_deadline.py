@@ -8,6 +8,11 @@ from contextvars import ContextVar
 from threading import Event, Lock, get_ident
 
 from app.utils.native_request_timing import phase
+from app.utils.statement_timeout_scope import (
+    acknowledge_record_timeout,
+    consume_record_timeout,
+    current_record_timeout_scope,
+)
 
 from sqlalchemy import Engine, event
 from sqlalchemy.orm import Session
@@ -100,7 +105,7 @@ def _sql_budget() -> CaptureBudget | None:
 
 @event.listens_for(Engine, "before_cursor_execute")
 def before_capture_statement(
-    connection, cursor, _statement, _parameters, _context, _many
+    connection, cursor, _statement, _parameters, context, _many
 ):
     budget = _sql_budget()
     if budget is None:
@@ -111,6 +116,14 @@ def before_capture_statement(
     # gets these settings; pool acquisition/pre-ping may settle before this hook.
     statement_ms = max(1, int(budget.check() * 1000))
     lock_ms = max(1, min(2000, int(budget.check() * 1000)))
+    record = current_record_timeout_scope(connection) if context is not None else None
+    if record is not None:
+        record_statement_ms, record_lock_ms = record.limits()
+        if consume_record_timeout(context, record, budget, "record"):
+            budget.check()
+            return
+        statement_ms = min(statement_ms, record_statement_ms)
+        lock_ms = min(lock_ms, record_lock_ms)
     # One parameterized round trip sets both transaction-local values. Every
     # statement still refreshes the remaining budget and checks cancellation
     # after the settings return, before its actual SQL can be dispatched.
@@ -120,6 +133,9 @@ def before_capture_statement(
         (str(statement_ms), str(lock_ms)),
     )
     budget.check()
+    if record is not None:
+        record.limits()
+        acknowledge_record_timeout(context, record, budget, "capture")
 
 
 @event.listens_for(Session, "before_flush")
