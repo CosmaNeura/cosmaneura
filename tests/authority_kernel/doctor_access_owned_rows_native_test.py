@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.services import companion_appointment_setup, companion_encounters
 from app.services import doctor_access as access
 from app.services import pilot_access_grandfather as pilot
 from app.services.doctor_access_row_ownership import DoctorAccessRowOwnership
@@ -61,6 +62,15 @@ def test_existing_companion_connection_setup_and_revocation_on_owned_database(
 def test_real_native_reduces_only_explicit_owned_provider_queries(
     native, engine, monkeypatch, kind, before, after, eligible, total, record_property
 ):
+    # Isolate the older owned-access-query change in this original regression.
+    # The joined final-provider path has its own response/lock/count comparison.
+    monkeypatch.setattr(
+        companion_appointment_setup,
+        "_locked_provider",
+        lambda session, *, expected, doctor_id, args: companion_encounters._provider(
+            session, **args
+        ),
+    )
     original = access.resolve_doctor_access
     original_matches = DoctorAccessRowOwnership.matches
     observed = Counter()

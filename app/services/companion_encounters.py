@@ -8,6 +8,8 @@ No identity, membership, patient, appointment or capture binding is created.
 from datetime import UTC, datetime, time
 from typing import Any, cast
 
+from typeid import TypeID
+
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.companion_encounters import CompanionEncounterSettings
 from app.services import authority
@@ -39,12 +41,20 @@ from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_a
 
 from activemodel.session_manager import global_session
 from app.models.appointment import Appointment
-from app.models.authority import AuthorityPerson, AuthorityPersonBinding
+from app.models.authority import (
+    AuthorityActor,
+    AuthorityActorExternalIdentity,
+    AuthorityPerson,
+    AuthorityPersonBinding,
+    AuthorityTenant,
+    AuthorityTenantMembership,
+)
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.practice import Practice, PracticeMember
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from sqlalchemy import and_, func, or_
+from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 
@@ -161,24 +171,130 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             )
         ):
             raise authority.AuthorityRequestDeniedError
-        content = ConnectionContent(
-            actor_ref=str(actor.id),
-            tenant_ref=str(link.tenant_id),
-            provider_link_ref=str(link.id),
-            practice_ref=str(practice[0]),
-            practice_label=practice[1],
-            review_sha256=digest(
-                {
-                    "provider_link_ref": str(link.id),
-                    "identity_ref": str(identity.id),
-                    "doctor_ref": str(doctor.id),
-                    "reviewed_at": link.reviewed_at.isoformat(),
-                    "review_ref": link.review_ref,
-                }
+        return _connection(actor, identity, link, doctor, practice), doctor.id
+
+
+def _connection(actor, identity, link, doctor, practice):
+    content = ConnectionContent(
+        actor_ref=str(actor.id),
+        tenant_ref=str(link.tenant_id),
+        provider_link_ref=str(link.id),
+        practice_ref=str(practice[0]),
+        practice_label=practice[1],
+        review_sha256=digest(
+            {
+                "provider_link_ref": str(link.id),
+                "identity_ref": str(identity.id),
+                "doctor_ref": str(doctor.id),
+                "reviewed_at": link.reviewed_at.isoformat(),
+                "review_ref": link.review_ref,
+            }
+        ),
+    )
+    data = content.model_dump(mode="json")
+    return ConnectionSnapshot(**data, connection_sha256=digest(data))
+
+
+def _locked_provider(session, *, expected, doctor_id, args):
+    """Fresh final read after appointment setup has locked every joined row.
+
+    This is only called by _current_provider after its original individual
+    authority/link/member locks. Retake the same Practice→Doctor locks and
+    retain the view-as guard and all three fresh access-decision stages.
+    Nothing from the first decision is reused as permission.
+    """
+    authority._ensure_enabled(args["settings"])
+    issuer, subject = args["issuer"], args["subject"]
+    if issuer != args["settings"].clerk_issuer:
+        raise authority.AuthorityRequestDeniedError
+    with lock_doctor_access_rows(
+        session,
+        practice_id=TypeID.from_string(expected.practice_ref),
+        doctor_id=doctor_id,
+        subject=subject,
+    ) as locked:
+        if locked is None:
+            raise authority.AuthorityRequestDeniedError
+        _, doctor, _, ownership = locked
+        if actor_bound_unended_view_as_exists(
+            session,
+            actor=doctor,
+            identity=ViewAsActorIdentity(
+                issuer=issuer, subject=subject, clerk_session_id=args["session_id"]
             ),
-        )
-        data = content.model_dump(mode="json")
-        return ConnectionSnapshot(**data, connection_sha256=digest(data)), doctor.id
+        ):
+            raise authority.AuthorityRequestDeniedError
+        current = session.exec(
+            sql_select(
+                AuthorityActor,
+                AuthorityActorExternalIdentity,
+                ScribeCaptureProviderLink,
+                AuthorityTenant,
+                AuthorityTenantMembership,
+                PracticeMember,
+                col(Practice.id),
+                col(Practice.legal_name),
+            )
+            .select_from(AuthorityActorExternalIdentity)
+            .join(
+                AuthorityActor,
+                col(AuthorityActor.id) == col(AuthorityActorExternalIdentity.actor_id),
+            )
+            .join(
+                ScribeCaptureProviderLink,
+                col(ScribeCaptureProviderLink.actor_id) == col(AuthorityActor.id),
+            )
+            .join(
+                AuthorityTenant,
+                col(AuthorityTenant.id) == col(ScribeCaptureProviderLink.tenant_id),
+            )
+            .join(
+                AuthorityTenantMembership,
+                and_(
+                    col(AuthorityTenantMembership.actor_id) == col(AuthorityActor.id),
+                    col(AuthorityTenantMembership.tenant_id) == col(AuthorityTenant.id),
+                ),
+            )
+            .join(
+                PracticeMember,
+                col(PracticeMember.doctor_id)
+                == col(ScribeCaptureProviderLink.doctor_id),
+            )
+            .join(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+            .where(
+                AuthorityActorExternalIdentity.issuer == issuer,
+                AuthorityActorExternalIdentity.subject == subject,
+                col(AuthorityActorExternalIdentity.revoked_at).is_(None),
+                ScribeCaptureProviderLink.tenant_id == args["tenant_ref"],
+                col(ScribeCaptureProviderLink.revoked_at).is_(None),
+                func.char_length(col(Practice.legal_name)).between(1, 200),
+            )
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if current is None:
+            raise authority.AuthorityRequestDeniedError
+        actor, identity, link, tenant, membership, member, *practice = current
+        if (
+            actor.status != "active"
+            or actor.actor_kind != "human"
+            or identity.verified_at is None
+            or link.source_identity_id != identity.id
+            or link.reviewed_at is None
+            or len(link.review_ref) < 16
+            or tenant.status != "active"
+            or membership.status != "active"
+            or membership.membership_kind != "provider"
+            or link.doctor_id != doctor.id
+            or doctor.deleted_at is not None
+            or doctor.clerk_id != subject
+            or member.practice_id != link.practice_id
+            or practice[0] != link.practice_id
+            or not doctor_access_in_force(
+                doctor, _ownership=ownership, _practice_id=link.practice_id
+            )
+        ):
+            raise authority.AuthorityRequestDeniedError
+        return _connection(actor, identity, link, doctor, practice), doctor.id
 
 
 def _encounters(
