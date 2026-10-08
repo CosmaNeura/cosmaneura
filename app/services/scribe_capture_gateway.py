@@ -802,7 +802,20 @@ async def execute_capture_operation(
         raise CaptureOperationUnavailable from None
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    # These configured metadata reads just returned from creator review's
+    # fresh post-validation authorization, with no intervening await. Only
+    # their overlapping caller check is removed. Other reads and all mutation,
+    # legacy status and creator-window branches retain their existing checks.
+    reviewed_metadata_read = (
+        configured
+        and isinstance(operation, protocol.ReadOperation)
+        and operation.kind in {"encryption_key", "capabilities"}
+        and operation.profile_receipt_id is None
+    )
+    if (
+        not reviewed_metadata_read
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
         raise CaptureReceiptInvalid
     capture_profile = None
     if getattr(operation, "profile_receipt_id", None) is not None:
@@ -940,10 +953,13 @@ async def _execute_creator_review(
         raise CaptureOperationUnavailable from None
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
-    # Retained remote evidence grants nothing after local revocation or switch.
+    checked = validate_receipt(operation, result, scope, upload_origins=())
+    # Check after synchronous validation, immediately before returning to the
+    # next dispatch/publication boundary. This also catches changes made while
+    # validating remote evidence; the caller does not need a duplicate check.
     if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
         raise CaptureReceiptInvalid
-    return validate_receipt(operation, result, scope, upload_origins=())
+    return checked
 
 
 def component_request_key(
