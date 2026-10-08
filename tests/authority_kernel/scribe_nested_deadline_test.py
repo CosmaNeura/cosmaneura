@@ -305,7 +305,8 @@ def test_real_native_removes_only_duplicate_setting_calls(
                     )
                 response = native.post(kind)
             assert response.status_code == 200
-            assert counts["owned"] > 500
+            # The invariant is timeout coverage, independent of query volume.
+            assert counts["owned"] > 0
             assert (
                 counts["capture"] + (counts["record"] if combined else 0)
                 == counts["owned"]

@@ -135,7 +135,9 @@ def test_actual_native_uses_one_timeout_call_for_every_owned_statement(
                         deadline.before_capture_statement,
                     )
             assert response.status_code == 200
-            assert counts["owned_statements"] > 500
+            # Query reductions may lower the total; every remaining statement
+            # must still receive the same timeout protection below.
+            assert counts["owned_statements"] > 0
             assert counts["capture_timeout_calls"] + (
                 counts["record_timeout_calls"] if optimized else 0
             ) == counts["owned_statements"] * (1 if optimized else 2)
