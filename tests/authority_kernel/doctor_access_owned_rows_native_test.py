@@ -7,7 +7,11 @@ from uuid import uuid4
 
 import pytest
 
-from app.services import companion_appointment_setup, companion_encounters
+from app.services import (
+    companion_appointment_setup,
+    companion_encounters,
+    scribe_encounters,
+)
 from app.services import doctor_access as access
 from app.services import pilot_access_grandfather as pilot
 from app.services import provider_record_authority as records
@@ -75,6 +79,16 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
             session, **args
         ),
     )
+
+    # Preserve this older query/call-site comparison's original full final
+    # lookup routine. The new lookup validator has separate real-path evidence.
+    def original_lookup_final(session, *, expected, doctor_id, args):
+        connection, current_doctor, _ = companion_appointment_setup._current_provider(
+            session, args
+        )
+        return connection, current_doctor
+
+    monkeypatch.setattr(scribe_encounters, "_locked_provider", original_lookup_final)
     original = access.resolve_doctor_access
     original_matches = DoctorAccessRowOwnership.matches
     observed = Counter()

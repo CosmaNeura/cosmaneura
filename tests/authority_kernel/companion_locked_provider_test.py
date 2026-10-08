@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.services import authority
+from app.services import authority, scribe_encounters
 from app.services import companion_appointment_setup as setup
 from app.services.companion_encounters import _provider
 
@@ -59,6 +59,13 @@ def arguments(native):
 def test_native_keeps_identical_receipts_and_lock_order_with_fewer_reads(
     native, engine, monkeypatch, kind, record_property
 ):
+    # Isolate this older final-provider join comparison from the subsequent
+    # lookup-only final-validator change; it has its own current-path tests.
+    def original_lookup_final(session, *, expected, doctor_id, args):
+        connection, current_doctor, _ = setup._current_provider(session, args)
+        return connection, current_doctor
+
+    monkeypatch.setattr(scribe_encounters, "_locked_provider", original_lookup_final)
     results = []
     for joined in (False, True):
         locks = []
