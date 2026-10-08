@@ -42,11 +42,21 @@ from app.models.provider_record_authority import (
     ProviderRecordAuthority,
 )
 from sqlalchemy import select as sql_select
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 
 class ProviderRecordScopeDenied(ValueError):
     """Value-free refusal; no discovery of another provider's record."""
+
+
+def _current_practice_rows(session: Session, doctor: Doctor):
+    """One fresh post-access read, including an absent practice or membership."""
+    return session.exec(
+        select(PracticeMember, Practice)
+        .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+        .where(PracticeMember.doctor_id == doctor.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
 
 
 def _current_practice(session: Session, doctor: Doctor) -> Practice:
@@ -57,17 +67,13 @@ def _current_practice(session: Session, doctor: Doctor) -> Practice:
         or not doctor_access_in_force(doctor, at=now)
     ):
         raise ProviderRecordScopeDenied
-    member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    rows = _current_practice_rows(session, doctor)
+    member, practice = rows if rows is not None else (None, None)
     if (
         member is None
         or member_access_state(member, at=now) not in SEAT_HOLDING_ACCESS_STATES
     ):
         raise ProviderRecordScopeDenied
-    practice = session.get(Practice, member.practice_id, populate_existing=True)
     if practice is None:
         raise ProviderRecordScopeDenied
     return practice

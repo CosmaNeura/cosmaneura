@@ -94,8 +94,10 @@ def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     # whole authorization transactions are deliberately absent.
     remaining = iter(results[0][2])
     assert all(any(old == lock for old in remaining) for lock in results[1][2])
+    # Each removed authorization now uses the joined practice read, saving
+    # two fewer SELECTs than when membership and practice were read separately.
     assert results[0][1] - results[1][1] == (
-        138 if kind == "preparation_metadata" else 69
+        134 if kind == "preparation_metadata" else 67
     )
     assert engine.pool.checkedout() == 0
     record_property("operation", kind)

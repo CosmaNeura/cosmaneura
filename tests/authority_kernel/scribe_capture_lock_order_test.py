@@ -104,6 +104,12 @@ class Transaction:
                 if resource not in self.locks:
                     self.locks.append(resource)
                     self.on_lock(model, row)
+        if len(statement.column_descriptions) == 2:
+            assert [column["entity"] for column in statement.column_descriptions] == [
+                PracticeMember,
+                Practice,
+            ]
+            return Rows([(row, self.get(Practice, row.practice_id)) for row in rows])
         return Rows(rows)
 
 
