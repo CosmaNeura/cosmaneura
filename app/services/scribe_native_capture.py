@@ -33,6 +33,7 @@ NATIVE_READ_OPERATIONS = frozenset(
         "native_recording_context",
         # Existing public wrapping key read; no private key or key mutation.
         "encryption_key",
+        "preparation_metadata",
     }
 )
 

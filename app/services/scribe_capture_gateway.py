@@ -565,17 +565,39 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
-    # The private compound first-window caller supplies immutable expected
+    # Private compound callers supply immutable expected
     # scope, never permission. Compare it with this component's ordinary fresh
     # authorization before any downstream read or mutation. Each original
     # post-I/O authorization below still checks against this same scope.
     if _expected_scope is not None and (
-        not isinstance(
-            operation, (protocol.BindKey, protocol.IssueLease, protocol.ReserveChunks)
+        not (
+            isinstance(
+                operation,
+                (protocol.BindKey, protocol.IssueLease, protocol.ReserveChunks),
+            )
+            or (
+                isinstance(operation, protocol.ReadOperation)
+                and operation.kind
+                in {"creator_review", "encryption_key", "capabilities"}
+                and operation.profile_receipt_id is None
+            )
         )
         or scope != _expected_scope
     ):
         raise CaptureReceiptInvalid
+    if operation.kind == "preparation_metadata":
+        from app.services.scribe_preparation_metadata import (
+            execute_preparation_metadata,
+        )
+
+        return await execute_preparation_metadata(
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
+            scope=scope,
+            client_request_key=client_request_key,
+            client=client,
+        )
     if isinstance(operation, protocol.PrepareRecordingWindow):
         from app.services.scribe_recording_window import execute_recording_window
 
