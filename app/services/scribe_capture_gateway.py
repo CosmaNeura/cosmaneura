@@ -294,6 +294,26 @@ def validate_receipt(
     capture_profile: protocol.CaptureProfileReceipt | None = None,
 ) -> BaseModel:
     """Validate even injected clients; retained or malformed receipts grant nothing."""
+    if operation.kind == "preparation_metadata":
+        try:
+            result = protocol.PreparationMetadata.model_validate(
+                receipt.model_dump(mode="json")
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise CaptureReceiptInvalid from None
+        for read, component in (
+            (protocol.ReadOperation(kind="creator_review"), result.review),
+            (protocol.ReadOperation(kind="encryption_key"), result.encryption_key),
+            (protocol.ReadOperation(kind="capabilities"), result.capabilities),
+        ):
+            validate_receipt(
+                read,
+                component,
+                scope,
+                upload_origins=upload_origins,
+                now=now,
+            )
+        return result
     if isinstance(operation, protocol.NativeSourceExtension):
         try:
             if (

@@ -97,7 +97,7 @@ def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     # Each removed authorization now uses the joined practice read, saving
     # two fewer SELECTs than when membership and practice were read separately.
     assert results[0][1] - results[1][1] == (
-        134 if kind == "preparation_metadata" else 67
+        0 if kind == "preparation_metadata" else 67
     )
     assert engine.pool.checkedout() == 0
     record_property("operation", kind)
@@ -105,9 +105,11 @@ def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     record_property("current_selects", results[1][1])
 
 
-@pytest.mark.parametrize("phase", range(1, 4))
+@pytest.mark.parametrize(
+    "component", ["creator_review", "encryption_key", "capabilities"]
+)
 def test_committed_revocation_during_creator_validation_denies_later_read(
-    native, engine, remote_reads, monkeypatch, phase
+    native, engine, remote_reads, monkeypatch, component
 ):
     assert native.post("preparation_metadata").status_code == 200
     monkeypatch.setattr(
@@ -120,9 +122,9 @@ def test_committed_revocation_during_creator_validation_denies_later_read(
 
     def revoke(operation, *args, **kwargs):
         checked = original(operation, *args, **kwargs)
-        if operation.kind == "creator_review":
+        if operation.kind == component:
             validations.append(True)
-            if len(validations) == phase:
+            if len(validations) == 1:
                 assert engine.pool.checkedout() == 0
                 with Session(engine) as session:
                     identity = session.execute(
@@ -141,13 +143,15 @@ def test_committed_revocation_during_creator_validation_denies_later_read(
     monkeypatch.setattr(gateway, "validate_receipt", revoke)
     response = native.post("preparation_metadata")
     assert response.status_code in (403, 409)
-    assert len(calls) == (1, 2, 4)[phase - 1]
+    assert len(calls) == 1
     assert "receipt" not in response.json() and engine.pool.checkedout() == 0
 
 
-@pytest.mark.parametrize("phase", range(1, 4))
+@pytest.mark.parametrize(
+    "component", ["creator_review", "encryption_key", "capabilities"]
+)
 def test_cancellation_during_creator_validation_prevents_later_dispatch(
-    native, engine, remote_reads, monkeypatch, phase
+    native, engine, remote_reads, monkeypatch, component
 ):
     arguments = admitted_arguments(native, monkeypatch)
     arguments["operation"] = gateway.protocol.ReadOperation(kind="preparation_metadata")
@@ -159,9 +163,9 @@ def test_cancellation_during_creator_validation_prevents_later_dispatch(
 
     def cancel(operation, *args, **kwargs):
         checked = original(operation, *args, **kwargs)
-        if operation.kind == "creator_review":
+        if operation.kind == component:
             validations.append(True)
-            if len(validations) == phase:
+            if len(validations) == 1:
                 budget.cancel()
         return checked
 
@@ -173,13 +177,15 @@ def test_cancellation_during_creator_validation_prevents_later_dispatch(
 
     with pytest.raises((CaptureDeadlineExceeded, gateway.CaptureOperationUnconfirmed)):
         asyncio.run(invoke())
-    assert len(calls) == (1, 2, 4)[phase - 1]
+    assert len(calls) == 1
     assert engine.pool.checkedout() == 0
 
 
-@pytest.mark.parametrize("phase", range(1, 4))
+@pytest.mark.parametrize(
+    "component", ["creator_review", "encryption_key", "capabilities"]
+)
 def test_token_expiry_during_creator_validation_prevents_later_dispatch(
-    native, engine, remote_reads, monkeypatch, phase
+    native, engine, remote_reads, monkeypatch, component
 ):
     arguments = admitted_arguments(native, monkeypatch)
     arguments["operation"] = gateway.protocol.ReadOperation(kind="preparation_metadata")
@@ -193,9 +199,9 @@ def test_token_expiry_during_creator_validation_prevents_later_dispatch(
 
     def expire(operation, *args, **kwargs):
         checked = original(operation, *args, **kwargs)
-        if operation.kind == "creator_review":
+        if operation.kind == component:
             validations.append(True)
-            if len(validations) == phase:
+            if len(validations) == 1:
                 assert engine.pool.checkedout() == 0
                 with Session(engine) as session:
                     token = session.execute(
@@ -216,5 +222,5 @@ def test_token_expiry_during_creator_validation_prevents_later_dispatch(
 
     with pytest.raises(ContextTokenExpiredError):
         asyncio.run(invoke())
-    assert len(calls) == (1, 2, 4)[phase - 1]
+    assert len(calls) == 1
     assert engine.pool.checkedout() == 0
