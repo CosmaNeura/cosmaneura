@@ -257,11 +257,11 @@ def test_clerk_authenticator_keeps_primary_header(monkeypatch):
     "operation",
     [
         {"kind": "issue_lease", "payload": {}},
-        {"kind": "encryption_key"},
+        {"kind": "bind_key", "payload": {}},
         {"kind": "complete", "payload": {}},
     ],
 )
-def test_mutation_and_key_operations_are_not_composed(monkeypatch, operation):
+def test_mutation_and_key_binding_operations_are_not_composed(monkeypatch, operation):
     connection, calls = client(monkeypatch)
     result = connection.post(
         PATH,
@@ -274,6 +274,22 @@ def test_mutation_and_key_operations_are_not_composed(monkeypatch, operation):
     )
     assert result.status_code == 422
     assert calls == ["agent", "capture"]
+
+
+def test_existing_public_wrapping_key_read_reaches_same_native_service(monkeypatch):
+    connection, calls = client(monkeypatch)
+    result = connection.post(
+        PATH,
+        json=body(
+            action="operation",
+            binding_ref="scribe_capture_binding_00000000000000000000000003",
+            operation={"kind": "encryption_key"},
+        ),
+        headers=headers(),
+    )
+    assert result.status_code == 200
+    assert calls[:2] == ["agent", "capture"]
+    assert calls[2]["data"].operation.kind == "encryption_key"
 
 
 @pytest.mark.parametrize(

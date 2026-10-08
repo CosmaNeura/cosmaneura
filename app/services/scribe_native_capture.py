@@ -26,7 +26,14 @@ from app.utils.native_request_timing import phase
 from activemodel.session_manager import global_session
 
 NATIVE_READ_OPERATIONS = frozenset(
-    {"creator_review", "provider_encounter", "capabilities", "native_recording_context"}
+    {
+        "creator_review",
+        "provider_encounter",
+        "capabilities",
+        "native_recording_context",
+        # Existing public wrapping key read; no private key or key mutation.
+        "encryption_key",
+    }
 )
 
 
