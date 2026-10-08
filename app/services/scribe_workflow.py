@@ -678,6 +678,22 @@ class HttpScribeWorkflowClient:
             )
         except (ValueError, TypeError, AttributeError):
             raise ScribeWorkflowRejectedError("scribe_invalid_operation") from None
+        if operation.kind == "prepare_recording_window":
+            from app.services.scribe_recording_window import PreparedRecordingWindow
+
+            if creator_actor_id is None or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
+            ):
+                raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+            return await self._post(
+                f"/v1/captured-sessions/{session_id}/recording-window",
+                tenant_id,
+                operation.payload,
+                idempotency_key,
+                PreparedRecordingWindow,
+                max_bytes=131_072,
+                creator_actor_id=creator_actor_id,
+            )
         if operation.kind == "preparation_metadata":
             if creator_actor_id is None or not re.fullmatch(
                 r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id
