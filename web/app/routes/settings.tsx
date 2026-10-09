@@ -146,12 +146,12 @@ function PracticeSettings({
     )
   }
   return (
-    <section className="prose-headings prose w-full max-w-3xl space-y-4">
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
       <BillingReturnNotice
         practice={practice}
         onPracticeChange={onPracticeChange}
       />
-      <h3>Practice</h3>
+      <h2 className="!mt-0 text-xl font-semibold">Practice</h2>
       <PracticeAccessEndingNotice practice={practice} />
       <PracticeJoinPanel
         practice={practice}
@@ -237,8 +237,8 @@ function BiographyInput({ biography }: { biography: string | null }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
-      <h3>Biography</h3>
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
+      <h2 className="!mt-0 text-xl font-semibold">Biography</h2>
       <p className="text-muted-foreground text-sm">
         This is the information that will be used to personalize your
         experience, including intake. You can change this at any time.
@@ -296,7 +296,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <section className="prose-headings prose w-full max-w-3xl space-y-4">
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
       <h3>Note Types</h3>
       {noteSchemas.length > 0 ? (
         <p>Below are the notes you've uploaded.</p>
@@ -363,8 +363,8 @@ function NoteCustomization({
   )
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
-      <h3>AI Output Customization</h3>
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
+      <h2 className="!mt-0 text-xl font-semibold">AI Output Customization</h2>
       <p className="text-sm">
         Tune how Cosmas writes each of your note types. Changes affect only the
         note type you edit.
@@ -447,8 +447,11 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="flex gap-8">
-        <section className="w-1/2 space-y-4">
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        className="flex flex-col gap-8"
+      >
+        <section className="w-full max-w-2xl space-y-4">
           <div className="space-y-2">
             <h2 className="text-left text-xl font-semibold">Notetaking</h2>
             <p className="text-muted-foreground text-left text-sm">
@@ -576,9 +579,9 @@ export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 
   if (!zoomEnabled) {
     return (
-      <section className="prose-headings prose w-1/2 space-y-4">
+      <section className="prose-headings prose w-full max-w-2xl space-y-4">
         <div className="flex items-center gap-2">
-          <h3 className="!mb-0">Zoom Integration</h3>
+          <h2 className="!my-0 text-xl font-semibold">Zoom Integration</h2>
           <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
             Coming Soon
           </span>
@@ -593,8 +596,8 @@ export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
-      <h3>Zoom Integration</h3>
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
+      <h2 className="!mt-0 text-xl font-semibold">Zoom Integration</h2>
       <p className="text-muted-foreground text-sm">
         Connect your Zoom account so Cosmas can automatically join your meetings
         and generate visit notes.
@@ -736,8 +739,8 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
-      <h3>NatMed Pro connection</h3>
+    <section className="prose-headings prose w-full max-w-2xl space-y-4">
+      <h2 className="!mt-0 text-xl font-semibold">NatMed Pro connection</h2>
       <p className="text-muted-foreground text-sm">
         If you have a NatMed Pro (Natural Medicines) subscription, turn this on
         to add its interaction checker and nutrient-depletion lookups as
@@ -755,6 +758,67 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
         I have a NatMed Pro subscription
       </label>
     </section>
+  )
+}
+
+type SettingsAnchor = { id: string; label: string }
+
+function anchorId(id: string) {
+  return `settings-${id}`
+}
+
+// The content area, not the window, scrolls; focus follows the jump so
+// keyboard and screen reader users land on the section too.
+function jumpToSection(event: React.MouseEvent<HTMLAnchorElement>, id: string) {
+  const target = document.getElementById(anchorId(id))
+  if (!target) return
+  event.preventDefault()
+  const reduceMotion = window.matchMedia?.(
+    "(prefers-reduced-motion: reduce)",
+  ).matches
+  target.scrollIntoView({
+    behavior: reduceMotion ? "auto" : "smooth",
+    block: "start",
+  })
+  target.focus({ preventScroll: true })
+  window.history.replaceState(null, "", `#${anchorId(id)}`)
+}
+
+function SettingsJumpLinks({ anchors }: { anchors: SettingsAnchor[] }) {
+  return (
+    <nav aria-label="Settings sections" className="-mx-1 overflow-x-auto">
+      <ul className="flex gap-1 px-1 text-sm whitespace-nowrap">
+        {anchors.map(({ id, label }) => (
+          <li key={id}>
+            <a
+              href={`#${anchorId(id)}`}
+              onClick={(event) => jumpToSection(event, id)}
+              className="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-block rounded-md px-2.5 py-1 focus-visible:ring-2 focus-visible:outline-none"
+            >
+              {label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  )
+}
+
+function SettingsAnchorTarget({
+  id,
+  children,
+}: {
+  id: string
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      id={anchorId(id)}
+      tabIndex={-1}
+      className="w-full scroll-mt-4 focus:outline-none"
+    >
+      {children}
+    </div>
   )
 }
 
@@ -784,6 +848,22 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const terminologyEnabled = isTerminologyEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const anchors: SettingsAnchor[] = billingRecoveryOnly
+    ? []
+    : [
+        ...(practice ? [{ id: "practice", label: "Practice" }] : []),
+        { id: "biography", label: "Biography" },
+        ...(terminologyEnabled
+          ? [{ id: "terminology", label: "Terminology" }]
+          : []),
+        { id: "note-types", label: "Note types" },
+        { id: "ai-output", label: "AI output" },
+        { id: "zoom", label: "Zoom" },
+        ...(referenceToolkitEnabled ? [{ id: "natmed", label: "NatMed" }] : []),
+        ...(referenceLabsEnabled
+          ? [{ id: "lab-ranges", label: "Lab ranges" }]
+          : []),
+      ]
 
   return (
     <SidebarProvider
@@ -793,38 +873,57 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
       <AppSidebar isLoading={false} entries={false} />
 
       <SidebarInset>
-        <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
+        <header className="bg-background sticky top-0 z-10 flex shrink-0 flex-col gap-2 border-b p-4">
           <h1 className="text-lg font-semibold">Settings</h1>
+          {anchors.length > 0 && <SettingsJumpLinks anchors={anchors} />}
         </header>
         <InnerScrollableContent>
-          <PracticeSettings
-            practice={practice}
-            roster={loaderData.practice_roster}
-            acceptances={loaderData.baa_acceptances}
-            onPracticeChange={handlePracticeChange}
-            billingReturnTo={billingReturnTo}
-          />
+          <SettingsAnchorTarget id="practice">
+            <PracticeSettings
+              practice={practice}
+              roster={loaderData.practice_roster}
+              acceptances={loaderData.baa_acceptances}
+              onPracticeChange={handlePracticeChange}
+              billingReturnTo={billingReturnTo}
+            />
+          </SettingsAnchorTarget>
           {!billingRecoveryOnly ? (
             <>
-              <BiographyInput biography={loaderData.biography} />
+              <SettingsAnchorTarget id="biography">
+                <BiographyInput biography={loaderData.biography} />
+              </SettingsAnchorTarget>
               {terminologyEnabled && (
-                <TerminologySettings
-                  terminology={loaderData.terminology}
-                  biography={loaderData.biography}
-                />
+                <SettingsAnchorTarget id="terminology">
+                  <TerminologySettings
+                    terminology={loaderData.terminology}
+                    biography={loaderData.biography}
+                  />
+                </SettingsAnchorTarget>
               )}
-              <NoteUpload noteSchemas={loaderData.notes_schema} />
-              <NoteCustomization
-                noteSchemas={loaderData.notes_schema}
-                customizations={loaderData.note_customizations}
-              />
-              <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+              <SettingsAnchorTarget id="note-types">
+                <NoteUpload noteSchemas={loaderData.notes_schema} />
+              </SettingsAnchorTarget>
+              <SettingsAnchorTarget id="ai-output">
+                <NoteCustomization
+                  noteSchemas={loaderData.notes_schema}
+                  customizations={loaderData.note_customizations}
+                />
+              </SettingsAnchorTarget>
+              <SettingsAnchorTarget id="zoom">
+                <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+              </SettingsAnchorTarget>
               {referenceToolkitEnabled && (
-                <NatMedConnection
-                  hasSubscription={loaderData.has_natmed_subscription}
-                />
+                <SettingsAnchorTarget id="natmed">
+                  <NatMedConnection
+                    hasSubscription={loaderData.has_natmed_subscription}
+                  />
+                </SettingsAnchorTarget>
               )}
-              {referenceLabsEnabled && <LabRangeSettings />}
+              {referenceLabsEnabled && (
+                <SettingsAnchorTarget id="lab-ranges">
+                  <LabRangeSettings />
+                </SettingsAnchorTarget>
+              )}
             </>
           ) : null}
         </InnerScrollableContent>
