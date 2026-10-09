@@ -10,9 +10,12 @@ from threading import Event, Lock, get_ident
 from app.utils.native_request_timing import phase
 from app.utils.statement_timeout_scope import (
     acknowledge_record_timeout,
+    capture_timeout_scopes,
     consume_record_timeout,
+    current_capture_timeout_scope,
     current_record_timeout_scope,
     remember_timeout_setting,
+    reusable_timeout_limits,
     timeout_setting_in_force,
 )
 
@@ -64,8 +67,15 @@ def capture_budget(budget: CaptureBudget) -> Iterator[None]:
     budget.owner_thread = get_ident()
     token = _budget.set(budget)
     try:
-        budget.check()
-        yield
+
+        def limits():
+            return max(1, int(budget.check() * 1000)), max(
+                1, min(2000, int(budget.check() * 1000))
+            )
+
+        with capture_timeout_scopes(budget, limits):
+            budget.check()
+            yield
     finally:
         _budget.reset(token)
 
@@ -119,6 +129,11 @@ def before_capture_statement(
     statement_ms = max(1, int(budget.check() * 1000))
     lock_ms = max(1, min(2000, int(budget.check() * 1000)))
     record = current_record_timeout_scope(connection) if context is not None else None
+    setting_scope = record or (
+        current_capture_timeout_scope(connection, budget)
+        if context is not None
+        else None
+    )
     if record is not None:
         record_statement_ms, record_lock_ms = record.limits()
         if consume_record_timeout(context, record, budget, "record"):
@@ -131,18 +146,24 @@ def before_capture_statement(
     # after the settings return, before its actual SQL can be dispatched.
     limits = statement_ms, lock_ms
     if not timeout_setting_in_force(
-        connection, cursor, context, record, budget, limits
+        connection, cursor, context, setting_scope, budget, limits
     ):
+        limits = reusable_timeout_limits(
+            connection, cursor, context, setting_scope, limits
+        )
         cursor.execute(
             "SELECT set_config('statement_timeout', %s, true), "
             "set_config('lock_timeout', %s, true)",
-            (str(statement_ms), str(lock_ms)),
+            tuple(map(str, limits)),
         )
     budget.check()
     if record is not None:
         record.limits()
-        remember_timeout_setting(connection, cursor, context, record, budget, limits)
         acknowledge_record_timeout(context, record, budget, "capture")
+    if setting_scope is not None:
+        remember_timeout_setting(
+            connection, cursor, context, setting_scope, budget, limits
+        )
 
 
 @event.listens_for(Session, "before_flush")

@@ -22,9 +22,13 @@ class RecordTimeoutScope:
     limits: Callable[[], tuple[int, int]] = field(repr=False)
     thread: int = field(default_factory=get_ident, repr=False)
     active: bool = field(default=True, repr=False)
+    capture_owner: object | None = field(default=None, repr=False)
     setting: tuple[object, object, object, int, int] | None = field(
         default=None, repr=False
     )
+
+    def invalidate(self, *_) -> None:
+        self.setting = None
 
 
 _scopes: ContextVar[tuple[RecordTimeoutScope, ...]] = ContextVar(
@@ -33,10 +37,116 @@ _scopes: ContextVar[tuple[RecordTimeoutScope, ...]] = ContextVar(
 _ATTRIBUTE = "_cosmaneura_record_timeout_scope"
 
 
+@dataclass(eq=False)
+class CaptureTimeoutScopes:
+    active: bool = field(default=True, init=False, repr=False)
+    budget: object = field(repr=False)
+    limits: Callable[[], tuple[int, int]] = field(repr=False)
+    thread: int = field(default_factory=get_ident, repr=False)
+    connections: dict[Connection, RecordTimeoutScope] = field(
+        default_factory=dict, repr=False
+    )
+
+
+_capture_scopes: ContextVar[tuple[CaptureTimeoutScopes, ...]] = ContextVar(
+    "capture_timeout_scopes", default=()
+)
+_MAX_CAPTURE_CONNECTIONS = 64
+_TRANSACTION_EVENTS = (
+    "begin",
+    "commit",
+    "rollback",
+    "savepoint",
+    "rollback_savepoint",
+    "release_savepoint",
+)
+
+
+def _invalidate_capture_scopes() -> None:
+    for frame in _capture_scopes.get():
+        for scope in frame.connections.values():
+            scope.setting = None
+
+
+@contextmanager
+def capture_timeout_scopes(
+    budget: object, limits: Callable[[], tuple[int, int]]
+) -> Iterator[None]:
+    """Own only successful SQL settings within one private capture request."""
+    _invalidate_capture_scopes()
+    frame = CaptureTimeoutScopes(budget, limits)
+    token = _capture_scopes.set((*_capture_scopes.get(), frame))
+    try:
+        yield
+    finally:
+        frame.active = False
+        for connection, scope in frame.connections.items():
+            scope.active = False
+            scope.setting = None
+            for name in _TRANSACTION_EVENTS:
+                event.remove(connection, name, scope.invalidate)
+        frame.connections.clear()
+        _capture_scopes.reset(token)
+        _invalidate_capture_scopes()
+
+
+def current_capture_timeout_scope(
+    connection: object, budget: object
+) -> RecordTimeoutScope | None:
+    # Record guards keep their independently checked ownership and nested order.
+    # Never substitute a capture scope for a mismatched/nested record guard.
+    frames = _capture_scopes.get()
+    if _scopes.get() or len(frames) != 1 or not isinstance(connection, Connection):
+        return None
+    frame = frames[0]
+    if not frame.active or frame.budget is not budget or frame.thread != get_ident():
+        return None
+    scope = frame.connections.get(connection)
+    if scope is None:
+        if len(frame.connections) >= _MAX_CAPTURE_CONNECTIONS:
+            return None
+        scope = RecordTimeoutScope(connection, frame.limits, capture_owner=budget)
+        for name in _TRANSACTION_EVENTS:
+            event.listen(connection, name, scope.invalidate)
+        frame.connections[connection] = scope
+    return scope
+
+
+def _scope_is_current(connection: object, scope: RecordTimeoutScope) -> bool:
+    if scope.capture_owner is None:
+        return current_record_timeout_scope(connection) is scope
+    frames = _capture_scopes.get()
+    return (
+        not _scopes.get()
+        and len(frames) == 1
+        and frames[0].active
+        and frames[0].budget is scope.capture_owner
+        and frames[0].thread == get_ident() == scope.thread
+        and isinstance(connection, Connection)
+        and frames[0].connections.get(connection) is scope
+        and scope.active
+        and scope.connection is connection
+    )
+
+
+def tighter_reusable_limits(limits: tuple[int, int]) -> tuple[int, int]:
+    """Tighten by at most 99ms; an existing setting never exceeds fresh limits.
+
+    The real cancellation/deadline checks still run for every statement. Close
+    to expiry retain the exact positive limit; never use PostgreSQL's zero
+    (unbounded) setting. This is SQL setup reuse, never authority reuse.
+    """
+    return (
+        limits[0] if limits[0] < 100 else limits[0] // 100 * 100,
+        limits[1] if limits[1] < 100 else limits[1] // 100 * 100,
+    )
+
+
 @contextmanager
 def record_timeout_scope(
     connection: object, limits: Callable[[], tuple[int, int]]
 ) -> Iterator[RecordTimeoutScope]:
+    _invalidate_capture_scopes()
     scope = RecordTimeoutScope(connection, limits)
     for previous in _scopes.get():
         previous.setting = None
@@ -67,6 +177,7 @@ def record_timeout_scope(
         for name in changes:
             event.remove(connection, name, invalidate)
         _scopes.reset(token)
+        _invalidate_capture_scopes()
         for previous in _scopes.get():
             previous.setting = None
 
@@ -90,7 +201,7 @@ def current_record_timeout_scope(connection: object) -> RecordTimeoutScope | Non
 def _setting_transaction(connection, cursor, context, scope):
     if (
         scope is None
-        or current_record_timeout_scope(connection) is not scope
+        or not _scope_is_current(connection, scope)
         or not isinstance(connection, Connection)
         or not isinstance(cursor, psycopg.Cursor)
         or cursor.connection is not connection.connection.driver_connection
@@ -120,6 +231,16 @@ def _setting_transaction(connection, cursor, context, scope):
     if transaction is None or not transaction.is_active:
         return None
     return transaction, connection.get_nested_transaction()
+
+
+def reusable_timeout_limits(connection, cursor, context, scope, limits):
+    # Tightening applies only to a proven generated relational read. Mutations,
+    # functions, nested/mismatched guards and adapters retain exact fresh values.
+    return (
+        tighter_reusable_limits(limits)
+        if _setting_transaction(connection, cursor, context, scope) is not None
+        else limits
+    )
 
 
 def timeout_setting_in_force(connection, cursor, context, scope, budget, limits):
