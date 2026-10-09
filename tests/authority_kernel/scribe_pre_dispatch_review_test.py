@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.services import provider_record_authority as record_authority
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_native_capture as native_service
 from app.services.authority import ContextTokenExpiredError
@@ -19,6 +20,7 @@ from app.models.authority import AuthorityActorExternalIdentity, MountContextTok
 from sqlalchemy import event, select
 from sqlmodel import Session, col
 
+from tests.authority_kernel.provider_record_provenance_read_test import previous_rows
 from tests.authority_kernel.scribe_native_status_enrichment_test import query_counts
 from tests.authority_kernel.scribe_preparation_metadata_test import (
     engine as _engine,
@@ -43,6 +45,9 @@ engine, native, remote_reads, workflow = _engine, _native, _remote_reads, _workf
 def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     native, engine, remote_reads, monkeypatch, kind, record_property
 ):
+    # Isolate this earlier whole-authorization removal from the newer exact
+    # provenance composition, which has its own full receipt/lock comparison.
+    monkeypatch.setattr(record_authority, "_record_lineage_rows", previous_rows)
     assert native.post(kind).status_code == 200
     monkeypatch.setattr(
         native_service, "execute_capture_operation", gateway.execute_capture_operation
