@@ -31,6 +31,8 @@ from app.models.practice import Practice, PracticeMember
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
 from sqlalchemy.exc import SQLAlchemyError
 
+from tests.factories import save_practice_member
+
 
 def _normalized_cli_output(output: str) -> str:
     lines = (line.strip().strip("│").strip() for line in unstyle(output).splitlines())
@@ -613,11 +615,13 @@ def test_multi_practice_configuration_cli_dry_run_then_atomic_apply(
         for index in (1, 2)
     ]
     for practice, owner in zip(practices, owners, strict=True):
-        PracticeMember(
-            practice_id=practice.id,
-            doctor_id=owner.id,
-            role="owner",
-        ).save()
+        save_practice_member(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=owner.id,
+                role="owner",
+            )
+        )
     workforce = Doctor(
         clerk_id=f"user_multi_cli_{secrets.token_hex(8)}",
         email=f"workforce@{domain}",

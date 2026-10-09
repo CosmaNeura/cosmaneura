@@ -67,6 +67,48 @@ export async function uploadToExactAzureUrl(
   }
 }
 
+export type UploadProgressHandler = (fraction: number) => void
+
+/**
+ * Same request as uploadToExactAzureUrl, sent with XMLHttpRequest because
+ * fetch cannot report upload progress. Network failures reject, like fetch.
+ */
+export function uploadToExactAzureUrlWithProgress(
+  file: File,
+  uploadUrl: string,
+  contentType: string,
+  onProgress: UploadProgressHandler,
+): Promise<{ error: boolean }> {
+  invariant(uploadUrl, "uploadUrl should always exist")
+  invariant(contentType, "contentType should always exist")
+
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest()
+    request.open("PUT", uploadUrl)
+    request.setRequestHeader("x-ms-blob-type", "BlockBlob")
+    request.setRequestHeader("Content-Type", contentType)
+    request.setRequestHeader("If-None-Match", "*")
+    request.upload.onprogress = (event) => {
+      // Without a known total, still leave "preparing" so the transfer reads
+      // as under way; a tiny fraction keeps the bar honest.
+      onProgress(
+        event.lengthComputable && event.total > 0
+          ? Math.min(event.loaded / event.total, 0.999)
+          : 0.01,
+      )
+    }
+    request.onload = () => {
+      const ok = request.status >= 200 && request.status < 300
+      if (ok) onProgress(1)
+      resolve({ error: !ok })
+    }
+    request.onerror = () => reject(new Error("upload failed"))
+    request.onabort = () => reject(new Error("upload aborted"))
+    request.ontimeout = () => reject(new Error("upload timed out"))
+    request.send(file)
+  })
+}
+
 /** Upload an example-note PDF to the exact blob URL issued by the server. */
 export async function uploadPdfToExactAzureUrl(file: File, uploadUrl: string) {
   return uploadToExactAzureUrl(file, uploadUrl, "application/pdf")

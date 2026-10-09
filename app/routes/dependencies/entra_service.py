@@ -1,4 +1,6 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Annotated, Any, Protocol
 from uuid import UUID
@@ -11,8 +13,12 @@ from jwt import PyJWKClient, PyJWTError
 from app import log
 from app.configuration.service_auth import (
     AGENT_API_AUTH_SETTINGS,
+    COMPANION_SESSION_PREP_AUTH_SETTINGS,
+    SCRIBE_CAPTURE_AUTH_SETTINGS,
     SERVICE_AUTH_SETTINGS,
+    SOVEREIGN_TOOL_AUTH_SETTINGS,
 )
+from app.utils.native_request_timing import active, phase
 
 
 @dataclass(frozen=True)
@@ -54,12 +60,48 @@ class EntraAuthPolicy(Protocol):
     def is_complete(self) -> bool: ...
 
 
+class _ObservedJWKClient(PyJWKClient):
+    def fetch_data(self) -> Any:
+        with phase("entra_jwks"):
+            return super().fetch_data()
+
+
+_request_keys: ContextVar[dict[tuple[str, str], PyJWKClient] | None] = ContextVar(
+    "entra_request_signing_keys", default=None
+)
+
+
+@contextmanager
+def request_signing_keys() -> Iterator[None]:
+    """Share only public keys while checking one request's workload policies.
+
+    Every policy still verifies the signature and its own claims. No token,
+    claims or authorization result is retained. The next request owns a fresh
+    client, preserving immediate published-key rotation/removal across requests.
+    """
+    clients: dict[tuple[str, str], PyJWKClient] = {}
+    token = _request_keys.set(clients)
+    try:
+        yield
+    finally:
+        clients.clear()
+        _request_keys.reset(token)
+
+
 class EntraTokenDecoder:
     """Verify Entra v2 access tokens against the tenant's published signing keys."""
 
     def __init__(self, settings: EntraAuthPolicy):
         self.settings = settings
-        self.jwks_client = PyJWKClient(settings.jwks_url, cache_keys=True)
+        client_type = _ObservedJWKClient if active() else PyJWKClient
+        clients = _request_keys.get()
+        namespace = (settings.issuer, settings.jwks_url)
+        if clients is not None and namespace in clients:
+            self.jwks_client = clients[namespace]
+        else:
+            self.jwks_client = client_type(settings.jwks_url, cache_keys=True)
+            if clients is not None:
+                clients[namespace] = self.jwks_client
 
     def __call__(self, token: str) -> dict[str, Any]:
         signing_key = self.jwks_client.get_signing_key_from_jwt(token)
@@ -172,3 +214,13 @@ class EntraServiceAuthenticator:
 
 authenticate_scribe_service_request = EntraServiceAuthenticator(SERVICE_AUTH_SETTINGS)
 authenticate_agent_api_request = EntraServiceAuthenticator(AGENT_API_AUTH_SETTINGS)
+authenticate_sovereign_tool_request = EntraServiceAuthenticator(
+    SOVEREIGN_TOOL_AUTH_SETTINGS
+)
+authenticate_scribe_capture_request = EntraServiceAuthenticator(
+    SCRIBE_CAPTURE_AUTH_SETTINGS
+)
+
+authenticate_companion_session_prep_request = EntraServiceAuthenticator(
+    COMPANION_SESSION_PREP_AUTH_SETTINGS
+)

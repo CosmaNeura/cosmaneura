@@ -1,0 +1,108 @@
+{
+  "cases": [
+    {
+      "name": "numeric",
+      "workspace_id": "00000000-0000-4000-8000-000000000002",
+      "base": {
+        "session_id": "00000000-0000-4000-8000-000000000003",
+        "scribe_source_id": "00000000-0000-4000-8000-000000000004",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema_ref": "doctor_note_schema_00000000000000000000000001",
+        "transcript_ref": "ai_visit_transcript_00000000000000000000000001",
+        "note_ref": "visit_note_00000000000000000000000001",
+        "status": "draft",
+        "note_type": "Invented template",
+        "fields": {
+          "2": "Earlier invented value",
+          "1": "Earlier invented value",
+          "Plan": "Earlier invented value"
+        },
+        "field_order": [
+          "2",
+          "1",
+          "Plan"
+        ],
+        "note_sha256": "6346b6834018b6a4a8ae105ecf03993fad551e56ae23e6bcdd11dad758b36f8c",
+        "created_at": "2026-09-21T15:00:00Z",
+        "review_required": true
+      },
+      "fields": {
+        "2": "Invented second value",
+        "1": "Invented first value",
+        "Plan": "Invented plan — changed"
+      },
+      "edit": {
+        "client_key": "00000000-0000-4000-8000-000000000009",
+        "expected_note_ref": "visit_note_00000000000000000000000001",
+        "expected_note_sha256": "6346b6834018b6a4a8ae105ecf03993fad551e56ae23e6bcdd11dad758b36f8c",
+        "expected_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fields": {
+          "2": "Invented second value",
+          "1": "Invented first value",
+          "Plan": "Invented plan — changed"
+        }
+      },
+      "receipt": {
+        "session_id": "00000000-0000-4000-8000-000000000003",
+        "schema_ref": "doctor_note_schema_00000000000000000000000001",
+        "client_key": "00000000-0000-4000-8000-000000000009",
+        "request_sha256": "0e197eda4e312368e41c7be07d6838bf7401b6c388aa4fcb97bf8533729e4328",
+        "status": "saved",
+        "result_note_ref": "visit_note_00000000000000000000000002",
+        "result_sha256": "5fef6af415c8b6a454872107ddf2e54bbac7332ba92a035ef172e9a0401b6d3a"
+      }
+    },
+    {
+      "name": "unicode",
+      "workspace_id": "00000000-0000-4000-8000-000000000002",
+      "base": {
+        "session_id": "00000000-0000-4000-8000-000000000003",
+        "scribe_source_id": "00000000-0000-4000-8000-000000000004",
+        "source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "schema_ref": "doctor_note_schema_00000000000000000000000001",
+        "transcript_ref": "ai_visit_transcript_00000000000000000000000001",
+        "note_ref": "visit_note_00000000000000000000000001",
+        "status": "draft",
+        "note_type": "Invented template",
+        "fields": {
+          "🧪": "Earlier invented value",
+          "": "Earlier invented value",
+          "Plan": "Earlier invented value"
+        },
+        "field_order": [
+          "🧪",
+          "",
+          "Plan"
+        ],
+        "note_sha256": "ff3f61c5ddd5964ef4310595137477a7327d2b2fd9714d90123773d9c78a1976",
+        "created_at": "2026-09-21T15:00:00Z",
+        "review_required": true
+      },
+      "fields": {
+        "🧪": "Invented astral field",
+        "": "Invented BMP field",
+        "Plan": "Invented \"quote\"\nand newline"
+      },
+      "edit": {
+        "client_key": "00000000-0000-4000-8000-000000000009",
+        "expected_note_ref": "visit_note_00000000000000000000000001",
+        "expected_note_sha256": "ff3f61c5ddd5964ef4310595137477a7327d2b2fd9714d90123773d9c78a1976",
+        "expected_source_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "fields": {
+          "🧪": "Invented astral field",
+          "": "Invented BMP field",
+          "Plan": "Invented \"quote\"\nand newline"
+        }
+      },
+      "receipt": {
+        "session_id": "00000000-0000-4000-8000-000000000003",
+        "schema_ref": "doctor_note_schema_00000000000000000000000001",
+        "client_key": "00000000-0000-4000-8000-000000000009",
+        "request_sha256": "bb7285452e8813d514dc4e07cce5423f5f66156336120a083d6b0d2f12221f6e",
+        "status": "saved",
+        "result_note_ref": "visit_note_00000000000000000000000002",
+        "result_sha256": "671c06b63f9683ed4f8608c8b19b74b5689574609a01ce5b42bb0a60b1f1a5c2"
+      }
+    }
+  ]
+}

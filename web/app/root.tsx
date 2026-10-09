@@ -26,7 +26,9 @@ import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
 import { APP_LOADING_DELAY_COPY } from "~/lib/channel"
 
 import "./app.css"
+import { ErrorPage } from "./components/shared/ErrorPage"
 import PageNotFound from "./components/shared/PageNotFound"
+import { MotionConfig } from "motion/react"
 
 export const links: LinksFunction = () => [
   { rel: "icon", href: "/cosmas.ico", sizes: "any" },
@@ -121,7 +123,11 @@ const AppWithProviders = withProviders(App)
 // React Router 7.9+ requires route modules to export a function component.
 // Keep the existing provider composition while presenting that stable shape.
 export default function Root() {
-  return <AppWithProviders />
+  return (
+    <MotionConfig reducedMotion="user">
+      <AppWithProviders />
+    </MotionConfig>
+  )
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
@@ -136,8 +142,8 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     )
   }
 
-  let message = "Oops!"
-  let details = "An unexpected error occurred."
+  let message = "Something went wrong"
+  let details = "We couldn't load this page. Please try again in a moment."
   let stack: string | undefined
 
   if (isRouteErrorResponse(error)) {
@@ -149,8 +155,7 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
       )
     }
 
-    message = "Error"
-    details = error.statusText || details
+    message = "Something went wrong"
   } else if (import.meta.env.DEV && error && error instanceof Error) {
     details = error.message
     stack = error.stack
@@ -158,15 +163,13 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
 
   return (
     <ViewAsProtectedErrorGuard>
-      <main className="container mx-auto p-4 pt-16">
-        <h1>{message}</h1>
-        <p>{details}</p>
+      <ErrorPage title={message} description={details} showRetry>
         {stack && (
-          <pre className="w-full overflow-x-auto p-4">
+          <pre className="bg-muted mt-8 w-full overflow-x-auto rounded-md p-4 text-left text-xs">
             <code>{stack}</code>
           </pre>
         )}
-      </main>
+      </ErrorPage>
     </ViewAsProtectedErrorGuard>
   )
 }

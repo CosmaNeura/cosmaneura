@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, TypeVar, cast
 from uuid import uuid4
 
+import httpx
 import pytest
 from clerk_backend_api.models import ClerkError, ClerkErrors, ClerkErrorsData
 from typer.testing import CliRunner
@@ -41,6 +42,8 @@ from app.services.staging_synthetic_appointment import (
     SYNTHETIC_CREATED_BY_SYSTEM,
     SYNTHETIC_PATIENT_DATE_OF_BIRTH,
     SYNTHETIC_PATIENT_NAME,
+    StagingSyntheticAppointmentConflict,
+    validate_exact_synthetic_fixture,
 )
 
 from app.models.appointment import Appointment
@@ -113,6 +116,7 @@ def _patch_staging_and_clerk(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def clerk_resource_not_found() -> ClerkErrors:
         return ClerkErrors(
+            raw_response=httpx.Response(404, json={"errors": []}),
             data=ClerkErrorsData(
                 errors=[
                     ClerkError(
@@ -121,7 +125,7 @@ def _patch_staging_and_clerk(monkeypatch: pytest.MonkeyPatch) -> None:
                         code="resource_not_found",
                     )
                 ]
-            )
+            ),
         )
 
     class ExactUsers:
@@ -296,6 +300,27 @@ def _plan_args(scope: dict[str, Any], session: Session) -> dict[str, Any]:
 
 def _all(session: Session, model: Any) -> list[Any]:
     return list(session.exec(select(model)).all())
+
+
+def test_unknown_birth_date_fails_exact_synthetic_integrity_checks(
+    authority_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope = _prepared_scope(authority_session, monkeypatch)
+    scope["patient"].date_of_birth = None
+    authority_session.add(scope["patient"])
+    authority_session.commit()
+    with pytest.raises(StagingSyntheticAppointmentConflict, match="integrity"):
+        validate_exact_synthetic_fixture(
+            doctor=scope["doctor"],
+            fixture=scope["fixture"],
+            patient=scope["patient"],
+            appointment=scope["appointment"],
+        )
+    with pytest.raises(AuthorityIdentityRebindError, match="integrity"):
+        plan_staging_provider_authority_identity_rebind(
+            **_plan_args(scope, authority_session)
+        )
 
 
 def test_rebind_is_dry_run_first_atomic_minimized_and_idempotent(
@@ -828,6 +853,7 @@ def test_rebind_rejects_clerk_error_with_more_than_one_error(
                     ],
                 )
             raise ClerkErrors(
+                raw_response=httpx.Response(404, json={"errors": []}),
                 data=ClerkErrorsData(
                     errors=[
                         ClerkError(
@@ -841,7 +867,7 @@ def test_rebind_rejects_clerk_error_with_more_than_one_error(
                             code="resource_not_found",
                         ),
                     ]
-                )
+                ),
             )
 
     monkeypatch.setattr(

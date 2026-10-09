@@ -60,3 +60,15 @@ export function isReferenceToolkitEnabled(
   // local dev / test: ungated, matching the server
   return true
 }
+
+// Core's lab-entry/interpretation pilot has an independent release latch.
+// The server also requires REFERENCE_LABS_ENABLED and the existing cohort;
+// this build flag only controls presentation and cannot grant API access.
+export function isReferenceLabsEnabled(
+  email: string | null | undefined,
+): boolean {
+  return (
+    import.meta.env.VITE_REFERENCE_LABS_ENABLED === "true" &&
+    isReferenceToolkitEnabled(email)
+  )
+}

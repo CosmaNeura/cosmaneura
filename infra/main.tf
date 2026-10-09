@@ -71,6 +71,7 @@ locals {
       startswith(trimspace(try(data.external.secrets.result["STRIPE_WEBHOOK_SECRET"], "")), "whsec_") &&
       startswith(trimspace(try(data.external.secrets.result["STRIPE_ACCOUNT_ID"], "")), "acct_") &&
       startswith(trimspace(try(data.external.secrets.result["STRIPE_PRICE_ID"], "")), "price_") &&
+      startswith(trimspace(try(data.external.secrets.result["STRIPE_PORTAL_CONFIGURATION_ID"], "")), "bpc_") &&
       trimspace(try(data.external.secrets.result["STRIPE_API_VERSION"], "")) != ""
     ))
   )
@@ -638,6 +639,22 @@ resource "azurerm_container_app" "app" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.core_cab_public_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
+        for_each = local.core_cab_secret_values
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
+        }
+      }
+
       env {
         name  = "SCRIBE_WORKFLOW_ENABLED"
         value = tostring(var.enable_scribe_workflow)
@@ -690,6 +707,14 @@ resource "azurerm_container_app" "app" {
   }
 
   dynamic "secret" {
+    for_each = local.core_cab_secret_values
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = secret.value
+    }
+  }
+
+  dynamic "secret" {
     for_each = local.database_url_v2_secret_values
 
     content {
@@ -720,6 +745,11 @@ resource "azurerm_container_app" "app" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.core_cab_configuration_valid
+      error_message = "Core CAB runtime flags and dedicated workload configuration are inconsistent"
+    }
+
     precondition {
       condition     = local.recall_webhook_secret_valid
       error_message = "RECALL_WEBHOOK_SECRET must use a whsec_ prefix and canonical base64 payload of at least 16 decoded bytes"

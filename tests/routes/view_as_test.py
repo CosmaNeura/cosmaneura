@@ -13,13 +13,14 @@ from app.routes.embed_context import (
 from app.server import api_app
 
 from app.models.doctor import Doctor
+from app.models.practice import PracticeMember
 from app.models.superadmin_capability import (
     SuperadminCapabilityEnvironment,
     SuperadminCapabilityKind,
 )
 from app.models.view_as import ViewAsAuditEvent, ViewAsSession
 
-from tests.factories import SimpleIncompleteIntakeFactory
+from tests.factories import SimpleIncompleteIntakeFactory, save_practice_member
 from tests.routes.utils import (
     MOCK_CLERK_ISSUER,
     get_clerk_dev_user,
@@ -216,6 +217,28 @@ def test_view_as_reads_target_but_blocks_target_and_actor_mutations(
         json={"registration_token": "A" * 43},
     )
     assert lab_upload_registration.status_code == status.HTTP_403_FORBIDDEN
+
+    target_workforce = save_practice_member(
+        PracticeMember(
+            practice_id=target_practice.id,
+            doctor_id=Doctor(
+                clerk_id="user_view_as_route_workforce",
+                email="view-as-route-workforce@example.net",
+                biography="",
+            )
+            .save()
+            .id,
+            role="workforce",
+        )
+    )
+    for route_name in ("revoke_practice_member", "restore_practice_member"):
+        member_write = authenticated_client.post(
+            api_app.url_path_for(route_name, member_id=str(target_workforce.id))
+        )
+        assert member_write.status_code == status.HTTP_403_FORBIDDEN
+    target_workforce.refresh()
+    assert target_workforce.seat_state == "active"
+    assert target_workforce.access_ends_at is None
 
     actor_admin_write = authenticated_client.post(
         api_app.url_path_for("webhook_inbox_redrive", delivery_id="unknown")

@@ -272,7 +272,7 @@ def test_terraform_plan_installs_only_required_host_package() -> None:
     assert "./.github/actions/common-setup" not in workflow
     assert "apt-packages:" not in workflow
     assert (
-        "opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f" in workflow
+        "opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4" in workflow
     )
     assert "libnss3-tools" not in workflow
     assert "poppler-utils" not in workflow

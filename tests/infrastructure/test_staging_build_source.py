@@ -374,6 +374,82 @@ class ControllerProofTests(unittest.TestCase):
             2 * len(m.MODULES),
         )
 
+    def test_squash_merge_requires_identical_complete_reviewed_tree(self):
+        for failure in (None, "tree", "object", "parent_count", "bugbot", "drift"):
+            obj, values, blobs = self.fixture()
+            reviewed = (
+                "tree " + "6" * 40 + "\nparent " + "4" * 40 + "\n\nreview\n"
+            ).encode()
+            head = hashlib.sha1(
+                b"commit " + str(len(reviewed)).encode() + b"\0" + reviewed
+            ).hexdigest()
+            tree = "5" * 40 if failure == "tree" else "6" * 40
+            parents = ("parent " + "4" * 40 + "\n") * (
+                3 if failure == "parent_count" else 1
+            )
+            merged = ("tree " + tree + "\n" + parents + "\nsquash\n").encode()
+            merged_id = hashlib.sha1(
+                b"commit " + str(len(merged)).encode() + b"\0" + merged
+            ).hexdigest()
+            pull = values["pulls/419"]
+            pull["head"]["sha"], pull["merge_commit_sha"] = head, merged_id
+            report = "Implementer review; synthetic fixture only.\n"
+            metadata = dict(
+                reviewer="Codex",
+                reviewed_head=head,
+                result="accepted",
+                after_final_substantive_push=True,
+                report_sha256=m.sha(report.encode()),
+            )
+            body = (
+                "<!-- COSMANEURA_LOCAL_AGENT_REVIEW "
+                + json.dumps(metadata)
+                + " -->\n"
+                + report
+            )
+            values["issues/comments/101"] = dict(
+                id=101,
+                user=USER,
+                issue_url="https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                body=body,
+            )
+            obj.request = replace(
+                obj.request,
+                controller_reviewed_head=head,
+                review_kind="bugbot" if failure == "bugbot" else "local_cursor",
+                controller_check_id=0,
+                controller_review_sha256=m.sha(body.encode()),
+            )
+
+            def git(*args):
+                if args[:2] == ("cat-file", "commit"):
+                    if args[2] == head:
+                        return reviewed + (b"tampered" if failure == "object" else b"")
+                    return merged
+                if args[0] == "diff":
+                    return b"app/changed.py\n" if failure == "drift" else b""
+                if args[0] == "merge-base":
+                    return b""
+                return blobs[args[-1].partition(":scripts/")[2]]
+
+            obj.git_bytes = Mock(side_effect=git)
+            with (
+                self.subTest(failure=failure),
+                patch.object(
+                    Path,
+                    "read_bytes",
+                    autospec=True,
+                    side_effect=lambda path: blobs[path.name],
+                ),
+                patch.object(m.source, "statuses") as statuses,
+            ):
+                if failure:
+                    with self.assertRaises(m.BuildSourceRefused):
+                        obj.controller()
+                else:
+                    obj.controller()
+                statuses.assert_not_called()
+
     def test_wrong_review_scope_pending_check_or_unmerged_controller_refuses(self):
         cases = [
             ("pulls/419", "merged", False),
@@ -664,3 +740,122 @@ class CandidateIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LocalCursorReviewTests(unittest.TestCase):
+    def test_agent_review_preserves_identity_source_and_report_binding(self):
+        report = "Independent final-source review.\n"
+        metadata = {
+            "reviewer": "Codex",
+            "reviewed_head": REVIEWED,
+            "result": "accepted",
+            "after_final_substantive_push": True,
+            "report_sha256": m.sha(report.encode()),
+        }
+
+        def verify(meta, *, prefix: object = "AGENT", **changes):
+            comment = {
+                "id": 101,
+                "user": {"login": "JohnClem", "type": "User"},
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                "body": "<!-- COSMANEURA_LOCAL_"
+                + str(prefix)
+                + "_REVIEW "
+                + json.dumps(meta)
+                + " -->\n"
+                + report,
+            }
+            comment.update(changes)
+            selected = replace(
+                request(),
+                review_kind="local_cursor",
+                controller_check_id=0,
+                controller_review_sha256=m.sha(comment["body"].encode()),
+            )
+            m.validate_request(selected)
+            m.validate_local_cursor_review(comment, selected)
+
+        for reviewer in ("Codex", "Claude Code"):
+            with self.subTest(reviewer=reviewer):
+                verify({**metadata, "reviewer": reviewer})
+        for key, value in (
+            ("reviewer", "Cursor"),
+            ("reviewer", "unknown"),
+            ("reviewer", []),
+            ("reviewed_head", "f" * 40),
+            ("result", "changes_requested"),
+            ("after_final_substantive_push", False),
+            ("report_sha256", "a" * 64),
+            ("extra_field", True),
+        ):
+            with (
+                self.subTest(key=key, value=value),
+                self.assertRaises(m.BuildSourceRefused),
+            ):
+                verify({**metadata, key: value})
+        for changes in (
+            {"id": 102},
+            {"user": {"login": "someone-else", "type": "User"}},
+            {"user": {"login": "JohnClem", "type": "Bot"}},
+            {
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/420"
+            },
+        ):
+            with self.subTest(changes=changes), self.assertRaises(m.BuildSourceRefused):
+                verify(metadata, **changes)
+        with self.assertRaises(m.BuildSourceRefused):
+            verify(metadata, prefix="CURSOR")
+
+    def test_local_review_binds_report_head_author_and_pull_request(self):
+        metadata = {
+            "reviewer": "Cursor",
+            "reviewed_head": REVIEWED,
+            "result": "accepted",
+            "after_final_substantive_push": True,
+            "report_sha256": m.sha(b"Independent report.\n"),
+        }
+
+        def comment(meta):
+            return {
+                "id": 101,
+                "user": {"login": "JohnClem", "type": "User"},
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                "body": "<!-- COSMANEURA_LOCAL_CURSOR_REVIEW "
+                + json.dumps(meta)
+                + " -->\nIndependent report.\n",
+            }
+
+        good = comment(metadata)
+        selected = replace(
+            request(),
+            review_kind="local_cursor",
+            controller_check_id=0,
+            controller_review_sha256=m.sha(good["body"].encode()),
+        )
+        m.validate_request(selected)
+        m.validate_local_cursor_review(good, selected)
+        for key, value in (
+            ("reviewed_head", "f" * 40),
+            ("result", "changes_requested"),
+            ("after_final_substantive_push", False),
+            ("report_sha256", "a" * 64),
+        ):
+            changed = comment({**metadata, key: value})
+            with self.subTest(key=key), self.assertRaises(m.BuildSourceRefused):
+                m.validate_local_cursor_review(
+                    changed,
+                    replace(
+                        selected,
+                        controller_review_sha256=m.sha(changed["body"].encode()),
+                    ),
+                )
+        for key, value in (
+            (
+                "issue_url",
+                "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/420",
+            ),
+            ("user", {"login": "someone-else", "type": "User"}),
+            ("body", good["body"] + "Edited report."),
+        ):
+            with self.subTest(key=key), self.assertRaises(m.BuildSourceRefused):
+                m.validate_local_cursor_review({**good, key: value}, selected)

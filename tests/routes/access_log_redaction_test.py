@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from types import ModuleType
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -102,6 +102,34 @@ def test_unmatched_path_and_query_are_never_logged() -> None:
     assert path not in serialized
     assert query not in serialized
     assert "unmatched" in serialized
+
+
+def test_nested_router_access_log_keeps_effective_template_and_leaf_name() -> None:
+    access_logging = _load_access_logging()
+    captured = _CapturingLog()
+    setattr(access_logging, "log", captured)
+    app = FastAPI()
+    internal = APIRouter()
+    patient_routes = APIRouter()
+
+    @patient_routes.get("/{patient_id}/medications", name="patient_medications")
+    def medications(patient_id: str) -> dict:
+        return {"items": []}
+
+    internal.include_router(patient_routes, prefix="/patients")
+    app.include_router(internal, prefix="/internal/v1")
+    access_logging.add_middleware(app)
+    with TestClient(app) as client:
+        response = client.get(
+            "/internal/v1/patients/synthetic-private-id/medications?private=query"
+        )
+    assert response.status_code == 200
+    assert (
+        captured.records[0]["path"] == "/internal/v1/patients/{patient_id}/medications"
+    )
+    assert captured.records[0]["route"] == "patient_medications"
+    assert "synthetic-private-id" not in json.dumps(captured.records)
+    assert "private=query" not in json.dumps(captured.records)
 
 
 def test_global_access_logger_is_app_owned_and_uvicorn_access_log_is_disabled() -> None:

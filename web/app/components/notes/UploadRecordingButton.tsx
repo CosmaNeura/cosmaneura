@@ -1,6 +1,7 @@
-import { addDays, subMonths } from "date-fns"
-import { ChangeEventHandler, useState } from "react"
+import { addDays, format, parseISO, subMonths } from "date-fns"
+import { useEffect, useRef, useState } from "react"
 import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
+import { href, useNavigate, useRevalidator } from "react-router"
 import { z } from "zod"
 
 import { CheckIcon, Upload } from "lucide-react"
@@ -13,6 +14,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { Progress } from "@/components/ui/progress"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
@@ -32,11 +35,10 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { Input } from "~/components/ui/input"
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import { standardDateFormat } from "~/lib/date"
+import { markProcessing } from "~/lib/recent-uploads"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
@@ -51,6 +53,11 @@ type UploadRecordingFormValues = {
   patient_name: string
   date_of_birth: Date
   file: File
+}
+
+// Birthdays are calendar dates, even when an API datetime includes a timezone.
+function patientBirthDate(value: string) {
+  return parseISO(value.slice(0, 10))
 }
 
 // TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
@@ -71,11 +78,16 @@ function PatientComboboxSearch({
     "patient_name"
   >["value"]
 }) {
-  const { data, error } = useQuery({ ...patientListOptions({ client }) })
+  const t = useTerminology()
+  const { data } = useQuery({ ...patientListOptions({ client }) })
   const patients = data ?? []
 
   if (!data) {
-    return <div>Loading...</div>
+    return (
+      <div role="status" aria-label={`Loading ${t.patientPlural}`}>
+        <Skeleton className="h-9 w-full" />
+      </div>
+    )
   }
 
   // TODO I need to better document this entire mess and upstream some of the combobox improvements
@@ -99,7 +111,7 @@ function PatientComboboxSearch({
     // `new_item` is a special key to used to indicate that a value was typed in, and it wasn't selected from the list
     // when this occurs, we want to set the field value to the inputted text (label)
     if (item.value == "new_item") {
-      onChange(item.label)
+      onChange(item.label.trim())
     } else {
       const selected_patient_id = item.value
       const patient = patients.find(
@@ -110,7 +122,13 @@ function PatientComboboxSearch({
       // update the patient name field with the name of the patient, not the ID
       onChange(patient.name)
 
-      form.setValue("date_of_birth", new Date(patient.date_of_birth))
+      if (patient.date_of_birth) {
+        form.setValue("date_of_birth", patientBirthDate(patient.date_of_birth))
+      } else {
+        // This legacy upload still requires a date for identity matching. Never
+        // carry the previous patient's date into a patient whose date is unknown.
+        form.resetField("date_of_birth")
+      }
     }
   }
 
@@ -134,7 +152,12 @@ function PatientComboboxSearch({
                 {patientItem.label}
               </span>
               <span className="text-muted-foreground text-xs">
-                {standardDateFormat(patientItem.date_of_birth)}
+                {patientItem.date_of_birth
+                  ? format(
+                      patientBirthDate(patientItem.date_of_birth),
+                      "M/d/yy",
+                    )
+                  : "Date of birth not provided"}
               </span>
               {patientItem.isSelected && (
                 <span className="absolute start-2 top-0 flex h-full items-center justify-center">
@@ -150,6 +173,44 @@ function PatientComboboxSearch({
   )
 }
 
+// Progress covers the file transfer; the short steps before (requesting an
+// upload slot) and after (registering the visit) are named instead.
+export function UploadProgress({ fraction }: { fraction: number }) {
+  // Floor so the bar never claims 100% while bytes are still being sent.
+  const percent = Math.floor(fraction * 100)
+  const label =
+    fraction <= 0
+      ? "Preparing upload…"
+      : fraction >= 1
+        ? "Finishing up…"
+        : `Uploading… ${percent}%`
+  // Screen readers hear quarter steps rather than every percent.
+  const announced =
+    fraction > 0 && fraction < 1
+      ? `Uploading, ${Math.floor(percent / 25) * 25}%`
+      : label
+  return (
+    <div className="space-y-2">
+      {/* The shared Progress wrapper keeps `value` for its indicator and does
+          not forward it to Radix (components/ui is vendored and not edited
+          here), so the ARIA values are supplied at the call site. */}
+      <Progress
+        value={percent}
+        aria-label="Upload progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+      />
+      <p className="text-muted-foreground text-sm" aria-hidden="true">
+        {label}
+      </p>
+      <p className="sr-only" aria-live="polite">
+        {announced}
+      </p>
+    </div>
+  )
+}
+
 function VisitAudioUploadForm({
   closeDialogBox,
 }: {
@@ -157,6 +218,16 @@ function VisitAudioUploadForm({
 }) {
   const t = useTerminology()
   const { toast } = useToast()
+  const navigate = useNavigate()
+  const revalidator = useRevalidator()
+  const mounted = useRef(true)
+  useEffect(() => {
+    // StrictMode runs this effect's cleanup once on mount; set it back.
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({
@@ -168,25 +239,41 @@ function VisitAudioUploadForm({
         subMonths(new Date(), 2),
         "Appointment date cannot be more than 2 months in the past",
       ),
-    patient_name: z.string(),
-    date_of_birth: z.date().max(tomorrow, {
-      message: "Date of birth cannot be in the future",
-    }),
+    // Validate without trimming: the backend matches existing patients by
+    // their exact stored name, so a selected name must pass through as-is.
+    patient_name: z
+      .string({ required_error: `Enter the ${t.patientPossessive} name` })
+      .refine(
+        (name) => name.trim().length > 0,
+        `Enter the ${t.patientPossessive} name`,
+      ),
+    date_of_birth: z
+      .date({
+        required_error: "Enter a date of birth",
+        invalid_type_error: "Enter a date of birth",
+      })
+      .max(tomorrow, {
+        message: "Date of birth cannot be in the future",
+      }),
     // most of the file validation is done within the dropzone component
     file: z.instanceof(File, {
-      message: "Please select a valid audio or video file",
+      message: "Choose a recording to upload",
     }),
   })
 
   const form = useForm<UploadRecordingFormValues>({
     resolver: zodResolver(formSchema),
   })
+  const [uploadProgress, setUploadProgress] = useState(0)
 
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    setUploadProgress(0)
     const result = await submitVisitAudioUpload({
+      onUploadProgress: setUploadProgress,
+      // Encounters retain their instant and ordering; birthdays are calendar days.
       appointmentDate: values.appointment_date.toISOString(),
-      dateOfBirth: values.date_of_birth.toISOString(),
+      dateOfBirth: format(values.date_of_birth, "yyyy-MM-dd'T'00:00:00"),
       file: values.file,
       patientName: values.patient_name,
     })
@@ -204,13 +291,29 @@ function VisitAudioUploadForm({
       return
     }
 
-    toast({
-      title: "Upload complete",
-      description:
-        "Your recording has been uploaded successfully. Check back in a couple minutes.",
-    })
-
+    const uploadedId = result.appointmentId
+    // If the dialog was closed during the upload the user has moved on;
+    // don't pull them to the new visit.
+    const stillHere = mounted.current
     closeDialogBox()
+
+    if (uploadedId) {
+      markProcessing(uploadedId)
+      toast({
+        title: "Recording uploaded",
+        description:
+          "We're writing your note now. It usually takes a couple of minutes.",
+      })
+      if (stillHere) navigate(href("/notes/:id", { id: uploadedId }))
+      else void revalidator.revalidate()
+      return
+    }
+
+    toast({
+      title: "Recording uploaded",
+      description: "Your note will appear in the list in a couple of minutes.",
+    })
+    void revalidator.revalidate()
   }
 
   // TODO should move a project constant
@@ -230,7 +333,7 @@ function VisitAudioUploadForm({
               <FormControl>
                 <DateTimePicker
                   {...field}
-                  showTimePicker={false}
+                  showTimePicker
                   suggestions={[
                     "Today",
                     "Yesterday",
@@ -280,8 +383,8 @@ function VisitAudioUploadForm({
                 />
               </FormControl>
               <FormDescription>
-                Use an accurate DOB. This will be required to identify the
-                patient in the future.
+                Use an accurate date of birth. It is used to identify this{" "}
+                {t.patient} in the future.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -291,14 +394,16 @@ function VisitAudioUploadForm({
         <FormField
           control={form.control}
           name="file"
-          render={({ field }) => (
+          render={() => (
             <FormItem>
               <FormDescription>
                 Upload an audio recording from a {t.patient} visit.
               </FormDescription>
               <FormControl>
                 <AudioVideoDropzone
-                  onDropFile={(file: File) => form.setValue("file", file)}
+                  onDropFile={(file: File) =>
+                    form.setValue("file", file, { shouldValidate: true })
+                  }
                   file={form.watch("file")}
                 />
               </FormControl>
@@ -316,6 +421,9 @@ function VisitAudioUploadForm({
             "Upload"
           )}
         </Button>
+        {form.formState.isSubmitting && (
+          <UploadProgress fraction={uploadProgress} />
+        )}
       </form>
     </Form>
   )
@@ -332,14 +440,22 @@ export function UploadRecordingButton() {
         <Dialog open={open} onOpenChange={setOpen}>
           <TooltipTrigger asChild>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm" className="hidden md:flex">
-                <Upload className="mr-2 h-4 w-4" />
-                Upload Recording
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-9 md:h-8 md:w-auto"
+              >
+                <Upload className="h-4 w-4 md:mr-2" aria-hidden="true" />
+                {/* Icon-only on phones; the name stays available to assistive tech. */}
+                <span className="sr-only md:not-sr-only">Upload Recording</span>
               </Button>
             </DialogTrigger>
           </TooltipTrigger>
           {/* onOpenAutoFocus is a very important line! Prevents the automatic date popup */}
-          <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DialogContent
+            className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto rounded-lg"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
             </DialogHeader>

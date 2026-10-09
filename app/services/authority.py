@@ -3,15 +3,22 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
+import app.configuration.session_prep as session_prep_configuration
 import app.services.session_prep_scope as session_prep_scope
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
+)
+from app.services.provider_record_authority import (
+    ProviderRecordScopeDenied,
+    ensure_provider_record_scope,
+    validate_provider_record_scope,
 )
 
 from activemodel.session_manager import get_session
@@ -106,6 +113,7 @@ class ResolvedMountContext:
     actor_id: str | None
     session_id: TypeIDType
     person_id: TypeIDType | None
+    session_prep_context_ref: str | None = field(default=None, repr=False)
 
     def public_body(self) -> dict[str, object]:
         return {
@@ -421,6 +429,23 @@ def exchange_context_token(
     db = session
     if clerk_issuer != settings.clerk_issuer:
         raise AuthorityRequestDeniedError
+    provider_scope = None
+    if (
+        requested_surface == "provider_assistant"
+        and record_ref is not None
+        and session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
+            clerk_subject
+        )
+    ):
+        try:
+            provider_scope = ensure_provider_record_scope(
+                session=db,
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
+                record_ref=record_ref,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
     actor, source_identity = _actor_for_clerk_identity(
         db,
         clerk_issuer,
@@ -433,6 +458,25 @@ def exchange_context_token(
         requested_surface=requested_surface,
         record_ref=record_ref,
     )
+    if person_binding_id is not None:
+        binding = db.get(AuthorityPersonBinding, person_binding_id)
+        if binding is None:
+            raise AuthorityRequestDeniedError
+        try:
+            provider_scope = validate_provider_record_scope(
+                session=db,
+                binding=binding,
+                actor_id=actor.id,
+                clerk_subject=source_identity.subject,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
+    if provider_scope is not None:
+        from app.services.session_prep_runtime import schedule_scope_build
+
+        schedule_scope_build(
+            db, provider_scope, observed_at=datetime.now(UTC), settings=settings
+        )
     surface_ceiling, auth_tier_ceiling = _exchange_authority_ceiling(
         db,
         actor=actor,
@@ -513,6 +557,7 @@ def _active_token(
     plaintext: str,
     *,
     lock_for_update: bool = False,
+    _before_view_as: Callable[[MountContextSession], None] | None = None,
 ) -> tuple[MountContextToken, MountContextSession]:
     # Resolve without a token lock first. Actor-bound view-as state must always
     # be locked before the token row so ``begin_view_as`` and every Agent API
@@ -543,6 +588,11 @@ def _active_token(
         absolute_now = absolute_now.replace(tzinfo=None)
     if absolute_expires_at <= absolute_now:
         raise ContextTokenExpiredError
+
+    # Capture adds the shared Practice -> Doctor order after bearer/session
+    # validation and before the mandatory Doctor -> view-as -> token locks.
+    if _before_view_as is not None:
+        _before_view_as(mount_session)
 
     # Local import avoids coupling the authority model layer to the Platform's
     # support UI at module import time. The helper locks Doctor -> ViewAsSession
@@ -656,6 +706,7 @@ def _context_for_session(
         if person is None or person.status != "active":
             raise AuthorityRequestDeniedError
 
+    session_prep_context_ref = None
     if binding is not None and binding.binding_kind == "provider_record":
         if actor is None or tenant is None:
             raise AuthorityRequestDeniedError
@@ -666,6 +717,19 @@ def _context_for_session(
         )
         if membership is None:
             raise AuthorityRequestDeniedError
+        if source_identity is None:
+            raise AuthorityRequestDeniedError
+        try:
+            record_scope = validate_provider_record_scope(
+                session=session,
+                binding=binding,
+                actor_id=actor.id,
+                clerk_subject=source_identity.subject,
+            )
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
+        if record_scope is not None:
+            session_prep_context_ref = record_scope.context_snapshot_ref
         surface = "provider_assistant"
         derived_auth_tier = "provider"
     else:
@@ -688,7 +752,7 @@ def _context_for_session(
             raise AuthorityRequestDeniedError
         auth_tier = derived_auth_tier
         capabilities = PROVIDER_CAPABILITIES
-        if (
+        if session_prep_context_ref is not None or (
             binding is not None
             and source_identity is not None
             and session_prep_scope.synthetic_session_prep_context_ref(
@@ -731,6 +795,7 @@ def _context_for_session(
         actor_id=str(actor.id) if actor is not None else None,
         session_id=mount_session.id,
         person_id=person.id if person is not None else None,
+        session_prep_context_ref=session_prep_context_ref,
     )
 
 
@@ -755,6 +820,7 @@ def authorize_interaction(
     interaction_ref: str,
     client_turn_id: UUID,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+    _before_view_as: Callable[[MountContextSession], None] | None = None,
 ) -> AuthorizedInteraction:
     """Re-resolve and lock one exact provider interaction for a durable action."""
 
@@ -763,6 +829,7 @@ def authorize_interaction(
         session,
         mount_context_token,
         lock_for_update=True,
+        _before_view_as=_before_view_as,
     )
     context = _context_for_session(
         session,
@@ -1107,3 +1174,17 @@ def bootstrap_mount_context(
         clerk_issuer=settings.clerk_issuer,
     )
     return context
+
+
+def authorize_mount_read(
+    *,
+    session: Session,
+    mount_context_token: str,
+    settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+) -> tuple[ResolvedMountContext, MountContextSession]:
+    """Reauthenticate a current read without inventing an interaction lineage."""
+    _ensure_enabled(settings)
+    _, mount = _active_token(session, mount_context_token, lock_for_update=True)
+    return _context_for_session(
+        session, mount, clerk_issuer=settings.clerk_issuer
+    ), mount

@@ -12,6 +12,10 @@ import { render, screen } from "@testing-library/react"
 
 const noteList = vi.fn()
 
+vi.mock("~/utils/terminology", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/utils/terminology")>()
+  return { ...actual, useTerminology: () => actual.getTerminology(null) }
+})
 vi.mock("~/configuration/client", () => ({
   noteList: (...args: unknown[]) => noteList(...args),
 }))
@@ -99,7 +103,10 @@ describe("loadNotesLayoutData", () => {
   })
 
   it("seeds the notes cache on a successful list", async () => {
-    const payload = { appointments: [{ id: "appt_1" }] }
+    const payload = {
+      appointments: [{ id: "appt_1" }],
+      note_statuses: { appt_1: "not-started" },
+    }
     noteList.mockResolvedValue({
       data: payload,
       error: undefined,
@@ -110,7 +117,19 @@ describe("loadNotesLayoutData", () => {
 
     expect(loaded.blocked).toBeNull()
     expect(loaded.appointments).toEqual(payload.appointments)
+    expect(loaded.noteStatuses).toEqual(payload.note_statuses)
     expect(queryClient.getQueryData(["noteList"])).toEqual(payload)
+  })
+
+  it("does not invent note status when an older backend omits it", async () => {
+    noteList.mockResolvedValue({
+      data: {
+        appointments: [{ id: "appt_legacy", appointment_name: "Named" }],
+      },
+      response: { status: 200 },
+    })
+
+    expect((await loadNotesLayoutData()).noteStatuses).toEqual({})
   })
 
   it("shares an in-flight request between concurrent route loads", async () => {
@@ -130,7 +149,10 @@ describe("loadNotesLayoutData", () => {
   })
 
   it("rechecks access after a success, clears stale notes on denial, and recovers", async () => {
-    const payload = { appointments: [{ id: "appt_before" }] }
+    const payload = {
+      appointments: [{ id: "appt_before" }],
+      note_statuses: { appt_before: "completed" },
+    }
     const recovered = { appointments: [{ id: "appt_after" }] }
     noteList
       .mockResolvedValueOnce({ data: payload, response: { status: 200 } })
@@ -143,9 +165,14 @@ describe("loadNotesLayoutData", () => {
     expect(queryClient.getQueryData(["noteList"])).toEqual(payload)
     const blocked = await loadNotesLayoutData()
     expect(blocked.appointments).toEqual([])
+    expect(blocked.noteStatuses).toEqual({})
     expect(blocked.blocked?.kind).toBe("accept_agreement")
     expect(queryClient.getQueryData(["noteList"])).toBeUndefined()
-    expect(await loadNotesLayoutData()).toEqual({ ...recovered, blocked: null })
+    expect(await loadNotesLayoutData()).toEqual({
+      ...recovered,
+      noteStatuses: {},
+      blocked: null,
+    })
     expect(noteList).toHaveBeenCalledTimes(3)
   })
 
@@ -184,6 +211,7 @@ describe("NotesLayout", () => {
   it("shows the agreement wall instead of an empty notes list", () => {
     const loaded = {
       appointments: [],
+      noteStatuses: {},
       blocked: {
         kind: "accept_agreement" as const,
         detail: PRACTICE_BAA_REQUIRED_DETAIL,

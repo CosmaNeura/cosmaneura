@@ -37,6 +37,7 @@ from app.models.scribe_transcript_delivery import (
 )
 from sqlalchemy.exc import IntegrityError
 
+from tests.factories import save_practice_member
 from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
@@ -208,7 +209,7 @@ def test_scribe_transcript_delivery_denies_revoked_doctor_without_writes(
     member.access_revoked_by_ref = "test-suite"
     member.access_revocation_reason = "Test offboarding"
     member.access_records_retain_until = now + timedelta(days=365 * 8)
-    member.save()
+    save_practice_member(member)
     monkeypatch.setattr(
         app.jobs.transcribe,
         "queue_schema_transcription",

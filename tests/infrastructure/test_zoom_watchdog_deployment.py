@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 FLAG = "ZOOM_WATCHDOG_ENABLED"
 
@@ -31,6 +33,50 @@ def _shell_array(source: str, name: str) -> str:
     start = source.index(f"\n{name}=(") + 1
     end = source.index("\n)", start)
     return source[start : end + 2]
+
+
+def _assert_watchdog_disabled_in_secret_overrides(source: str) -> None:
+    overrides = [
+        _hcl_block(source[match.start() :], "override_data")
+        for match in re.finditer(r"^[ \t]*override_data\s*\{", source, re.MULTILINE)
+    ]
+    secret_overrides = [
+        block
+        for block in overrides
+        if re.search(
+            r"^\s*target\s*=\s*data\.external\.secrets\s*$", block, re.MULTILINE
+        )
+    ]
+    assert secret_overrides, "secretless plan must override external secrets"
+    for block in secret_overrides:
+        declarations = re.findall(rf"^\s*{FLAG}\s*=\s*(.*)$", block, re.MULTILINE)
+        assert declarations == ['"false"'], (
+            "each secrets scenario must disable watchdog"
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_value", ['"true"', "", '"false"\nZOOM_WATCHDOG_ENABLED = "false"']
+)
+@pytest.mark.parametrize("indent", ["", "  "])
+def test_watchdog_scenario_guard_rejects_enabled_missing_or_duplicate_flags(
+    unsafe_value: str,
+    indent: str,
+) -> None:
+    def scenario(value: str) -> str:
+        declaration = f"{FLAG} = {value}" if value else ""
+        return f"override_data {{\ntarget = data.external.secrets\nvalues = {{\n{declaration}\n}}\n}}\n"
+
+    safe = scenario('"false"')
+
+    def second_scenario(value: str) -> str:
+        return "\n".join(indent + line for line in scenario(value).splitlines()) + "\n"
+
+    _assert_watchdog_disabled_in_secret_overrides(safe + second_scenario('"false"'))
+    with pytest.raises(AssertionError):
+        _assert_watchdog_disabled_in_secret_overrides(
+            safe + second_scenario(unsafe_value)
+        )
 
 
 def _workflow_job(source: str, name: str) -> str:
@@ -72,7 +118,7 @@ def test_watchdog_is_public_in_both_terraform_environments() -> None:
         assert "var.python_public_vars" in block
 
     secretless_plan = _read("infra/tests/secretless_plan.tftest.hcl")
-    assert secretless_plan.count(f'{FLAG}      = "false"') == 1
+    _assert_watchdog_disabled_in_secret_overrides(secretless_plan)
 
 
 def test_staging_deploy_forces_evidences_and_reads_back_watchdog_false() -> None:

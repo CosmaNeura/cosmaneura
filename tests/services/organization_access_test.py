@@ -39,6 +39,8 @@ from app.models.practice_access_audit import (
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
+from tests.factories import save_practice_member
+
 
 def _doctor(email: str) -> Doctor:
     return Doctor(
@@ -319,11 +321,13 @@ def test_roster_import_rejects_account_attached_to_another_practice():
         origin_channel="direct",
         is_solo=True,
     ).save()
-    PracticeMember(
-        practice_id=unrelated_practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=unrelated_practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+        )
+    )
     target_practice, _ = _configured_practice(domain, now=now)
 
     with pytest.raises(
@@ -412,20 +416,24 @@ def test_existing_same_practice_member_claim_preserves_role_and_attestation():
     rostered_owner = _doctor(f"owner@{domain}")
     unrostered_member = _doctor(f"legacy@{domain}")
     practice, code = _configured_practice(domain, now=now)
-    owner_member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=rostered_owner.id,
-        role="owner",
-        attested_at=historical_attestation,
-        attestation_name="Historical Owner",
-    ).save()
-    legacy_member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=unrostered_member.id,
-        role="workforce",
-        attested_at=historical_attestation,
-        attestation_name="Historical Workforce Member",
-    ).save()
+    owner_member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=rostered_owner.id,
+            role="owner",
+            attested_at=historical_attestation,
+            attestation_name="Historical Owner",
+        )
+    )
+    legacy_member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=unrostered_member.id,
+            role="workforce",
+            attested_at=historical_attestation,
+            attestation_name="Historical Workforce Member",
+        )
+    )
     _approve(practice, rostered_owner.email or "", now=now)
 
     # Linking a practice to an organization immediately makes a legacy
@@ -566,13 +574,15 @@ def test_revoked_roster_history_is_a_global_authorization_tombstone():
         claimed_at=revoked_at + timedelta(seconds=2),
         claimed_code_version=organization.access_code_version,
     ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="workforce",
-        organization_roster_approval_id=conflicting_active.id,
-        organization_authorized_at=revoked_at + timedelta(seconds=2),
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+            organization_roster_approval_id=conflicting_active.id,
+            organization_authorized_at=revoked_at + timedelta(seconds=2),
+        )
+    )
 
     assert find_access_opportunity(doctor, at=revoked_at + timedelta(seconds=3)) is None
     assert (
@@ -751,20 +761,24 @@ def test_multi_practice_configuration_is_atomic_and_routes_explicit_assignments(
     second_owner = _doctor(f"second.owner@{domain}")
     new_workforce = _doctor(f"new.workforce@{domain}")
     historical_attestation = now - timedelta(days=90)
-    first_owner_member = PracticeMember(
-        practice_id=first.id,
-        doctor_id=first_owner.id,
-        role="owner",
-        attested_at=historical_attestation,
-        attestation_name="First Historical Owner",
-    ).save()
-    second_owner_member = PracticeMember(
-        practice_id=second.id,
-        doctor_id=second_owner.id,
-        role="owner",
-        attested_at=historical_attestation,
-        attestation_name="Second Historical Owner",
-    ).save()
+    first_owner_member = save_practice_member(
+        PracticeMember(
+            practice_id=first.id,
+            doctor_id=first_owner.id,
+            role="owner",
+            attested_at=historical_attestation,
+            attestation_name="First Historical Owner",
+        )
+    )
+    second_owner_member = save_practice_member(
+        PracticeMember(
+            practice_id=second.id,
+            doctor_id=second_owner.id,
+            role="owner",
+            attested_at=historical_attestation,
+            attestation_name="Second Historical Owner",
+        )
+    )
     assignments = [
         RosterAssignmentInput(first_owner.email or "", first.id),
         RosterAssignmentInput(second_owner.email or "", second.id),
@@ -933,16 +947,20 @@ def test_multi_practice_configuration_rolls_back_incomplete_or_moved_members(fai
     second = _unlinked_pilot_practice(domain, "Second", now=now)
     first_owner = _doctor(f"first.owner@{domain}")
     second_owner = _doctor(f"second.owner@{domain}")
-    PracticeMember(
-        practice_id=first.id,
-        doctor_id=first_owner.id,
-        role="owner",
-    ).save()
-    PracticeMember(
-        practice_id=second.id,
-        doctor_id=second_owner.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=first.id,
+            doctor_id=first_owner.id,
+            role="owner",
+        )
+    )
+    save_practice_member(
+        PracticeMember(
+            practice_id=second.id,
+            doctor_id=second_owner.id,
+            role="owner",
+        )
+    )
     assignments = [
         RosterAssignmentInput(first_owner.email or "", first.id),
         RosterAssignmentInput(second_owner.email or "", second.id),
@@ -1006,16 +1024,20 @@ def test_revocation_retry_is_scoped_to_the_requested_sibling_practice():
     second = _unlinked_pilot_practice(domain, "Second", now=now)
     first_owner = _doctor(f"first.owner@{domain}")
     second_owner = _doctor(f"second.owner@{domain}")
-    PracticeMember(
-        practice_id=first.id,
-        doctor_id=first_owner.id,
-        role="owner",
-    ).save()
-    PracticeMember(
-        practice_id=second.id,
-        doctor_id=second_owner.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=first.id,
+            doctor_id=first_owner.id,
+            role="owner",
+        )
+    )
+    save_practice_member(
+        PracticeMember(
+            practice_id=second.id,
+            doctor_id=second_owner.id,
+            role="owner",
+        )
+    )
     transfer_email = f"transfer@{domain}"
     assignments = [
         RosterAssignmentInput(first_owner.email or "", first.id),
@@ -1107,11 +1129,13 @@ def test_offboarding_last_owner_requires_an_authorized_successor():
     domain = f"last-owner-{secrets.token_hex(4)}.example.com"
     owner = _doctor(f"owner@{domain}")
     practice, code = _configured_practice(domain, now=now)
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=owner.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=owner.id,
+            role="owner",
+        )
+    )
     _approve(practice, owner.email or "", now=now)
     _, owner_member = claim_roster_access(
         owner,
@@ -1133,11 +1157,13 @@ def test_offboarding_last_owner_requires_an_authorized_successor():
     assert owner.deleted_at is None
 
     successor = _doctor(f"successor@{domain}")
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=successor.id,
-        role="owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=successor.id,
+            role="owner",
+        )
+    )
     _approve(
         practice,
         successor.email or "",
@@ -1174,3 +1200,126 @@ def test_offboarding_last_owner_requires_an_authorized_successor():
         now=now + timedelta(seconds=6),
     )
     assert revoked_member.access_revoked_at == now + timedelta(seconds=6)
+
+
+def _offboarding_with_subscription() -> tuple[Practice, Doctor, datetime]:
+    approved_at = datetime(2028, 2, 1, 9, 0, tzinfo=timezone.utc)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    practice, code = _configured_practice(domain, now=approved_at)
+    departing = _doctor(f"departing@{domain}")
+    for doctor in (departing, _doctor(f"staying@{domain}")):
+        _approve(practice, doctor.email or "", now=approved_at)
+        claim_roster_access(
+            doctor, supplied_code=code, now=approved_at + timedelta(minutes=1)
+        )
+    practice.refresh()
+    practice.stripe_subscription_id = f"sub_offboard_{secrets.token_hex(6)}"
+    practice.save()
+    return practice, departing, approved_at + timedelta(days=1)
+
+
+def test_offboarding_records_the_stripe_seat_target_in_its_transaction(monkeypatch):
+    from app.services import stripe_billing
+
+    practice, departing, revoked_at = _offboarding_with_subscription()
+
+    def refuse_post_commit_marking(_practice: Practice) -> None:
+        raise AssertionError("the seat target must be recorded before commit")
+
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", refuse_post_commit_marking
+    )
+    offboard_member(
+        practice,
+        departing,
+        operator_ref="ticket-OFFBOARD-8",
+        reason="Provider left the pilot organization",
+        now=revoked_at,
+    )
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 1
+
+
+def test_offboarding_still_revokes_when_the_seat_ledger_is_invalid(monkeypatch):
+    from app.services import organization_access, stripe_billing
+    from app.services.public_entitlements import ClinicianSeatPolicyError
+
+    practice, departing, revoked_at = _offboarding_with_subscription()
+
+    def invalid_ledger(*_args, **_kwargs) -> int:
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    marked: list[str] = []
+    monkeypatch.setattr(
+        organization_access, "record_active_clinician_seat_quantity", invalid_ledger
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "mark_quantity_sync_required",
+        lambda value: marked.append(str(value.id)),
+    )
+    revoked_member, _, _ = offboard_member(
+        practice,
+        departing,
+        operator_ref="ticket-OFFBOARD-9",
+        reason="Provider left the pilot organization",
+        now=revoked_at,
+    )
+
+    assert revoked_member.access_revoked_at == revoked_at
+    assert marked == [str(practice.id)]
+
+
+def test_claim_and_offboarding_read_the_clock_once_the_seat_lock_is_held(
+    monkeypatch,
+):
+    from app.services import organization_access
+
+    approved_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    practice, code = _configured_practice(domain, now=approved_at)
+    departing = _doctor(f"departing@{domain}")
+    _approve(practice, departing.email or "", now=approved_at)
+
+    locked = False
+    queued_from = datetime.now(timezone.utc)
+    queued_until = queued_from + timedelta(minutes=1)
+    lock = organization_access.lock_practice_for_active_seat_mutation
+
+    def record_lock(*args, **kwargs):
+        nonlocal locked
+        practice = lock(*args, **kwargs)
+        locked = True
+        return practice
+
+    class QueuedClock(datetime):
+        """Stands in for time passing while a call waits on the seat lock."""
+
+        @classmethod
+        def now(cls, tz=None):
+            return queued_until if locked else queued_from
+
+    monkeypatch.setattr(
+        organization_access, "lock_practice_for_active_seat_mutation", record_lock
+    )
+    monkeypatch.setattr(organization_access, "datetime", QueuedClock)
+
+    _, member = claim_roster_access(departing, supplied_code=code)
+    assert member.organization_authorized_at == queued_until
+
+    locked = False
+    queued_from, queued_until = (
+        queued_until + timedelta(minutes=1),
+        queued_until + timedelta(minutes=2),
+    )
+    result = revoke_roster_access(
+        practice,
+        departing.email or "",
+        operator_ref="ticket-QUEUED-OFFBOARD",
+        reason="Provider left the pilot organization",
+    )
+    assert result.approval.revoked_at == queued_until
+    assert result.audit.effective_at == queued_until

@@ -18,6 +18,7 @@ vi.mock("~/lib/practice-api", async (importOriginal) => ({
 vi.mock("@clerk/clerk-react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clerk/clerk-react")>()),
   UserButton: () => null,
+  useUser: () => ({ user: { primaryEmailAddress: { emailAddress: "provider@synthetic.invalid" } } }),
 }))
 
 beforeEach(() => {
@@ -120,5 +121,57 @@ describe("legacy join-code recovery", () => {
       screen.queryByText("That code did not accept this inbox."),
     ).not.toBeInTheDocument()
     expect(apiMocks.joinPractice).not.toHaveBeenCalled()
+  })
+
+  it("joins through the workforce attestation with every acknowledgement", async () => {
+    apiMocks.lookupPractice.mockResolvedValue({
+      mismatch: false,
+      practice: {
+        legal_name: "Synthetic Practice",
+        email_domain: "outside.example",
+        join_code: "TESTCODE",
+        baa_accepted: true,
+      },
+    })
+    apiMocks.joinPractice.mockReturnValue(new Promise(() => {}))
+    openJoinForm()
+
+    const join = await screen.findByRole("button", {
+      name: "Attest and join Synthetic Practice",
+    })
+    for (const box of screen.getAllByRole("checkbox")) fireEvent.click(box)
+    fireEvent.change(screen.getByLabelText("Typed name"), {
+      target: { value: "Riley Clinician" },
+    })
+    fireEvent.click(join)
+
+    expect(apiMocks.joinPractice).toHaveBeenCalledWith({
+      join_code: "TESTCODE",
+      attestation_name: "Riley Clinician",
+      checks: ["workforce", "not-party", "direction", "phi"],
+    })
+  })
+
+  it("offers no attestation for a practice without a BAA", async () => {
+    apiMocks.lookupPractice.mockResolvedValue({
+      mismatch: false,
+      practice: {
+        legal_name: "Unsigned Practice",
+        email_domain: "outside.example",
+        join_code: "TESTCODE",
+        baa_accepted: false,
+      },
+    })
+    openJoinForm()
+
+    expect(
+      await screen.findByText(
+        "This practice has not accepted the Cosmaneura Inc BAA. Capture stays locked.",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /Attest and join/ }),
+    ).not.toBeInTheDocument()
   })
 })

@@ -44,6 +44,8 @@ from app.models.superadmin_capability import (
     SuperadminCapabilityKind,
 )
 
+from tests.factories import save_practice_member
+
 SUPERADMIN_ISSUER = "https://staging.example.clerk.accounts.dev"
 
 
@@ -67,13 +69,15 @@ def _scope(*, is_solo: bool = True, role: str = "owner"):
         baa_signature_name="Retained Signer",
         baa_signature_title="Owner",
     ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=role,
-        attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
-        attestation_name="Retained Signer",
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role=role,
+            attested_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            attestation_name="Retained Signer",
+        )
+    )
     return doctor, practice, member
 
 
@@ -273,13 +277,15 @@ def test_closure_refuses_owner_while_another_active_member_remains():
         email=f"other-{secrets.token_hex(5)}@example.com",
         biography="",
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=other.id,
-        role="workforce",
-        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        attestation_name="Other Provider",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=other.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Other Provider",
+        )
+    )
 
     with pytest.raises(DoctorAccountClosureError, match="transfer ownership first"):
         plan_doctor_account_closure(
@@ -348,13 +354,15 @@ def test_closure_permits_non_owner_and_leaves_owner_active():
         email=f"workforce-{secrets.token_hex(5)}@example.com",
         biography="",
     ).save()
-    workforce_member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=workforce.id,
-        role="workforce",
-        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-        attestation_name="Workforce Provider",
-    ).save()
+    workforce_member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=workforce.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Workforce Provider",
+        )
+    )
     args = {
         "doctor_id": workforce.id,
         "operator_ref": "change:workforce-closure-test",
@@ -469,7 +477,7 @@ def test_closure_retry_refuses_missing_grant_evidence():
     member.access_revoked_by_ref = operator_ref
     member.access_revocation_reason = reason
     member.access_records_retain_until = retain_until
-    member.save()
+    save_practice_member(member)
     PracticeAccessAudit(
         practice_id=practice.id,
         action=PracticeAccessAction.doctor_account_closed.value,
@@ -719,3 +727,84 @@ def test_closure_cli_is_dry_run_first_and_does_not_print_identity_values():
     assert doctor.clerk_id not in result.output
     doctor.refresh()
     assert doctor.deleted_at is None
+
+
+def _workforce_closure_with_subscription() -> tuple[Doctor, Practice, dict]:
+    owner, practice, _ = _scope(is_solo=False)
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.save()
+    workforce = Doctor(
+        clerk_id=f"user_close_workforce_{secrets.token_hex(5)}",
+        email=f"workforce-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=workforce.id,
+            role="workforce",
+            attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+            attestation_name="Workforce Provider",
+        )
+    )
+    args = {
+        "doctor_id": workforce.id,
+        "operator_ref": "change:workforce-seat-closure-test",
+        "reason": "Close a departing workforce provider account",
+    }
+    return workforce, practice, args
+
+
+def test_closure_records_the_stripe_seat_target_in_its_transaction(monkeypatch):
+    workforce, practice, args = _workforce_closure_with_subscription()
+
+    def refuse_post_commit_marking(_: Practice) -> None:
+        raise AssertionError("the seat target must be recorded before commit")
+
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", refuse_post_commit_marking
+    )
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 0, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 1
+
+
+def test_closure_still_applies_when_the_seat_ledger_is_invalid(monkeypatch):
+    import app.services.doctor_account_closure as closure
+    from app.services.public_entitlements import ClinicianSeatPolicyError
+
+    workforce, practice, args = _workforce_closure_with_subscription()
+
+    def invalid_ledger(*_args, **_kwargs) -> int:
+        raise ClinicianSeatPolicyError("practice seat ledger has an invalid state")
+
+    marked: list[str] = []
+    monkeypatch.setattr(
+        closure, "record_active_clinician_seat_quantity", invalid_ledger
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "mark_quantity_sync_required",
+        lambda value: marked.append(str(value.id)),
+    )
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 0, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    workforce.refresh()
+    assert workforce.deleted_at is not None
+    assert marked == [str(practice.id)]

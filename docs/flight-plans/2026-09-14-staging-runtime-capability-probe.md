@@ -1,5 +1,10 @@
 # Staging runtime: bounded namespace-prerequisite test
 
+Historical September 14 assembly: the hashes below describe the original
+candidate. The current build-only source/artifact refresh is qualified under
+[Core type cleanup qualification](2026-10-05-core-type-cleanup.md#diagnostic-image-evidence).
+Neither candidate has runtime, deployment or execution acceptance.
+
 Tier 2. Prepared September 14, 2026. Source/image proposal only; not an execution
 receipt, infrastructure plan, platform acceptance or authorization to deploy.
 Foundation apply already completed. PRs #385–#387 merged normally at protected

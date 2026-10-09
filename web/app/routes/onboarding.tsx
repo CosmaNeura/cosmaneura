@@ -11,9 +11,17 @@ import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
+import { AnimatedCheckmark } from "~/components/shared/AnimatedCheckmark"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
+import { PracticeAccessEndingNotice } from "~/components/shared/PracticeMemberAccess"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
+import {
+  CheckRow,
+  Field,
+  WorkforceAttestation,
+  type WorkforceAttestationSubmission,
+} from "~/components/shared/WorkforceAttestation"
 import { Button } from "~/components/ui/button"
 import {
   Form,
@@ -25,7 +33,6 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
-import { Label } from "~/components/ui/label"
 import { ScrollArea } from "~/components/ui/scroll-area"
 import { getClient } from "~/configuration/clerk"
 import {
@@ -40,7 +47,6 @@ import {
   BAA_PDF_URL,
   BAA_VERSION,
   COMPANY,
-  WORKFORCE_CHECKS,
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
@@ -56,6 +62,7 @@ import {
   exampleNoteUploadErrorCopy,
   submitExampleNote,
 } from "~/lib/example-note-upload"
+import { actionablePendingInvitation } from "~/lib/pending-invitation"
 import {
   type BaaDocument,
   type OrganizationAccessOpportunity,
@@ -116,6 +123,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getPractice(),
     getOrganizationAccessOpportunity(),
   ])
+  if (!practice && actionablePendingInvitation()) {
+    throw redirect(href("/invite"))
+  }
 
   // The server's effective access decision includes exact-account grants. Do
   // not recompute authorization from the factual practice payload here.
@@ -185,6 +195,8 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           />
         ) : practice?.access_revoked ? (
           <OrganizationAccessRevoked practice={practice} />
+        ) : practice?.access_ended ? (
+          <PracticeAccessEndingNotice practice={practice} />
         ) : practiceReady(practice) ? (
           <OptionalSetup
             biography={onboardingData.biography}
@@ -944,8 +956,6 @@ function WorkforceFlow({
 }) {
   const [code, setCode] = useState("")
   const [found, setFound] = useState<PracticeStatus | null>(null)
-  const [checks, setChecks] = useState<Record<string, boolean>>({})
-  const [name, setName] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -972,17 +982,14 @@ function WorkforceFlow({
     }
   }
 
-  async function onJoin() {
+  async function onJoin(attestation: WorkforceAttestationSubmission) {
     if (!found?.join_code) return
     setBusy(true)
     setError(null)
     try {
       const next = await joinPractice({
         join_code: found.join_code,
-        attestation_name: name,
-        checks: WORKFORCE_CHECKS.map((item) => item.id).filter(
-          (id) => checks[id],
-        ),
+        ...attestation,
       })
       onPractice(next)
     } catch (err) {
@@ -991,11 +998,6 @@ function WorkforceFlow({
       setBusy(false)
     }
   }
-
-  const ready =
-    Boolean(found?.baa_accepted) &&
-    WORKFORCE_CHECKS.every((item) => checks[item.id]) &&
-    name.trim().length >= 2
 
   return (
     <div className="max-w-xl">
@@ -1044,34 +1046,11 @@ function WorkforceFlow({
               locked.
             </p>
           ) : (
-            <div className="mt-5 grid gap-4">
-              {WORKFORCE_CHECKS.map((item) => (
-                <CheckRow
-                  key={item.id}
-                  checked={Boolean(checks[item.id])}
-                  onChange={(next) =>
-                    setChecks((prev) => ({ ...prev, [item.id]: next }))
-                  }
-                >
-                  {item.label}
-                </CheckRow>
-              ))}
-              <Field label="Typed name" htmlFor="attestation">
-                <Input
-                  id="attestation"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </Field>
-              <Button
-                type="button"
-                disabled={!ready || busy}
-                onClick={() => void onJoin()}
-                size="lg"
-              >
-                {busy ? "Joining…" : `Attest and join ${found.legal_name}`}
-              </Button>
-            </div>
+            <WorkforceAttestation
+              legalName={found.legal_name}
+              busy={busy}
+              onAttest={(attestation) => void onJoin(attestation)}
+            />
           )}
         </div>
       ) : null}
@@ -1139,7 +1118,7 @@ function OptionalSetup({
   return <AllSetStep practice={practice} />
 }
 
-function BiographyStep({
+export function BiographyStep({
   biography,
   onComplete,
   onSkip,
@@ -1158,7 +1137,15 @@ function BiographyStep({
   })
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    await updateSettingsData({ body: values })
+    const { error } = await updateSettingsData({ body: values })
+    if (error) {
+      toast({
+        title: "Couldn't save your biography",
+        description: "Your text is still here. Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
     onComplete()
   }
 
@@ -1429,48 +1416,31 @@ function ZoomStep({
   )
 }
 
-function AllSetStep({ practice }: { practice: PracticeStatus }) {
+export function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
 
   async function handleGoToCosmas() {
     setLoading(true)
-    await completeOnboarding()
+    const { error } = await completeOnboarding()
+    if (error) {
+      // The backend explains practice-access problems (no PHI) that a
+      // retry alone cannot fix.
+      const detail = (error as { detail?: unknown }).detail
+      toast({
+        title: "Couldn't finish setup",
+        description:
+          typeof detail === "string" ? detail : "Please try again in a moment.",
+        variant: "destructive",
+      })
+      setLoading(false)
+      return
+    }
     window.location.href = href("/notes")
   }
 
   return (
     <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
-      <motion.div
-        initial={{ scale: 0, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.1 }}
-        className="relative flex size-24 items-center justify-center rounded-full"
-        style={{ background: "var(--brand-navy-deep)" }}
-      >
-        <motion.span
-          initial={{ scale: 0.8, opacity: 0.6 }}
-          animate={{ scale: 1.6, opacity: 0 }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
-          className="absolute inset-0 rounded-full"
-          style={{ background: "var(--brand-navy-deep)" }}
-        />
-        <svg
-          viewBox="0 0 52 52"
-          className="size-12"
-          fill="none"
-          stroke="var(--brand-gold)"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <motion.path
-            d="M14 27 L23 36 L38 18"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.5, delay: 0.4, ease: "easeOut" }}
-          />
-        </svg>
-      </motion.div>
+      <AnimatedCheckmark />
 
       <motion.div
         initial={{ opacity: 0, y: 12 }}
@@ -1519,45 +1489,6 @@ function DisplayTitle({ children }: { children: React.ReactNode }) {
     >
       {children}
     </h1>
-  )
-}
-
-function Field({
-  label,
-  htmlFor,
-  children,
-}: {
-  label: string
-  htmlFor: string
-  children: React.ReactNode
-}) {
-  return (
-    <div className="grid gap-1.5 text-left">
-      <Label htmlFor={htmlFor}>{label}</Label>
-      {children}
-    </div>
-  )
-}
-
-function CheckRow({
-  checked,
-  onChange,
-  children,
-}: {
-  checked: boolean
-  onChange: (next: boolean) => void
-  children: React.ReactNode
-}) {
-  return (
-    <label className="flex gap-3 text-left text-sm leading-snug">
-      <input
-        type="checkbox"
-        className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-      <span>{children}</span>
-    </label>
   )
 }
 

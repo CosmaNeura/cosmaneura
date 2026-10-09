@@ -1,4 +1,8 @@
-import { ClerkProvider } from "@clerk/clerk-react"
+import { useEffect } from "react"
+
+import { forgetPendingInvitationOnSignOut } from "~/lib/pending-invitation"
+
+import { ClerkProvider, useClerk } from "@clerk/clerk-react"
 import { loadClerkJsScript } from "@clerk/shared/loadClerkJsScript"
 import { invariant } from "@epic-web/invariant"
 
@@ -36,7 +40,10 @@ type ClerkClient = {
   load: () => Promise<void>
   user?: ClerkUser
   session?: {
-    getToken: (options?: { template?: string }) => Promise<string | null>
+    getToken: (options?: {
+      template?: string
+      skipCache?: boolean
+    }) => Promise<string | null>
   }
   redirectToSignIn: () => Promise<void>
 }
@@ -151,6 +158,12 @@ export async function getUserId() {
   return client.user.id
 }
 
+function ForgetPendingInvitationOnSignOut() {
+  const clerk = useClerk()
+  useEffect(() => forgetPendingInvitationOnSignOut(clerk), [clerk])
+  return null
+}
+
 export default function withClerkProvider(Component: React.ComponentType) {
   return (props: React.ComponentProps<typeof Component>) => (
     <ClerkProvider
@@ -160,6 +173,7 @@ export default function withClerkProvider(Component: React.ComponentType) {
       signInFallbackRedirectUrl="/notes"
       signUpFallbackRedirectUrl="/notes"
     >
+      <ForgetPendingInvitationOnSignOut />
       <Component {...props} />
     </ClerkProvider>
   )

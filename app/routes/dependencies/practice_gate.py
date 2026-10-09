@@ -30,6 +30,10 @@ EXEMPT_ROUTE_NAMES = {
     "accept_practice_baa",
     "lookup_practice",
     "join_practice",
+    # an invitee has no membership until acceptance; both enforce their own
+    # identity, invitation and BAA checks
+    "inspect_practice_invitation",
+    "accept_practice_invitation",
     "organization_access_opportunity",
     "claim_organization_access",
     "baa_current",
@@ -85,6 +89,12 @@ def require_practice_in_force(request: Request) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Name or join a practice and accept the BAA before using Cosmas.",
+        )
+
+    if decision.denial_reason == "practice_membership_inactive":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your practice owner ended your access to Cosmas.",
         )
 
     raise HTTPException(

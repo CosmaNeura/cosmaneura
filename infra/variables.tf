@@ -125,6 +125,7 @@ variable "python_billing_public_vars" {
   default = [
     "STRIPE_INTEGRATION_ENABLED", "STRIPE_BILLING_ENABLED", "STRIPE_ACCOUNT_ID",
     "STRIPE_PRICE_ID", "STRIPE_API_VERSION", "STRIPE_LIVE_MODE",
+    "STRIPE_PORTAL_CONFIGURATION_ID",
   ]
 }
 
@@ -188,9 +189,9 @@ variable "scribe_service_scope" {
 }
 
 variable "scribe_service_timeout_seconds" {
-  description = "Timeout for one platform-to-Scribe API request."
+  description = "Timeout for one platform-to-Scribe API request; keep aligned with the application fallback for non-Terraform entry points."
   type        = number
-  default     = 15
+  default     = 60
 
   validation {
     condition     = var.scribe_service_timeout_seconds >= 1 && var.scribe_service_timeout_seconds <= 60

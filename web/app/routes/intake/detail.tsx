@@ -1,20 +1,20 @@
+import { useRef } from "react"
 import Markdown from "react-markdown"
 import type { MetaFunction } from "react-router"
 
 import { Route } from "./+types/detail"
 
-import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset } from "@/components/ui/sidebar"
 import { CopyButton } from "~/components/shared/CopyButton"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
+import { PageHeader } from "~/components/shared/PageHeader"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
+import { intakeStatusBadge } from "~/lib/intake-status"
 import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
-
-type Status = Parameters<typeof StatusBadge>[0]["status"]
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   const { data } = await intakeDetail({
@@ -35,30 +35,17 @@ export const meta: MetaFunction = () => {
     { title: "Intake" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "Intake summary",
     },
   ]
 }
 
-function Header({ title }: { title?: string }) {
-  const t = useTerminology()
-  return (
-    <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
-      <SidebarTrigger className="-ml-1" />
-      <Separator orientation="vertical" className="mr-2 h-4" />
-      <h1 className="text-lg font-semibold">
-        {title ? title : `Select a ${t.patient}`}
-      </h1>
-    </header>
-  )
-}
-
-function IntakeHeader({
-  status,
+export function IntakeHeader({
+  badge,
   title,
   dataFields,
 }: {
-  status: Status
+  badge: ReturnType<typeof intakeStatusBadge>
   title: string
   dataFields: Record<string, string>
 }) {
@@ -66,8 +53,14 @@ function IntakeHeader({
     <div className="mb-6 flex items-start justify-between">
       <div className="text-left">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">{title}</h1>
-          <StatusBadge status={status} />
+          <h1
+            className="text-2xl font-semibold"
+            data-ph-no-capture=""
+            data-sentry-block=""
+          >
+            {title}
+          </h1>
+          <StatusBadge status={badge.status} label={badge.label} />
         </div>
         <div className="mt-1 space-y-1">
           {Object.entries(dataFields).map(([key, value]) => (
@@ -82,56 +75,84 @@ function IntakeHeader({
   )
 }
 
-function EmptyState({ intake }: { intake: { public_url: string | null } }) {
+export function EmptyState({
+  intake,
+}: {
+  intake: { public_url: string | null }
+}) {
   const t = useTerminology()
   return (
-    <div className="mb-4">
-      <div className="text-muted-foreground">
-        Your {t.patient} has not yet completed their intake they have been sent.
-        If you'd like to resend their intake URL, you can find it below.
-        <br />
-        <br />
-        {intake.public_url ? (
-          <div className="flex items-center gap-2">
-            <a
-              target="_blank"
-              href={intake.public_url}
-              data-ph-no-capture=""
-              data-sentry-block=""
-              className="text-blue-500"
-            >
-              {intake.public_url}
-            </a>
-            <CopyButton text={intake.public_url} />
-          </div>
-        ) : null}
+    <section
+      aria-labelledby="intake-waiting-title"
+      className="bg-muted/40 max-w-xl rounded-lg border p-5"
+    >
+      <h2 id="intake-waiting-title" className="text-base font-semibold">
+        Waiting on your {t.patient}
+      </h2>
+      <p className="text-muted-foreground mt-1 text-sm">
+        They haven&apos;t finished their intake yet. If they need the link
+        again, you can copy it and send it to them.
+      </p>
+      {intake.public_url ? (
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <a
+            target="_blank"
+            rel="noopener noreferrer"
+            href={intake.public_url}
+            data-ph-no-capture=""
+            data-sentry-block=""
+            className="text-primary min-w-0 truncate text-sm underline underline-offset-4"
+          >
+            {intake.public_url}
+          </a>
+          <CopyButton
+            text={intake.public_url}
+            label="Copy intake link"
+            variant="default"
+            className="shrink-0"
+          />
+        </div>
+      ) : null}
+    </section>
+  )
+}
+
+export function IntakeSummary({ summary }: { summary: string }) {
+  const summaryRef = useRef<HTMLDivElement>(null)
+  return (
+    <div className="space-y-3">
+      <CopyButton htmlRef={summaryRef} label="Copy summary" />
+      <div ref={summaryRef} className="prose-headings prose max-w-full">
+        <Markdown>{summary}</Markdown>
       </div>
     </div>
   )
 }
 
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
+  const t = useTerminology()
   const { intake } = loaderData
   const hasSummary = !!intake.summary
 
   return (
     <SidebarInset>
-      <Header title={loaderData.patient.name} />
+      <PageHeader title={loaderData.patient.name} />
       <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
-          status={hasSummary ? "completed" : "not-started"}
+          // A written summary is the ground truth for completion, even if a
+          // re-run summary left an answer missing.
+          badge={intakeStatusBadge(
+            hasSummary ? "complete" : loaderData.appointment.intake_status,
+            t,
+          )}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
             ),
           }}
         />
-        {hasSummary && (
-          <div className="prose-headings prose max-w-full">
-            <Markdown>{intake.summary}</Markdown>
-          </div>
-        )}
+        {intake.summary && <IntakeSummary summary={intake.summary} />}
 
         {!hasSummary && <EmptyState intake={intake} />}
       </InnerScrollableContent>

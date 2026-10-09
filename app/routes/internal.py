@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal, cast
 
@@ -23,11 +24,13 @@ import app.jobs.extract
 import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
+import app.jobs.practice_invitation_email as practice_invitation_email
 import app.jobs.start_zoom_capture as start_zoom_capture_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.reference_labs_gate as reference_labs_gate
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -38,10 +41,11 @@ from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
 from app.configuration.stripe import (
     stripe_billing_configured,
-    stripe_runtime_configured,
+    stripe_portal_configured,
     stripe_webhook_configured,
 )
 from app.services import lab_ranges as lab_ranges_service
+from app.services.billing_header_contract import BillingHeaderSource
 from app.services.biomarkers import (
     BY_KEY as BIOMARKERS_BY_KEY,
 )
@@ -53,7 +57,11 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
-from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.doctor_access import (
+    DoctorAccessDecision,
+    practice_members_access_in_force,
+    resolve_doctor_access,
+)
 from app.services.managed_organization_access import (
     ManagedOrganizationAccessState,
     resolve_managed_organization_access,
@@ -70,9 +78,35 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
+from app.services.practice_invitations import (
+    ACCOUNT_IN_ANOTHER_PRACTICE,
+    InspectionState,
+    InvalidInvitationEmail,
+    InvitationNotFound,
+    InvitationWrongAccount,
+    IssuedInvitation,
+    PracticeInvitationError,
+    accept_invitation,
+    inspect_invitation,
+    invitation_expired,
+    issue_invitation,
+    pending_invitations,
+    resend_invitation,
+    revoke_invitation,
+)
+from app.services.practice_member_access import (
+    MemberAccessChange,
+    MemberNotFound,
+    PracticeMemberAccessError,
+    restore_member_access,
+    revoke_member_access,
+)
 from app.services.public_entitlements import (
     ActiveClinicianSeatLimitReached,
+    ClinicianSeatPolicyError,
+    active_clinician_seat_count,
     lock_practice_for_active_seat_mutation,
+    occupies_active_clinician_seat,
     record_active_clinician_seat_quantity,
     require_active_clinician_seat_capacity,
 )
@@ -136,25 +170,40 @@ from app.models.patient_medication import (
     PatientMedication,
 )
 from app.models.practice import (
+    SEAT_HOLDING_ACCESS_STATES,
     TRIAL_LENGTH,
+    MemberAccessState,
     OriginChannel,
     Practice,
     PracticeAcquisitionSource,
     PracticeMember,
     PracticeRole,
+    member_access_state,
 )
+from app.models.public_onboarding import PracticeInvitation
+from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
-from sqlmodel import select
+from sqlmodel import col, select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
+from .billing_header import billing_header_api, note_billing_sources
+from .cab_bff import router as cab_bff_router
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
+from .note_template_fields import note_template_fields_api
+from .session_prep_review import (
+    PriorNoteOverview,
+    SessionPrepNoteReview,
+    note_review_statuses,
+    prior_notes_for_session_prep,
+    session_prep_review_api,
+)
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -168,6 +217,8 @@ CHECKOUT_RETIREMENT_PENDING_DETAIL = (
 
 internal_api_app = APIRouter(
     prefix="/internal/v1",
+    # Keep generated client method names stable for nested routers as well.
+    generate_unique_id_function=lambda route: route.name,
     # TODO unclear what the tags are used for...
     tags=["private"],
     # think of dependencies as middleware
@@ -190,6 +241,10 @@ internal_api_app = APIRouter(
 
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
+internal_api_app.include_router(session_prep_review_api)
+internal_api_app.include_router(billing_header_api)
+internal_api_app.include_router(cab_bff_router)
+internal_api_app.include_router(note_template_fields_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -221,6 +276,9 @@ def intake_list(request: Request) -> IntakeList:
 
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = Field(
+        default_factory=dict
+    )
 
 
 @internal_api_app.get("/notes")
@@ -244,7 +302,35 @@ def note_list(request: Request) -> NotetakingData:
         .all()
     )
 
-    return NotetakingData(appointments=cast(list[Appointment], list(appointment_list)))
+    appointments = cast(list[Appointment], list(appointment_list))
+    appointment_ids = [appointment.id for appointment in appointments]
+    note_statuses: dict[str, Literal["not-started", "completed"]] = {
+        str(appointment_id): "not-started" for appointment_id in appointment_ids
+    }
+    if appointment_ids:
+        # Match note_detail's current-note scope without loading note content.
+        # The owner join keeps bind count constant for this unpaginated list.
+        with get_session() as session:
+            completed_ids = session.exec(
+                select(cast(Any, AIVisitNote.appointment_id))
+                .join(
+                    Appointment,
+                    cast(Any, Appointment.id) == AIVisitNote.appointment_id,
+                )
+                .where(
+                    AIVisitNote.doctor_id == doctor.id,
+                    Appointment.doctor_id == doctor.id,
+                    cast(Any, AIVisitNote.superseded_at).is_(None),
+                )
+                .distinct()
+            ).all()
+        for appointment_id in completed_ids:
+            # A new appointment may appear after the list read. Never introduce
+            # a status key for a visit absent from this response's appointments.
+            if str(appointment_id) in note_statuses:
+                note_statuses[str(appointment_id)] = "completed"
+
+    return NotetakingData(appointments=appointments, note_statuses=note_statuses)
 
 
 # TODO what about doctors who have an insane patient list?
@@ -268,7 +354,12 @@ class NoteDetail(BaseModel, extra="forbid"):
     appointment: Appointment
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
+    note_transcripts: list[AIVisitTranscript] = Field(default_factory=list)
+    capture_workflow_required: bool = False
     engagement_role: EngagementRole | None = None
+    billing_header_sources: dict[str, BillingHeaderSource] = Field(default_factory=dict)
+    session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
+    session_prep_prior_notes: PriorNoteOverview | None = None
 
     @computed_field
     @property
@@ -279,37 +370,99 @@ class NoteDetail(BaseModel, extra="forbid"):
 @internal_api_app.get("/notes/{appointment_id}")
 def note_detail(
     request: Request,
+    response: Response,
     appointment_id: Annotated[TypeIDType, Path()],
 ) -> NoteDetail:
-    # TODO error handling for bad IDs
+    response.headers["Cache-Control"] = "no-store"
     doctor: Doctor = request.state.doctor
     appointment = cast(
-        Appointment,
+        Appointment | None,
         Appointment.where(
             Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-        ).one(),
+        ).first(),
     )
+    if appointment is None:
+        # A stale link and a visit owned by another doctor have the same result.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Visit unavailable",
+            headers={"Cache-Control": "no-store"},
+        )
 
     visit_notes = cast(
         list[AIVisitNote],
-        AIVisitNote.where(
-            AIVisitNote.appointment_id == appointment_id,
-            cast(Any, AIVisitNote.superseded_at).is_(None),
-        ).all(),
+        list(
+            AIVisitNote.where(
+                AIVisitNote.appointment_id == appointment_id,
+                AIVisitNote.doctor_id == doctor.id,
+                cast(Any, AIVisitNote.superseded_at).is_(None),
+            ).all()
+        ),
     )
 
-    # There should only ever be one transcript per appointment. If this
-    # invariant is violated, this endpoint will start to cause issues.
-    transcript = AIVisitTranscript.get(appointment_id=appointment_id)
+    # Retained/reviewed versions can leave several transcripts on an encounter.
+    # Follow each current note's actual source, including an admin-restored note;
+    # neither creation time nor the restore frontier identifies that source.
+    transcript_query = AIVisitTranscript.where(
+        AIVisitTranscript.appointment_id == appointment.id,
+        AIVisitTranscript.doctor_id == doctor.id,
+        AIVisitTranscript.patient_id == appointment.patient_id,
+    )
+    note_transcripts: list[AIVisitTranscript] = []
+    transcript: AIVisitTranscript | None = None
+    if visit_notes:
+        source_ids = {note.ai_transcript_id for note in visit_notes}
+        note_transcripts = cast(
+            list[AIVisitTranscript],
+            list(
+                transcript_query.where(
+                    cast(Any, AIVisitTranscript.id).in_(source_ids)
+                ).all()
+            ),
+        )
+        # Keep the legacy shared field only when it describes every visible note.
+        if len(source_ids) == 1 and len(note_transcripts) == 1:
+            transcript = note_transcripts[0]
+    else:
+        # Preserve the single-transcript, pre-note view. Do not choose arbitrarily
+        # between multiple unassociated versions or expose their history.
+        candidates = cast(
+            list[AIVisitTranscript], list(transcript_query.limit(2).all())
+        )
+        if len(candidates) == 1:
+            transcript = candidates[0]
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
+    # A retained capture owns note preparation even if admission was interrupted.
+    # Tell the provider why a later Recall/upload transcript has no queued note;
+    # background summarization must not replace an authorized capture source.
+    capture_workflow_required = (
+        ScribeCaptureBinding.where(
+            ScribeCaptureBinding.appointment_id == appointment.id,
+            ScribeCaptureBinding.doctor_id == doctor.id,
+        ).first()
+        is not None
+    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
+        note_transcripts=note_transcripts,
+        capture_workflow_required=capture_workflow_required,
         engagement_role=engagement_role,
+        billing_header_sources=note_billing_sources(request, visit_notes),
+        session_prep_reviews=(
+            note_review_statuses(doctor, visit_notes)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
+        session_prep_prior_notes=(
+            prior_notes_for_session_prep(doctor, appointment.id)
+            if getattr(request.state, "view_as", None) is None
+            else None
+        ),
     )
 
     return note_detail
@@ -539,8 +692,14 @@ class VisitAudioUploadRequest(BaseModel, extra="forbid"):
     date_of_birth: datetime
 
 
+class VisitAudioUploadResponse(BaseModel):
+    appointment_id: str
+
+
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
+def upload_visit_audio_file(
+    request: Request, data: VisitAudioUploadRequest
+) -> VisitAudioUploadResponse:
     doctor: Doctor = request.state.doctor
 
     try:
@@ -592,7 +751,7 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
             event_code="clinical_upload_receipt_completion_deferred",
             upload_type=UploadType.VISIT.value,
         )
-    return result
+    return VisitAudioUploadResponse(appointment_id=result)
 
 
 class ExampleNoteUploadGrant(BaseModel, extra="forbid"):
@@ -1000,6 +1159,13 @@ def zoom_revoked_ack(request: Request) -> None:
 
 _JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+# The seat cap is a soft limit Cosmaneura lifts per customer, so neither
+# audience is shown the number.
+SEAT_LIMIT_JOINING_CLINICIAN_DETAIL = (
+    "This practice can't add more clinicians right now. "
+    "Ask the practice owner to contact Cosmaneura."
+)
+
 
 def _current_baa_version() -> BaaVersion:
     version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
@@ -1040,6 +1206,13 @@ def _verified_legacy_enrollment_email(doctor: Doctor) -> str:
 
 def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
+
+
+def _owner_membership(doctor: Doctor, detail: str) -> PracticeMember:
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+    return member
 
 
 def _practice_ready(
@@ -1093,13 +1266,16 @@ def _practice_payload(
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
+        access_ends_at=member.access_ends_at,
+        access_ended=member_access_state(member, at=datetime.now(timezone.utc))
+        is MemberAccessState.revoked,
         pilot_access_grant_active=pilot_access_grant_active,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
         billing_exempt_until=practice.billing_exempt_until,
         billing_exempt_active=practice.billing_exemption_active(),
         billing_enabled=stripe_billing_configured(),
-        billing_management_enabled=stripe_runtime_configured(),
+        billing_management_enabled=stripe_portal_configured(),
         billing_portal_available=practice.stripe_customer_id is not None,
         billing_checkout_resumable=(
             stripe_webhook_configured()
@@ -1111,7 +1287,56 @@ def _practice_payload(
         billing_checkout_available_at=stripe_billing.checkout_deferred_until(practice),
         entitled=practice.entitled(),
         subscription_status=practice.subscription_status,
+        seat_summary=(
+            _billing_seat_summary(practice)
+            if member.role == PracticeRole.owner.value
+            else None
+        ),
     )
+
+
+def _billing_seat_summary(practice: Practice) -> "BillingSeatSummary | None":
+    try:
+        with get_session() as session:
+            active = active_clinician_seat_count(session, practice.id)
+    except ClinicianSeatPolicyError:
+        # The status screen must still load, but a corrupt ledger is an
+        # invariant violation operators have to see, not a missing summary.
+        log.error(
+            "active seat ledger invalid while building billing status",
+            event_code="billing_seat_summary_ledger_invalid",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        return None
+    billed = stripe_billing.confirmed_billed_quantity(practice)
+    return BillingSeatSummary(
+        account_kind="solo" if practice.is_solo else "practice",
+        active_clinicians=active,
+        billed_seats=billed,
+        seat_sync_pending=bool(
+            stripe_billing.has_nonterminal_subscription(practice)
+            and (
+                practice.stripe_quantity_sync_required
+                or (billed is not None and billed != active)
+            )
+        ),
+        unit_amount=stripe_billing.EXPECTED_PRICE_UNIT_AMOUNT,
+        currency=stripe_billing.EXPECTED_PRICE_CURRENCY,
+        interval=stripe_billing.EXPECTED_PRICE_INTERVAL,
+    )
+
+
+class BillingSeatSummary(BaseModel, extra="forbid"):
+    account_kind: Literal["solo", "practice"]
+    active_clinicians: int
+    billed_seats: int | None
+    "Stripe-confirmed quantity; null while unconfirmed or without a live subscription."
+    seat_sync_pending: bool
+    unit_amount: int
+    "Per-seat price in the currency's minor unit; Checkout refuses any other price."
+    currency: Literal["usd"]
+    interval: Literal["month"]
 
 
 class PracticeStatus(BaseModel, extra="forbid"):
@@ -1126,6 +1351,10 @@ class PracticeStatus(BaseModel, extra="forbid"):
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
+    access_ends_at: datetime | None
+    "Set once the practice owner revoked this member; access stops at this instant."
+    access_ended: bool
+    "An owner revocation has taken effect, judged by the server's clock."
     pilot_access_grant_active: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
@@ -1139,6 +1368,8 @@ class PracticeStatus(BaseModel, extra="forbid"):
     billing_checkout_available_at: datetime | None
     entitled: bool
     subscription_status: str | None
+    seat_summary: BillingSeatSummary | None
+    "Owner-only; workforce and join-code lookups never receive billing seats."
 
 
 class PracticeLookupResult(BaseModel, extra="forbid"):
@@ -1432,6 +1663,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         )
         session.add(practice)
         session.flush()
+        practice = lock_practice_for_active_seat_mutation(session, practice.id)
         member = PracticeMember(
             practice_id=practice.id,
             doctor_id=locked_doctor.id,
@@ -1648,6 +1880,506 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
     ]
 
 
+class PracticeRosterMember(BaseModel, extra="forbid"):
+    member_id: str
+    display_name: str | None
+    "Name recorded at attestation; null for roster-authorized members who never attested."
+    role: Literal["owner", "workforce"]
+    is_self: bool
+    seat_active: bool
+    "Holds a clinician seat, which an owner-revoked member keeps until access_ends_at."
+    revoked: bool
+    "Access was permanently revoked by support, as distinct from an owner revocation."
+    access_in_force: bool
+    "Passes the same effective-access decision that gates protected routes."
+    access_ends_at: datetime | None
+    "When an owner revocation ends, or ended, this member's access; null otherwise."
+    joined_at: datetime
+
+
+class PracticeRosterInvitation(BaseModel, extra="forbid"):
+    invitation_id: str
+    invitee_email: str | None
+    "Null under support view-as."
+    issued_at: datetime
+    expires_at: datetime
+    expired: bool
+
+
+class PracticeRoster(BaseModel, extra="forbid"):
+    members: list[PracticeRosterMember]
+    invitations: list[PracticeRosterInvitation]
+    "Unanswered invitations. They occupy no seat and are not billed."
+    occupied_seats: int
+    "The billed clinician seat count."
+
+
+def _roster_member(
+    row: PracticeMember, *, is_self: bool, seat_active: bool, access_in_force: bool
+) -> PracticeRosterMember:
+    assert row.created_at is not None
+    return PracticeRosterMember(
+        member_id=str(row.id),
+        display_name=row.attestation_name,
+        role=cast(Literal["owner", "workforce"], row.role),
+        is_self=is_self,
+        seat_active=seat_active,
+        revoked=row.access_revoked_at is not None,
+        access_in_force=access_in_force,
+        access_ends_at=row.access_ends_at,
+        joined_at=row.created_at,
+    )
+
+
+def _roster_invitation(
+    invitation: PracticeInvitation, *, expired: bool, include_email: bool = True
+) -> PracticeRosterInvitation:
+    return PracticeRosterInvitation(
+        invitation_id=str(invitation.id),
+        invitee_email=invitation.invitee_email if include_email else None,
+        issued_at=invitation.issued_at,
+        expires_at=invitation.expires_at,
+        expired=expired,
+    )
+
+
+@internal_api_app.get("/practice/members", name="practice_roster")
+def practice_roster(request: Request) -> PracticeRoster:
+    """The practice's members and pending invitations, for its owner.
+
+    Members carry no contact details; an invitation carries the address the
+    owner typed, except under support view-as.
+    """
+    doctor: Doctor = request.state.doctor
+    member = _owner_membership(
+        doctor, "Only the practice owner can view the practice roster."
+    )
+    now = datetime.now(timezone.utc)
+    with get_session() as session:
+        rows = session.exec(
+            select(
+                PracticeMember,
+                Doctor,
+                occupies_active_clinician_seat(now),
+            )
+            .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
+            .where(PracticeMember.practice_id == member.practice_id)
+            .order_by(
+                col(PracticeMember.role) != PracticeRole.owner.value,
+                col(PracticeMember.created_at),
+                col(PracticeMember.id),
+            )
+        ).all()
+        practice = session.get(Practice, member.practice_id)
+        assert practice is not None
+        access = practice_members_access_in_force(
+            practice, [(row, subject) for row, subject, _ in rows], at=now
+        )
+        roster = [
+            _roster_member(
+                row,
+                is_self=row.doctor_id == doctor.id,
+                seat_active=seat_active,
+                access_in_force=access_in_force,
+            )
+            for (row, _, seat_active), access_in_force in zip(rows, access, strict=True)
+        ]
+        include_email = request.state.view_as is None
+        invitations = [
+            _roster_invitation(invitation, expired=expired, include_email=include_email)
+            for invitation, expired in pending_invitations(session, practice.id, now)
+        ]
+        occupied_seats = active_clinician_seat_count(session, practice.id, at=now)
+    return PracticeRoster(
+        members=roster, invitations=invitations, occupied_seats=occupied_seats
+    )
+
+
+# Seat-cap wording for the owner; the soft cap is lifted on request.
+SEAT_LIMIT_OWNER_DETAIL = "To add more clinicians, contact us at info@cosmaneura.com."
+
+_MEMBER_ACCESS_OWNER_ONLY = "Only the practice owner can revoke or restore clinicians."
+
+
+def _change_member_access(
+    request: Request,
+    member_id: TypeIDType,
+    change: Callable[..., MemberAccessChange],
+) -> PracticeRosterMember:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _MEMBER_ACCESS_OWNER_ONLY)
+    try:
+        with get_session() as session:
+            result = change(session, owner_member=owner, member_id=member_id)
+    except ActiveClinicianSeatLimitReached:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    except PracticeMemberAccessError as exc:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if isinstance(exc, MemberNotFound)
+                else status.HTTP_409_CONFLICT
+            ),
+            detail=str(exc),
+        ) from None
+    [access_in_force] = practice_members_access_in_force(
+        result.practice, [(result.member, result.doctor)], at=result.decided_at
+    )
+    return _roster_member(
+        result.member,
+        is_self=result.member.doctor_id == doctor.id,
+        seat_active=member_access_state(result.member, at=result.decided_at)
+        in SEAT_HOLDING_ACCESS_STATES,
+        access_in_force=access_in_force,
+    )
+
+
+@internal_api_app.post(
+    "/practice/members/{member_id}/revoke", name="revoke_practice_member"
+)
+def revoke_practice_member(
+    request: Request, member_id: Annotated[TypeIDType, Path()]
+) -> PracticeRosterMember:
+    """End a clinician's access at midnight US Eastern tonight; reversible."""
+    return _change_member_access(request, member_id, revoke_member_access)
+
+
+@internal_api_app.post(
+    "/practice/members/{member_id}/restore", name="restore_practice_member"
+)
+def restore_practice_member(
+    request: Request, member_id: Annotated[TypeIDType, Path()]
+) -> PracticeRosterMember:
+    """Undo a revocation; after its cut-off the clinician takes a seat again."""
+    return _change_member_access(request, member_id, restore_member_access)
+
+
+class CreatePracticeInvitationBody(BaseModel, extra="forbid"):
+    email: str = Field(min_length=3, max_length=320)
+
+
+class PracticeInvitationIssued(BaseModel, extra="forbid"):
+    invitation: PracticeRosterInvitation
+    invite_url: str
+    "Carries the token in the URL fragment so it stays out of logs and Referer."
+    email_queued: bool
+
+
+class PracticeInvitationTokenBody(BaseModel, extra="forbid"):
+    token: str = Field(min_length=16, max_length=128)
+
+
+class AcceptPracticeInvitationBody(BaseModel, extra="forbid"):
+    token: str = Field(min_length=16, max_length=128)
+    attestation_name: str = Field(min_length=2, max_length=120)
+    checks: list[str]
+
+
+class PracticeInvitationInspection(BaseModel, extra="forbid"):
+    state: InspectionState
+    legal_name: str | None
+    "Only for the account the invitation was addressed to."
+    baa_accepted: bool
+
+
+_WORKFORCE_ATTESTATION_CHECKS = {"workforce", "not-party", "direction", "phi"}
+
+
+def _invitation_http_error(
+    exc: PracticeInvitationError | ActiveClinicianSeatLimitReached,
+    *,
+    seat_limit_detail: str,
+) -> HTTPException:
+    if isinstance(exc, ActiveClinicianSeatLimitReached):
+        return HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=seat_limit_detail
+        )
+    if isinstance(exc, InvitationNotFound):
+        code = status.HTTP_404_NOT_FOUND
+    elif isinstance(exc, InvitationWrongAccount):
+        code = status.HTTP_403_FORBIDDEN
+    elif isinstance(exc, InvalidInvitationEmail):
+        code = status.HTTP_400_BAD_REQUEST
+    else:
+        code = status.HTTP_409_CONFLICT
+    return HTTPException(status_code=code, detail=str(exc))
+
+
+def _consume_practice_invitation_attempt(practice_id: Any) -> None:
+    """Bound how many invitations one practice can send per hour."""
+
+    key_id = hashlib.sha256(str(practice_id).encode("ascii")).hexdigest()
+    key = f"practice-invitation-attempt:{key_id}"
+    redis = get_redis()
+    pipe = redis.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.expire(key, 60 * 60)
+    attempts, _ = pipe.execute()
+    if int(attempts) > 20:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many invitations sent. Try again later.",
+        )
+
+
+def _first_resend_with_key(invitation_id: Any, idempotency_key: str) -> bool:
+    """Whether this key has not already re-sent this unchanged invitation.
+
+    Re-sending a live invitation writes no row, so the key is remembered here
+    to keep a retried request from emailing the invitee twice.
+    """
+
+    key_id = hashlib.sha256(
+        f"{invitation_id}:{idempotency_key}".encode("utf-8")
+    ).hexdigest()
+    return bool(
+        get_redis().set(
+            f"practice-invitation-resend:{key_id}", "1", nx=True, ex=24 * 60 * 60
+        )
+    )
+
+
+def _invitation_web_origin(request: Request) -> str:
+    return _validated_web_origin(
+        request, detail="Invitations require a recognized web origin."
+    )
+
+
+def _queue_invitation_email(invitation: PracticeInvitation) -> bool:
+    if not practice_invitation_email.email_enabled():
+        return False
+    try:
+        practice_invitation_email.queue(str(invitation.id))
+    except Exception:
+        # The invitation is committed and the owner still gets the link, so a
+        # broker outage must not turn this into a failed request.
+        log.warning(
+            "practice invitation email could not be queued",
+            event_code="practice_invitation_email_queue_failed",
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _issued_invitation_payload(
+    origin: str, issued: IssuedInvitation, now: datetime, *, email_queued: bool
+) -> PracticeInvitationIssued:
+    return PracticeInvitationIssued(
+        invitation=_roster_invitation(
+            issued.invitation,
+            expired=invitation_expired(issued.invitation, now),
+        ),
+        invite_url=f"{origin}/invite#t={issued.token}",
+        email_queued=email_queued,
+    )
+
+
+_INVITATION_OWNER_ONLY = "Only the practice owner can invite clinicians."
+
+
+@internal_api_app.post(
+    "/practice/invitations",
+    name="create_practice_invitation",
+    status_code=status.HTTP_201_CREATED,
+)
+def create_practice_invitation(
+    request: Request,
+    data: CreatePracticeInvitationBody,
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=255)
+    ],
+) -> PracticeInvitationIssued:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    origin = _invitation_web_origin(request)
+    _consume_practice_invitation_attempt(owner.practice_id)
+    try:
+        with get_session() as session:
+            issued = issue_invitation(
+                session,
+                owner_member=owner,
+                email=data.email,
+                idempotency_key=idempotency_key,
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    # A replayed request already queued its email.
+    email_queued = issued.created and _queue_invitation_email(issued.invitation)
+    return _issued_invitation_payload(
+        origin, issued, datetime.now(timezone.utc), email_queued=email_queued
+    )
+
+
+@internal_api_app.post(
+    "/practice/invitations/{invitation_id}/revoke",
+    name="revoke_practice_invitation",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def revoke_practice_invitation(
+    request: Request,
+    invitation_id: Annotated[TypeIDType, Path()],
+) -> None:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    try:
+        with get_session() as session:
+            revoke_invitation(
+                session,
+                owner_member=owner,
+                invitation_id=invitation_id,
+            )
+    except PracticeInvitationError as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+
+
+@internal_api_app.post(
+    "/practice/invitations/{invitation_id}/resend",
+    name="resend_practice_invitation",
+)
+def resend_practice_invitation(
+    request: Request,
+    invitation_id: Annotated[TypeIDType, Path()],
+    idempotency_key: Annotated[
+        str, Header(alias="Idempotency-Key", min_length=8, max_length=255)
+    ],
+) -> PracticeInvitationIssued:
+    doctor: Doctor = request.state.doctor
+    owner = _owner_membership(doctor, _INVITATION_OWNER_ONLY)
+    origin = _invitation_web_origin(request)
+    _consume_practice_invitation_attempt(owner.practice_id)
+    try:
+        with get_session() as session:
+            issued = resend_invitation(
+                session,
+                owner_member=owner,
+                invitation_id=invitation_id,
+                idempotency_key=idempotency_key,
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_OWNER_DETAIL
+        ) from None
+    email_due = issued.created or (
+        not issued.replayed and _first_resend_with_key(invitation_id, idempotency_key)
+    )
+    return _issued_invitation_payload(
+        origin,
+        issued,
+        datetime.now(timezone.utc),
+        email_queued=email_due and _queue_invitation_email(issued.invitation),
+    )
+
+
+def _refuse_borrowed_identity(request: Request, doctor: Doctor) -> None:
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invitation could not be verified.",
+        )
+
+
+def _invitee_verified_email(request: Request, doctor: Doctor) -> str:
+    """The invitee's live verified email, refusing any borrowed identity."""
+
+    _refuse_borrowed_identity(request, doctor)
+    if uses_managed_organization_path(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(doctor, verified_primary_email=verified_email):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
+    return verified_email
+
+
+@internal_api_app.post(
+    "/practice/invitations/inspect",
+    name="inspect_practice_invitation",
+)
+def inspect_practice_invitation(
+    request: Request, data: PracticeInvitationTokenBody
+) -> PracticeInvitationInspection:
+    doctor: Doctor = request.state.doctor
+    _refuse_borrowed_identity(request, doctor)
+    # Answered rather than refused, so the invite page can drop the link
+    # instead of sending this account back to it.
+    if uses_managed_organization_path(doctor):
+        return PracticeInvitationInspection(
+            state="managed_account", legal_name=None, baa_accepted=False
+        )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    _consume_legacy_join_attempt(doctor)
+    try:
+        with get_session() as session:
+            inspection = inspect_invitation(
+                session,
+                token=data.token,
+                doctor=doctor,
+                verified_email=verified_email,
+                now=datetime.now(timezone.utc),
+            )
+    except PracticeInvitationError as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL
+        ) from None
+    return PracticeInvitationInspection(
+        state=inspection.state,
+        legal_name=inspection.legal_name,
+        baa_accepted=inspection.baa_accepted,
+    )
+
+
+@internal_api_app.post(
+    "/practice/invitations/accept",
+    name="accept_practice_invitation",
+)
+def accept_practice_invitation(
+    request: Request, data: AcceptPracticeInvitationBody
+) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    verified_email = _invitee_verified_email(request, doctor)
+    if not _WORKFORCE_ATTESTATION_CHECKS.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All workforce acknowledgements are required.",
+        )
+    _consume_legacy_join_attempt(doctor)
+    try:
+        with get_session() as session:
+            practice, member = accept_invitation(
+                session,
+                token=data.token,
+                doctor=doctor,
+                verified_email=verified_email,
+                attestation_name=data.attestation_name,
+                reverify_email=_verified_legacy_enrollment_email,
+            )
+    except (PracticeInvitationError, ActiveClinicianSeatLimitReached) as exc:
+        raise _invitation_http_error(
+            exc, seat_limit_detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL
+        ) from None
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
 class JoinCodeBody(BaseModel, extra="forbid"):
     join_code: str = Field(min_length=4, max_length=16)
 
@@ -1669,6 +2401,21 @@ def _consume_legacy_join_attempt(doctor: Doctor) -> None:
         )
 
 
+def _refuse_join_code_of_another_practice(
+    own_practice: Practice | None, supplied_code: str
+) -> None:
+    # Compared against the member's own code rather than looked up, so an
+    # unknown code and another practice's code give the same answer.
+    if (
+        own_practice is None
+        or _normalize_join_code(supplied_code) != own_practice.join_code
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=ACCOUNT_IN_ANOTHER_PRACTICE,
+        )
+
+
 @internal_api_app.post("/practice/lookup", name="lookup_practice")
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
@@ -1683,6 +2430,10 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
         verified_primary_email=verified_email,
     ) or doctor_has_managed_roster_assignment(doctor):
         return PracticeLookupResult()
+    if existing := _membership_for(doctor):
+        _refuse_join_code_of_another_practice(
+            Practice.get(id=existing.practice_id), data.join_code
+        )
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
     if (
@@ -1714,13 +2465,15 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             access_authorized=False,
             authorization_basis=None,
             access_revoked=False,
+            access_ends_at=None,
+            access_ended=False,
             pilot_access_grant_active=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
             billing_exempt_until=practice.billing_exempt_until,
             billing_exempt_active=practice.billing_exemption_active(),
             billing_enabled=stripe_billing_configured(),
-            billing_management_enabled=stripe_runtime_configured(),
+            billing_management_enabled=stripe_portal_configured(),
             billing_portal_available=practice.stripe_customer_id is not None,
             billing_checkout_resumable=(
                 stripe_webhook_configured()
@@ -1734,6 +2487,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             ),
             entitled=practice.entitled(),
             subscription_status=practice.subscription_status,
+            seat_summary=None,
         )
     )
 
@@ -1791,6 +2545,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                     "Use that enrollment path."
                 ),
             )
+        _refuse_join_code_of_another_practice(practice, data.join_code)
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -1856,14 +2611,14 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             .with_for_update()
         ).one_or_none()
         if existing is not None:
+            if existing.practice_id != locked_practice.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=ACCOUNT_IN_ANOTHER_PRACTICE,
+                )
             session.commit()
             session.refresh(existing)
-            existing_practice = (
-                locked_practice
-                if existing.practice_id == locked_practice.id
-                else Practice.get(id=existing.practice_id)
-            )
-            payload = _practice_payload(existing_practice, existing)
+            payload = _practice_payload(locked_practice, existing)
             assert payload
             return payload
         if (
@@ -1893,10 +2648,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             )
         try:
             require_active_clinician_seat_capacity(session, locked_practice)
-        except ActiveClinicianSeatLimitReached as exc:
+        except ActiveClinicianSeatLimitReached:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
+                detail=SEAT_LIMIT_JOINING_CLINICIAN_DETAIL,
             ) from None
         member = PracticeMember(
             practice_id=locked_practice.id,
@@ -1953,18 +2708,17 @@ class BillingSessionUrl(BaseModel, extra="forbid"):
 
 
 def _owner_practice_for_billing(doctor: Doctor) -> Practice:
-    member = _membership_for(doctor)
-    if not member or member.role != PracticeRole.owner.value:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the practice owner can manage billing.",
-        )
+    member = _owner_membership(doctor, "Only the practice owner can manage billing.")
     practice = Practice.get(id=member.practice_id)
     assert practice
     return practice
 
 
-def _validated_web_origin(request: Request) -> str:
+def _validated_web_origin(
+    request: Request,
+    *,
+    detail: str = "Billing requires a recognized web origin.",
+) -> str:
     """Stripe redirect targets always point back at one of our own origins;
     the client only ever chooses the path."""
     from .middleware import allowed_hosts
@@ -1977,10 +2731,7 @@ def _validated_web_origin(request: Request) -> str:
     for candidate in allowed:
         if referer == candidate or referer.startswith(f"{candidate}/"):
             return candidate
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Billing requires a recognized web origin.",
-    )
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
 def _safe_redirect_path(path: str) -> str:
@@ -2084,14 +2835,6 @@ def create_billing_checkout(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
         ) from exc
-    except stripe_billing.StripeTrialCarryoverDeferred as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Checkout opens when the current trial ends at "
-                f"{exc.available_at.isoformat()}; no trial time will be shortened."
-            ),
-        ) from exc
     except stripe_billing.StripeCheckoutAlreadyCompleted as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2162,7 +2905,7 @@ def create_billing_portal(
     practice = _owner_practice_for_billing(doctor)
 
     # Acquisition can be paused without stranding existing customers.
-    if not stripe_runtime_configured():
+    if not stripe_portal_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
@@ -2180,6 +2923,16 @@ def create_billing_portal(
             return_url=f"{origin}{_safe_redirect_path(data.return_path)}",
         )
     except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except stripe_billing.StripePortalConfigurationInvalid as exc:
+        log.error(
+            "stripe portal configuration validation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
@@ -2770,6 +3523,14 @@ def medication_nutrient_depletions(
     )
 
 
+def _require_reference_labs(request: Request) -> None:
+    # Check the release latch before resolving any provider email or lab data.
+    if not reference_labs_gate.REFERENCE_LABS_ENABLED:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if not reference_labs_gate.reference_labs_enabled_for(request.state.doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+
 class LabResultData(BaseModel, extra="forbid"):
     id: str
     biomarker: str
@@ -2808,7 +3569,11 @@ def _lab_panel_data(panel: LabPanel, results: list[LabResult]) -> LabPanelData:
     )
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-panels", name="lab_panel_list")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_list(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> list[LabPanelData]:
@@ -2849,7 +3614,11 @@ class CreateLabPanel(BaseModel, extra="forbid"):
     results: list[ManualLabResult] = Field(min_length=1)
 
 
-@internal_api_app.post("/patients/{patient_id}/lab-panels", name="lab_panel_create")
+@internal_api_app.post(
+    "/patients/{patient_id}/lab-panels",
+    name="lab_panel_create",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_panel_create(
     request: Request, patient_id: Annotated[str, Path()], data: CreateLabPanel
 ) -> LabPanelData:
@@ -2892,7 +3661,9 @@ def lab_panel_create(
     return _lab_panel_data(panel, results)
 
 
-@internal_api_app.post("/lab-panels/get-signed-url")
+@internal_api_app.post(
+    "/lab-panels/get-signed-url", dependencies=[Depends(_require_reference_labs)]
+)
 def generate_signed_lab_upload_url(
     request: Request,
     data: ClinicalUploadGrantRequest,
@@ -2928,6 +3699,7 @@ class LabUploadComplete(BaseModel, extra="forbid"):
 @internal_api_app.post(
     "/patients/{patient_id}/lab-panels/upload-complete",
     name="lab_panel_upload_complete",
+    dependencies=[Depends(_require_reference_labs)],
 )
 def lab_panel_upload_complete(
     request: Request, patient_id: Annotated[str, Path()], data: LabUploadComplete
@@ -3019,6 +3791,7 @@ def lab_panel_upload_complete(
 @internal_api_app.delete(
     "/lab-panels/{lab_panel_id}",
     name="lab_panel_delete",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_panel_delete(request: Request, lab_panel_id: Annotated[str, Path()]) -> None:
@@ -3071,7 +3844,11 @@ class LabEvaluationPanel(BaseModel, extra="forbid"):
     entries: list[LabEvaluationEntry]
 
 
-@internal_api_app.get("/patients/{patient_id}/lab-evaluations", name="lab_evaluations")
+@internal_api_app.get(
+    "/patients/{patient_id}/lab-evaluations",
+    name="lab_evaluations",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_evaluations(
     request: Request, patient_id: Annotated[str, Path()]
 ) -> LabEvaluationPanel:
@@ -3160,7 +3937,11 @@ def _lab_range_data(biomarker: str, doctor_id) -> LabRangeData:
     )
 
 
-@internal_api_app.get("/lab-ranges", name="lab_range_list")
+@internal_api_app.get(
+    "/lab-ranges",
+    name="lab_range_list",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_list(request: Request) -> list[LabRangeData]:
     "effective ranges (defaults merged with this doctor's overrides) for all biomarkers"
     doctor: Doctor = request.state.doctor
@@ -3209,7 +3990,11 @@ class UpdateLabRange(BaseModel, extra="forbid"):
         return self
 
 
-@internal_api_app.put("/lab-ranges/{biomarker}", name="lab_range_upsert")
+@internal_api_app.put(
+    "/lab-ranges/{biomarker}",
+    name="lab_range_upsert",
+    dependencies=[Depends(_require_reference_labs)],
+)
 def lab_range_upsert(
     request: Request, biomarker: Annotated[str, Path()], data: UpdateLabRange
 ) -> LabRangeData:
@@ -3234,6 +4019,7 @@ def lab_range_upsert(
 @internal_api_app.delete(
     "/lab-ranges/{biomarker}",
     name="lab_range_reset",
+    dependencies=[Depends(_require_reference_labs)],
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def lab_range_reset(request: Request, biomarker: Annotated[str, Path()]) -> None:

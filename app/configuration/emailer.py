@@ -86,7 +86,6 @@ def mail(
         html=html_content,
     )
 
-    # Get current event loop if one exists, otherwise create new one
+    # A Celery worker thread has no current event loop to borrow.
     # TODO https://github.com/alex-oleshkevich/mailers/issues/14
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(_mailer.send(message))
+    return asyncio.run(_mailer.send(message))

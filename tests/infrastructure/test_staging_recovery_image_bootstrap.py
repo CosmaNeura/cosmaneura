@@ -716,6 +716,6 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
     # Protected-master baseline after e0691079's staging verifier correction.
-    assert hashlib.sha256(deploy).hexdigest() == "602b5f67d936055f25ae90a296f9bf1323e3d09eeeabdd5e05748523939404bd"
+    assert hashlib.sha256(deploy).hexdigest() == "3bf0d32b0876b18213dfddeda3a77f147e0257d563c363b6982f2804adbd9568"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

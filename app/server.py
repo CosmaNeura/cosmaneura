@@ -35,11 +35,22 @@ from .routes.authority_errors import (
     normalize_trace_id,
     token_problem_response,
 )
+from .routes.cab_authorization import router as cab_authorization_router
 from .routes.chat import chat_api_app
+from .routes.companion_appointment_setup import (
+    install as install_companion_appointment_setup,
+)
+from .routes.companion_encounters import install as install_companion_encounters
+from .routes.companion_records import install as install_companion_records
+from .routes.companion_session_prep import PATH as COMPANION_SESSION_PREP_PATH
+from .routes.companion_session_prep import router as companion_session_prep_router
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.public_onboarding import public_onboarding_api_app
+from .routes.scribe_capture_deadline import install_capture_boundaries
+from .routes.scribe_encounters import install as install_scribe_encounters
+from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 
@@ -78,11 +89,16 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
 # Agent and context-token contracts are workload/host APIs and intentionally stay
 # out of the browser-generated client schema.
 api_app.include_router(agent_api_app, include_in_schema=False)
+# This composition owns a fresh transaction per existing service phase.
+# Do not inherit agent_api_app's request-wide aglobal_session dependency.
+api_app.include_router(native_capture_api_app, include_in_schema=False)
+api_app.include_router(companion_session_prep_router, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
@@ -109,6 +125,13 @@ def register_public_onboarding_routes(app) -> bool:
 register_public_onboarding_routes(api_app)
 
 add_middleware(api_app)
+# Final-send budgets must wrap the full middleware chain, including no-store,
+# logging and session response transforms; route-level sends are intermediate.
+install_companion_records(api_app)
+install_companion_encounters(api_app)
+install_companion_appointment_setup(api_app)
+install_scribe_encounters(api_app)
+install_capture_boundaries(api_app)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 
@@ -154,7 +177,10 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
             retryable=exc.status_code >= 500,
         )
 
-    if request.url.path.startswith("/service/v1/agent/"):
+    if (
+        request.url.path.startswith("/service/v1/agent/")
+        or request.url.path == COMPANION_SESSION_PREP_PATH
+    ):
         trace_id = _bootstrap_error_trace_id(request)
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             return agent_problem_response(
@@ -195,7 +221,10 @@ async def safe_request_validation_handler(
             title="Invalid request",
             detail="The context-token request is invalid.",
         )
-    if request.url.path.startswith("/service/v1/agent/"):
+    if (
+        request.url.path.startswith("/service/v1/agent/")
+        or request.url.path == COMPANION_SESSION_PREP_PATH
+    ):
         errors = exc.errors()
         missing_fields = {
             str(error["loc"][-1])

@@ -10,7 +10,10 @@ import hashlib
 import hmac
 import json
 import math
+import random
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 from urllib.parse import urlparse
@@ -39,11 +42,46 @@ from app.models.practice import (
 )
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 STRIPE_API = "https://api.stripe.com/v1"
+
+# Explicit timeouts, split the way `recall.py` and `zoom_auth.py` do it: a hang
+# inside a Celery prefork slot looks alive while processing nothing, so a stuck
+# socket has to surface as an exception rather than a silently wedged worker.
+_HTTPX_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+
+# One client for the process. Rebuilding it per call paid a fresh TCP and TLS
+# handshake on every billing operation.
+#
+# Reset after a Celery fork by `reset_http_client`, for the reason
+# `worker_process_init` already disposes the SQLAlchemy engine: a child that
+# inherits a parent's pooled sockets shares them with its siblings.
+_HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
+
+def reset_http_client() -> None:
+    """Drop any connection pooled before a fork and start a fresh one."""
+
+    global _HTTP_CLIENT
+    try:
+        _HTTP_CLIENT.close()
+    except Exception:  # noqa: BLE001 - a half-inherited pool must not stop startup
+        pass
+    _HTTP_CLIENT = httpx.Client(timeout=_HTTPX_TIMEOUT)
+
+
+# Retry only what Stripe says is safe to retry, and only for requests this
+# integration can prove are idempotent. Stripe caches an idempotent result for
+# 24 hours, so replaying a keyed POST returns the original outcome rather than
+# repeating the operation.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+_MAX_REQUEST_ATTEMPTS = 3
+_RETRY_BASE_DELAY_SECONDS = 0.5
+_RETRY_MAX_DELAY_SECONDS = 4.0
+
 SIGNATURE_TOLERANCE_SECONDS = 5 * 60
 MINIMUM_CHECKOUT_TRIAL_LEAD = timedelta(hours=48)
 # Stripe validates the minimum lead against its own request-processing time.
@@ -68,13 +106,27 @@ CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
 # explicit policy generation in the key so a successful old request whose local
 # cache write was interrupted cannot block the card-required rollout.
 PAID_PILOT_CHECKOUT_POLICY_VERSION = "paid-pilot-v3"
+# Retire when: no Checkout Session created under `card-required-v1` is still
+# recoverable. Stripe expires an idempotency key after 24 hours, so this is
+# removable once no frozen checkout request on any Practice row names this
+# generation. Only read at one site, when deciding whether a stored request may
+# be replayed.
 LEGACY_CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "card-required-v1"
 # The active writer and its idempotency key share one immutable generation.
 # This prevents a retry from reusing a legacy key with a different request.
 CHECKOUT_IDEMPOTENCY_POLICY_VERSION = PAID_PILOT_CHECKOUT_POLICY_VERSION
 CHECKOUT_TRIAL_CLOCK_POLICY = "checkout-fixed-14-day-v2"
+# Retire when: no live subscription carries a trial that began under the
+# BAA-carryover rule ADR 0024 replaced. Those trials are finite, so this expires
+# on its own once the last one ends; until then a subscription bound under it
+# must keep resolving to its original trial end rather than the fixed 14 days.
 LEGACY_TRIAL_CLOCK_POLICY = "legacy-baa-carryover-v1"
 CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION = PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+# Retire when: no subscription in Stripe still carries entitlement metadata
+# written before the contract was versioned. Unlike the two above this does not
+# expire by itself — it needs a backfill that stamps the current contract
+# version onto those subscriptions, after which this and its entry in
+# SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS both go.
 LEGACY_UNVERSIONED_STRIPE_CONTRACT = "stripe-legacy-unversioned.v0"
 SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS = frozenset(
     {CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION}
@@ -134,7 +186,7 @@ class StripeCoreBindingInvalid(Exception):
 
 
 class StripeSeatLimitExceeded(StripeStateInvalid):
-    """Core's authoritative active-clinician count is outside pilot bounds."""
+    """Core's authoritative active-clinician count is outside seat bounds."""
 
 
 class StripeSeatLedgerInvalid(StripeStateInvalid):
@@ -143,6 +195,10 @@ class StripeSeatLedgerInvalid(StripeStateInvalid):
 
 class StripeManagedBilling(StripeStateInvalid):
     """The public paid-pilot Checkout is unavailable to a managed practice."""
+
+
+class StripePortalConfigurationInvalid(StripeStateInvalid):
+    """The pinned customer portal configuration is missing or could bypass seats."""
 
 
 class StripeSubscriptionContractInvalid(StripeStateInvalid):
@@ -154,15 +210,8 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
         super().__init__(str(reason))
 
 
-class StripeTrialCarryoverDeferred(Exception):
-    """Legacy API compatibility for callers that handled the former dead zone."""
-
-    def __init__(self, available_at: datetime):
-        self.available_at = available_at
-        super().__init__(
-            "Checkout is deferred until the platform trial ends so no remaining "
-            "trial time is shortened."
-        )
+class StripeQuantitySyncUnsafe(StripeStateInvalid):
+    """Core's subscription projection does not allow a quantity sync."""
 
 
 class StripeTrialClockReconciliationRequired(Exception):
@@ -225,6 +274,77 @@ def _isolated_state_session() -> Session:
     return Session(manager.get_engine())
 
 
+def _stripe_error_detail(response: httpx.Response) -> str:
+    """Stripe's structured error, flattened for a log line and an exception.
+
+    Only Stripe's enumerated fields. `message` and `param` are free text that
+    echoes what was submitted — an invalid-email failure quotes the address
+    back — and this string does not stay in the process: it becomes the
+    exception message, and `process_stripe_event_inbox` writes that into
+    `stripe_event_inbox.last_error`, where it persists. `customer_email` is a
+    real doctor's address.
+
+    `request_id` is the handle for the rest. Anyone debugging can retrieve the
+    full error from Stripe with it, which is where that text belongs.
+    """
+
+    request_id = response.headers.get("request-id", "")
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        error = {}
+    fields = {
+        "type": error.get("type"),
+        "code": error.get("code"),
+        "decline_code": error.get("decline_code"),
+        "request_id": request_id or None,
+    }
+    rendered = " ".join(f"{k}={v}" for k, v in fields.items() if v)
+    return rendered or f"no error body (request-id={request_id or 'unknown'})"
+
+
+def _request_is_replayable(method: str, idempotency_key: str | None) -> bool:
+    """Whether retrying could not duplicate the operation.
+
+    Stripe guarantees GET and DELETE are idempotent. A POST is replayable only
+    when it carries an idempotency key; `create_portal_session` does not, so it
+    is deliberately excluded rather than retried on a guess.
+    """
+
+    return method in ("GET", "DELETE") or bool(idempotency_key)
+
+
+def _should_retry(response: httpx.Response) -> bool:
+    """`Stripe-Should-Retry` wins; the status code is the fallback it documents."""
+
+    advice = response.headers.get("stripe-should-retry")
+    if advice == "true":
+        return True
+    if advice == "false":
+        return False
+    return response.status_code in _RETRYABLE_STATUS
+
+
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Exponential backoff with jitter, unless Stripe named a delay itself."""
+
+    if response is not None:
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+                if math.isfinite(delay) and delay >= 0:
+                    return min(delay, _RETRY_MAX_DELAY_SECONDS)
+            except ValueError:
+                pass
+    backoff = min(_RETRY_BASE_DELAY_SECONDS * (2**attempt), _RETRY_MAX_DELAY_SECONDS)
+    # Jitter so concurrent workers retrying the same outage do not resynchronise.
+    return backoff * (0.5 + random.random() / 2)
+
+
 def _request(
     method: str,
     path: str,
@@ -237,17 +357,66 @@ def _request(
     headers = {"Stripe-Version": stripe_config.STRIPE_API_VERSION}
     if idempotency_key:
         headers["Idempotency-Key"] = idempotency_key
-    response = httpx.request(
-        method,
-        f"{STRIPE_API}{path}",
-        auth=(stripe_config.STRIPE_SECRET_KEY, ""),
-        data=data if method != "GET" else None,
-        params=data if method == "GET" else None,
-        headers=headers,
-        timeout=20,
-    )
-    response.raise_for_status()
-    return cast(dict[str, Any], response.json())
+
+    replayable = _request_is_replayable(method, idempotency_key)
+
+    attempt = 0
+    while True:
+        final_attempt = attempt == _MAX_REQUEST_ATTEMPTS - 1
+        try:
+            response = _HTTP_CLIENT.request(
+                method,
+                f"{STRIPE_API}{path}",
+                auth=(stripe_config.STRIPE_SECRET_KEY, ""),
+                data=data if method != "GET" else None,
+                params=data if method == "GET" else None,
+                headers=headers,
+            )
+        except httpx.RequestError as exc:
+            # No response means the request's fate is unknown. Replaying it with
+            # the same key is the only way to find out what happened.
+            if not replayable or final_attempt:
+                raise
+            log.warning(
+                "stripe request transport error, retrying",
+                stripe_path=path,
+                attempt=attempt + 1,
+                error=type(exc).__name__,
+            )
+            time.sleep(_retry_delay(None, attempt))
+            attempt += 1
+            continue
+
+        if response.is_success:
+            return cast(dict[str, Any], response.json())
+
+        if replayable and not final_attempt and _should_retry(response):
+            log.warning(
+                "stripe request failed, retrying",
+                stripe_path=path,
+                attempt=attempt + 1,
+                status=response.status_code,
+                detail=_stripe_error_detail(response),
+            )
+            time.sleep(_retry_delay(response, attempt))
+            attempt += 1
+            continue
+
+        detail = _stripe_error_detail(response)
+        log.error(
+            "stripe request failed",
+            stripe_path=path,
+            status=response.status_code,
+            detail=detail,
+            retried=attempt > 0,
+        )
+        # Still an `httpx.HTTPStatusError`, because callers branch on
+        # `exc.response.status_code`; the message now names the cause.
+        raise httpx.HTTPStatusError(
+            f"Stripe {method} {path} failed with {response.status_code}: {detail}",
+            request=response.request,
+            response=response,
+        )
 
 
 def _validate_runtime_account() -> None:
@@ -353,7 +522,7 @@ def _subscription_item(
         raise StripeStateInvalid("subscription item is missing id or quantity")
     if enforce_quantity_bounds and not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise StripeSeatLimitExceeded(
-            "subscription quantity is outside the 1-20 paid-pilot limit"
+            "subscription quantity is outside the 1-20 seat limit"
         )
     return item
 
@@ -1184,7 +1353,7 @@ def attested_member_count(practice: Practice) -> int:
 
 
 def _authorized_member_count(session: Session, practice: Practice) -> int:
-    """Consume Core's canonical active-seat policy and enforce pilot bounds."""
+    """Consume Core's canonical active-seat policy and enforce seat bounds."""
 
     try:
         count = active_clinician_seat_count(session, practice.id)
@@ -1194,7 +1363,7 @@ def _authorized_member_count(session: Session, practice: Practice) -> int:
         ) from exc
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise StripeSeatLimitExceeded(
-            "authoritative active-clinician count is outside the 1-20 pilot limit"
+            "authoritative active-clinician count is outside the 1-20 seat limit"
         )
     return count
 
@@ -1276,6 +1445,24 @@ def has_nonterminal_subscription(practice: Practice) -> bool:
         practice.stripe_subscription_id
         and practice.subscription_status not in TERMINAL_SUBSCRIPTION_STATUSES
     )
+
+
+def confirmed_billed_quantity(practice: Practice) -> int | None:
+    """Return the seat quantity Stripe last confirmed, from persisted state only.
+
+    ``stripe_quantity_sync_target`` equals the remote quantity only while no
+    sync obligation is outstanding: a new obligation overwrites it, and the
+    previously confirmed quantity is not retained. Invalid or unverified
+    projections report nothing rather than a quantity Core has not accepted.
+    """
+
+    if (
+        not has_nonterminal_subscription(practice)
+        or practice.subscription_status not in KNOWN_SUBSCRIPTION_STATUSES
+        or practice.stripe_quantity_sync_required
+    ):
+        return None
+    return practice.stripe_quantity_sync_target
 
 
 def _has_complete_core_subscription_binding(practice: Practice) -> bool:
@@ -1500,7 +1687,7 @@ def _validate_frozen_checkout_request(
     except ValueError as exc:
         raise StripeStateInvalid("stored Checkout quantity is invalid") from exc
     if str(quantity) != raw_quantity or not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
-        raise StripeStateInvalid("stored Checkout quantity is outside pilot bounds")
+        raise StripeStateInvalid("stored Checkout quantity is outside seat bounds")
 
     entitlement_contract = frozen_data.get("metadata[entitlement_contract]")
     if (
@@ -2721,13 +2908,121 @@ def create_checkout_session(
     return url
 
 
+REVIEWED_PORTAL_FEATURES = frozenset(
+    {
+        "customer_update",
+        "invoice_history",
+        "payment_method_update",
+        "subscription_cancel",
+        "subscription_pause",
+        "subscription_update",
+    }
+)
+
+
+def _validated_portal_configuration() -> str:
+    configuration_id = stripe_config.STRIPE_PORTAL_CONFIGURATION_ID
+    if not configuration_id.startswith("bpc_"):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration is not pinned"
+        )
+    try:
+        configuration = _request(
+            "GET", f"/billing_portal/configurations/{configuration_id}"
+        )
+    except httpx.HTTPStatusError as exc:
+        # A deleted, mistyped, or other-account id, or a restricted key without
+        # Customer portal access, will not heal on retry.
+        if exc.response.status_code == 404:
+            raise StripePortalConfigurationInvalid(
+                "Stripe portal configuration was not found"
+            ) from exc
+        if exc.response.status_code in (401, 403):
+            raise StripePortalConfigurationInvalid(
+                "Stripe key cannot read the portal configuration"
+            ) from exc
+        raise
+    if configuration.get("id") != configuration_id:
+        raise StripePortalConfigurationInvalid(
+            "Stripe returned the wrong portal configuration"
+        )
+    try:
+        _validate_livemode(configuration.get("livemode"), source="portal configuration")
+    except StripeStateInvalid as exc:
+        raise StripePortalConfigurationInvalid(str(exc)) from exc
+    if configuration.get("active") is not True:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration is not active"
+        )
+    # The pinned configuration must not double as a no-code portal entry point.
+    if "login_page" in configuration:
+        login_page = configuration["login_page"]
+        if not isinstance(login_page, dict) or login_page.get("enabled") is not False:
+            raise StripePortalConfigurationInvalid(
+                "Stripe portal configuration enables the login page"
+            )
+    features = configuration.get("features")
+    if not isinstance(features, dict):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration features are missing"
+        )
+    # An allowlist, so a feature Stripe adds later is refused until reviewed.
+    unreviewed = sorted(set(features) - REVIEWED_PORTAL_FEATURES)
+    if unreviewed:
+        raise StripePortalConfigurationInvalid(
+            f"Stripe portal configuration has unreviewed features: {unreviewed}"
+        )
+    for name, feature in features.items():
+        if not isinstance(feature, dict):
+            raise StripePortalConfigurationInvalid(
+                f"Stripe portal configuration {name} is malformed"
+            )
+    # Stripe also returns this optional feature for disabled portal configs.
+    # Pausing is not part of Core's reviewed subscription/entitlement lifecycle.
+    if "subscription_pause" in features and (
+        features["subscription_pause"].get("enabled") is not False
+    ):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows subscription_pause"
+        )
+    for name in ("subscription_update", "subscription_cancel", "customer_update"):
+        if name not in features:
+            raise StripePortalConfigurationInvalid(
+                f"Stripe portal configuration {name} is missing"
+            )
+    # Quantity and plan changes must go through Core, which charges added
+    # seats immediately and never credits removed ones.
+    if features["subscription_update"].get("enabled") is not False:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows subscription updates"
+        )
+    subscription_cancel = features["subscription_cancel"]
+    if subscription_cancel.get("enabled") is not False and (
+        subscription_cancel.get("enabled") is not True
+        or subscription_cancel.get("mode") != "at_period_end"
+    ):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration cancels before the period ends"
+        )
+    if features["customer_update"].get("enabled") is not False:
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows customer updates"
+        )
+    return configuration_id
+
+
 def create_portal_session(practice: Practice, *, return_url: str) -> str:
     assert practice.stripe_customer_id
     _validate_runtime_configuration()
+    configuration_id = _validated_portal_configuration()
     session = _request(
         "POST",
         "/billing_portal/sessions",
-        {"customer": practice.stripe_customer_id, "return_url": return_url},
+        {
+            "customer": practice.stripe_customer_id,
+            "return_url": return_url,
+            "configuration": configuration_id,
+        },
     )
     return _hosted_url(session.get("url"), hostname="billing.stripe.com")
 
@@ -2768,6 +3063,66 @@ def mark_quantity_sync_required(practice: Practice) -> None:
     _quantity_sync_snapshot(practice.id, force_new_version=True)
 
 
+def _subscription_item_period_start(item: dict[str, Any]) -> datetime:
+    # API 2025-09-30.clover carries the billing period on the item, not on
+    # the subscription; during a trial it is the trial period.
+    start = item.get("current_period_start")
+    end = item.get("current_period_end")
+    if (
+        not isinstance(start, int)
+        or isinstance(start, bool)
+        or not isinstance(end, int)
+        or isinstance(end, bool)
+        or end <= start
+    ):
+        raise StripeStateInvalid(
+            "subscription item billing period is missing or invalid"
+        )
+    return _stripe_timestamp(start, source="subscription item billing period")
+
+
+def _paid_seat_high_water(
+    practice: Practice, *, quantity: int, period_start: datetime, repairing: bool
+) -> int | None:
+    """Return the highest seat count already paid in Stripe's current period.
+
+    A new period starts from the quantity Stripe billed at renewal. Folding in
+    the current quantity also covers a sync whose confirmation was lost after
+    Stripe applied a billable raise. An out-of-range quantity under repair was
+    never a paid seat count.
+    """
+
+    recorded = (
+        practice.stripe_paid_seat_high_water
+        if practice.stripe_paid_seat_period_start == period_start
+        else None
+    )
+    observed = None if repairing else quantity
+    return max((v for v in (recorded, observed) if v is not None), default=None)
+
+
+def _quantity_update_steps(
+    *, current: int, target: int, high_water: int | None, billable: bool
+) -> list[tuple[int, str]]:
+    """Plan absolute quantity updates so only seats above the high-water prorate."""
+
+    paid = high_water or 0
+    if target < current or not billable or target <= paid:
+        return [(target, "none")]
+    if current < paid:
+        # Stripe prorates the whole current-to-target difference in one call,
+        # so restore the already-paid seats first without proration.
+        return [(paid, "none"), (target, "create_prorations")]
+    return [(target, "create_prorations")]
+
+
+def _record_paid_seat_high_water(
+    row: Practice, *, high_water: int, period_start: datetime
+) -> None:
+    row.stripe_paid_seat_high_water = high_water
+    row.stripe_paid_seat_period_start = period_start
+
+
 def _finish_quantity_sync(
     practice_id: Any,
     *,
@@ -2775,6 +3130,7 @@ def _finish_quantity_sync(
     version: int,
     target: int,
     error: Exception | None = None,
+    paid_seats: tuple[int, datetime] | None = None,
 ) -> bool:
     """Finish only the exact obligation that initiated the remote request."""
 
@@ -2787,10 +3143,25 @@ def _finish_quantity_sync(
             # in flight. Never clear or poison the new subscription's repair.
             session.commit()
             return False
+        if paid_seats is not None:
+            # The high-water stands whether or not Core's target has moved on
+            # or the update failed: a failed sync may already have charged the
+            # seats Stripe held when it planned.
+            _record_paid_seat_high_water(
+                row, high_water=paid_seats[0], period_start=paid_seats[1]
+            )
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
-            row.stripe_quantity_sync_error = str(error)[:512] or type(error).__name__
+            # The refresh that refused the sync has already recorded why the
+            # projection is invalid; the generic refusal would bury that cause.
+            if not (
+                isinstance(error, StripeQuantitySyncUnsafe)
+                and row.stripe_quantity_sync_error
+            ):
+                row.stripe_quantity_sync_error = (
+                    str(error)[:512] or type(error).__name__
+                )
             session.add(row)
             session.commit()
             return False
@@ -2814,15 +3185,59 @@ def _finish_quantity_sync(
         return True
 
 
+@contextmanager
+def _quantity_sync_lease(practice_id: Any) -> Iterator[bool]:
+    """Serialize one practice's Stripe quantity mutations across processes.
+
+    Stripe has no compare-and-set on quantity, so an overlapping sync could
+    lower Stripe back to the high-water after another sync's billable raise
+    and then prorate the same seats again. A session-level advisory lock on
+    its own autocommit connection spans the HTTP calls without holding a
+    transaction or row lock, and PostgreSQL releases it if the process dies.
+    """
+
+    key = int.from_bytes(
+        hashlib.sha256(f"stripe-quantity-sync:{practice_id}".encode()).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    with SessionManager.get_instance().get_engine().connect() as connection:
+        connection.execution_options(isolation_level="AUTOCOMMIT")
+        acquired = bool(
+            connection.execute(select(func.pg_try_advisory_lock(key))).scalar_one()
+        )
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                connection.execute(select(func.pg_advisory_unlock(key)))
+
+
 def sync_subscription_quantity(
     practice: Practice, *, raise_on_error: bool = False
 ) -> bool:
     """Reconcile the paid quantity, leaving durable retry state on failure."""
 
+    with _quantity_sync_lease(practice.id) as leased:
+        if not leased:
+            # The in-flight sync re-reads Core's target when it finishes, and
+            # any newer obligation stays durably required for the next sweep.
+            if raise_on_error:
+                raise StripeStateConflict("a quantity sync is already in flight")
+            return False
+        return _sync_subscription_quantity_leased(
+            practice, raise_on_error=raise_on_error
+        )
+
+
+def _sync_subscription_quantity_leased(
+    practice: Practice, *, raise_on_error: bool
+) -> bool:
     snapshot = _quantity_sync_snapshot(practice.id, force_new_version=False)
     if snapshot is None:
         return True
     target, version, subscription_id = snapshot
+    paid_seats: tuple[int, datetime] | None = None
     try:
         practice.refresh()
         assert practice.stripe_subscription_id
@@ -2846,7 +3261,7 @@ def sync_subscription_quantity(
             or subscription["id"] != subscription_id
             or subscription["customer"] != practice.stripe_customer_id
         ):
-            raise StripeStateInvalid(
+            raise StripeQuantitySyncUnsafe(
                 "Stripe subscription identity or contract is not safe for quantity sync"
             )
         if subscription["status"] in TERMINAL_SUBSCRIPTION_STATUSES:
@@ -2862,16 +3277,65 @@ def sync_subscription_quantity(
                 enforce_quantity_bounds=not repairing_remote_quantity,
             )
             if item["quantity"] != target:
-                key_source = f"quantity:{subscription['id']}:{target}:version:{version}"
-                _request(
-                    "POST",
-                    f"/subscription_items/{item['id']}",
-                    {"quantity": str(target)},
-                    idempotency_key=(
-                        "cosmas-quantity-"
-                        + hashlib.sha256(key_source.encode()).hexdigest()
-                    ),
+                period_start = _subscription_item_period_start(item)
+                high_water = _paid_seat_high_water(
+                    practice,
+                    quantity=item["quantity"],
+                    period_start=period_start,
+                    repairing=repairing_remote_quantity,
                 )
+                if high_water is not None:
+                    paid_seats = (high_water, period_start)
+                # The part-month is queued on the next invoice, never charged
+                # now, so a declined card cannot make an active practice
+                # past_due mid-cycle. The mirrored status treats a portal
+                # pause_collection as paused (Stripe's raw status stays
+                # "active"). A trial, a paused subscription and an incomplete
+                # first payment have nothing to prorate, and a drift repair
+                # realigns Stripe to Core rather than adding a seat.
+                billable = (
+                    not repairing_remote_quantity
+                    and _mirrored_subscription_status(subscription)
+                    in {"active", "past_due", "unpaid"}
+                )
+                steps = _quantity_update_steps(
+                    current=item["quantity"],
+                    target=target,
+                    high_water=high_water,
+                    billable=billable,
+                )
+                for step, (quantity, proration_behavior) in enumerate(steps):
+                    if step:
+                        # An out-of-band edit, or a step replayed after a crash
+                        # (Stripe returns the cached response without reapplying
+                        # it), would widen this proration; only a fresh read
+                        # shows where it starts.
+                        applied = _subscription_item(
+                            _retrieve_subscription(subscription_id)
+                        )
+                        if applied["quantity"] != steps[step - 1][0]:
+                            raise StripeStateInvalid(
+                                "Stripe quantity changed between seat updates"
+                            )
+                    # The attempt makes a retry after a failure re-send every
+                    # step, since Stripe may have moved in between.
+                    key_source = (
+                        f"quantity:{subscription['id']}:{target}:version:{version}"
+                        f":attempt:{practice.stripe_quantity_sync_attempts}"
+                        f":step:{step}:{quantity}:proration:{proration_behavior}"
+                    )
+                    _request(
+                        "POST",
+                        f"/subscription_items/{item['id']}",
+                        {
+                            "quantity": str(quantity),
+                            "proration_behavior": proration_behavior,
+                        },
+                        idempotency_key=(
+                            "cosmas-quantity-"
+                            + hashlib.sha256(key_source.encode()).hexdigest()
+                        ),
+                    )
                 # Do not trust a successful HTTP status alone. Retrieve the
                 # authoritative subscription and confirm the exact quantity.
                 subscription = _retrieve_subscription(practice.stripe_subscription_id)
@@ -2880,6 +3344,29 @@ def sync_subscription_quantity(
                     raise StripeStateInvalid(
                         "Stripe did not confirm the requested subscription quantity"
                     )
+                if _subscription_item_period_start(confirmed) != period_start:
+                    # Stripe renewed at the old quantity before this update, so
+                    # the plan used the old period's high-water. The next sweep
+                    # plans against the new period, but cannot charge a raise
+                    # Stripe already applied here without proration.
+                    raise StripeStateInvalid(
+                        "Stripe renewed the billing period during the quantity sync"
+                    )
+                paid_seats = (max(high_water or 0, target), period_start)
+            else:
+                try:
+                    period_start = _subscription_item_period_start(item)
+                except StripeStateInvalid:
+                    period_start = None
+                if period_start is not None:
+                    high_water = _paid_seat_high_water(
+                        practice,
+                        quantity=item["quantity"],
+                        period_start=period_start,
+                        repairing=repairing_remote_quantity,
+                    )
+                    if high_water is not None:
+                        paid_seats = (high_water, period_start)
             if repairing_remote_quantity:
                 # The first refresh intentionally revoked entitlement before
                 # repair. Only a second fully validated in-range read may
@@ -2894,6 +3381,7 @@ def sync_subscription_quantity(
                 subscription_id=subscription_id,
                 version=version,
                 target=target,
+                paid_seats=paid_seats,
             )
     except Exception as exc:
         _finish_quantity_sync(
@@ -2902,6 +3390,7 @@ def sync_subscription_quantity(
             version=version,
             target=target,
             error=exc,
+            paid_seats=paid_seats,
         )
         log.warning(
             "failed to sync stripe subscription quantity",
@@ -3065,7 +3554,7 @@ def validate_stripe_event_envelope(
     event_id = event.get("id")
     if not isinstance(event_id, str) or not event_id.startswith("evt_"):
         raise StripeStateInvalid("Stripe event id is invalid")
-    if event.get("api_version") != stripe_config.SUPPORTED_STRIPE_API_VERSION:
+    if event.get("api_version") not in stripe_config.ACCEPTED_EVENT_API_VERSIONS:
         raise StripeStateInvalid(
             "Stripe event API version does not match the pinned contract"
         )
