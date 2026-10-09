@@ -66,7 +66,7 @@ bound_acr() {
 		--subscription "$PINNED_SUBSCRIPTION_ID" \
 		--resource https://containerregistry.azure.net \
 		--only-show-errors --output json) || return
-	if "$AZURE_CLI_PYTHON" -I -B "$BOUND_ACR_CLI" "$@" \
+	if "$AZURE_CLI_PYTHON" -I -B "$BOUND_ACR_CLI" --candidate-sha "$CANDIDATE_SHA" "$@" \
 		--subscription "$PINNED_SUBSCRIPTION_ID" \
 		3< <(printf '%s' "$management_token_json") \
 		4< <(printf '%s' "$registry_token_json"); then
@@ -416,6 +416,13 @@ printf '%s' "$PLAN_CAPTURE" | "$JQ" -e \
 	(.value | type == "object")' >/dev/null
 PLAN_JSON=$(printf '%s' "$PLAN_CAPTURE" | "$JQ" -cer '.value')
 unset PLAN_CAPTURE
+if [[ "$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.version')" == "2" ]]; then
+	# These values come only from the separately hash-bound release plan. The
+	# existing source verifier rechecks merged source/review before credentials.
+	CANDIDATE_SHA=$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_sha | select(test("^[0-9a-f]{40}$"))')
+	APPROVAL_PR_NUMBER=$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.candidate_pr | select(type == "number" and . > 0 and floor == .)')
+	EXPECTED_SCHEMA_AFTER=$(printf '%s' "$PLAN_JSON" | "$JQ" -er '.release.schema_after | select(test("^[0-9a-f]{12}$"))')
+fi
 PLAN_CONTROLLER_SHA=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
 	'.controller_sha | select(test("^[0-9a-f]{40}$"))')
 PLAN_SOURCE_ARCHIVE_SHA256=$(printf '%s' "$PLAN_JSON" | "$JQ" -er \
@@ -568,7 +575,7 @@ ACR_LOGIN_JSON=$(bound_acr acr login --name "$REGISTRY_NAME" \
 	--only-show-errors --output json)
 UPLOAD_RESULT=$(printf '%s' "$ACR_LOGIN_JSON" | \
 	"$PYTHON" -I -S -B "$UNTAGGED_UPLOADER" \
-		"$IMAGE_ARCHIVE" "$ARCHIVE_SHA256" "$IMAGE_ID")
+		"$IMAGE_ARCHIVE" "$ARCHIVE_SHA256" "$IMAGE_ID" "$CANDIDATE_SHA")
 unset ACR_LOGIN_JSON
 IMAGE_DIGEST=$(printf '%s' "$UPLOAD_RESULT" | "$JQ" -er \
 	--arg archive "$ARCHIVE_SHA256" \

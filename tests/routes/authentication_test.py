@@ -15,7 +15,8 @@ from tests.routes.utils import (
 def test_unauthorized_no_credentials(client: TestClient):
     response = client.get(api_app.url_path_for("settings_data"))
 
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
 def test_authorized_bad_credentials(client: TestClient):

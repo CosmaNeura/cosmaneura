@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { createBillingCheckout } from "~/lib/practice-api"
-import type { PracticeStatus } from "~/lib/practice-api"
+import type { BillingSeatSummary, PracticeStatus } from "~/lib/practice-api"
 
 import { PracticeJoinPanel, billingActionKind } from "./PracticeJoinPanel"
 import { fireEvent, render, screen } from "@testing-library/react"
@@ -26,6 +26,8 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: true,
     authorization_basis: "workforce_attestation",
     access_revoked: false,
+    access_ends_at: null,
+    access_ended: false,
     pilot_access_grant_active: false,
     trial_ends_at: "2026-08-25T20:00:00Z",
     billing_exempt: false,
@@ -39,6 +41,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     billing_checkout_available_at: null,
     entitled: true,
     subscription_status: null,
+    seat_summary: null,
     ...overrides,
   }
 }
@@ -311,5 +314,203 @@ describe("PracticeJoinPanel billing recovery", () => {
       screen.getByText(/does not accept reusable join-code enrollment/i),
     ).toBeInTheDocument()
     expect(screen.queryByText("TESTCODE")).not.toBeInTheDocument()
+  })
+})
+
+function seatSummary(
+  overrides: Partial<BillingSeatSummary> = {},
+): BillingSeatSummary {
+  return {
+    account_kind: "practice",
+    active_clinicians: 4,
+    billed_seats: 4,
+    seat_sync_pending: false,
+    unit_amount: 8900,
+    currency: "usd",
+    interval: "month",
+    ...overrides,
+  }
+}
+
+function subscribed(
+  summary: Partial<BillingSeatSummary> = {},
+  overrides: Partial<PracticeStatus> = {},
+): PracticeStatus {
+  return practice({
+    join_code: null,
+    subscription_status: "active",
+    billing_subscription_manageable: true,
+    billing_portal_available: true,
+    seat_summary: seatSummary(summary),
+    ...overrides,
+  })
+}
+
+describe("PracticeJoinPanel seat summary", () => {
+  it("shows the seats a practice pays for and their monthly cost", () => {
+    render(<PracticeJoinPanel practice={subscribed()} showBillingActions />)
+
+    expect(
+      screen.getByText("You are paying for 4 seats · $356/month"),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/being updated/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/of 20/i)).not.toBeInTheDocument()
+  })
+
+  it("labels a solo doctor as a solo practice", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({
+          account_kind: "solo",
+          active_clinicians: 1,
+          billed_seats: 1,
+        })}
+        showBillingActions
+      />,
+    )
+
+    expect(
+      screen.getByText("Solo practice · 1 seat · $89/month"),
+    ).toBeInTheDocument()
+  })
+
+  it("says the cost starts after the trial while trialing", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({}, { subscription_status: "trialing" })}
+        showBillingActions
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        "Your subscription covers 4 seats · $356/month after your trial",
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("says plainly when billed seats lag behind active clinicians", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({ billed_seats: 3, seat_sync_pending: true })}
+        showBillingActions
+      />,
+    )
+
+    expect(
+      screen.getByText("You are paying for 3 seats · $267/month"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        /you have 4 active clinicians\. your billed seats are being updated to match/i,
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it("does not show a stale cost while Stripe has not confirmed the new count", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({ billed_seats: null, seat_sync_pending: true })}
+        showBillingActions
+      />,
+    )
+
+    expect(screen.queryByText(/you are paying for/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/your billed seats are being updated to 4 seats/i),
+    ).toBeInTheDocument()
+  })
+
+  it.each(["past_due", "unpaid", "paused", "incomplete"])(
+    "does not claim a %s practice is paying",
+    (subscription_status) => {
+      render(
+        <PracticeJoinPanel
+          practice={subscribed({}, { subscription_status })}
+          showBillingActions
+        />,
+      )
+
+      expect(
+        screen.getByText("Your subscription covers 4 seats · $356/month"),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/you are paying/i)).not.toBeInTheDocument()
+    },
+  )
+
+  it("renders nothing when there is neither a billed count nor a pending update", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed(
+          { billed_seats: null },
+          { subscription_status: "invalid" },
+        )}
+        showBillingActions
+      />,
+    )
+
+    expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
+  })
+
+  it("shows the cost of a subscription kept alongside pilot access", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({}, { pilot_access_grant_active: true })}
+        showBillingActions
+      />,
+    )
+
+    expect(
+      screen.getByText("You are paying for 4 seats · $356/month"),
+    ).toBeInTheDocument()
+  })
+
+  it.each([
+    ["trial before checkout", {}],
+    [
+      "pilot access without a subscription",
+      { pilot_access_grant_active: true },
+    ],
+    [
+      "complimentary access",
+      { billing_exempt: true, billing_exempt_active: true },
+    ],
+    [
+      "ended complimentary access",
+      { billing_exempt: true, billing_exempt_until: "2026-08-19T20:00:00Z" },
+    ],
+    ["canceled subscription", { subscription_status: "canceled" }],
+  ] satisfies [string, Partial<PracticeStatus>][])(
+    "shows no billed seats for %s",
+    (_label, overrides) => {
+      render(
+        <PracticeJoinPanel
+          practice={practice({
+            seat_summary: seatSummary({ billed_seats: null }),
+            ...overrides,
+          })}
+          showBillingActions
+        />,
+      )
+
+      expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
+    },
+  )
+
+  it("does not show billing seats to workforce", () => {
+    render(
+      <PracticeJoinPanel
+        practice={subscribed({}, { role: "workforce" })}
+        showBillingActions
+      />,
+    )
+
+    expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
+  })
+
+  it("shows seats only on the billing screen", () => {
+    render(<PracticeJoinPanel practice={subscribed()} />)
+
+    expect(screen.queryByTestId("seat-summary")).not.toBeInTheDocument()
   })
 })

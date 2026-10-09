@@ -15,15 +15,17 @@ from app.configuration.authority import (
     AuthorityKernelSettings,
 )
 from app.configuration.clerk import CLERK_PRIVATE_KEY
+from app.services.provider_context_exchange import provider_exchange_blocked
+from app.services.provider_record_authority import ProviderRecordScopeDenied
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     configured_superadmin_capability_environment,
 )
 from app.services.view_as import (
     ViewAsError,
-    context_token_exchange_blocked_by_view_as,
     context_token_rotation_blocked_by_view_as,
 )
+from app.utils.native_request_timing import phase
 
 from activemodel.session_manager import aglobal_session, get_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -106,7 +108,8 @@ def authenticate_embed_platform_session(
     ],
 ) -> VerifiedClerkIdentity:
     try:
-        auth_state = _authenticate_clerk_session(request, credentials)
+        with phase("clerk_auth"):
+            auth_state = _authenticate_clerk_session(request, credentials)
     except HTTPException:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -197,23 +200,21 @@ def exchange_context_token(
             retryable=False,
         )
     try:
-        if settings.enabled:
-            environment = configured_superadmin_capability_environment()
-            with get_session() as session:
-                if context_token_exchange_blocked_by_view_as(
-                    session,
-                    issuer=clerk_identity.issuer,
-                    subject=clerk_identity.subject,
-                    clerk_session_id=clerk_identity.clerk_session_id,
-                    environment=environment,
-                ):
-                    return token_problem_response(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        code="REQUEST_DENIED",
-                        title="Request denied",
-                        detail="Provider context is unavailable during view-as.",
-                        retryable=False,
-                    )
+        if provider_exchange_blocked(
+            issuer=clerk_identity.issuer,
+            subject=clerk_identity.subject,
+            clerk_session_id=clerk_identity.clerk_session_id,
+            requested_surface=data.requested_surface,
+            record_ref=data.record_ref,
+            settings=settings,
+        ):
+            return token_problem_response(
+                status_code=status.HTTP_403_FORBIDDEN,
+                code="REQUEST_DENIED",
+                title="Request denied",
+                detail="Provider context is unavailable during view-as.",
+                retryable=False,
+            )
         result = app.services.authority.exchange_context_token(
             clerk_issuer=clerk_identity.issuer,
             clerk_subject=clerk_identity.subject,
@@ -236,7 +237,10 @@ def exchange_context_token(
             title="Context service unavailable",
             detail="Context-token exchange is not available.",
         )
-    except app.services.authority.AuthorityRequestDeniedError:
+    except (
+        app.services.authority.AuthorityRequestDeniedError,
+        ProviderRecordScopeDenied,
+    ):
         return token_problem_response(
             status_code=status.HTTP_403_FORBIDDEN,
             code="REQUEST_DENIED",

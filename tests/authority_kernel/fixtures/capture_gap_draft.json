@@ -1,0 +1,37 @@
+{
+  "provenance": "Invented local fixture emitted by Core DraftReceipt and the shared Scribe capture-source producer fixture.",
+  "draft": {
+    "session_id": "00000000-0000-4000-8000-000000000003",
+    "scribe_source_id": "00000000-0000-4000-8000-000000000004",
+    "source_sha256": "9c9e2525562197f3ce61087a92a1385ff3f07960c128026b25c31fbe7c5b829e",
+    "schema_ref": "doctor_note_schema_00000000000000000000000001",
+    "transcript_ref": "ai_visit_transcript_00000000000000000000000001",
+    "note_ref": "visit_note_00000000000000000000000001",
+    "status": "draft",
+    "note_type": "Visit note",
+    "fields": {
+      "CC": "Invented visit",
+      "Plan": "Discuss sleep — synthetic only."
+    },
+    "field_order": [
+      "CC",
+      "Plan"
+    ],
+    "note_sha256": "7601785ea9f2baa9a4268cc57760c857b30ce4a85c0c01c5eead7d31af9c2901",
+    "created_at": "2026-09-17T10:00:00Z",
+    "review_required": true,
+    "capture_gap_review": {
+      "recovery_sha256": "571d148b7492c248af90241ded20d3fb199e5ad68946f1b76dfb4233622e632c",
+      "observations": [
+        {
+          "gap_id": "00000000-0000-0000-0000-00000000000c",
+          "reason_code": "capture_backgrounded",
+          "observed_at": "2026-09-17T00:00:00Z",
+          "acknowledged_at": "2026-09-17T00:00:00Z",
+          "decision": "resume_capture"
+        }
+      ],
+      "review_required": true
+    }
+  }
+}

@@ -1,5 +1,6 @@
 export const REDACTED_AZURE_SAS_URL = "[Filtered Azure Blob SAS URL]"
 export const REDACTED_INTAKE_CREDENTIAL = "[Filtered-intake-credential]"
+export const REDACTED_INVITATION_FRAGMENT = "[Filtered-invitation-fragment]"
 export const REDACTED_LEGACY_EXAMPLE_NOTE_URL =
   "[Filtered legacy example-note request]"
 export const REDACTED_ZOOM_JOIN_URL = "[Filtered Zoom join URL]"
@@ -16,6 +17,13 @@ const LEGACY_EXAMPLE_NOTE_PATH_PATTERN =
   /\/internal\/v1\/notes\/upload-example\b/iu
 const LEGACY_EXAMPLE_NOTE_QUERY_PATTERN =
   /(?:[?&]|&amp;)(?:file_name|note_type)=/iu
+// A practice invitation link carries its bearer token in the fragment, and
+// Sentry's history instrumentation records full relative URLs, fragment
+// included, when the invite page strips it with history.replaceState.
+const INVITATION_FRAGMENT_TOKEN_PATTERN =
+  /(#(?:[^#\s"'<>]*?&)?t=)[^&#\s"'<>]*/giu
+const INVITE_PATH_FRAGMENT_PATTERN =
+  /(\/invite\/?(?:\?[^#\s"'<>]*)?)#[^\s"'<>]*/giu
 const BEARER_CREDENTIAL_PATTERN = /\bbearer\s+[a-z0-9._~+/=-]+/giu
 const MOUNT_CONTEXT_TOKEN_PATTERN = /\bmctx_[a-z0-9._~-]+\b/giu
 const SENSITIVE_NORMALIZED_KEYS = new Set([
@@ -150,10 +158,25 @@ function redactLegacyExampleNoteQuery(value: string): string {
     : value
 }
 
+function redactInvitationFragments(value: string): string {
+  INVITE_PATH_FRAGMENT_PATTERN.lastIndex = 0
+  const pathRedacted = value.replace(
+    INVITE_PATH_FRAGMENT_PATTERN,
+    (_candidate, prefix: string) => `${prefix}#${REDACTED_INVITATION_FRAGMENT}`,
+  )
+  INVITATION_FRAGMENT_TOKEN_PATTERN.lastIndex = 0
+  return pathRedacted.replace(
+    INVITATION_FRAGMENT_TOKEN_PATTERN,
+    (_candidate, prefix: string) => `${prefix}${REDACTED_INVITATION_FRAGMENT}`,
+  )
+}
+
 function redactSensitiveTelemetryString(value: string): string {
-  const urlRedacted = redactLegacyExampleNoteQuery(
-    redactZoomJoinUrls(
-      redactIntakeBearerCredentials(redactAzureBlobSasUrls(value)),
+  const urlRedacted = redactInvitationFragments(
+    redactLegacyExampleNoteQuery(
+      redactZoomJoinUrls(
+        redactIntakeBearerCredentials(redactAzureBlobSasUrls(value)),
+      ),
     ),
   )
   BEARER_CREDENTIAL_PATTERN.lastIndex = 0

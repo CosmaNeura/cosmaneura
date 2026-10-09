@@ -50,3 +50,16 @@ client.setConfig({
     return token
   },
 })
+
+// Only an explicitly consented continuation forces fresh expiry evidence.
+// Ordinary reads, status and mutations retain their existing authentication.
+export async function billingContinuationAuth() {
+  const clerkClient = await getClient()
+  invariant(
+    clerkClient && clerkClient.session && clerkClient.user,
+    "Signed-in session required",
+  )
+  const token = await clerkClient.session.getToken({ skipCache: true })
+  invariant(token, "Signed-in session token required")
+  return token
+}

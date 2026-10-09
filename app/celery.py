@@ -454,6 +454,12 @@ def worker_process_init_setup_logging(**kwargs):
         instance._engine.dispose()
         instance._engine = None
 
+    # Same hazard, different pool: an inherited httpx connection would be shared
+    # between sibling workers.
+    from app.services.stripe_billing import reset_http_client
+
+    reset_http_client()
+
 
 # tag all jobs with the job name (module path) and uuid for the task
 @signals.task_prerun.connect
@@ -525,6 +531,14 @@ def capture_worker_stop(sender, **kwargs):
 # }
 
 celery_app.conf.beat_schedule = {
+    "session_prep_maintenance": {
+        "task": "app.jobs.session_prep.maintain",
+        "schedule": 60.0,
+    },
+    "session_prep": {
+        "task": "app.jobs.session_prep.perform",
+        "schedule": 5.0,
+    },
     "sync_clerk": {
         "task": "app.jobs.sync_clerk.perform",
         "schedule": crontab(minute="0", hour="0"),

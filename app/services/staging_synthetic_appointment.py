@@ -94,6 +94,7 @@ def validate_exact_synthetic_fixture(
         and fixture.doctor_id == doctor.id
         and patient.doctor_id == doctor.id
         and patient.name == SYNTHETIC_PATIENT_NAME
+        and patient.date_of_birth is not None
         and _normalized_naive_utc(patient.date_of_birth)
         == SYNTHETIC_PATIENT_DATE_OF_BIRTH
         and appointment.doctor_id == doctor.id

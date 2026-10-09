@@ -1,0 +1,40 @@
+{
+  "provenance": "Exact 27-field shape and generated values from authorized synthetic iPhone55 acceptance. No real patient data. Original schema guidance was not exported.",
+  "transcript": [
+    "This is a synthetic role play about fictional Avery Morgan.",
+    "When did the pretend cough begin?",
+    "The pretend cough began 3 days ago.",
+    "How has the fictional cough changed?",
+    "It has become more frequent, especially at night.",
+    "These details are invented."
+  ],
+  "generated_fields": {
+    "Patient": "Avery Morgan",
+    "MRN / DOB": "Not mentioned in transcript",
+    "Provider": "Not mentioned in transcript",
+    "Payer": "Not mentioned in transcript",
+    "Date of service": "Not mentioned in transcript",
+    "Modality": "Not mentioned in transcript",
+    "Sites": "Not mentioned in transcript",
+    "Place of service": "Not mentioned in transcript",
+    "Telehealth attestation": "Not mentioned in transcript",
+    "S - SUBJECTIVE": "- The patient reports that their cough began 3 days ago.\n- The patient states the cough has become more frequent, especially at night.\n",
+    "PMH / PSH": "Not mentioned in transcript",
+    "Medications": "Not mentioned in transcript",
+    "Allergies": "Not mentioned in transcript",
+    "Family hx": "Not mentioned in transcript",
+    "Social hx": "Not mentioned in transcript",
+    "Immunizations": "Not mentioned in transcript",
+    "O - OBJECTIVE": "Not mentioned in transcript",
+    "Observed and patient-assisted exam via video": "Not mentioned in transcript",
+    "Exam deferred to in-person visit 08/26/2026": "Not mentioned in transcript",
+    "Labs - fasting, 02/12/2026": "Not mentioned in transcript",
+    "Risk calculations": "Not mentioned in transcript",
+    "Screening gaps": "Not mentioned in transcript",
+    "A - ASSESSMENT": "- Cough, onset 3 days ago, increasing in frequency, especially at night.\n",
+    "P - PLAN": "- Monitor cough symptoms and note any changes in frequency, severity, or associated symptoms (e.g., fever, shortness of breath).\n- Seek medical attention if symptoms worsen or new concerning symptoms develop.\n",
+    "Follow-ups": "Not mentioned in transcript",
+    "Return precautions - given verbally, repeated back accurately, sent in writing": "Not mentioned in transcript",
+    "CODING, ATTESTATION, SIGNATURE": "Not mentioned in transcript"
+  }
+}

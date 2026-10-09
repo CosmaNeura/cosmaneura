@@ -138,6 +138,107 @@ class ControllerTests(unittest.TestCase):
         )
         self.put("native_archive", b"invented-native-archive")
 
+    def configure_version_two(self):
+        self.plan.update(
+            version=2, candidate_sha="e" * 40, candidate_pr=479, controller_check_id=0
+        )
+        self.plan["release"] = {
+            "schema_before": "c" * 12,
+            "schema_after": "f" * 12,
+            "migration_revisions": ["d" * 12, "f" * 12],
+            "review_kind": "local_cursor",
+            "runtime_public": {},
+            "recovery": {},
+        }
+        self.put(
+            "selection",
+            {"founder_selected": True, "candidate_pr": 479, "candidate_sha": "e" * 40},
+        )
+        self.put(
+            "delegation",
+            {
+                "actor": "delegated_assistant",
+                "staging_build_approved": True,
+                "candidate_sha": "e" * 40,
+                "production_approved": False,
+            },
+        )
+        rehearsal = m.record(Path(self.plan["rehearsal"]["path"]).read_bytes())
+        rehearsal["rehearsal"].update(
+            source_revision="c" * 12,
+            target_revision="f" * 12,
+            forward_only=True,
+            restore_verified=True,
+            actual_online_migrations=[{"revision": x} for x in ("d" * 12, "f" * 12)],
+        )
+        self.put("rehearsal", rehearsal)
+        return rehearsal
+
+    def test_version_two_requires_exact_selection_and_rehearsed_schema(self):
+        rehearsal = self.configure_version_two()
+        self.assertTrue(self.invoke(check_only=True)["local_bindings_passed"])
+        for field, value in (("candidate_sha", "a" * 40), ("candidate_pr", 480)):
+            with self.subTest(field=field):
+                original = self.plan[field]
+                self.plan[field] = value
+                with self.assertRaises(m.BuildControllerRefused):
+                    self.invoke(check_only=True)
+                self.plan[field] = original
+        rehearsal["rehearsal"]["restore_verified"] = False
+        self.put("rehearsal", rehearsal)
+        with self.assertRaises(m.BuildControllerRefused):
+            self.invoke(check_only=True)
+
+    def configure_unchanged_schema(self):
+        rehearsal = self.configure_version_two()
+        self.plan["release"].update(schema_before="f" * 12, migration_revisions=[])
+        rehearsal["rehearsal"].update(
+            source_revision="f" * 12, actual_online_migrations=[]
+        )
+        self.put("rehearsal", rehearsal)
+        return rehearsal
+
+    def test_unchanged_schema_reaches_source_and_build_with_exact_head(self):
+        self.configure_unchanged_schema()
+        self.assertTrue(self.invoke(check_only=True)["local_bindings_passed"])
+        modules = self.fake_modules()
+        with patch.object(m, "load_modules", return_value=modules):
+            source = self.invoke(source_only=True)
+            result = self.invoke()
+        self.assertEqual(source["schema_head"], "f" * 12)
+        self.assertTrue(result["complete"])
+        self.assertEqual(
+            modules["verify_staging_candidate"].HumanCandidateContext.call_args.args[2],
+            "f" * 12,
+        )
+        modules["staging_human_build_executor"].build_candidate.assert_called_once()
+
+    def test_unchanged_schema_requires_no_actual_or_declared_migrations(self):
+        rehearsal = self.configure_unchanged_schema()
+        for field, value in (
+            ("schema_before", "c" * 12),
+            ("migration_revisions", ["f" * 12]),
+        ):
+            with self.subTest(field=field):
+                original = self.plan["release"][field]
+                self.plan["release"][field] = value
+                with self.assertRaises(m.BuildControllerRefused):
+                    self.invoke(check_only=True)
+                self.plan["release"][field] = original
+        for field, value in (
+            ("source_revision", "c" * 12),
+            ("target_revision", "c" * 12),
+            ("actual_online_migrations", [{"revision": "f" * 12}]),
+            ("restore_verified", False),
+        ):
+            with self.subTest(field=field):
+                original = rehearsal["rehearsal"][field]
+                rehearsal["rehearsal"][field] = value
+                self.put("rehearsal", rehearsal)
+                with self.assertRaises(m.BuildControllerRefused):
+                    self.invoke(check_only=True)
+                rehearsal["rehearsal"][field] = original
+
     def tearDown(self):
         self.temp.cleanup()
         if self.parent.exists():

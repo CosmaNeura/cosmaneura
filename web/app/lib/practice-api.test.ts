@@ -19,6 +19,8 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: true,
     authorization_basis: "organization_roster",
     access_revoked: false,
+    access_ends_at: null,
+    access_ended: false,
     pilot_access_grant_active: false,
     trial_ends_at: null,
     billing_exempt: true,
@@ -32,6 +34,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     billing_checkout_available_at: null,
     entitled: true,
     subscription_status: null,
+    seat_summary: null,
     ...overrides,
   }
 }

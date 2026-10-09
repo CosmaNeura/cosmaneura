@@ -20,7 +20,6 @@ import {
   generateDate,
   generateDateString,
   generateDateTimeString,
-  isValidDateFormat,
 } from "./datetime-utils"
 
 const DEFAULT_SUGGESTIONS = [
@@ -43,7 +42,7 @@ interface DateTimePickerProps
   > {
   showTimePicker?: boolean
   suggestions?: string[]
-  value: Date
+  value: Date | undefined
   onChange: React.Dispatch<React.SetStateAction<Date | undefined>>
 }
 
@@ -259,9 +258,8 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
     // if the dateTime prop changes, update the input value. This can occur when the field date is programatically
     // updated from the parent component
     useEffect(() => {
-      if (dateTime) {
-        setInputValue(dateTimeFormatFunction(dateTime))
-      }
+      setInputValue(dateTime ? dateTimeFormatFunction(dateTime) : "")
+      if (!dateTime) setSuggestion(null)
     }, [dateTime, setInputValue, dateTimeFormatFunction])
 
     useEffect(() => {

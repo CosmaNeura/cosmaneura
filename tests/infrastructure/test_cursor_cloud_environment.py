@@ -855,6 +855,38 @@ op vault list >/dev/null 2>&1 || true
     assert frontend.index("$CURSOR_PNPM_BIN") < frontend.index("$CURSOR_NODE_BIN")
 
 
+@pytest.mark.parametrize(
+    ("ci", "expected_api_base"),
+    [("", "https://api.cosma.localhost"), ("true", "http://localhost:8205")],
+)
+def test_envrc_gives_the_api_its_base_url_outside_the_cursor_path(
+    tmp_path: Path, ci: str, expected_api_base: str
+) -> None:
+    sandbox = tmp_path / "repo"
+    (sandbox / "web").mkdir(parents=True)
+    for relative_path in ".envrc .env .env.shared .env.dev .env.test".split():
+        shutil.copyfile(ROOT / relative_path, sandbox / relative_path)
+
+    shell = """strict_env() { set -u; }
+PATH_add() { PATH="$1:$PATH"; }
+layout() { :; }
+source_env() { source "$1"; }
+source_env_if_exists() { [[ ! -f "$1" ]] || source "$1"; }
+env_vars_required() { :; }
+source .envrc
+printf "api=%s\\n" "$API_BASE_URL"
+"""
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "CI": ci,
+        "API_BASE_URL": "https://stale.example",
+    }
+    result = _run(["bash", "-c", shell], cwd=sandbox, environment=env)
+    assert result.returncode == 0, result.stderr
+    assert f"api={expected_api_base}" in result.stdout
+
+
 @pytest.mark.parametrize("mode", ("dev", "test"))
 @pytest.mark.parametrize("host", ("localhost", "127.0.0.1", "[::1]"))
 def test_database_guard_accepts_only_explicit_exact_urls(mode: str, host: str) -> None:

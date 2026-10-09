@@ -207,6 +207,433 @@
         ]
       }
     },
+    "/internal/v1/notes/revisions/{note_id}/session-prep-review": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Review Note For Session Prep",
+        "operationId": "review_note_for_session_prep",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewNoteForSessionPrepRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPrepNoteReview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/revisions/{note_id}/billing-header-source": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Source",
+        "operationId": "billing_header_source",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderSource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/revisions/{note_id}/billing-header-operations": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Prepare Billing Header Operation",
+        "operationId": "prepare_billing_header_operation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareBillingHeaderOperation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderOperation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Operation",
+        "operationId": "billing_header_operation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderOperation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}/cab": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Cab",
+        "operationId": "billing_header_cab",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}/generation-continue": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Generation Continue",
+        "operationId": "billing_header_generation_continue",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabGenerationContinueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabGenerationContinueResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/note-schemas/{schema_id}/fields": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Get Note Template Fields",
+        "operationId": "get_note_template_fields",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schema_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateFields"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Note Template Fields",
+        "operationId": "update_note_template_fields",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schema_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplateFields"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateFields"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -278,7 +705,7 @@
                     "$ref": "#/components/schemas/Patient"
                   },
                   "type": "array",
-                  "title": "Response Patient List Internal V1 Patients Get"
+                  "title": "Response Patient List"
                 }
               }
             }
@@ -553,7 +980,7 @@
               "application/json": {
                 "schema": {
                   "type": "string",
-                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
+                  "title": "Response Generate Signed Example Note Upload Url"
                 }
               }
             }
@@ -903,7 +1330,7 @@
                       "type": "null"
                     }
                   ],
-                  "title": "Response Practice Status Internal V1 Practice Get"
+                  "title": "Response Practice Status"
                 }
               }
             }
@@ -982,7 +1409,7 @@
                       "type": "null"
                     }
                   ],
-                  "title": "Response Organization Access Opportunity Internal V1 Practice Organization Access Get"
+                  "title": "Response Organization Access Opportunity"
                 }
               }
             }
@@ -1133,7 +1560,379 @@
                     "$ref": "#/components/schemas/BaaAcceptanceRecord"
                   },
                   "type": "array",
-                  "title": "Response Practice Baa Acceptances Internal V1 Practice Baa Acceptances Get"
+                  "title": "Response Practice Baa Acceptances"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/members": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Roster",
+        "description": "The practice's members and pending invitations, for its owner.\n\nMembers carry no contact details; an invitation carries the address the\nowner typed, except under support view-as.",
+        "operationId": "practice_roster",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRoster"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/members/{member_id}/revoke": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Revoke Practice Member",
+        "description": "End a clinician's access at midnight US Eastern tonight; reversible.",
+        "operationId": "revoke_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRosterMember"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/members/{member_id}/restore": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Restore Practice Member",
+        "description": "Undo a revocation; after its cut-off the clinician takes a seat again.",
+        "operationId": "restore_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeRosterMember"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Practice Invitation",
+        "operationId": "create_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePracticeInvitationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationIssued"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/{invitation_id}/revoke": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Revoke Practice Invitation",
+        "operationId": "revoke_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/{invitation_id}/resend": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Resend Practice Invitation",
+        "operationId": "resend_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationIssued"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/inspect": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Inspect Practice Invitation",
+        "operationId": "inspect_practice_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeInvitationTokenBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeInvitationInspection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/invitations/accept": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Accept Practice Invitation",
+        "operationId": "accept_practice_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPracticeInvitationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1522,7 +2321,7 @@
                   "items": {
                     "$ref": "#/components/schemas/MedicationData"
                   },
-                  "title": "Response Medication List Internal V1 Patients  Patient Id  Medications Get"
+                  "title": "Response Medication List"
                 }
               }
             }
@@ -1923,7 +2722,7 @@
                   "items": {
                     "$ref": "#/components/schemas/LabPanelData"
                   },
-                  "title": "Response Lab Panel List Internal V1 Patients  Patient Id  Lab Panels Get"
+                  "title": "Response Lab Panel List"
                 }
               }
             }
@@ -2205,7 +3004,7 @@
                     "$ref": "#/components/schemas/LabRangeData"
                   },
                   "type": "array",
-                  "title": "Response Lab Range List Internal V1 Lab Ranges Get"
+                  "title": "Response Lab Range List"
                 }
               }
             }
@@ -2517,6 +3316,37 @@
         ],
         "title": "AcceptBaaBody"
       },
+      "AcceptPracticeInvitationBody": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Token"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "AcceptPracticeInvitationBody"
+      },
       "Appointment": {
         "properties": {
           "id": {
@@ -2757,6 +3587,96 @@
         "type": "object",
         "title": "BillingCheckoutBody"
       },
+      "BillingHeaderOperation": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core.billing-header-operation.v1",
+            "title": "Schemaversion",
+            "default": "core.billing-header-operation.v1"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "state": {
+            "type": "string",
+            "const": "prepared",
+            "title": "State",
+            "default": "prepared"
+          },
+          "sourceRevision": {
+            "type": "integer",
+            "title": "Sourcerevision"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BillingSource"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completedat"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/BillingTransportState"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "sourceRevision",
+          "source",
+          "completedAt",
+          "replayed"
+        ],
+        "title": "BillingHeaderOperation"
+      },
+      "BillingHeaderSource": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core.billing-header-source.v1",
+            "title": "Schemaversion",
+            "default": "core.billing-header-source.v1"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "review_required"
+            ],
+            "title": "State"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BillingSource"
+          },
+          "visit": {
+            "$ref": "#/components/schemas/BillingVisitSuggestions"
+          },
+          "latestOperation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparedSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "source"
+        ],
+        "title": "BillingHeaderSource"
+      },
       "BillingPortalBody": {
         "properties": {
           "return_path": {
@@ -2769,6 +3689,63 @@
         "additionalProperties": false,
         "type": "object",
         "title": "BillingPortalBody"
+      },
+      "BillingSeatSummary": {
+        "properties": {
+          "account_kind": {
+            "type": "string",
+            "enum": [
+              "solo",
+              "practice"
+            ],
+            "title": "Account Kind"
+          },
+          "active_clinicians": {
+            "type": "integer",
+            "title": "Active Clinicians"
+          },
+          "billed_seats": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billed Seats"
+          },
+          "seat_sync_pending": {
+            "type": "boolean",
+            "title": "Seat Sync Pending"
+          },
+          "unit_amount": {
+            "type": "integer",
+            "title": "Unit Amount"
+          },
+          "currency": {
+            "type": "string",
+            "const": "usd",
+            "title": "Currency"
+          },
+          "interval": {
+            "type": "string",
+            "const": "month",
+            "title": "Interval"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "account_kind",
+          "active_clinicians",
+          "billed_seats",
+          "seat_sync_pending",
+          "unit_amount",
+          "currency",
+          "interval"
+        ],
+        "title": "BillingSeatSummary"
       },
       "BillingSessionUrl": {
         "properties": {
@@ -2783,6 +3760,271 @@
           "url"
         ],
         "title": "BillingSessionUrl"
+      },
+      "BillingSource": {
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Noteid"
+          },
+          "appointmentId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Appointmentid"
+          },
+          "noteSchemaId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Noteschemaid"
+          },
+          "contentSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Contentsha256"
+          },
+          "textSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Textsha256"
+          },
+          "projectionVersion": {
+            "type": "string",
+            "const": "ordered-note-markdown.v1",
+            "title": "Projectionversion",
+            "default": "ordered-note-markdown.v1"
+          },
+          "excludedRecordingTime": {
+            "type": "boolean",
+            "title": "Excludedrecordingtime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "noteId",
+          "appointmentId",
+          "noteSchemaId",
+          "contentSha256",
+          "textSha256",
+          "excludedRecordingTime"
+        ],
+        "title": "BillingSource"
+      },
+      "BillingTransportState": {
+        "properties": {
+          "asyncGeneration": {
+            "type": "boolean",
+            "title": "Asyncgeneration",
+            "default": false
+          },
+          "generationContinuation": {
+            "type": "boolean",
+            "title": "Generationcontinuation",
+            "default": false
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "configured"
+            ],
+            "title": "State",
+            "default": "not_configured"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingTransportState"
+      },
+      "BillingVisitSuggestions": {
+        "properties": {
+          "serviceDate": {
+            "type": "null",
+            "title": "Servicedate"
+          },
+          "patientAge": {
+            "type": "null",
+            "title": "Patientage"
+          },
+          "patientSex": {
+            "type": "null",
+            "title": "Patientsex"
+          },
+          "encounterType": {
+            "type": "null",
+            "title": "Encountertype"
+          },
+          "placeOfService": {
+            "type": "null",
+            "title": "Placeofservice"
+          },
+          "providerSpecialty": {
+            "type": "null",
+            "title": "Providerspecialty"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingVisitSuggestions"
+      },
+      "CabActionRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "read",
+              "generate",
+              "save",
+              "generation-status"
+            ],
+            "title": "Action"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "command"
+        ],
+        "title": "CabActionRequest"
+      },
+      "CabActionResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-result.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "completed-note.accept",
+              "header.read",
+              "header.generate",
+              "header.save",
+              "header.generation-status"
+            ],
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "requestSha256",
+          "result",
+          "source"
+        ],
+        "title": "CabActionResult"
+      },
+      "CabGenerationContinueRequest": {
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "purpose",
+          "command"
+        ],
+        "title": "CabGenerationContinueRequest"
+      },
+      "CabGenerationContinueResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-generation-continuation.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "generationExpiresAt": {
+            "type": "string",
+            "title": "Generationexpiresat"
+          },
+          "generationAuthorizedUntil": {
+            "type": "string",
+            "title": "Generationauthorizeduntil"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "operationId",
+          "requestSha256",
+          "generationExpiresAt",
+          "generationAuthorizedUntil"
+        ],
+        "title": "CabGenerationContinueResult"
       },
       "ClaimOrganizationAccessBody": {
         "properties": {
@@ -2854,6 +4096,73 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "ConfirmedBillingVisit": {
+        "properties": {
+          "patientAge": {
+            "type": "integer",
+            "maximum": 130.0,
+            "minimum": 0.0,
+            "title": "Patientage"
+          },
+          "patientSex": {
+            "type": "string",
+            "enum": [
+              "M",
+              "F",
+              "other",
+              "unknown"
+            ],
+            "title": "Patientsex"
+          },
+          "encounterType": {
+            "type": "string",
+            "enum": [
+              "office_new",
+              "office_established",
+              "telehealth_new",
+              "telehealth_established"
+            ],
+            "title": "Encountertype"
+          },
+          "placeOfService": {
+            "type": "string",
+            "enum": [
+              "11",
+              "02",
+              "10"
+            ],
+            "title": "Placeofservice"
+          },
+          "providerSpecialty": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Providerspecialty"
+          },
+          "serviceDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Servicedate"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patientAge",
+          "patientSex",
+          "encounterType",
+          "placeOfService",
+          "providerSpecialty"
+        ],
+        "title": "ConfirmedBillingVisit"
       },
       "CreateLabPanel": {
         "properties": {
@@ -2974,6 +4283,22 @@
           "legal_name"
         ],
         "title": "CreatePracticeBody"
+      },
+      "CreatePracticeInvitationBody": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "CreatePracticeInvitationBody"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -4416,10 +5741,53 @@
             ],
             "title": "Notes"
           },
+          "note_transcripts": {
+            "items": {
+              "$ref": "#/components/schemas/AIVisitTranscript"
+            },
+            "type": "array",
+            "title": "Note Transcripts"
+          },
+          "capture_workflow_required": {
+            "type": "boolean",
+            "title": "Capture Workflow Required",
+            "default": false
+          },
           "engagement_role": {
             "anyOf": [
               {
                 "$ref": "#/components/schemas/EngagementRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "billing_header_sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BillingHeaderSource"
+            },
+            "type": "object",
+            "title": "Billing Header Sources"
+          },
+          "session_prep_reviews": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/SessionPrepNoteReview"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Prep Reviews"
+          },
+          "session_prep_prior_notes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PriorNoteOverview"
               },
               {
                 "type": "null"
@@ -4502,6 +5870,17 @@
             },
             "type": "array",
             "title": "Appointments"
+          },
+          "note_statuses": {
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "not-started",
+                "completed"
+              ]
+            },
+            "type": "object",
+            "title": "Note Statuses"
           }
         },
         "additionalProperties": false,
@@ -4639,8 +6018,15 @@
             "title": "Name"
           },
           "date_of_birth": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Date Of Birth"
           }
         },
@@ -4648,8 +6034,7 @@
         "required": [
           "id",
           "doctor_id",
-          "name",
-          "date_of_birth"
+          "name"
         ],
         "title": "Patient",
         "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
@@ -4751,6 +6136,87 @@
         ],
         "title": "PlanOrdering"
       },
+      "PracticeInvitationInspection": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "expired",
+              "revoked",
+              "used",
+              "wrong_account",
+              "member_elsewhere",
+              "already_member",
+              "practice_not_ready",
+              "managed_account"
+            ],
+            "title": "State"
+          },
+          "legal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Legal Name"
+          },
+          "baa_accepted": {
+            "type": "boolean",
+            "title": "Baa Accepted"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "legal_name",
+          "baa_accepted"
+        ],
+        "title": "PracticeInvitationInspection"
+      },
+      "PracticeInvitationIssued": {
+        "properties": {
+          "invitation": {
+            "$ref": "#/components/schemas/PracticeRosterInvitation"
+          },
+          "invite_url": {
+            "type": "string",
+            "title": "Invite Url"
+          },
+          "email_queued": {
+            "type": "boolean",
+            "title": "Email Queued"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitation",
+          "invite_url",
+          "email_queued"
+        ],
+        "title": "PracticeInvitationIssued"
+      },
+      "PracticeInvitationTokenBody": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 16,
+            "title": "Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "PracticeInvitationTokenBody"
+      },
       "PracticeLookupResult": {
         "properties": {
           "practice": {
@@ -4772,6 +6238,153 @@
         "additionalProperties": false,
         "type": "object",
         "title": "PracticeLookupResult"
+      },
+      "PracticeRoster": {
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeRosterMember"
+            },
+            "type": "array",
+            "title": "Members"
+          },
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/PracticeRosterInvitation"
+            },
+            "type": "array",
+            "title": "Invitations"
+          },
+          "occupied_seats": {
+            "type": "integer",
+            "title": "Occupied Seats"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "members",
+          "invitations",
+          "occupied_seats"
+        ],
+        "title": "PracticeRoster"
+      },
+      "PracticeRosterInvitation": {
+        "properties": {
+          "invitation_id": {
+            "type": "string",
+            "title": "Invitation Id"
+          },
+          "invitee_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invitee Email"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Issued At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "expired": {
+            "type": "boolean",
+            "title": "Expired"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitation_id",
+          "invitee_email",
+          "issued_at",
+          "expires_at",
+          "expired"
+        ],
+        "title": "PracticeRosterInvitation"
+      },
+      "PracticeRosterMember": {
+        "properties": {
+          "member_id": {
+            "type": "string",
+            "title": "Member Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          },
+          "is_self": {
+            "type": "boolean",
+            "title": "Is Self"
+          },
+          "seat_active": {
+            "type": "boolean",
+            "title": "Seat Active"
+          },
+          "revoked": {
+            "type": "boolean",
+            "title": "Revoked"
+          },
+          "access_in_force": {
+            "type": "boolean",
+            "title": "Access In Force"
+          },
+          "access_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Ends At"
+          },
+          "joined_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Joined At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "member_id",
+          "display_name",
+          "role",
+          "is_self",
+          "seat_active",
+          "revoked",
+          "access_in_force",
+          "access_ends_at",
+          "joined_at"
+        ],
+        "title": "PracticeRosterMember"
       },
       "PracticeStatus": {
         "properties": {
@@ -4832,6 +6445,22 @@
           "access_revoked": {
             "type": "boolean",
             "title": "Access Revoked"
+          },
+          "access_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Access Ends At"
+          },
+          "access_ended": {
+            "type": "boolean",
+            "title": "Access Ended"
           },
           "pilot_access_grant_active": {
             "type": "boolean",
@@ -4915,6 +6544,16 @@
               }
             ],
             "title": "Subscription Status"
+          },
+          "seat_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BillingSeatSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -4931,6 +6570,8 @@
           "access_authorized",
           "authorization_basis",
           "access_revoked",
+          "access_ends_at",
+          "access_ended",
           "pilot_access_grant_active",
           "trial_ends_at",
           "billing_exempt",
@@ -4943,9 +6584,148 @@
           "billing_subscription_manageable",
           "billing_checkout_available_at",
           "entitled",
-          "subscription_status"
+          "subscription_status",
+          "seat_summary"
         ],
         "title": "PracticeStatus"
+      },
+      "PrepareBillingHeaderOperation": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "expectedContentSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedcontentsha256"
+          },
+          "expectedTextSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedtextsha256"
+          },
+          "confirmedComplete": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmedcomplete"
+          },
+          "visit": {
+            "$ref": "#/components/schemas/ConfirmedBillingVisit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedContentSha256",
+          "expectedTextSha256",
+          "confirmedComplete",
+          "visit"
+        ],
+        "title": "PrepareBillingHeaderOperation"
+      },
+      "PreparedSummary": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "sourceRevision": {
+            "type": "integer",
+            "title": "Sourcerevision"
+          },
+          "state": {
+            "type": "string",
+            "const": "prepared",
+            "title": "State",
+            "default": "prepared"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "sourceRevision",
+          "createdAt"
+        ],
+        "title": "PreparedSummary"
+      },
+      "PriorNoteOverview": {
+        "properties": {
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/PriorNotePreview"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "included_count": {
+            "type": "integer",
+            "title": "Included Count"
+          },
+          "more_notes": {
+            "type": "boolean",
+            "title": "More Notes"
+          },
+          "selection_limited": {
+            "type": "boolean",
+            "title": "Selection Limited"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notes",
+          "included_count",
+          "more_notes",
+          "selection_limited"
+        ],
+        "title": "PriorNoteOverview"
+      },
+      "PriorNotePreview": {
+        "properties": {
+          "note_id": {
+            "type": "string",
+            "title": "Note Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "included",
+              "reviewed",
+              "needs_review",
+              "unavailable"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "note_id",
+          "appointment_id",
+          "appointment_date",
+          "note_type",
+          "status"
+        ],
+        "title": "PriorNotePreview"
       },
       "PronounStyle": {
         "type": "string",
@@ -5029,6 +6809,21 @@
         ],
         "title": "ResourceLink"
       },
+      "ReviewNoteForSessionPrepRequest": {
+        "properties": {
+          "expected_content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_content_sha256"
+        ],
+        "title": "ReviewNoteForSessionPrepRequest"
+      },
       "ScheduleResponse": {
         "properties": {
           "zoom_connected": {
@@ -5055,6 +6850,33 @@
           "meetings"
         ],
         "title": "ScheduleResponse"
+      },
+      "SessionPrepNoteReview": {
+        "properties": {
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Content Sha256"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "content_sha256"
+        ],
+        "title": "SessionPrepNoteReview"
       },
       "SettingsData": {
         "properties": {
@@ -5160,6 +6982,47 @@
           "patient_and_doctor"
         ],
         "title": "SubjectiveSource"
+      },
+      "TemplateField": {
+        "properties": {
+          "heading": {
+            "type": "string",
+            "title": "Heading"
+          },
+          "guidance": {
+            "type": "string",
+            "title": "Guidance"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "heading",
+          "guidance"
+        ],
+        "title": "TemplateField"
+      },
+      "TemplateFields": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "fields"
+        ],
+        "title": "TemplateFields"
       },
       "Terminology": {
         "type": "string",
@@ -5487,6 +7350,31 @@
         ],
         "title": "UpdateSettingsData"
       },
+      "UpdateTemplateFields": {
+        "properties": {
+          "expected_revision": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Revision"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "fields"
+        ],
+        "title": "UpdateTemplateFields"
+      },
       "UsageResponse": {
         "properties": {
           "recent_appointments": {
@@ -5558,6 +7446,13 @@
           "type": {
             "type": "string",
             "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
           }
         },
         "type": "object",

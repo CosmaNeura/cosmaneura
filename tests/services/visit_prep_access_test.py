@@ -12,6 +12,8 @@ from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
 
+from tests.factories import save_practice_member
+
 
 def _doctor(label: str) -> Doctor:
     nonce = secrets.token_hex(4)
@@ -39,13 +41,15 @@ def _practice(
         negotiated_baa_reference="test:visit-prep-baa" if baa else None,
         billing_exempt=entitled,
     ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-        attested_at=now if attested else None,
-        attestation_name="Visit Prep Test Physician" if attested else None,
-    ).save()
+    member = save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+            attested_at=now if attested else None,
+            attestation_name="Visit Prep Test Physician" if attested else None,
+        )
+    )
     return practice, member
 
 
@@ -291,7 +295,7 @@ def test_revoked_practice_membership_cannot_use_visit_prep():
     member.access_revoked_by_ref = "test-suite"
     member.access_revocation_reason = "Test offboarding"
     member.access_records_retain_until = now + timedelta(days=365 * 8)
-    member.save()
+    save_practice_member(member)
 
     decision = resolve_visit_prep_access(
         doctor,

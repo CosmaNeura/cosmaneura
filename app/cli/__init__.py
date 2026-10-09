@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 from typeid import TypeID
 
 from activemodel.session_manager import global_session
@@ -125,9 +125,9 @@ def routes():
 
     from app.server import api_app
 
-    for route in api_app.routes:
-        if isinstance(route, APIRoute):
-            methods = sorted(route.methods)
+    for route in iter_route_contexts(api_app.routes):
+        if isinstance(route.original_route, APIRoute):
+            methods = sorted(route.methods or ())
             method = ", ".join(methods)
             typer.echo(f"{method}   {route.path}    {route.name}")
         else:
@@ -1655,6 +1655,94 @@ def _read_multi_practice_roster_manifest(path_value: str):
     return assignments, slug, domain, hashlib.sha256(raw).hexdigest()
 
 
+@app.command("transfer-practice-owner")
+def transfer_practice_owner_command(
+    practice_id: str = typer.Option(..., help="Exact existing Practice TypeID."),
+    expected_owner_subject: str = typer.Option(
+        ..., help="Exact current owner's Clerk subject."
+    ),
+    new_owner_subject: str = typer.Option(
+        ..., help="Exact existing workforce member's Clerk subject."
+    ),
+    transfer_ref: str = typer.Option(..., help="Unique opaque transfer reference."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Non-sensitive lowercase reason code."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None, help="Exact plan hash from the reviewed dry run; required with --apply."
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply the reviewed ownership transfer."
+    ),
+    recover_orphaned_owner: bool = typer.Option(
+        False,
+        "--recover-orphaned-owner",
+        help="Require current exact not-found proof for the prior owner's sign-in.",
+    ),
+) -> None:
+    """Preview one owner correction; retain the former owner as workforce.
+
+    No member is created, moved, revoked or re-attested. BAA, billing, provider
+    bindings, account roles, clinical records and access grants remain intact.
+    """
+    from app.configuration.clerk import prove_absent_owner_identity
+    from app.services.clerk_identity import verified_primary_email
+    from app.services.practice_owner_transfer import (
+        PracticeOwnerTransferError,
+        transfer_practice_owner,
+    )
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    target = _typeid(practice_id, "practice")
+    # Keep the confirming email out of shell history, process arguments and logs.
+    email = typer.prompt("Exact new owner's verified primary email", hide_input=True)
+    try:
+        with global_session():
+            plan = transfer_practice_owner(
+                practice_id=target,
+                expected_owner_subject=expected_owner_subject,
+                new_owner_subject=new_owner_subject,
+                new_owner_email_confirmation=email,
+                transfer_ref=transfer_ref,
+                operator_ref=operator_ref,
+                reason=reason,
+                verify_primary_email=verified_primary_email,
+                recover_orphaned_owner=recover_orphaned_owner,
+                verify_owner_absence=(
+                    prove_absent_owner_identity if recover_orphaned_owner else None
+                ),
+                apply=apply,
+                confirm_plan_sha256=confirm_plan_sha256,
+            )
+        state = (
+            "already applied"
+            if plan.already_applied
+            else ("applied" if apply else "valid")
+        )
+        prefix = "Ownership transfer" if apply else "DRY RUN: ownership transfer"
+        typer.echo(
+            f"{prefix} {state}; practice_id={plan.practice_id} "
+            f"previous_owner_member_id={plan.previous_owner_member_id} "
+            f"new_owner_member_id={plan.new_owner_member_id} "
+            f"plan_sha256={plan.plan_sha256} audit={plan.audit_id or 'none'}."
+        )
+        typer.echo(
+            "The former owner remains workforce. No legal acceptance or processing grant is created."
+        )
+    except PracticeOwnerTransferError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SQLAlchemyError:
+        message = (
+            "ownership transfer outcome is unconfirmed; inspect the exact transfer "
+            "receipt and current owner before any retry"
+            if apply
+            else "ownership transfer preflight failed; no mutation was requested"
+        )
+        raise typer.BadParameter(message) from None
+
+
 @app.command("bootstrap-provider-practice")
 def bootstrap_provider_practice_command(
     manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),
@@ -1773,6 +1861,81 @@ def bootstrap_provider_practice_command(
         raise typer.BadParameter(
             "provider practice bootstrap database validation failed; no identities "
             "were printed"
+        ) from None
+
+
+@app.command("provision-companion-provider")
+def provision_companion_provider_command(
+    doctor_id: str = typer.Option(...),
+    practice_id: str = typer.Option(...),
+    authority_tenant_id: str = typer.Option(...),
+    scribe_tenant_id: str = typer.Option(...),
+    review_ref: str = typer.Option(
+        ..., help="Opaque reference to reviewed practice correspondence."
+    ),
+    operator_ref: str = typer.Option(
+        ..., help="Opaque accountable operator reference."
+    ),
+    create_missing_authority: bool = typer.Option(False, "--create-missing-authority"),
+    confirm_plan_sha256: str | None = typer.Option(None, "--confirm-plan-sha256"),
+    apply: bool = typer.Option(False, "--apply"),
+) -> None:
+    """Prepare or apply one reviewed companion connection; dry-run by default."""
+    from dataclasses import asdict
+    from uuid import UUID
+
+    from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+    from app.services.clerk_identity import verified_primary_email
+    from app.services.companion_provider_provisioning import (
+        CompanionProvisioningError,
+        provision_companion_provider,
+    )
+
+    from activemodel.session_manager import get_session
+    from sqlalchemy.exc import SQLAlchemyError
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter(
+            "--apply requires --confirm-plan-sha256 from the reviewed plan"
+        )
+    doctor_ref = _typeid(doctor_id, "doctor")
+    practice_ref = _typeid(practice_id, "practice")
+    tenant_ref = _typeid(authority_tenant_id, "authority_tenant")
+    try:
+        scribe_ref = UUID(scribe_tenant_id)
+    except ValueError:
+        raise typer.BadParameter("Scribe practice must be a UUID") from None
+    email = typer.prompt("Exact provider account email", hide_input=True)
+    try:
+        with global_session():
+            doctor = _doctor_by_id(doctor_id)
+            verified_subject = doctor.clerk_id
+            verified = verified_primary_email(verified_subject)
+            with get_session() as session:
+                result = provision_companion_provider(
+                    session,
+                    doctor_id=doctor_ref,
+                    practice_id=practice_ref,
+                    tenant_id=tenant_ref,
+                    scribe_tenant_id=scribe_ref,
+                    verified_primary_email=verified,
+                    verified_clerk_subject=verified_subject,
+                    email_confirmation=email,
+                    review_ref=review_ref,
+                    operator_ref=operator_ref,
+                    settings=AUTHORITY_KERNEL_SETTINGS,
+                    create_missing_authority=create_missing_authority,
+                    apply=apply,
+                    confirm_plan_sha256=confirm_plan_sha256,
+                )
+                if not apply:
+                    session.rollback()
+                typer.echo(json.dumps(asdict(result), sort_keys=True))
+    except CompanionProvisioningError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SQLAlchemyError:
+        raise typer.BadParameter(
+            "Companion provisioning could not be confirmed; inspect a new dry-run before retrying"
         ) from None
 
 

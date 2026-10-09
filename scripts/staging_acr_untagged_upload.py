@@ -320,7 +320,9 @@ def build_and_upload(
     expected_archive_sha256: str,
     expected_image_id: str,
     token_record: dict[str, Any],
+    candidate_sha: str = CANDIDATE_SHA,
 ) -> dict[str, Any]:
+    require(type(candidate_sha) is str and re.fullmatch(r"[0-9a-f]{40}", candidate_sha))
     keys = set(token_record)
     required = {"accessToken", "loginServer"}
     require(keys in (required, required | {"refreshToken", "username"}))
@@ -379,7 +381,7 @@ def build_and_upload(
             require(type(labels) is dict)
             exact_labels = cast(dict[str, Any], labels)
             require(
-                exact_labels.get("org.opencontainers.image.revision") == CANDIDATE_SHA
+                exact_labels.get("org.opencontainers.image.revision") == candidate_sha
             )
             require(
                 exact_labels.get("org.opencontainers.image.source")
@@ -483,7 +485,7 @@ def build_and_upload(
             return {
                 "schema_version": 1,
                 "archive_sha256": expected_archive_sha256,
-                "candidate_sha": CANDIDATE_SHA,
+                "candidate_sha": candidate_sha,
                 "config_digest": config_digest,
                 "layer_count": len(layers),
                 "manifest_digest": manifest_digest,
@@ -503,13 +505,17 @@ def build_and_upload(
 
 def main() -> int:
     require(sys.flags.isolated and sys.flags.no_site and not sys.flags.optimize)
-    require(os.getuid() == os.geteuid() != 0 and len(sys.argv) == 4)
+    require(os.getuid() == os.geteuid() != 0 and len(sys.argv) in {4, 5})
+    candidate_sha = sys.argv[4] if len(sys.argv) == 5 else CANDIDATE_SHA
+    require(re.fullmatch(r"[0-9a-f]{40}", candidate_sha))
     token_raw = sys.stdin.buffer.read(256 * 1024 + 1)
     require(0 < len(token_raw) <= 256 * 1024)
     token_record = json.loads(token_raw, object_pairs_hook=unique)
     del token_raw
     require(type(token_record) is dict)
-    result = build_and_upload(Path(sys.argv[1]), sys.argv[2], sys.argv[3], token_record)
+    result = build_and_upload(
+        Path(sys.argv[1]), sys.argv[2], sys.argv[3], token_record, candidate_sha
+    )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
     return 0
 

@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "024655ca3a542caf02e46d1b9b209d3c5b4d96d0",
+      "f7f75c63a5459d441f27ef063183346fa89914a2",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",

@@ -5,6 +5,7 @@ Summarize a patient visit into a clinical note with the specified schema.
 import json
 import math
 import textwrap
+from collections.abc import Callable
 from datetime import UTC, datetime
 from textwrap import dedent
 from typing import Any, cast
@@ -36,8 +37,22 @@ from app.models.note_type_customization import (
     PronounStyle,
     SubjectiveSource,
 )
+from app.models.scribe_capture_binding import ScribeCaptureBinding
 from sqlalchemy import and_, or_, update
 from sqlmodel import Session, select
+
+
+def _capture_owns_appointment(session: Session, appointment_id: TypeIDType) -> bool:
+    # A retained binding owns preparation even before transcript import and
+    # after revocation. A background job has no current capture authorization.
+    return (
+        session.exec(
+            select(cast(Any, ScribeCaptureBinding.id))
+            .where(ScribeCaptureBinding.appointment_id == appointment_id)
+            .limit(1)
+        ).first()
+        is not None
+    )
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
@@ -56,6 +71,21 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
             "summarization skipped: access unavailable",
             event_code="summarization_access_not_in_force",
             transcript_ref=provider_log_ref(str(transcript_id)),
+        )
+        return
+
+    with get_session() as session:
+        capture_owned = _capture_owns_appointment(
+            cast(Session, session), trigger.appointment_id
+        )
+    if capture_owned:
+        # Captures use explicit versioned sources. This background path merges
+        # independent recordings and carries no current capture authority;
+        # the explicit capture-note receiver owns the appointment's notes.
+        log.info(
+            "captured working source requires explicit note preparation",
+            event_code="capture_working_explicit_preparation_required",
+            transcript_ref=provider_log_ref(str(trigger.id)),
         )
         return
 
@@ -156,6 +186,9 @@ def _finalize_generated_note(
     generated_through_transcript_id: TypeIDType,
     note: dict[str, str],
     appointment_name: str,
+    authorize_finalization: Callable[[Session], None] | None = None,
+    replace_note_ref: TypeIDType | None = None,
+    persist_provenance: Callable[[Session, AIVisitNote], None] | None = None,
 ) -> bool:
     """Commit a generated note only while its transcript snapshot is current.
 
@@ -172,23 +205,38 @@ def _finalize_generated_note(
     """
 
     with get_session() as session:
+        if authorize_finalization is not None:
+            # Capture callers acquire their normal authority locks before the
+            # shared appointment lock, and hold them through publication.
+            authorize_finalization(cast(Session, session))
         appointment = session.exec(
             select(Appointment)
             .where(Appointment.id == trigger.appointment_id)
             .with_for_update()
         ).one()
-        current_latest = session.exec(
-            select(AIVisitTranscript)
-            .where(
-                AIVisitTranscript.appointment_id == trigger.appointment_id,
-                cast(Any, AIVisitTranscript.deleted_at).is_(None),
+        if authorize_finalization is None and _capture_owns_appointment(
+            cast(Session, session), appointment.id
+        ):
+            # A capture may have been bound while this background model call
+            # was in flight. Recheck under the publication lock before writing.
+            return False
+        source_query = select(AIVisitTranscript).where(
+            AIVisitTranscript.appointment_id == trigger.appointment_id,
+            cast(Any, AIVisitTranscript.deleted_at).is_(None),
+        )
+        if authorize_finalization is not None:
+            # The capture callback checks the current Scribe source under its
+            # authority locks. A separate Recall/upload row cannot replace or
+            # permanently block that exact source's note publication.
+            source_query = source_query.where(
+                AIVisitTranscript.id == generated_through_transcript_id
             )
-            .order_by(
+        else:
+            source_query = source_query.order_by(
                 cast(Any, AIVisitTranscript.created_at).desc(),
                 cast(Any, AIVisitTranscript.id).desc(),
-            )
-            .limit(1)
-        ).one_or_none()
+            ).limit(1)
+        current_latest = session.exec(source_query).one_or_none()
         existing_note = session.exec(
             select(AIVisitNote).where(
                 AIVisitNote.appointment_id == trigger.appointment_id,
@@ -211,6 +259,7 @@ def _finalize_generated_note(
         if (
             existing_note is not None
             and existing_note.ai_transcript_id == generated_through_transcript_id
+            and existing_note.id != replace_note_ref
         ):
             log.info(
                 "visit note generation already committed",
@@ -267,15 +316,17 @@ def _finalize_generated_note(
             appointment_ref=provider_log_ref(str(trigger.appointment_id)),
             schema_ref=provider_log_ref(str(schema.id)),
         )
-        session.add(
-            AIVisitNote(
-                doctor_id=trigger.doctor_id,
-                appointment_id=trigger.appointment_id,
-                ai_transcript_id=generated_through_transcript_id,
-                doctor_note_schema_id=schema.id,
-                note=note,
-            )
+        saved_note = AIVisitNote(
+            doctor_id=trigger.doctor_id,
+            appointment_id=trigger.appointment_id,
+            ai_transcript_id=generated_through_transcript_id,
+            doctor_note_schema_id=schema.id,
+            note=note,
         )
+        session.add(saved_note)
+        session.flush()
+        if persist_provenance is not None:
+            persist_provenance(cast(Session, session), saved_note)
         appointment.appointment_name = appointment_name
         session.add(appointment)
         session.commit()
@@ -499,20 +550,30 @@ def build_structured_prompt(
     example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
     customization: NoteTypeCustomization | None = None,
+    *,
+    action_items: str | None = None,
+    doctor: Doctor | None = None,
+    source_indexes: bool = False,
 ) -> str:
     c = customization or NoteTypeCustomization()
 
     transcript_text = "\n".join(
-        [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
+        [
+            f"{u.speaker}: "
+            + (f"[source {index}] " if source_indexes else "")
+            + u.content
+            for index, u in enumerate(transcript.transcript_data, 1)
+        ]
     )
 
     # TODO:
     #  - give access to intake information
 
-    doctor = Doctor.one(transcript.doctor_id)
+    doctor = doctor if doctor is not None else Doctor.one(transcript.doctor_id)
     t = terminology_terms(doctor)
 
-    action_items = extract_action_items(transcript, t)
+    if action_items is None:
+        action_items = extract_action_items(transcript, t)
     maybe_doctor_bio = "You are a medical professional.\n"
     if doctor and doctor.biography:
         maybe_doctor_bio = dedent(f"""

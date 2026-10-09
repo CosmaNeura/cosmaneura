@@ -126,6 +126,9 @@ def validate_template(
 
 
 def main() -> int:
+    if sys.argv[1:] == ["--alembic-command"]:
+        print(ALEMBIC_ARGS[0])
+        return 0
     if sys.argv[1:] == ["--staging-alembic-command"]:
         print(STAGING_ALEMBIC_ARGS[0])
         return 0

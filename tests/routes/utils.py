@@ -11,13 +11,11 @@ import pytest
 from cachetools import LRUCache, cached
 from clerk_backend_api import CreateSessionRequestBody
 from clerk_backend_api import User as ClerkUser
-from clerk_backend_api.jwks_helpers import AuthStatus
-from clerk_backend_api.jwks_helpers.authenticaterequest import RequestState
 from decouple import config as decouple_config
 from fastapi import Request, status
 from httpx import Response
 
-from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
+from app.configuration.clerk import CLERK_PRIVATE_KEY, AuthStatus, RequestState, clerk
 from app.utils.email_domain import extract_email_domain
 
 from app.models.baa import (
@@ -42,6 +40,7 @@ from tests.constants import (
     CLERK_DEV_USER_EMAIL,
     CLERK_DEV_USER_PASSWORD,
 )
+from tests.factories import save_practice_member
 
 # TODO this is a bit dangerous, let's see how it performs
 clerk_cache_instance = LRUCache(maxsize=128)
@@ -106,10 +105,8 @@ def _get_or_create_clerk_user(email: str):
         return user_list[0]
     elif len(user_list) == 0:
         return clerk.users.create(
-            request={
-                "email_address": [email],
-                "password": CLERK_DEV_USER_PASSWORD,
-            }
+            email_address=[email],
+            password=CLERK_DEV_USER_PASSWORD,
         )
     else:
         raise ValueError("more than one user found")
@@ -182,13 +179,15 @@ def provision_practice_in_force(doctor: Doctor) -> Practice:
         accepted_at_utc=now,
         content_sha256=version.sha256,
     ).save()
-    PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role="owner",
-        attested_at=now,
-        attestation_name="Test Owner",
-    ).save()
+    save_practice_member(
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="owner",
+            attested_at=now,
+            attestation_name="Test Owner",
+        )
+    )
     return practice
 
 

@@ -394,7 +394,7 @@ def test_evidence_is_allowlisted_non_secret_and_always_uploaded() -> None:
     assert '"$HEALTHCHECK_HTTP_STATUS" != "200"' in smoke_gate
     upload = _step(deploy, "Upload non-secret staging release evidence")
     assert "if: always()" in upload
-    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in upload
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in upload
     assert "if-no-files-found: error" in upload
     assert "retention-days: 90" in upload
     attempt = _job(_source(), "attempt_evidence")
@@ -438,7 +438,7 @@ def test_evidence_is_allowlisted_non_secret_and_always_uploaded() -> None:
     assert "^[0-9a-f]{12}$" in terminal
     upload_attempt = _step(attempt, "Upload complete staging workflow-attempt evidence")
     assert "if: always()" in upload_attempt
-    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in attempt
+    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in attempt
 
 
 def test_identity_fingerprint_digest_contract_is_canonical_across_files() -> None:

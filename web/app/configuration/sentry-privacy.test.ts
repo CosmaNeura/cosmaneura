@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   REDACTED_AZURE_SAS_URL,
   REDACTED_INTAKE_CREDENTIAL,
+  REDACTED_INVITATION_FRAGMENT,
   REDACTED_LEGACY_EXAMPLE_NOTE_URL,
   REDACTED_ZOOM_JOIN_URL,
   containsAzureBlobSasUrl,
@@ -230,5 +231,48 @@ describe("Sentry Azure SAS privacy", () => {
     expect(event.extra.authorization_basis).toBe("organization_roster")
     expect(event.extra.method).toBe("POST")
     expect(event.extra.status).toBe(200)
+  })
+
+  it("redacts practice invitation tokens carried in a URL fragment", () => {
+    const token = "invitation-bearer-secret_A1b2"
+    const breadcrumb = scrubSentryBreadcrumb({
+      category: "navigation",
+      data: { from: `/invite#t=${token}`, to: "/invite" },
+    })
+    expect(breadcrumb).toEqual({
+      category: "navigation",
+      data: { from: `/invite#${REDACTED_INVITATION_FRAGMENT}`, to: "/invite" },
+    })
+
+    const event = scrubSensitiveSentryPayload({
+      request: { url: `https://app.cosmaneura.test/invite#t=${token}` },
+      transaction: `/invite/?utm=email#t=${token}`,
+      breadcrumbs: [
+        {
+          category: "navigation",
+          data: {
+            from: `https://app.cosmaneura.test/elsewhere#x=1&t=${token}`,
+            to: `/somewhere#t=${token}`,
+          },
+        },
+      ],
+      message: `Opened /invite#${token} from an email`,
+    })
+    const serialized = JSON.stringify(event)
+
+    expect(serialized).not.toContain(token)
+    expect(event.request.url).toBe(
+      `https://app.cosmaneura.test/invite#${REDACTED_INVITATION_FRAGMENT}`,
+    )
+    expect(event.transaction).toBe(
+      `/invite/?utm=email#${REDACTED_INVITATION_FRAGMENT}`,
+    )
+    expect(event.breadcrumbs[0].data).toEqual({
+      from: `https://app.cosmaneura.test/elsewhere#x=1&t=${REDACTED_INVITATION_FRAGMENT}`,
+      to: `/somewhere#t=${REDACTED_INVITATION_FRAGMENT}`,
+    })
+    expect(scrubSensitiveSentryPayload({ url: "/settings#billing" }).url).toBe(
+      "/settings#billing",
+    )
   })
 })
