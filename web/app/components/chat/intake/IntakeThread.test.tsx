@@ -15,10 +15,11 @@ function respond(body: unknown) {
   )
 }
 
-function renderChat(setIsFinished = vi.fn()) {
+function renderChat(setIsFinished = vi.fn(), retrySafe = true) {
   render(
     <IntakeRuntimeProvider
       api={API}
+      retrySafe={retrySafe}
       setIsFinished={setIsFinished}
       initialMessages={[
         { role: "assistant", content: "Synthetic first question" },
@@ -81,6 +82,7 @@ describe("intake chat", () => {
         respond({
           question: "Synthetic first question",
           status: "in_progress",
+          retry_safe: true,
         }),
       )
       .mockImplementationOnce(() =>
@@ -112,8 +114,32 @@ describe("intake chat", () => {
     for (const [, init] of posts) {
       expect(JSON.parse((init as RequestInit).body as string)).toEqual({
         answer: "Synthetic answer",
+        expected_question: "Synthetic first question",
       })
     }
+  })
+
+  it("never resends an ambiguous answer to a receiver without an atomic guard", async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementationOnce(() =>
+        respond({
+          question: "Synthetic first question",
+          status: "in_progress",
+        }),
+      )
+    vi.stubGlobal("fetch", fetch)
+    renderChat(vi.fn(), false)
+    answer("Synthetic answer")
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    expect(
+      fetch.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toHaveLength(1)
+    expect(screen.getByRole("textbox", { name: "Your answer" })).toBeDisabled()
   })
 
   it("does not resend an answer the server already recorded", async () => {
@@ -150,7 +176,7 @@ describe("intake chat", () => {
     answer("Synthetic answer")
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "This link isn't working anymore.",
+      "We couldn't confirm your answer.",
     )
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
   })

@@ -203,6 +203,7 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
             content: loaderData.question,
           },
         ]}
+        retrySafe={loaderData.retry_safe === true}
       >
         <IntakeThread />
       </IntakeRuntimeProvider>

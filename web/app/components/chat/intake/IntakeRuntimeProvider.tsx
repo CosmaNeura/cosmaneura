@@ -22,8 +22,9 @@ const convertMessage = (message: IntakeMessage): ThreadMessageLike => {
 
 // TODO need to manually sync with the backend, should really use a
 interface IntakeResponse {
-  question: string
+  question: string | null
   status: string
+  retry_safe?: boolean
 }
 
 export class IntakeRequestError extends Error {
@@ -53,6 +54,7 @@ async function getCurrentQuestion(
 export const getNextQuestion = async (
   apiEndpoint: string,
   messageInput: string,
+  expectedQuestion?: string,
 ): Promise<IntakeResponse> => {
   const response = await fetch(apiEndpoint, {
     method: "POST",
@@ -64,6 +66,7 @@ export const getNextQuestion = async (
     },
     body: JSON.stringify({
       answer: messageInput,
+      expected_question: expectedQuestion,
     }),
   })
 
@@ -94,11 +97,13 @@ export function IntakeRuntimeProvider({
   initialMessages,
   children,
   setIsFinished,
+  retrySafe = false,
 }: Readonly<{
   api: string
   initialMessages: IntakeMessage[]
   children: ReactNode
   setIsFinished: (isFinished: boolean) => void
+  retrySafe?: boolean
 }>) {
   const [isRunning, setIsRunning] = useState(false)
   const [messages, setMessages] = useState<IntakeMessage[]>(initialMessages)
@@ -113,9 +118,11 @@ export function IntakeRuntimeProvider({
       setIsFinished(true)
       return
     }
+    const question = response.question
+    if (!question) return
     setMessages((currentConversation) => [
       ...currentConversation,
-      { role: "assistant", content: response.question },
+      { role: "assistant", content: question },
     ])
   }
 
@@ -124,7 +131,7 @@ export function IntakeRuntimeProvider({
     setFailedAnswer(null)
     setIsRunning(true)
     try {
-      accept(await getNextQuestion(api, answer))
+      accept(await getNextQuestion(api, answer, askedQuestion))
     } catch (error) {
       setFailedAnswer(answer)
       setFatal(!isRetryable(error))
@@ -133,11 +140,8 @@ export function IntakeRuntimeProvider({
     }
   }
 
-  // The server records an answer against its next unanswered question, so a
-  // request that committed but lost its response must not be resent: that
-  // would file the same answer under the following question. Ask the server
-  // where the intake stands first, and resend only if it is still waiting on
-  // the question this answer was written for.
+  // A bound retry is safe only when the receiver advertises its atomic guard.
+  // Older receivers can be read to recover progress, but never resent to.
   async function retry(answer: string) {
     setFailedAnswer(null)
     setIsRunning(true)
@@ -152,7 +156,12 @@ export function IntakeRuntimeProvider({
         // The earlier request was recorded; show where the intake moved on.
         accept(current)
       } else {
-        accept(await getNextQuestion(api, answer))
+        if (retrySafe && current.retry_safe && lastAsked.current) {
+          accept(await getNextQuestion(api, answer, lastAsked.current))
+        } else {
+          setFailedAnswer(answer)
+          setFatal(true)
+        }
       }
     } catch (error) {
       setFailedAnswer(answer)

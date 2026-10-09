@@ -66,7 +66,7 @@ export const IntakeSendError: FC = () => {
     >
       {failure === "fatal" ? (
         <p>
-          This link isn&apos;t working anymore. Please contact your
+          We couldn&apos;t confirm your answer. Please contact your
           provider&apos;s office.
         </p>
       ) : (
