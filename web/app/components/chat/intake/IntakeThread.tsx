@@ -41,6 +41,7 @@ export const IntakeTypingIndicator: FC = () => {
       aria-label="Preparing the next question"
       className="flex w-full max-w-[var(--thread-max-width)] py-4"
     >
+      <span className="sr-only">Preparing the next question</span>
       <div className="bg-chat-assistant flex items-center gap-1.5 rounded-3xl px-5 py-4">
         {[0, 150, 300].map((delay) => (
           <span
@@ -56,17 +57,26 @@ export const IntakeTypingIndicator: FC = () => {
 }
 
 export const IntakeSendError: FC = () => {
-  const { failed, retry } = useIntakeSend()
-  if (!failed) return null
+  const { failure, retry } = useIntakeSend()
+  if (!failure) return null
   return (
     <div
       role="alert"
       className="border-destructive/30 bg-destructive/5 flex w-full max-w-[var(--thread-max-width)] flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-3 text-sm"
     >
-      <p>That didn&apos;t send. Your answer is still here.</p>
-      <Button type="button" size="sm" variant="outline" onClick={retry}>
-        Try again
-      </Button>
+      {failure === "fatal" ? (
+        <p>
+          This link isn&apos;t working anymore. Please contact your
+          provider&apos;s office.
+        </p>
+      ) : (
+        <>
+          <p>We couldn&apos;t confirm that sent. Your answer is still here.</p>
+          <Button type="button" size="sm" variant="outline" onClick={retry}>
+            Try again
+          </Button>
+        </>
+      )}
     </div>
   )
 }
@@ -78,7 +88,7 @@ const IntakeComposerAction: FC = () => {
     <>
       <ThreadPrimitive.If running={false}>
         <ComposerPrimitive.Send asChild>
-          <Button type="submit" size="sm" className="my-2.5">
+          <Button size="sm" className="my-2.5">
             Send
             <SendHorizontalIcon className="ml-1.5 size-4" aria-hidden="true" />
           </Button>

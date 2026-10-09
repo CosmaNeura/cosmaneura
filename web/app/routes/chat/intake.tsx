@@ -1,10 +1,16 @@
 import { useEffect, useState } from "react"
-import { type MetaFunction, useParams, useRevalidator } from "react-router"
+import {
+  type MetaFunction,
+  isRouteErrorResponse,
+  useParams,
+  useRevalidator,
+} from "react-router"
 
 import { Loader2 } from "lucide-react"
 
 import type { Route } from "./+types/intake"
 
+import { Button } from "@/components/ui/button"
 import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
 import { IntakeThread } from "~/components/chat/intake/IntakeThread"
 import { AnimatedCheckmark } from "~/components/shared/AnimatedCheckmark"
@@ -123,15 +129,38 @@ export function IntakeProcessing() {
 
 // Patients reach this page from a link, so failures explain what to do next
 // without technical detail or any route into the clinician app.
-export function ErrorBoundary() {
+export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  const deadLink = isRouteErrorResponse(error) && error.status === 404
   return (
     <IntakeLayout>
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
-        <h1 className="text-2xl font-semibold">This link isn&apos;t working</h1>
-        <p className="text-muted-foreground">
-          It may have expired. Please contact your provider&apos;s office for a
-          new link.
-        </p>
+        {deadLink ? (
+          <>
+            <h1 className="text-2xl font-semibold">
+              This link isn&apos;t working
+            </h1>
+            <p className="text-muted-foreground">
+              It may have expired. Please contact your provider&apos;s office
+              for a new link.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="text-2xl font-semibold">
+              We couldn&apos;t load your questions
+            </h1>
+            <p className="text-muted-foreground">
+              This is usually a brief connection problem. Please try again.
+            </p>
+            <Button
+              type="button"
+              className="mt-2"
+              onClick={() => window.location.reload()}
+            >
+              Try again
+            </Button>
+          </>
+        )}
       </div>
     </IntakeLayout>
   )

@@ -1,4 +1,9 @@
-import { RouterProvider, createMemoryRouter, useLoaderData } from "react-router"
+import {
+  RouterProvider,
+  createMemoryRouter,
+  useLoaderData,
+  useRouteError,
+} from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import IntakeChat, {
@@ -30,7 +35,13 @@ function renderRoute(loader: () => unknown) {
             />
           )
         },
-        ErrorBoundary,
+        ErrorBoundary: () => (
+          <ErrorBoundary
+            {...({ error: useRouteError() } as Parameters<
+              typeof ErrorBoundary
+            >[0])}
+          />
+        ),
       },
     ],
     { initialEntries: ["/chat/intake/intake_test"] },
@@ -75,6 +86,20 @@ describe("intake chat route", () => {
     expect(screen.getByText(/contact your provider's office/)).toBeVisible()
     expect(screen.queryByRole("link")).toBeNull()
     expect(screen.queryByText(/404|Not found/)).toBeNull()
+  })
+
+  it("offers a retry for a temporary failure instead of blaming the link", async () => {
+    renderRoute(() => {
+      throw new TypeError("Failed to fetch")
+    })
+
+    expect(
+      await screen.findByRole("heading", {
+        name: "We couldn't load your questions",
+      }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible()
+    expect(screen.queryByRole("link")).toBeNull()
   })
 })
 

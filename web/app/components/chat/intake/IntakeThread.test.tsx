@@ -73,10 +73,16 @@ describe("intake chat", () => {
     ).toBeNull()
   })
 
-  it("keeps the answer and resends it once when sending fails", async () => {
+  it("resends once after checking the server is still on the same question", async () => {
     const fetch = vi
       .fn()
       .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementationOnce(() =>
+        respond({
+          question: "Synthetic first question",
+          status: "in_progress",
+        }),
+      )
       .mockImplementationOnce(() =>
         respond({
           question: "Synthetic second question",
@@ -89,7 +95,7 @@ describe("intake chat", () => {
     answer("Synthetic answer")
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "That didn't send. Your answer is still here.",
+      "We couldn't confirm that sent. Your answer is still here.",
     )
     expect(screen.getAllByText("Synthetic answer")).toHaveLength(1)
     expect(screen.getByRole("textbox", { name: "Your answer" })).toBeDisabled()
@@ -99,12 +105,54 @@ describe("intake chat", () => {
     expect(await screen.findByText("Synthetic second question")).toBeVisible()
     expect(screen.queryByRole("alert")).toBeNull()
     expect(screen.getAllByText("Synthetic answer")).toHaveLength(1)
-    expect(fetch).toHaveBeenCalledTimes(2)
-    for (const [, init] of fetch.mock.calls) {
+    const posts = fetch.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+    )
+    expect(posts).toHaveLength(2)
+    for (const [, init] of posts) {
       expect(JSON.parse((init as RequestInit).body as string)).toEqual({
         answer: "Synthetic answer",
       })
     }
+  })
+
+  it("does not resend an answer the server already recorded", async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementationOnce(() =>
+        respond({
+          question: "Synthetic second question",
+          status: "in_progress",
+        }),
+      )
+    vi.stubGlobal("fetch", fetch)
+    renderChat()
+
+    answer("Synthetic answer")
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }))
+
+    expect(await screen.findByText("Synthetic second question")).toBeVisible()
+    expect(
+      fetch.mock.calls.filter(
+        ([, init]) => (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toHaveLength(1)
+  })
+
+  it("does not offer a retry when the link no longer works", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(new Response(null, { status: 404 }))),
+    )
+    renderChat()
+
+    answer("Synthetic answer")
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This link isn't working anymore.",
+    )
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull()
   })
 
   it("finishes when the server says the intake is complete", async () => {

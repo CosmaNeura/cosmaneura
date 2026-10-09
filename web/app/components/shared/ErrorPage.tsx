@@ -3,11 +3,17 @@ import { isPublicIntakeLocation } from "~/configuration/posthog"
 import { requireEnv } from "~/utils/environment"
 
 // Patients on the intake link must never be pointed into the clinician app.
+// Without the domain setting (the error being shown may be that very
+// misconfiguration), assume the patient domain and offer no clinician link.
 export function isOnPatientIntake() {
-  return isPublicIntakeLocation(
-    window.location,
-    requireEnv("VITE_INTAKE_CHAT_DOMAIN"),
-  )
+  try {
+    return isPublicIntakeLocation(
+      window.location,
+      requireEnv("VITE_INTAKE_CHAT_DOMAIN"),
+    )
+  } catch {
+    return true
+  }
 }
 
 export function ErrorPage({

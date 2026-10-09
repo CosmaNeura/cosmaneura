@@ -1,5 +1,5 @@
 // https://www.assistant-ui.com/docs/runtimes/custom/external-store
-import { ReactNode, createContext, useContext, useState } from "react"
+import { ReactNode, createContext, useContext, useRef, useState } from "react"
 
 import {
   AppendMessage,
@@ -26,6 +26,30 @@ interface IntakeResponse {
   status: string
 }
 
+export class IntakeRequestError extends Error {
+  constructor(readonly status: number) {
+    super(`intake request failed with status ${status}`)
+  }
+}
+
+// A revoked or unknown link, or a request refused outright, will not succeed
+// on retry; everything else (network loss, 5xx) might.
+function isRetryable(error: unknown) {
+  return !(
+    error instanceof IntakeRequestError &&
+    error.status >= 400 &&
+    error.status < 500
+  )
+}
+
+async function getCurrentQuestion(
+  apiEndpoint: string,
+): Promise<IntakeResponse> {
+  const response = await fetch(apiEndpoint, { credentials: "include" })
+  if (!response.ok) throw new IntakeRequestError(response.status)
+  return response.json()
+}
+
 export const getNextQuestion = async (
   apiEndpoint: string,
   messageInput: string,
@@ -44,7 +68,7 @@ export const getNextQuestion = async (
   })
 
   if (!response.ok) {
-    throw new Error("Failed to fetch response from backend")
+    throw new IntakeRequestError(response.status)
   }
 
   const intakeResponse = response.json()
@@ -52,12 +76,12 @@ export const getNextQuestion = async (
 }
 
 type IntakeSendState = {
-  failed: boolean
+  failure: "retryable" | "fatal" | null
   retry: () => void
 }
 
 const IntakeSendContext = createContext<IntakeSendState>({
-  failed: false,
+  failure: null,
   retry: () => {},
 })
 
@@ -81,24 +105,58 @@ export function IntakeRuntimeProvider({
   // The unsent answer stays in the thread as the patient's message; a retry
   // resends it rather than appending it again.
   const [failedAnswer, setFailedAnswer] = useState<string | null>(null)
+  const [fatal, setFatal] = useState(false)
+  const lastAsked = useRef<string | undefined>(undefined)
 
-  async function send(answer: string) {
+  function accept(response: IntakeResponse) {
+    if (response.status === "completed") {
+      setIsFinished(true)
+      return
+    }
+    setMessages((currentConversation) => [
+      ...currentConversation,
+      { role: "assistant", content: response.question },
+    ])
+  }
+
+  async function send(answer: string, askedQuestion: string | undefined) {
+    lastAsked.current = askedQuestion
     setFailedAnswer(null)
     setIsRunning(true)
     try {
-      const questionResponse = await getNextQuestion(api, answer)
-
-      if (questionResponse.status === "completed") {
-        setIsFinished(true)
-        return
-      }
-
-      setMessages((currentConversation) => [
-        ...currentConversation,
-        { role: "assistant", content: questionResponse.question },
-      ])
-    } catch {
+      accept(await getNextQuestion(api, answer))
+    } catch (error) {
       setFailedAnswer(answer)
+      setFatal(!isRetryable(error))
+    } finally {
+      setIsRunning(false)
+    }
+  }
+
+  // The server records an answer against its next unanswered question, so a
+  // request that committed but lost its response must not be resent: that
+  // would file the same answer under the following question. Ask the server
+  // where the intake stands first, and resend only if it is still waiting on
+  // the question this answer was written for.
+  async function retry(answer: string) {
+    setFailedAnswer(null)
+    setIsRunning(true)
+    try {
+      const current = await getCurrentQuestion(api)
+      if (current.status === "completed") {
+        accept(current)
+      } else if (!current.question) {
+        // No question to compare against yet; leave the answer unsent.
+        setFailedAnswer(answer)
+      } else if (current.question !== lastAsked.current) {
+        // The earlier request was recorded; show where the intake moved on.
+        accept(current)
+      } else {
+        accept(await getNextQuestion(api, answer))
+      }
+    } catch (error) {
+      setFailedAnswer(answer)
+      setFatal(!isRetryable(error))
     } finally {
       setIsRunning(false)
     }
@@ -110,13 +168,16 @@ export function IntakeRuntimeProvider({
     }
 
     const latestMessageInput = message.content[0].text
+    const askedQuestion = [...messages]
+      .reverse()
+      .find((entry) => entry.role === "assistant")?.content
 
     setMessages((currentConversation) => [
       ...currentConversation,
       { role: "user", content: latestMessageInput },
     ])
 
-    await send(latestMessageInput)
+    await send(latestMessageInput, askedQuestion)
   }
 
   const runtime = useExternalStoreRuntime({
@@ -130,9 +191,10 @@ export function IntakeRuntimeProvider({
   })
 
   const sendState: IntakeSendState = {
-    failed: failedAnswer !== null,
+    failure: failedAnswer === null ? null : fatal ? "fatal" : "retryable",
     retry: () => {
-      if (failedAnswer !== null && !isRunning) void send(failedAnswer)
+      if (failedAnswer !== null && !fatal && !isRunning)
+        void retry(failedAnswer)
     },
   }
 
