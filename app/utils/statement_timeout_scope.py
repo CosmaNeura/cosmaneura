@@ -104,7 +104,10 @@ def _setting_transaction(connection, cursor, context, scope):
     # refresh for them and invalidate the prior setting. No SQL is parsed.
     if (
         not isinstance(statement, Select)
-        or not statement.get_final_froms()
+        # This conservative column-derived subset avoids constructing an ORM
+        # compile state on every budget callback. An explicit FROM without
+        # relational selected columns takes the original setter instead.
+        or not statement.columns_clause_froms
         or any(
             isinstance(node, (TextClause, FunctionElement, UpdateBase))
             or isinstance(node, ColumnClause)
