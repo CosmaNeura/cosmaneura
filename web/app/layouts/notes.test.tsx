@@ -12,6 +12,10 @@ import { render, screen } from "@testing-library/react"
 
 const noteList = vi.fn()
 
+vi.mock("~/utils/terminology", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/utils/terminology")>()
+  return { ...actual, useTerminology: () => actual.getTerminology(null) }
+})
 vi.mock("~/configuration/client", () => ({
   noteList: (...args: unknown[]) => noteList(...args),
 }))

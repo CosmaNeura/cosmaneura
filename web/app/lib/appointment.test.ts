@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { Appointment } from "~/configuration/client"
 
 import { appointmentsToSidebarEntries } from "./appointment"
+import { relativeDayLabel } from "./date"
 
 const appointments = [
   {
@@ -53,5 +54,42 @@ describe("note status in the appointment sidebar", () => {
       { id: "unnamed_note", status: "none" },
       { id: "named_capture", status: "not-started" },
     ])
+  })
+})
+
+describe("note sidebar labels", () => {
+  it("shows relative dates and a status label for each visit", () => {
+    const now = new Date("2026-09-24T18:00:00Z")
+    const entries = appointmentsToSidebarEntries(
+      appointments,
+      linkTarget,
+      { named_capture: "not-started", unnamed_note: "completed" },
+      now,
+    )
+
+    expect(entries.map(({ statusLabel }) => statusLabel)).toEqual([
+      "No note yet",
+      "Note ready",
+    ])
+    expect(entries[0].isoDate).toBe("2026-09-24T12:00:00.000Z")
+    expect(entries[1].preview).toBe("")
+    expect(entries[0].date).toBe(
+      relativeDayLabel(new Date("2026-09-24T12:00:00Z"), now),
+    )
+  })
+})
+
+describe("defensive note status lookup", () => {
+  it("treats a present but empty status as unknown", () => {
+    const [entry] = appointmentsToSidebarEntries(
+      appointments.slice(0, 1),
+      linkTarget,
+      { named_capture: undefined } as unknown as Record<
+        string,
+        "not-started" | "completed"
+      >,
+    )
+    expect(entry.status).toBe("none")
+    expect(entry.statusLabel).toBeUndefined()
   })
 })

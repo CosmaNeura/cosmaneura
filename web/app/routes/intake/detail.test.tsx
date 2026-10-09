@@ -1,9 +1,20 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { EmptyState, IntakeSummary } from "./detail"
+import IntakeDetailPage, { EmptyState, IntakeSummary } from "./detail"
 import { fireEvent, render, screen } from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({ intakeDetail: vi.fn() }))
+vi.mock("~/components/shared/PageHeader", () => ({ PageHeader: () => null }))
+vi.mock("~/components/shared/InnerScrollableContent", () => ({
+  InnerScrollableContent: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+}))
+vi.mock("@/components/ui/sidebar", () => ({
+  SidebarInset: ({ children }: { children: React.ReactNode }) => (
+    <div>{children}</div>
+  ),
+}))
 vi.mock("~/utils/terminology", () => ({
   useTerminology: () => ({ patient: "client" }),
 }))
@@ -33,6 +44,40 @@ describe("intake waiting state", () => {
     expect(
       screen.queryByRole("button", { name: "Copy intake link" }),
     ).toBeNull()
+  })
+})
+
+describe("intake detail status", () => {
+  function showIntake(
+    intake_status: "pending" | "processing" | "complete" | "none",
+    summary: string | null,
+  ) {
+    const loaderData = {
+      appointment: {
+        id: "appointment_test",
+        appointment_date: "2026-10-08T15:00:00Z",
+        intake_status,
+      },
+      patient: { id: "patient_test", name: "Synthetic Person" },
+      intake: { summary, public_url: null },
+    }
+    render(
+      <IntakeDetailPage
+        {...({ loaderData } as unknown as Parameters<
+          typeof IntakeDetailPage
+        >[0])}
+      />,
+    )
+  }
+
+  it.each([
+    ["pending", null, "Awaiting client"],
+    ["processing", null, "Processing"],
+    ["complete", "## Summary", "Completed"],
+    ["pending", "## Summary", "Completed"],
+  ] as const)("shows %s with summary %s as %s", (status, summary, label) => {
+    showIntake(status, summary)
+    expect(screen.getByText(label)).toBeInTheDocument()
   })
 })
 
