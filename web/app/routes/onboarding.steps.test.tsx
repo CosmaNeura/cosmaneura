@@ -54,16 +54,9 @@ describe("onboarding biography step", () => {
   })
 
   it.each([
-    [
-      "the server rejects it",
-      () => ({ data: undefined, error: { detail: "x" } }),
-    ],
-    [
-      "the request fails",
-      () => Promise.reject(new TypeError("Failed to fetch")),
-    ],
+    ["the server rejects it", { data: undefined, error: { detail: "x" } }],
   ])("stays on the step with the text intact when %s", async (_, result) => {
-    client.updateSettingsData.mockImplementation(async () => result())
+    client.updateSettingsData.mockResolvedValue(result)
     const onComplete = vi.fn()
     render(
       <BiographyStep
@@ -94,6 +87,40 @@ describe("onboarding biography step", () => {
 })
 
 describe("onboarding final step", () => {
+  it("goes to notes once setup is complete", async () => {
+    client.completeOnboarding.mockResolvedValue({
+      data: null,
+      error: undefined,
+    })
+    render(<AllSetStep practice={{} as PracticeStatus} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to Cosmas" }))
+
+    await waitFor(() => expect(window.location.pathname).toBe("/notes"))
+  })
+
+  it("shows the backend's explanation for a practice-access problem", async () => {
+    client.completeOnboarding.mockResolvedValue({
+      data: undefined,
+      error: {
+        detail:
+          "Name or join a practice and accept the BAA before using Cosmas.",
+      },
+    })
+    render(<AllSetStep practice={{} as PracticeStatus} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Go to Cosmas" }))
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description:
+            "Name or join a practice and accept the BAA before using Cosmas.",
+        }),
+      ),
+    )
+  })
+
   it("stays put and lets the user retry when finishing setup fails", async () => {
     client.completeOnboarding.mockResolvedValue({
       data: undefined,

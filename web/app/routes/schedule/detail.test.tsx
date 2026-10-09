@@ -120,7 +120,7 @@ describe("meeting cancellation", () => {
     renderMeeting(meeting, [appointment], [patient], false)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel Meeting" }),
+      await screen.findByRole("button", { name: "Cancel meeting" }),
     )
 
     const dialog = await screen.findByRole("alertdialog")
@@ -132,6 +132,7 @@ describe("meeting cancellation", () => {
 
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
     expect(cancelMeeting).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Cancel meeting" })).toHaveFocus()
   })
 
   it("cancels after confirmation", async () => {
@@ -139,10 +140,10 @@ describe("meeting cancellation", () => {
     renderMeeting(meeting, [appointment], [patient], false)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel Meeting" }),
+      await screen.findByRole("button", { name: "Cancel meeting" }),
     )
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel meeting" }),
+      await screen.findByRole("button", { name: "Yes, cancel meeting" }),
     )
 
     await waitFor(() =>
@@ -161,10 +162,10 @@ describe("meeting cancellation", () => {
     renderMeeting(meeting, [appointment], [patient], false)
 
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel Meeting" }),
+      await screen.findByRole("button", { name: "Cancel meeting" }),
     )
     fireEvent.click(
-      await screen.findByRole("button", { name: "Cancel meeting" }),
+      await screen.findByRole("button", { name: "Yes, cancel meeting" }),
     )
 
     await waitFor(() =>
@@ -173,7 +174,9 @@ describe("meeting cancellation", () => {
       ),
     )
     expect(screen.getByRole("alertdialog")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Cancel meeting" })).toBeEnabled()
+    expect(
+      screen.getByRole("button", { name: "Yes, cancel meeting" }),
+    ).toBeEnabled()
   })
 })
 

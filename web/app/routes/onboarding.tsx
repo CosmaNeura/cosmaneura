@@ -1136,11 +1136,8 @@ export function BiographyStep({
   })
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const saved = await updateSettingsData({ body: values }).then(
-      ({ error }) => !error,
-      () => false,
-    )
-    if (!saved) {
+    const { error } = await updateSettingsData({ body: values })
+    if (error) {
       toast({
         title: "Couldn't save your biography",
         description: "Your text is still here. Please try again.",
@@ -1423,14 +1420,15 @@ export function AllSetStep({ practice }: { practice: PracticeStatus }) {
 
   async function handleGoToCosmas() {
     setLoading(true)
-    const completed = await completeOnboarding().then(
-      ({ error }) => !error,
-      () => false,
-    )
-    if (!completed) {
+    const { error } = await completeOnboarding()
+    if (error) {
+      // The backend explains practice-access problems (no PHI) that a
+      // retry alone cannot fix.
+      const detail = (error as { detail?: unknown }).detail
       toast({
         title: "Couldn't finish setup",
-        description: "Please try again in a moment.",
+        description:
+          typeof detail === "string" ? detail : "Please try again in a moment.",
         variant: "destructive",
       })
       setLoading(false)

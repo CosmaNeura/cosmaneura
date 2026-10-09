@@ -606,14 +606,12 @@ export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
             <div className="bg-success h-2 w-2 rounded-full" />
             <span>Connected</span>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setConfirmingDisconnect(true)}
-          >
-            Disconnect
-          </Button>
           <ConfirmDialog
+            trigger={
+              <Button variant="outline" size="sm">
+                Disconnect
+              </Button>
+            }
             open={confirmingDisconnect}
             onOpenChange={setConfirmingDisconnect}
             title="Disconnect Zoom?"

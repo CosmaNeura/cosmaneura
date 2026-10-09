@@ -1,4 +1,4 @@
-import { useRef } from "react"
+import { useEffect, useRef } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -8,13 +8,16 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Icons } from "~/components/icons"
 
 // The repo has no AlertDialog primitive, so this composes Dialog with
 // alertdialog semantics: the safe choice takes initial focus and Escape,
 // and the dialog cannot be dismissed while the confirmed action is running.
+// The trigger renders through DialogTrigger so Radix returns focus to it.
 export function ConfirmDialog({
+  trigger,
   open,
   onOpenChange,
   title,
@@ -25,6 +28,7 @@ export function ConfirmDialog({
   pending,
   onConfirm,
 }: {
+  trigger: React.ReactElement
   open: boolean
   onOpenChange: (open: boolean) => void
   title: string
@@ -36,6 +40,14 @@ export function ConfirmDialog({
   onConfirm: () => void
 }) {
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const wasPending = useRef(pending)
+
+  // Disabling the focused button while pending drops focus to <body>; after a
+  // failed action, give keyboard users a place to continue from.
+  useEffect(() => {
+    if (wasPending.current && !pending && open) cancelRef.current?.focus()
+    wasPending.current = pending
+  }, [pending, open])
 
   function handleOpenChange(nextOpen: boolean) {
     if (pending) return
@@ -44,6 +56,7 @@ export function ConfirmDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent
         role="alertdialog"
         className="w-[calc(100%-2rem)] rounded-lg sm:max-w-md"

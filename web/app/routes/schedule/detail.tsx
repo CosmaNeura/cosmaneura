@@ -307,22 +307,18 @@ export function MeetingDetail({
         )}
 
         {isScheduled && (
-          <>
-            <Button variant="outline" onClick={() => setConfirmingCancel(true)}>
-              Cancel Meeting
-            </Button>
-            <ConfirmDialog
-              open={confirmingCancel}
-              onOpenChange={setConfirmingCancel}
-              title={`Cancel your ${formatDateTime(meeting.start_time)} meeting?`}
-              description={`The meeting link will stop working for your ${t.patient}. This can't be undone.`}
-              cancelLabel="Keep meeting"
-              confirmLabel="Cancel meeting"
-              pendingLabel="Cancelling..."
-              pending={cancelling}
-              onConfirm={handleCancel}
-            />
-          </>
+          <ConfirmDialog
+            trigger={<Button variant="outline">Cancel meeting</Button>}
+            open={confirmingCancel}
+            onOpenChange={setConfirmingCancel}
+            title={`Cancel your ${formatDateTime(meeting.start_time)} meeting?`}
+            description={`The meeting link will stop working for your ${t.patient}. This can't be undone.`}
+            cancelLabel="Keep meeting"
+            confirmLabel="Yes, cancel meeting"
+            pendingLabel="Cancelling..."
+            pending={cancelling}
+            onConfirm={handleCancel}
+          />
         )}
       </div>
 

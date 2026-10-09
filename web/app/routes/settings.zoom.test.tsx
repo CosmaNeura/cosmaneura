@@ -2,7 +2,13 @@ import { RouterProvider, createMemoryRouter } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ZoomConnect } from "./settings"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 
 const client = vi.hoisted(() => ({
   settingsData: vi.fn(),
@@ -60,16 +66,34 @@ describe("Zoom disconnect", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }))
     const dialog = await screen.findByRole("alertdialog")
-    fireEvent.click(
-      Array.from(dialog.querySelectorAll("button")).find(
-        (button) => button.textContent === "Disconnect",
-      )!,
-    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }))
 
     await waitFor(() => expect(client.zoomDisconnect).toHaveBeenCalledOnce())
     await waitFor(() =>
       expect(toast).toHaveBeenCalledWith({ title: "Zoom disconnected" }),
     )
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  })
+
+  it("stays open and explains when disconnecting fails", async () => {
+    client.zoomDisconnect.mockResolvedValue({
+      data: undefined,
+      error: { detail: "x" },
+    })
+    renderZoom()
+
+    fireEvent.click(await screen.findByRole("button", { name: "Disconnect" }))
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }))
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't disconnect Zoom" }),
+      ),
+    )
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole("button", { name: "Disconnect" }),
+    ).toBeEnabled()
   })
 })
