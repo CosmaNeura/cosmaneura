@@ -18,6 +18,7 @@ import { TerminologySettings } from "~/components/TerminologySettings"
 import { useViewAsActive } from "~/components/ViewAsRouteGuard"
 import { Icons } from "~/components/icons"
 import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
+import { ConfirmDialog } from "~/components/shared/ConfirmDialog"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
@@ -532,11 +533,12 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   )
 }
 
-function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
+export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   const t = useTerminology()
   const revalidator = useRevalidator()
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  const [confirmingDisconnect, setConfirmingDisconnect] = useState(false)
   const { user } = useUser()
   const zoomEnabled = isZoomEnabled(user?.primaryEmailAddress?.emailAddress)
 
@@ -559,7 +561,8 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     const { error } = await zoomDisconnect()
     if (error) {
       toast({
-        title: "Failed to disconnect. Please try again.",
+        title: "Couldn't disconnect Zoom",
+        description: "Zoom is still connected. Please try again.",
         variant: "destructive",
       })
       setDisconnecting(false)
@@ -567,6 +570,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     }
     toast({ title: "Zoom disconnected" })
     setDisconnecting(false)
+    setConfirmingDisconnect(false)
     revalidator.revalidate()
   }
 
@@ -605,18 +609,21 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
           <Button
             variant="outline"
             size="sm"
-            onClick={onDisconnect}
-            disabled={disconnecting}
+            onClick={() => setConfirmingDisconnect(true)}
           >
-            {disconnecting ? (
-              <>
-                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                Disconnecting...
-              </>
-            ) : (
-              "Disconnect"
-            )}
+            Disconnect
           </Button>
+          <ConfirmDialog
+            open={confirmingDisconnect}
+            onOpenChange={setConfirmingDisconnect}
+            title="Disconnect Zoom?"
+            description="Cosmas will stop joining your scheduled Zoom meetings and won't prepare notes from them. You can reconnect at any time, and recording with the Scribe app keeps working."
+            cancelLabel="Stay connected"
+            confirmLabel="Disconnect"
+            pendingLabel="Disconnecting..."
+            pending={disconnecting}
+            onConfirm={onDisconnect}
+          />
         </div>
       ) : (
         <>

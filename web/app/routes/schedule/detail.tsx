@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { SidebarInset } from "@/components/ui/sidebar"
+import { ConfirmDialog } from "~/components/shared/ConfirmDialog"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PageHeader } from "~/components/shared/PageHeader"
 import { authorizeZoomCapture, cancelMeeting } from "~/configuration/client"
@@ -237,9 +238,12 @@ export function MeetingDetail({
   meeting: ZoomMeetingResponse
   patients: Patient[]
 }) {
-  const [cancelling, setCancelling] = useState(false)
+  const t = useTerminology()
   const { revalidate } = useRevalidator()
   const navigate = useNavigate()
+
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
 
   const isScheduled = meeting.status === "scheduled"
   const isActive =
@@ -253,11 +257,17 @@ export function MeetingDetail({
     })
 
     if (error) {
-      toast({ title: "Failed to cancel meeting", variant: "destructive" })
+      toast({
+        title: "Couldn't cancel the meeting",
+        description: "The meeting is still scheduled. Please try again.",
+        variant: "destructive",
+      })
       setCancelling(false)
       return
     }
 
+    setCancelling(false)
+    setConfirmingCancel(false)
     toast({ title: "Meeting cancelled" })
     revalidate()
     navigate(href("/schedule"))
@@ -297,13 +307,22 @@ export function MeetingDetail({
         )}
 
         {isScheduled && (
-          <Button
-            variant="outline"
-            onClick={handleCancel}
-            disabled={cancelling}
-          >
-            {cancelling ? "Cancelling..." : "Cancel Meeting"}
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => setConfirmingCancel(true)}>
+              Cancel Meeting
+            </Button>
+            <ConfirmDialog
+              open={confirmingCancel}
+              onOpenChange={setConfirmingCancel}
+              title={`Cancel your ${formatDateTime(meeting.start_time)} meeting?`}
+              description={`The meeting link will stop working for your ${t.patient}. This can't be undone.`}
+              cancelLabel="Keep meeting"
+              confirmLabel="Cancel meeting"
+              pendingLabel="Cancelling..."
+              pending={cancelling}
+              onConfirm={handleCancel}
+            />
+          </>
         )}
       </div>
 
