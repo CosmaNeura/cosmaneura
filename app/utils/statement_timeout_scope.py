@@ -10,6 +10,7 @@ import psycopg
 from psycopg.pq import TransactionStatus
 
 from sqlalchemy import Connection, event
+from sqlalchemy.engine.default import DefaultExecutionContext
 from sqlalchemy.sql import Select, visitors
 from sqlalchemy.sql.dml import UpdateBase
 from sqlalchemy.sql.elements import ColumnClause, TextClause
@@ -35,6 +36,7 @@ _scopes: ContextVar[tuple[RecordTimeoutScope, ...]] = ContextVar(
     "record_timeout_scopes", default=()
 )
 _ATTRIBUTE = "_cosmaneura_record_timeout_scope"
+_STATEMENT_ATTRIBUTE = "_cosmaneura_relational_timeout_statement"
 
 
 @dataclass(eq=False)
@@ -198,6 +200,34 @@ def current_record_timeout_scope(connection: object) -> RecordTimeoutScope | Non
     return None
 
 
+def _relational_timeout_read(context) -> bool:
+    compiled = getattr(context, "compiled", None)
+    statement = getattr(compiled, "statement", None)
+    # A real execution context belongs to one SQL dispatch. Repeated timeout
+    # callbacks may inspect its same immutable compiled statement once; this
+    # never survives into another execution or stores transaction/budget proof.
+    previous = (
+        getattr(context, _STATEMENT_ATTRIBUTE, None)
+        if isinstance(context, DefaultExecutionContext)
+        else None
+    )
+    if previous is not None and previous[0] is compiled and previous[1] is statement:
+        return previous[2]
+    relational = bool(
+        isinstance(statement, Select)
+        and statement.columns_clause_froms
+        and not any(
+            isinstance(node, (TextClause, FunctionElement, UpdateBase))
+            or isinstance(node, ColumnClause)
+            and node.is_literal
+            for node in visitors.iterate(statement)
+        )
+    )
+    if isinstance(context, DefaultExecutionContext):
+        setattr(context, _STATEMENT_ATTRIBUTE, (compiled, statement, relational))
+    return relational
+
+
 def _setting_transaction(connection, cursor, context, scope):
     if (
         scope is None
@@ -208,24 +238,10 @@ def _setting_transaction(connection, cursor, context, scope):
         or cursor.connection.info.transaction_status != TransactionStatus.INTRANS
     ):
         return None
-    compiled = getattr(context, "compiled", None)
-    statement = getattr(compiled, "statement", None)
     # Only generated relational reads can retain an existing setting. Text,
     # mutations and functions may change transaction-local policy, so always
     # refresh for them and invalidate the prior setting. No SQL is parsed.
-    if (
-        not isinstance(statement, Select)
-        # This conservative column-derived subset avoids constructing an ORM
-        # compile state on every budget callback. An explicit FROM without
-        # relational selected columns takes the original setter instead.
-        or not statement.columns_clause_froms
-        or any(
-            isinstance(node, (TextClause, FunctionElement, UpdateBase))
-            or isinstance(node, ColumnClause)
-            and node.is_literal
-            for node in visitors.iterate(statement)
-        )
-    ):
+    if not _relational_timeout_read(context):
         return None
     transaction = connection.get_transaction()
     if transaction is None or not transaction.is_active:
