@@ -190,7 +190,7 @@ async def execute_native_capture(
         data.expected_tenant_ref,
     ):
         raise authority.AuthorityRequestDeniedError
-    current()
+    last = current()
     caller = CaptureCaller(
         workload_client_id=workload_client_id,
         mount_context_token=issued.context_token,
@@ -216,7 +216,7 @@ async def execute_native_capture(
         if data.action == "preparation_context" and binding != snapshot.binding_ref:
             raise authority.AuthorityRequestDeniedError
         binding = snapshot.binding_ref
-        current()
+        last = current()
     if binding is None:
         raise authority.AuthorityRequestDeniedError
     operation = data.operation or (
@@ -237,7 +237,13 @@ async def execute_native_capture(
         check_async_capture_deadline()
     # Only the final mount row is published. All other lookups still execute
     # their full fresh authority checks without unused saved-note display reads.
-    last = current(include_status=data.action == "mount")
+    # A preparation request cannot contain an operation. Its current row was
+    # just read after the last synchronous service boundary (mount or binding),
+    # with no intervening service call or await. Do not repeat that same final
+    # lookup. Ordinary reads still reauthorize after I/O, and mounts still
+    # obtain their display status in the final publication lookup.
+    if data.action != "preparation_context":
+        last = current(include_status=data.action == "mount")
     envelope = {
         "contract_version": "1",
         "workspace_id": str(data.workspace_id),
