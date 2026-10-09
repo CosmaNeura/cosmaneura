@@ -1117,7 +1117,7 @@ function OptionalSetup({
   return <AllSetStep practice={practice} />
 }
 
-function BiographyStep({
+export function BiographyStep({
   biography,
   onComplete,
   onSkip,
@@ -1136,7 +1136,15 @@ function BiographyStep({
   })
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    await updateSettingsData({ body: values })
+    const { error } = await updateSettingsData({ body: values })
+    if (error) {
+      toast({
+        title: "Couldn't save your biography",
+        description: "Your text is still here. Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
     onComplete()
   }
 
@@ -1407,12 +1415,25 @@ function ZoomStep({
   )
 }
 
-function AllSetStep({ practice }: { practice: PracticeStatus }) {
+export function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
 
   async function handleGoToCosmas() {
     setLoading(true)
-    await completeOnboarding()
+    const { error } = await completeOnboarding()
+    if (error) {
+      // The backend explains practice-access problems (no PHI) that a
+      // retry alone cannot fix.
+      const detail = (error as { detail?: unknown }).detail
+      toast({
+        title: "Couldn't finish setup",
+        description:
+          typeof detail === "string" ? detail : "Please try again in a moment.",
+        variant: "destructive",
+      })
+      setLoading(false)
+      return
+    }
     window.location.href = href("/notes")
   }
 
