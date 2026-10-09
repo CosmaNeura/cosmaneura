@@ -587,11 +587,24 @@ async def execute_capture_operation(
     # These helpers take their one fresh pre-dispatch decision after the
     # cancellation yield, then reauthorize after validating the remote reply.
     # Do not run another complete decision here before that same dispatch.
-    if operation.kind == "preparation_metadata" or isinstance(
-        operation, protocol.PrepareRecordingWindow
-    ):
+    if operation.kind in {
+        "preparation_metadata",
+        "native_recording_preparation",
+    } or isinstance(operation, protocol.PrepareRecordingWindow):
         if _expected_scope is not None:
             raise CaptureReceiptInvalid
+        if operation.kind == "native_recording_preparation":
+            from app.services.scribe_preparation_metadata import (
+                execute_native_recording_preparation,
+            )
+
+            return await execute_native_recording_preparation(
+                caller=caller,
+                binding_ref=binding_ref,
+                workspace_id=workspace_id,
+                client_request_key=client_request_key,
+                client=client,
+            )
         if operation.kind == "preparation_metadata":
             from app.services.scribe_preparation_metadata import (
                 execute_preparation_metadata,
