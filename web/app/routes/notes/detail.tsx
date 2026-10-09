@@ -16,6 +16,7 @@ import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import type { EngagementRole } from "~/configuration/client"
+import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
@@ -108,7 +109,7 @@ function NoteHeader({
           >
             {title}
           </h1>
-          <StatusBadge status={status} />
+          <StatusBadge status={status} label={NOTE_STATUS_LABELS[status]} />
         </div>
         {engagementRole ? (
           <div className="mt-2">

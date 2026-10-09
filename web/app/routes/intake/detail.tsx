@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import Markdown from "react-markdown"
 import type { MetaFunction } from "react-router"
 
@@ -10,11 +11,10 @@ import { PageHeader } from "~/components/shared/PageHeader"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
+import { intakeStatusBadge } from "~/lib/intake-status"
 import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
-
-type Status = Parameters<typeof StatusBadge>[0]["status"]
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   const { data } = await intakeDetail({
@@ -40,12 +40,12 @@ export const meta: MetaFunction = () => {
   ]
 }
 
-function IntakeHeader({
-  status,
+export function IntakeHeader({
+  badge,
   title,
   dataFields,
 }: {
-  status: Status
+  badge: ReturnType<typeof intakeStatusBadge>
   title: string
   dataFields: Record<string, string>
 }) {
@@ -60,7 +60,7 @@ function IntakeHeader({
           >
             {title}
           </h1>
-          <StatusBadge status={status} />
+          <StatusBadge status={badge.status} label={badge.label} />
         </div>
         <div className="mt-1 space-y-1">
           {Object.entries(dataFields).map(([key, value]) => (
@@ -117,7 +117,20 @@ export function EmptyState({
   )
 }
 
+export function IntakeSummary({ summary }: { summary: string }) {
+  const summaryRef = useRef<HTMLDivElement>(null)
+  return (
+    <div className="space-y-3">
+      <CopyButton htmlRef={summaryRef} label="Copy summary" />
+      <div ref={summaryRef} className="prose-headings prose max-w-full">
+        <Markdown>{summary}</Markdown>
+      </div>
+    </div>
+  )
+}
+
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
+  const t = useTerminology()
   const { intake } = loaderData
   const hasSummary = !!intake.summary
 
@@ -127,18 +140,19 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
       <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
-          status={hasSummary ? "completed" : "not-started"}
+          // A written summary is the ground truth for completion, even if a
+          // re-run summary left an answer missing.
+          badge={intakeStatusBadge(
+            hasSummary ? "complete" : loaderData.appointment.intake_status,
+            t,
+          )}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
             ),
           }}
         />
-        {hasSummary && (
-          <div className="prose-headings prose max-w-full">
-            <Markdown>{intake.summary}</Markdown>
-          </div>
-        )}
+        {intake.summary && <IntakeSummary summary={intake.summary} />}
 
         {!hasSummary && <EmptyState intake={intake} />}
       </InnerScrollableContent>

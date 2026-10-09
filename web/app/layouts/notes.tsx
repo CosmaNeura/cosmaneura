@@ -3,6 +3,7 @@ import { Outlet, data, href, isRouteErrorResponse } from "react-router"
 import type { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { NotesKeyboardShortcuts } from "@/components/notes/KeyboardShortcuts"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
@@ -20,6 +21,7 @@ import {
   practiceAgreementBlockFromRouteFailure,
 } from "~/lib/practice-gate-error"
 import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
+import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
 import { noteListOptions } from "client/@tanstack/react-query.gen"
@@ -109,6 +111,8 @@ export default function NotesLayout({
 }: {
   loaderData: NotesLayoutData
 }) {
+  const t = useTerminology()
+
   if (loaderData.blocked) {
     return <PracticeAgreementWall block={loaderData.blocked} />
   }
@@ -126,6 +130,9 @@ export default function NotesLayout({
       <AppSidebar
         isLoading={!appointments}
         header={"Notes"}
+        searchPlaceholder={`Search ${t.patientPlural} or visits…`}
+        headerAction={<NotesKeyboardShortcuts />}
+        listShortcuts
         emptyState={{
           title: "No visits yet",
           description: "Upload a visit recording to create your first note.",

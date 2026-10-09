@@ -1,5 +1,12 @@
 import * as React from "react"
-import { href, useLocation, useNavigate } from "react-router"
+import {
+  Link,
+  NavLink,
+  href,
+  matchPath,
+  useLocation,
+  useNavigate,
+} from "react-router"
 
 import { Calendar, File, Inbox, Settings } from "lucide-react"
 
@@ -24,6 +31,8 @@ import { cn } from "@/lib/utils"
 import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
+import { isInCurrentWeek } from "~/lib/date"
+import { adjacentUrl, shouldIgnoreShortcut } from "~/lib/keyboard-shortcuts"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { motion } from "motion/react"
@@ -34,9 +43,9 @@ const IconSidebarHeader = () => (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" asChild className="md:h-8 md:p-0">
-          <a href="/">
+          <Link to="/" aria-label="Cosmas home">
             <BrandLogo variant="light" size="sm" />
-          </a>
+          </Link>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>
@@ -67,9 +76,7 @@ const NAVIGATION_ITEMS = [
 ]
 
 const NavigationMenu = () => {
-  const location = useLocation()
-  const currentUrl = location.pathname
-  const navigate = useNavigate()
+  const { pathname } = useLocation()
 
   return (
     <SidebarMenu>
@@ -77,17 +84,19 @@ const NavigationMenu = () => {
         return (
           <SidebarMenuItem key={item.title}>
             <SidebarMenuButton
+              asChild
               tooltip={{
                 children: item.title,
                 hidden: false,
               }}
-              onClick={() => navigate(item.url)}
-              // TODO this is a bit dangerous: there's got to be a better way to decide what section we are on
-              isActive={currentUrl.startsWith(item.url)}
+              // Segment-aware, so /notes matches /notes/:id but not /notesfoo.
+              isActive={!!matchPath({ path: item.url, end: false }, pathname)}
               className="px-2.5 md:px-2"
             >
-              <item.icon />
-              <span>{item.title}</span>
+              <NavLink to={item.url}>
+                <item.icon />
+                <span>{item.title}</span>
+              </NavLink>
             </SidebarMenuButton>
           </SidebarMenuItem>
         )
@@ -102,9 +111,14 @@ export interface SidebarEntry {
   title: string
   location: string
   subTitle?: string
+  // display label; isoDate is the machine-readable value for filtering
   date: string
+  isoDate: string
   status: StatusBadgeOptions | "none"
+  statusLabel?: string
   preview: string
+  // consecutive entries with the same group render under one subheading
+  group?: string
 }
 
 export interface SidebarEmptyState {
@@ -132,7 +146,56 @@ function SidebarEmptyMessage({
   )
 }
 
-// not rendered unless entries has contents
+function SelectionEntry({ entry }: { entry: SidebarEntry }) {
+  const { isMobile, setOpenMobile } = useSidebar()
+  const { pathname } = useLocation()
+  const isCurrent = pathname === entry.url
+  const linkRef = React.useRef<HTMLAnchorElement>(null)
+
+  React.useEffect(() => {
+    if (isCurrent) linkRef.current?.scrollIntoView?.({ block: "nearest" })
+  }, [isCurrent])
+
+  return (
+    <Link
+      ref={linkRef}
+      to={entry.url}
+      aria-current={isCurrent ? "page" : undefined}
+      onClick={(event) => {
+        // Re-selecting the open entry should not refetch it, but modifier
+        // clicks still open it elsewhere.
+        const modified =
+          event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+        if (isCurrent && !modified) event.preventDefault()
+        if (isMobile) setOpenMobile(false)
+      }}
+      className={cn(
+        "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground focus-visible:ring-sidebar-ring flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset",
+        isCurrent && "bg-sidebar-accent text-sidebar-accent-foreground",
+      )}
+    >
+      <div className="flex w-full items-center justify-between gap-2">
+        <span className="font-medium">{entry.title}</span>
+        <span className="text-on-navy-muted shrink-0 text-xs">
+          {entry.date}
+        </span>
+      </div>
+      <div className="flex w-full items-center justify-between gap-2">
+        <span className="text-on-navy-muted text-left text-xs">
+          {entry.preview}
+        </span>
+        {entry.status !== "none" && (
+          <StatusBadge
+            status={entry.status}
+            label={entry.statusLabel}
+            surface="navy"
+          />
+        )}
+      </div>
+    </Link>
+  )
+}
+
 function SelectionList({
   isLoading,
   entries,
@@ -140,96 +203,129 @@ function SelectionList({
   isLoading: boolean
   entries: SidebarEntry[]
 }) {
-  // TODO loading state is not used here, consider
-  const navigate = useNavigate()
-  const { isMobile, setOpenMobile } = useSidebar()
-
-  const location = useLocation()
-  const currentUrl = location.pathname
+  if (isLoading) {
+    return (
+      <SidebarGroupContent>
+        <SkeletonMessageList />
+      </SidebarGroupContent>
+    )
+  }
 
   return (
     <SidebarGroupContent>
-      {isLoading ? (
-        <SkeletonMessageList />
-      ) : (
-        entries.map((entry) => (
-          <button
-            key={entry.id}
-            onClick={() => {
-              if (currentUrl !== entry.url) {
-                navigate(entry.url)
-              }
-              if (isMobile) {
-                setOpenMobile(false)
-              }
-            }}
-            className={cn(
-              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight",
-              currentUrl === entry.url &&
-                true &&
-                "bg-sidebar-accent text-sidebar-accent-foreground",
-            )}
-          >
-            <div className="flex w-full items-center justify-between gap-2">
-              <span className="font-medium">{entry.title}</span>
-              <span className="text-on-navy-muted text-xs">{entry.date}</span>
-            </div>
-            <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-on-navy-muted text-left text-xs">
-                {entry.preview}
-              </span>
-              {entry.status !== "none" && <StatusBadge status={entry.status} />}
-            </div>
-          </button>
-        ))
-      )}
+      {entries.map((entry, index) => (
+        <React.Fragment key={entry.id}>
+          {entry.group && entry.group !== entries[index - 1]?.group && (
+            <h3 className="text-on-navy-muted px-4 pt-4 pb-2 text-xs font-semibold tracking-wide uppercase">
+              {entry.group}
+            </h3>
+          )}
+          <SelectionEntry entry={entry} />
+        </React.Fragment>
+      ))}
     </SidebarGroupContent>
   )
 }
 
+function matchesSearch(entry: SidebarEntry, term: string) {
+  const needle = term.trim().toLowerCase()
+  if (!needle) return true
+  return [entry.title, entry.preview, entry.date, entry.statusLabel]
+    .filter(Boolean)
+    .some((field) => field!.toLowerCase().includes(needle))
+}
+
+// Focus the list search with "/" unless the user is already typing, a dialog
+// owns focus, or the list panel is collapsed (its input stays mounted).
+function useSlashToFocus(
+  inputRef: React.RefObject<HTMLInputElement | null>,
+  enabled: boolean,
+) {
+  React.useEffect(() => {
+    if (!enabled) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (
+        event.key !== "/" ||
+        shouldIgnoreShortcut(event) ||
+        !inputRef.current
+      ) {
+        return
+      }
+      event.preventDefault()
+      inputRef.current.focus()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [inputRef, enabled])
+}
+
+// j and k step through the list as currently filtered.
+function useListShortcuts(entries: SidebarEntry[], enabled: boolean) {
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+
+  React.useEffect(() => {
+    if (!enabled) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "j" && event.key !== "k") return
+      if (shouldIgnoreShortcut(event)) return
+      const next = adjacentUrl(
+        entries.map((entry) => entry.url),
+        pathname,
+        event.key === "j" ? 1 : -1,
+      )
+      if (!next) return
+      event.preventDefault()
+      navigate(next)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [entries, enabled, navigate, pathname])
+}
+
 function SelectionSidebar({
   header,
+  headerAction,
   isLoading,
   entries,
   emptyState = DEFAULT_EMPTY_STATE,
+  searchPlaceholder = "Search…",
+  listShortcuts = false,
 }: {
   header?: string
+  headerAction?: React.ReactNode
   isLoading: boolean
   entries: SidebarEntry[]
   emptyState?: SidebarEmptyState
+  searchPlaceholder?: string
+  listShortcuts?: boolean
 }) {
+  const { isMobile, open } = useSidebar()
+
   const [searchTerm, setSearchTerm] = React.useState("")
   const [showThisWeek, setShowThisWeek] = React.useState(false)
+  const searchRef = React.useRef<HTMLInputElement>(null)
+  useSlashToFocus(searchRef, isMobile || open)
 
-  const filteredEntries = entries.filter((entry) => {
-    const matchesSearch = entry.title
-      .toLowerCase()
-      .includes(searchTerm.toLowerCase())
-
-    if (showThisWeek) {
-      const entryDate = new Date(entry.date)
-      const today = new Date()
-      const startOfWeek = new Date(today)
-      startOfWeek.setDate(today.getDate() - today.getDay())
-      const endOfWeek = new Date(today)
-      endOfWeek.setDate(today.getDate() + (6 - today.getDay()))
-
-      const isThisWeek = entryDate >= startOfWeek && entryDate <= endOfWeek
-      return matchesSearch && isThisWeek
-    }
-
-    return matchesSearch
-  })
-
-  const { isMobile, open } = useSidebar()
+  const filteredEntries = entries.filter(
+    (entry) =>
+      matchesSearch(entry, searchTerm) &&
+      (!showThisWeek || isInCurrentWeek(new Date(entry.isoDate))),
+  )
+  // Desktop only: on small screens the list is a sheet (a dialog) and the
+  // shortcuts would only act while it is hidden.
+  useListShortcuts(filteredEntries, listShortcuts && !isMobile && open)
 
   const content = (
     <>
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <div className="text-sidebar-foreground text-base font-medium">
-            {header ?? "Appointments"}
+          <div className="flex items-center gap-1">
+            <h2 className="text-sidebar-foreground text-base font-medium">
+              {header ?? "Appointments"}
+            </h2>
+            {headerAction}
           </div>
           <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
             <span>This Week</span>
@@ -241,7 +337,11 @@ function SelectionSidebar({
           </Label>
         </div>
         <SidebarInput
-          placeholder="Type to search..."
+          ref={searchRef}
+          type="search"
+          aria-label={searchPlaceholder.replace(/…$/, "")}
+          aria-keyshortcuts="/"
+          placeholder={searchPlaceholder}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
@@ -313,12 +413,18 @@ export function AppSidebar({
   entries,
   header,
   emptyState,
+  searchPlaceholder,
+  headerAction,
+  listShortcuts,
   ...props
 }: {
   isLoading: boolean
   entries: SidebarEntry[] | false
   header?: string
   emptyState?: SidebarEmptyState
+  searchPlaceholder?: string
+  headerAction?: React.ReactNode
+  listShortcuts?: boolean
 }) {
   const showSidebar = entries !== false
 
@@ -334,6 +440,9 @@ export function AppSidebar({
           isLoading={isLoading}
           entries={entries}
           emptyState={emptyState}
+          searchPlaceholder={searchPlaceholder}
+          headerAction={headerAction}
+          listShortcuts={listShortcuts}
         />
       )}
     </div>

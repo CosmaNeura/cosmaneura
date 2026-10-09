@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { href, useNavigate } from "react-router"
+import { Link, href, useNavigate } from "react-router"
 import { useRevalidator } from "react-router"
 
 import { Route } from "./+types/detail"
@@ -340,9 +340,9 @@ export function MeetingDetail({
                 This meeting has ended. AI notes are available.
               </p>
               <Button variant="outline" asChild>
-                <a href={href("/notes/:id", { id: meeting.appointment_id })}>
+                <Link to={href("/notes/:id", { id: meeting.appointment_id })}>
                   View notes →
-                </a>
+                </Link>
               </Button>
             </div>
           ) : (

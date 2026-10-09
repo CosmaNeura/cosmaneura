@@ -36,7 +36,12 @@ from app.services.companion_records import (
     transaction_budget,
 )
 from app.services.doctor_access import doctor_access_in_force
-from app.services.doctor_access_row_ownership import lock_doctor_access_rows
+from app.services.doctor_access_row_ownership import (
+    lock_doctor_access_rows,
+    lookup_owns_provider_rows,
+    lookup_uses_provider_session,
+    provider_doctor_access_rows,
+)
 from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_as_exists
 
 from activemodel.session_manager import global_session
@@ -58,12 +63,18 @@ from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 
-def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
-    authority._ensure_enabled(settings)
-    if issuer != settings.clerk_issuer:
-        raise authority.AuthorityRequestDeniedError
-    # Follow current Core exchange/offboarding: Practice before Doctor, then
-    # view-as and authority rows. Recheck a practice move after waiting.
+def _provider_owner_discovery_rows(session, subject):
+    # Discovery identifies the original lock owner, never permission. A real
+    # synchronous lookup reads both inputs together; all post-wait checks and
+    # individual locks still run. Other callers retain their original reads.
+    if lookup_uses_provider_session(session):
+        rows = session.exec(
+            select(Doctor, PracticeMember)
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .where(Doctor.clerk_id == subject)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None)
     owner = session.exec(
         select(Doctor)
         .where(Doctor.clerk_id == subject)
@@ -78,6 +89,16 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         if owner is not None
         else None
     )
+    return owner, member
+
+
+def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
+    authority._ensure_enabled(settings)
+    if issuer != settings.clerk_issuer:
+        raise authority.AuthorityRequestDeniedError
+    # Follow current Core exchange/offboarding: Practice before Doctor, then
+    # view-as and authority rows. Recheck a practice move after waiting.
+    owner, member = _provider_owner_discovery_rows(session, subject)
     if owner is None or member is None:
         raise authority.AuthorityRequestDeniedError
     practice_id, doctor_id = member.practice_id, owner.id
@@ -100,63 +121,84 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
             ),
         ):
             raise authority.AuthorityRequestDeniedError
-        actor, identity = authority._actor_for_clerk_identity(session, issuer, subject)
-        if identity.verified_at is None:
-            raise authority.AuthorityRequestDeniedError
-        link = session.exec(
-            select(ScribeCaptureProviderLink).where(
-                ScribeCaptureProviderLink.actor_id == actor.id,
-                ScribeCaptureProviderLink.tenant_id == tenant_ref,
-                col(ScribeCaptureProviderLink.revoked_at).is_(None),
-            )
-        ).one_or_none()
-        if (
-            link is None
-            or link.source_identity_id != identity.id
-            or link.reviewed_at is None
-            or len(link.review_ref) < 16
-        ):
-            raise authority.AuthorityRequestDeniedError
-        authority._active_tenant(session, link.tenant_id)
-        if (
-            authority._active_provider_membership(
-                session,
-                actor_id=actor.id,
-                tenant_id=link.tenant_id,
-            )
-            is None
-        ):
-            raise authority.AuthorityRequestDeniedError
-        doctor = session.get(Doctor, link.doctor_id)
-        if doctor is not None and ownership.matches(
-            session, doctor, practice_id=link.practice_id
-        ):
-            # Both rows remain protected by this exact Practice→Doctor lock
-            # scope. Still read current membership and display eligibility;
-            # combine only this pair, without reusing an access decision.
-            current = session.exec(
-                select(PracticeMember, col(Practice.id), col(Practice.legal_name))
-                .join(Practice, col(Practice.id) == col(PracticeMember.practice_id))
-                .where(
-                    PracticeMember.doctor_id == link.doctor_id,
-                    Practice.id == link.practice_id,
-                    func.char_length(col(Practice.legal_name)).between(1, 200),
-                )
-            ).one_or_none()
-            member = current[0] if current is not None else None
-            practice = current[1:] if current is not None else None
+        if lookup_owns_provider_rows(session, owner, ownership):
+            current = _provider_connection_rows(session, issuer, subject, tenant_ref)
+            if current is None:
+                raise authority.AuthorityRequestDeniedError
+            actor, identity, link, tenant, membership, member, *practice = current
+            if (
+                actor.status != "active"
+                or actor.actor_kind != "human"
+                or identity.verified_at is None
+                or link.source_identity_id != identity.id
+                or link.reviewed_at is None
+                or len(link.review_ref) < 16
+                or tenant.status != "active"
+                or membership.status != "active"
+                or membership.membership_kind != "provider"
+            ):
+                raise authority.AuthorityRequestDeniedError
+            doctor = session.get(Doctor, link.doctor_id)
         else:
-            member = session.exec(
-                select(PracticeMember).where(
-                    PracticeMember.doctor_id == link.doctor_id,
+            actor, identity = authority._actor_for_clerk_identity(
+                session, issuer, subject
+            )
+            if identity.verified_at is None:
+                raise authority.AuthorityRequestDeniedError
+            link = session.exec(
+                select(ScribeCaptureProviderLink).where(
+                    ScribeCaptureProviderLink.actor_id == actor.id,
+                    ScribeCaptureProviderLink.tenant_id == tenant_ref,
+                    col(ScribeCaptureProviderLink.revoked_at).is_(None),
                 )
             ).one_or_none()
-            practice = session.exec(
-                select(col(Practice.id), col(Practice.legal_name)).where(
-                    Practice.id == link.practice_id,
-                    func.char_length(col(Practice.legal_name)).between(1, 200),
+            if (
+                link is None
+                or link.source_identity_id != identity.id
+                or link.reviewed_at is None
+                or len(link.review_ref) < 16
+            ):
+                raise authority.AuthorityRequestDeniedError
+            authority._active_tenant(session, link.tenant_id)
+            if (
+                authority._active_provider_membership(
+                    session,
+                    actor_id=actor.id,
+                    tenant_id=link.tenant_id,
                 )
-            ).one_or_none()
+                is None
+            ):
+                raise authority.AuthorityRequestDeniedError
+            doctor = session.get(Doctor, link.doctor_id)
+            if doctor is not None and ownership.matches(
+                session, doctor, practice_id=link.practice_id
+            ):
+                # Both rows remain protected by this exact Practice→Doctor lock
+                # scope. Still read current membership and display eligibility;
+                # combine only this pair, without reusing an access decision.
+                current = session.exec(
+                    select(PracticeMember, col(Practice.id), col(Practice.legal_name))
+                    .join(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+                    .where(
+                        PracticeMember.doctor_id == link.doctor_id,
+                        Practice.id == link.practice_id,
+                        func.char_length(col(Practice.legal_name)).between(1, 200),
+                    )
+                ).one_or_none()
+                member = current[0] if current is not None else None
+                practice = current[1:] if current is not None else None
+            else:
+                member = session.exec(
+                    select(PracticeMember).where(
+                        PracticeMember.doctor_id == link.doctor_id,
+                    )
+                ).one_or_none()
+                practice = session.exec(
+                    select(col(Practice.id), col(Practice.legal_name)).where(
+                        Practice.id == link.practice_id,
+                        func.char_length(col(Practice.legal_name)).between(1, 200),
+                    )
+                ).one_or_none()
         if (
             doctor is None
             or doctor.deleted_at is not None
@@ -172,6 +214,59 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         ):
             raise authority.AuthorityRequestDeniedError
         return _connection(actor, identity, link, doctor, practice), doctor.id
+
+
+def _provider_connection_rows(session, issuer, subject, tenant_ref):
+    """One current connection read after actual provider locks and view-as.
+
+    Only the synchronous lookup path calls this. No individual lock changes,
+    extra permission, identity-map override or cached access decision.
+    """
+    return session.exec(
+        sql_select(
+            AuthorityActor,
+            AuthorityActorExternalIdentity,
+            ScribeCaptureProviderLink,
+            AuthorityTenant,
+            AuthorityTenantMembership,
+            PracticeMember,
+            col(Practice.id),
+            col(Practice.legal_name),
+        )
+        .select_from(AuthorityActorExternalIdentity)
+        .join(
+            AuthorityActor,
+            col(AuthorityActor.id) == col(AuthorityActorExternalIdentity.actor_id),
+        )
+        .join(
+            ScribeCaptureProviderLink,
+            col(ScribeCaptureProviderLink.actor_id) == col(AuthorityActor.id),
+        )
+        .join(
+            AuthorityTenant,
+            col(AuthorityTenant.id) == col(ScribeCaptureProviderLink.tenant_id),
+        )
+        .join(
+            AuthorityTenantMembership,
+            and_(
+                col(AuthorityTenantMembership.actor_id) == col(AuthorityActor.id),
+                col(AuthorityTenantMembership.tenant_id) == col(AuthorityTenant.id),
+            ),
+        )
+        .join(
+            PracticeMember,
+            col(PracticeMember.doctor_id) == col(ScribeCaptureProviderLink.doctor_id),
+        )
+        .join(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+        .where(
+            AuthorityActorExternalIdentity.issuer == issuer,
+            AuthorityActorExternalIdentity.subject == subject,
+            col(AuthorityActorExternalIdentity.revoked_at).is_(None),
+            ScribeCaptureProviderLink.tenant_id == tenant_ref,
+            col(ScribeCaptureProviderLink.revoked_at).is_(None),
+            func.char_length(col(Practice.legal_name)).between(1, 200),
+        )
+    ).one_or_none()
 
 
 def _connection(actor, identity, link, doctor, practice):
@@ -207,7 +302,7 @@ def _locked_provider(session, *, expected, doctor_id, args):
     issuer, subject = args["issuer"], args["subject"]
     if issuer != args["settings"].clerk_issuer:
         raise authority.AuthorityRequestDeniedError
-    with lock_doctor_access_rows(
+    with provider_doctor_access_rows(
         session,
         practice_id=TypeID.from_string(expected.practice_ref),
         doctor_id=doctor_id,
