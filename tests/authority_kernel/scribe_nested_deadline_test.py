@@ -259,6 +259,12 @@ def test_cancellation_after_combined_setting_refuses_actual_sql(
 def test_real_native_removes_only_duplicate_setting_calls(
     native, engine, kind, monkeypatch, record_property
 ):
+    # Isolate the original two-budget correspondence; equal-setting reuse has
+    # separate actual-PostgreSQL coverage and is not part of this comparison.
+    monkeypatch.setattr(capture, "timeout_setting_in_force", lambda *_: False)
+    monkeypatch.setattr(
+        "app.services.companion_records.timeout_setting_in_force", lambda *_: False
+    )
     counts = Counter()
 
     class Cursor(psycopg.Cursor):

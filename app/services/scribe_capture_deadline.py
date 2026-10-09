@@ -12,6 +12,8 @@ from app.utils.statement_timeout_scope import (
     acknowledge_record_timeout,
     consume_record_timeout,
     current_record_timeout_scope,
+    remember_timeout_setting,
+    timeout_setting_in_force,
 )
 
 from sqlalchemy import Engine, event
@@ -127,14 +129,19 @@ def before_capture_statement(
     # One parameterized round trip sets both transaction-local values. Every
     # statement still refreshes the remaining budget and checks cancellation
     # after the settings return, before its actual SQL can be dispatched.
-    cursor.execute(
-        "SELECT set_config('statement_timeout', %s, true), "
-        "set_config('lock_timeout', %s, true)",
-        (str(statement_ms), str(lock_ms)),
-    )
+    limits = statement_ms, lock_ms
+    if not timeout_setting_in_force(
+        connection, cursor, context, record, budget, limits
+    ):
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)",
+            (str(statement_ms), str(lock_ms)),
+        )
     budget.check()
     if record is not None:
         record.limits()
+        remember_timeout_setting(connection, cursor, context, record, budget, limits)
         acknowledge_record_timeout(context, record, budget, "capture")
 
 
