@@ -84,7 +84,9 @@ def test_actual_native_response_calls_and_lock_order_match_previous_reads(
             )
         )
     assert results[0][:3] == results[1][:3]
-    assert results[0][3] - results[1][3] == 16
+    # The post-lock context is now derived once per capture phase. The two
+    # eliminated preliminary derivations each formerly read practice here.
+    assert results[0][3] - results[1][3] == 14
     assert engine.pool.checkedout() == 0
     record_property("previous_selects", results[0][3])
     record_property("joined_selects", results[1][3])

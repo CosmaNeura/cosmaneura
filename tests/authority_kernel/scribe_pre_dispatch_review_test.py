@@ -100,9 +100,11 @@ def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     remaining = iter(results[0][2])
     assert all(any(old == lock for old in remaining) for lock in results[1][2])
     # A removed authorization now uses joined practice, explicitly timed access
-    # inputs, record-owner and lock-owner discovery reads. Receipts/locks match.
+    # inputs, record-owner and lock-owner discovery reads. Its context is now
+    # derived once after locks, removing 19 more reads from this legacy baseline.
+    # Receipts and the remaining lock order still match.
     assert results[0][1] - results[1][1] == (
-        0 if kind == "preparation_metadata" else 60
+        0 if kind == "preparation_metadata" else 41
     )
     assert engine.pool.checkedout() == 0
     record_property("operation", kind)

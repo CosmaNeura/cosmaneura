@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.services import authority
 from app.services import doctor_access as access
 from app.services import doctor_access_row_ownership as ownership
 from app.services import scribe_capture_scope as capture
@@ -32,6 +33,57 @@ from tests.authority_kernel.scribe_preparation_metadata_test import (
 )
 
 engine, native, remote_reads, workflow = _engine, _native, _remote_reads, _workflow
+
+
+@pytest.mark.parametrize("kind", ["creator_review", "preparation_metadata"])
+def test_single_context_matches_previous_receipt_and_first_acquired_locks(
+    native, engine, remote_reads, monkeypatch, kind, record_property
+):
+    original = authority.authorize_interaction
+
+    def previous_authorization(**arguments):
+        before_context = arguments.pop("_before_context", None)
+        authorized = original(**arguments)
+        if before_context is not None:
+            before_context(authorized.mount_session)
+            arguments.pop("_before_view_as", None)
+            return original(**arguments)
+        return authorized
+
+    results = []
+    for previous in (True, False):
+        locks = []
+
+        def observe(_connection, _cursor, statement, *_args):
+            shape = " ".join(statement.lower().split())
+            if " for update" in shape:
+                locks.append(shape)
+
+        with monkeypatch.context() as patch:
+            if previous:
+                patch.setattr(
+                    authority, "authorize_interaction", previous_authorization
+                )
+            event.listen(engine, "before_cursor_execute", observe)
+            try:
+                with query_counts(engine) as counts:
+                    response = native.post(kind)
+            finally:
+                event.remove(engine, "before_cursor_execute", observe)
+        assert response.status_code == 200
+        results.append(
+            (response.json()["result"]["receipt"], counts["all_selects"], locks)
+        )
+    assert results[0][0] == results[1][0]
+    # The removed second decision only reacquired already held token/lineage
+    # locks. Every distinct lock remains, in the same first-acquisition order.
+    assert list(dict.fromkeys(results[0][2])) == list(dict.fromkeys(results[1][2]))
+    assert results[0][1] - results[1][1] == 36
+    assert engine.pool.checkedout() == 0
+    assert session_manager._session_context.get() is None
+    assert ownership._CAPTURE_ROWS.get() is None
+    record_property("previous_selects", results[0][1])
+    record_property("single_context_selects", results[1][1])
 
 
 @contextmanager
@@ -72,8 +124,9 @@ def test_actual_native_receipts_and_lock_order_match_with_fewer_roundtrips(
     assert results[0][0] == results[1][0]
     assert results[0][2] == results[1][2]
     # Both reads now retain two capture authorizations around remote I/O.
-    # Ownership removes nine selects per authorization, keeping lock order.
-    assert results[0][1] - results[1][1] >= 18
+    # Each phase now derives context once, after its original locks. Ownership
+    # still removes eight selects per phase, without a second context decision.
+    assert results[0][1] - results[1][1] >= 16
     assert engine.pool.checkedout() == 0
     assert session_manager._session_context.get() is None
     assert ownership._CAPTURE_ROWS.get() is None
