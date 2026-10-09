@@ -11,6 +11,7 @@ from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_capture_scope, scribe_encounters
+from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import CaptureCaller
 from app.services.scribe_capture_deadline import (
@@ -31,6 +32,7 @@ NATIVE_READ_OPERATIONS = frozenset(
         "provider_encounter",
         "capabilities",
         "native_recording_context",
+        "native_recording_preparation",
         # Existing public wrapping key read; no private key or key mutation.
         "encryption_key",
         "preparation_metadata",
@@ -40,7 +42,7 @@ NATIVE_READ_OPERATIONS = frozenset(
 
 class NativeCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-    action: Literal["mount", "operation"]
+    action: Literal["mount", "operation", "preparation_context"]
     workspace_id: UUID
     request_nonce: UUID
     expected_actor_ref: str = Field(
@@ -54,16 +56,30 @@ class NativeCaptureRequest(BaseModel):
     )
     operation: CaptureOperation | None = None
     opening_nonce: UUID | None = None
+    preparation: Literal["admission", "recording_window"] | None = None
 
     @model_validator(mode="after")
     def action_fields(self):
         if self.action == "mount":
-            if self.binding_ref is not None or self.operation is not None:
+            if (
+                self.binding_ref is not None
+                or self.operation is not None
+                or self.preparation is not None
+            ):
                 raise ValueError("invalid_native_mount")
+        elif self.action == "preparation_context":
+            if (
+                self.binding_ref is None
+                or self.preparation is None
+                or self.operation is not None
+                or self.opening_nonce is not None
+            ):
+                raise ValueError("invalid_native_preparation_context")
         elif (
             self.binding_ref is None
             or self.operation is None
             or self.opening_nonce is not None
+            or self.preparation is not None
         ):
             raise ValueError("invalid_native_operation")
         if (
@@ -93,6 +109,8 @@ async def execute_native_capture(
     await. The existing capture worker owns SQL, cancellation and publication.
     Local Scribe registry checks bracket this request in the native receiver.
     """
+    if data.preparation == "admission" and not capture_settings.enabled:
+        raise authority.AuthorityKernelDisabledError
 
     def lookup(*, include_status=False):
         check_async_capture_deadline()
@@ -116,6 +134,12 @@ async def execute_native_capture(
                 # This shorter SQL budget supplements the unchanged capture budget.
                 deadline=time.monotonic() + min(15, remaining),
                 include_lookup_status=include_status,
+                # Admission already supplies the binding created at mount.
+                # Validate its complete current scope in every fresh lookup;
+                # the durable admission service authorizes it again before I/O.
+                expected_capture_binding_ref=(
+                    data.binding_ref if data.preparation == "admission" else None
+                ),
             )
         check_async_capture_deadline()
         row = result["encounter"]
@@ -137,7 +161,7 @@ async def execute_native_capture(
     # Retain the exchange route's guard/issuance transaction and lock ordering.
     # Close it before the next lookup or any downstream await.
     with phase("policy_exchange"):
-        with global_session():
+        with global_session() as session, provider_record_access_row_scope(session):
             if provider_exchange_blocked(
                 issuer=issuer,
                 subject=subject,
@@ -176,7 +200,7 @@ async def execute_native_capture(
         data.expected_tenant_ref,
     ):
         raise authority.AuthorityRequestDeniedError
-    current()
+    last = current()
     caller = CaptureCaller(
         workload_client_id=workload_client_id,
         mount_context_token=issued.context_token,
@@ -200,7 +224,7 @@ async def execute_native_capture(
                 request_nonce=data.request_nonce,
             )
         binding = snapshot.binding_ref
-        current()
+        last = current()
     if binding is None:
         raise authority.AuthorityRequestDeniedError
     operation = data.operation or (
@@ -221,7 +245,15 @@ async def execute_native_capture(
         check_async_capture_deadline()
     # Only the final mount row is published. All other lookups still execute
     # their full fresh authority checks without unused saved-note display reads.
-    last = current(include_status=data.action == "mount")
+    # A preparation request cannot contain an operation. Its current row was
+    # just read after the last synchronous service boundary (mount or binding),
+    # with no intervening service call or await. Do not repeat that same final
+    # lookup. Admission's existing binding is checked in these lookups, rather
+    # than resolving/creating it again. Ordinary reads still reauthorize after
+    # I/O, and mounts still
+    # obtain their display status in the final publication lookup.
+    if data.action != "preparation_context":
+        last = current(include_status=data.action == "mount")
     envelope = {
         "contract_version": "1",
         "workspace_id": str(data.workspace_id),
@@ -229,7 +261,19 @@ async def execute_native_capture(
         "request_nonce": str(data.request_nonce),
         "checked_at": datetime.now(UTC).isoformat(),
     }
-    if data.action == "operation":
+    if data.action == "preparation_context":
+        # This replaces the existing server-to-server negotiation only. No
+        # admission/window mutation runs here. The native receiver consumes the
+        # credential once in this invocation after its fresh account fence.
+        result = {
+            **envelope,
+            "appointment_ref": last["appointment_ref"],
+            "preparation": data.preparation,
+            "context_token": issued.context_token,
+            "interaction_ref": resolved.interaction_ref,
+            "client_turn_id": str(turn),
+        }
+    elif data.action == "operation":
         assert operation is not None and receipt is not None
         result = {
             **envelope,
@@ -249,7 +293,8 @@ async def execute_native_capture(
                 "operation": "provider_encounter",
                 "receipt": receipt.model_dump(mode="json"),
             }
-    # Context and workload credentials never leave this service invocation.
+    # Ordinary native responses contain no credentials. A preparation context
+    # replaces the existing server-side negotiation and must never reach a device.
     return {
         "version": "1",
         "action": data.action,
