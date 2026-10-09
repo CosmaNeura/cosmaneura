@@ -104,9 +104,14 @@ async def test_resume_reuses_saved_family_and_rejects_wrong_session_before_io(
         await admission.admit_capture(**wrong, expected_session_id=uuid4())
     assert len(f.client.calls) == calls_before
     assert len(getattr(f, "configured_calls", [])) == configured_calls_before
-    for choice in ({"resume_current": True}, {"expected_session_id": saved.session_id}):
+    for expected_session_id, resume_current in (
+        (None, True),
+        (saved.session_id, False),
+    ):
         resumed = await admission.admit_capture(
-            **call_arguments(f, resume=True), **choice
+            **call_arguments(f, resume=True),
+            expected_session_id=expected_session_id,
+            resume_current=resume_current,
         )
         assert resumed == saved
     after = journal(f)
@@ -120,13 +125,16 @@ async def test_resume_reuses_saved_family_and_rejects_wrong_session_before_io(
 @pytest.mark.parametrize("mode", ["resume_current", "expected_session_id"])
 async def test_resume_cannot_create_an_admission_without_consent(admission_case, mode):
     f = admission_case
-    choice = {mode: True if mode == "resume_current" else uuid4()}
     error = (
         admission.AdmissionConsentRequired
         if mode == "resume_current"
         else admission.AdmissionConflict
     )
     with pytest.raises(error):
-        await admission.admit_capture(**call_arguments(f, resume=True), **choice)
+        await admission.admit_capture(
+            **call_arguments(f, resume=True),
+            expected_session_id=uuid4() if mode == "expected_session_id" else None,
+            resume_current=mode == "resume_current",
+        )
     assert f.client.calls == []
     assert not f.client.consents and not f.client.sessions

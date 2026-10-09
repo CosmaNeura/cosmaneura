@@ -753,13 +753,13 @@ class LocalCursorReviewTests(unittest.TestCase):
             "report_sha256": m.sha(report.encode()),
         }
 
-        def verify(meta, *, prefix="AGENT", **changes):
+        def verify(meta, *, prefix: object = "AGENT", **changes):
             comment = {
                 "id": 101,
                 "user": {"login": "JohnClem", "type": "User"},
                 "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
                 "body": "<!-- COSMANEURA_LOCAL_"
-                + prefix
+                + str(prefix)
                 + "_REVIEW "
                 + json.dumps(meta)
                 + " -->\n"

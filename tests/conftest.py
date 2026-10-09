@@ -43,6 +43,8 @@ from .log import log
 
 
 _APPEND_ONLY_TEST_TRIGGERS = {
+    "billing_header_prepared_operation": "billing_header_operation_immutable",
+    "billing_header_action": "billing_header_action_guard",
     "scribe_capture_source_version": "scribe_working_source_immutable",
     "scribe_capture_gap_manifest": "scribe_gap_manifest_immutable",
     "scribe_capture_note_edit": "scribe_note_edit_immutable",

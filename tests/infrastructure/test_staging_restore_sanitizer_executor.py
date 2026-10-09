@@ -326,6 +326,9 @@ def test_retained_fixed_catalog_requires_type_exact_canonical_equality(
     source = real_case.source
     original_projection = source._ordered_projection
     changed_projection: list[tuple[str, Any]] = []
+    assert original_projection, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for name, value in original_projection:
         if name != "fixed_catalog":
             changed_projection.append((name, value))

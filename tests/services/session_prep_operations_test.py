@@ -28,6 +28,7 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
     _doctor, _target, _note, token, record = scope
     runtime_tests._read(token, record, runtime_tests._action(token))
     recent = SessionPrepReadReceipt.first()
+    assert recent is not None
     audit_count = AuthorityAuditEvent.count()
     old_time = datetime.now(UTC) - timedelta(days=2)
     with get_session() as session:
@@ -48,7 +49,7 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
                 recorded_at=old_time,
                 retain_until=old_time + timedelta(hours=24),
             )
-            receipt.id = identifier
+            setattr(receipt, "id", identifier)
             session.add(receipt)
         session.commit()
     monkeypatch.setattr(operations, "RECEIPT_CLEANUP_BATCH", 3)
@@ -59,18 +60,21 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
     assert AuthorityAuditEvent.count() == audit_count
     with get_session() as session:
         with pytest.raises(DBAPIError):
-            session.exec(text("DELETE FROM session_prep_read_receipt"))
+            session.execute(text("DELETE FROM session_prep_read_receipt"))
         session.rollback()
 
 
 def test_queue_health_reports_only_counts_and_detects_stuck_work(scope):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.requested_at = datetime.now(UTC) - timedelta(minutes=3)
     build.save()
     health = operations.runtime_health()
     assert health["pending"] == 1
     assert health["status"] == "degraded"
-    assert health["oldest_pending_seconds"] >= 180
+    oldest_pending_seconds = health["oldest_pending_seconds"]
+    assert isinstance(oldest_pending_seconds, int)
+    assert oldest_pending_seconds >= 180
     assert set(health) == {
         "pending",
         "running",
@@ -99,6 +103,7 @@ def test_health_distinguishes_recent_outages_from_terminal_scope_changes(
     scope, failure_code, age, expected_status
 ):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.state = "failed"
     build.failure_code = failure_code
     build.retry_at = datetime.now(UTC) - age
@@ -145,14 +150,22 @@ def test_worker_configuration_failure_remains_visible_in_health(scope, drift):
 
     settings = replace(
         runtime_tests.AUTHORITY_SETTINGS,
-        **({"enabled": False} if drift == "disabled" else {"clerk_issuer": "https://wrong.invalid"}),
+        **(
+            {"enabled": False}
+            if drift == "disabled"
+            else {"clerk_issuer": "https://wrong.invalid"}
+        ),
     )
-    assert run_one_build(
-        generate=runtime_tests._brief,
-        clock=lambda: runtime_tests.NOW,
-        settings=settings,
-    ) == "failed"
+    assert (
+        run_one_build(
+            generate=runtime_tests._brief,
+            clock=lambda: runtime_tests.NOW,
+            settings=settings,
+        )
+        == "failed"
+    )
     build = SessionPrepBuild.first()
+    assert build is not None
     assert build.state == "failed"
     assert build.failure_code == "scope_unavailable"
     assert operations.runtime_health()["status"] == "degraded"

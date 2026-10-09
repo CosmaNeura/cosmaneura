@@ -263,6 +263,6 @@ def test_sentry_keeps_request_monitoring_without_recursive_sync_wrapping() -> No
         """
     )
     result = subprocess.run(
-        [sys.executable, '-c', probe], capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, result.stdout + result.stderr

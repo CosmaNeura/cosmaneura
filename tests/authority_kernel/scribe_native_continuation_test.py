@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -48,6 +48,7 @@ def extension():
         reservation_count=90,
     )
     operation = NativeSourceExtension(kind="source_extend", payload=payload)
+    assert selected.creator_actor_id is not None
     receipt = NativeExtensionReceipt(
         extension_id=uuid4(),
         source_start_id=uuid4(),
@@ -128,6 +129,7 @@ def test_extension_requires_exact_current_receipt(fault):
         elif isinstance(value, int):
             value += 1
         elif fault.endswith("until"):
+            assert isinstance(value, datetime)
             value += timedelta(seconds=1)
         else:
             value = uuid4()

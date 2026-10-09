@@ -10,17 +10,17 @@ def saved_encounter_statuses(session, doctor_id, appointment_ids):
         return {}
     # Select references only. Catalog discovery does not load transcript/note text.
     transcripts = session.exec(
-        select(AIVisitTranscript.appointment_id).where(
+        select(col(AIVisitTranscript.appointment_id)).where(
             AIVisitTranscript.doctor_id == doctor_id,
             col(AIVisitTranscript.appointment_id).in_(appointment_ids),
-            AIVisitTranscript.deleted_at.is_(None),
+            col(AIVisitTranscript.deleted_at).is_(None),
         )
     ).all()
     drafts = session.exec(
-        select(AIVisitNote.appointment_id).where(
+        select(col(AIVisitNote.appointment_id)).where(
             AIVisitNote.doctor_id == doctor_id,
             col(AIVisitNote.appointment_id).in_(appointment_ids),
-            AIVisitNote.superseded_at.is_(None),
+            col(AIVisitNote.superseded_at).is_(None),
         )
     ).all()
     return {

@@ -198,7 +198,7 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                       href={link.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-xs text-blue-600 hover:underline"
+                      className="text-primary text-xs hover:underline"
                     >
                       {link.label}
                       {link.requires_subscription
@@ -230,7 +230,7 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                               href={d.citation.url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-blue-600 hover:underline"
+                              className="text-primary hover:underline"
                               title={d.citation.reference}
                             >
                               source ↗

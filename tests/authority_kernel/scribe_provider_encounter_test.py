@@ -1,7 +1,7 @@
 """Cross-device discovery never creates consent or mistakes a conflict for new work."""
 
-from typing import cast
-from uuid import uuid4
+from typing import TypedDict, cast
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -12,6 +12,15 @@ from app.services import scribe_capture_protocol as protocol
 from app.services.scribe_workflow import ScribeWorkflowClient
 
 from tests.authority_kernel.scribe_native_recording_context_test import exercise
+
+
+class DiscoveryArguments(TypedDict):
+    caller: admission.CaptureCaller
+    binding_ref: str
+    workspace_id: UUID
+    operation: protocol.ReadOperation
+    client_request_key: str
+    client: ScribeWorkflowClient
 
 
 @pytest.mark.asyncio
@@ -67,14 +76,14 @@ async def test_only_missing_admission_can_return_not_prepared(monkeypatch, error
         raise error()
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
-    arguments = dict(
-        caller=cast(admission.CaptureCaller, None),
-        binding_ref="synthetic-binding",
-        workspace_id=uuid4(),
-        operation=protocol.ReadOperation(kind="provider_encounter"),
-        client_request_key="synthetic-discovery-key",
-        client=cast(ScribeWorkflowClient, None),
-    )
+    arguments: DiscoveryArguments = {
+        "caller": cast(admission.CaptureCaller, None),
+        "binding_ref": "synthetic-binding",
+        "workspace_id": uuid4(),
+        "operation": protocol.ReadOperation(kind="provider_encounter"),
+        "client_request_key": "synthetic-discovery-key",
+        "client": cast(ScribeWorkflowClient, None),
+    }
     if error == admission.AdmissionConsentRequired:
         result = await gateway.execute_capture_operation(**arguments)
         assert result.model_dump(mode="json") == {

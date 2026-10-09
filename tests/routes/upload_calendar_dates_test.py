@@ -26,14 +26,14 @@ from sqlmodel import Session
 def test_calendar_upload_preserves_day_and_reuses_existing_patient(monkeypatch):
     queued = []
     monkeypatch.setattr(app.jobs.transcribe, "queue", queued.append)
-    doctor = Doctor(clerk_id="user_synthetic_calendar_test").save()
+    doctor = Doctor(clerk_id="user_synthetic_calendar_test", biography=None).save()
     patient = Patient(
         doctor_id=doctor.id,
         name="Synthetic calendar patient",
         date_of_birth=datetime(2000, 1, 1),
     ).save()
     # Encounters carry UTC instants; only the birthday is a calendar day.
-    perform(
+    returned_id = perform(
         doctor=doctor,
         patient_name=patient.name,
         appointment_date=datetime.fromisoformat("2026-09-25T00:45:00Z"),
@@ -46,17 +46,101 @@ def test_calendar_upload_preserves_day_and_reuses_existing_patient(monkeypatch):
     assert file is not None
     appointment = Appointment.get(id=file.appointment_id)
     assert appointment is not None
+    assert returned_id == str(appointment.id)
     assert appointment.appointment_date == datetime(2026, 9, 25, 0, 45)
     assert appointment.patient_id == patient.id
     assert Patient.where(Patient.doctor_id == doctor.id).count() == 1
     assert queued == [file.id]
+    replay_id = perform(
+        doctor=doctor,
+        patient_name=patient.name,
+        appointment_date=datetime.fromisoformat("2026-09-25T00:45:00Z"),
+        date_of_birth=datetime(2000, 1, 1),
+        file_name="synthetic_calendar_recording.wav",
+    )
+    assert replay_id == returned_id
+    assert Appointment.where(Appointment.doctor_id == doctor.id).count() == 1
+
+
+def test_registration_returns_its_authoritative_appointment_id(monkeypatch):
+    from types import SimpleNamespace
+
+    from starlette.requests import Request
+
+    from app.routes.internal import VisitAudioUploadRequest, upload_visit_audio_file
+
+    monkeypatch.setattr(
+        "app.routes.internal.app.commands.uploads.sas.consume_upload",
+        lambda *args, **kwargs: SimpleNamespace(
+            blob_key="synthetic.wav", claim_token="synthetic"
+        ),
+    )
+    monkeypatch.setattr(
+        "app.routes.internal.app.commands.uploads.sas.complete_upload",
+        lambda *args: True,
+    )
+    monkeypatch.setattr(app.jobs.transcribe, "queue", lambda _id: None)
+    doctor = Doctor(clerk_id="user_synthetic_registration", biography=None).save()
+    request = Request({"type": "http"})
+    request.state.doctor = doctor
+    request.state.auth_state = SimpleNamespace(
+        payload={"iss": "https://synthetic.invalid"}
+    )
+    response = upload_visit_audio_file(
+        request,
+        VisitAudioUploadRequest(
+            registration_token="A" * 43,
+            appointment_date=datetime(2026, 9, 25),
+            patient_name="Synthetic registration patient",
+            date_of_birth=datetime(2000, 1, 1),
+        ),
+    )
+    registered = VisitAudioFile.one(
+        doctor_id=doctor.id, azure_file_name="synthetic.wav"
+    )
+    assert response.appointment_id == str(registered.appointment_id)
+
+
+def test_registration_openapi_declares_appointment_response():
+    import json
+    from pathlib import Path
+
+    from tests.integration.server import api_app
+
+    schema = api_app.openapi()
+    operation = next(
+        path["post"]
+        for path in schema["paths"].values()
+        if path.get("post", {}).get("operationId") == "upload_visit_audio_file"
+    )
+    response_schema = operation["responses"]["200"]["content"]["application/json"][
+        "schema"
+    ]
+    assert response_schema["$ref"].endswith("/VisitAudioUploadResponse")
+    assert schema["components"]["schemas"]["VisitAudioUploadResponse"]["required"] == [
+        "appointment_id"
+    ]
+    stored = json.loads(
+        (Path(__file__).resolve().parents[2] / "web/openapi.json").read_text()
+    )
+    stored_operation = stored["paths"]["/internal/v1/visit-audio-file/upload-complete"][
+        "post"
+    ]
+    assert (
+        stored_operation["responses"]["200"]["content"]["application/json"]["schema"]
+        == response_schema
+    )
+    assert (
+        stored["components"]["schemas"]["VisitAudioUploadResponse"]
+        == schema["components"]["schemas"]["VisitAudioUploadResponse"]
+    )
 
 
 def test_two_same_day_uploads_keep_the_earlier_reviewed_visit_as_a_prep_source(
     monkeypatch,
 ):
     monkeypatch.setattr(app.jobs.transcribe, "queue", lambda _file_id: None)
-    doctor = Doctor(clerk_id="user_synthetic_same_day_test").save()
+    doctor = Doctor(clerk_id="user_synthetic_same_day_test", biography=None).save()
     appointments = []
     for hour in (13, 19):
         file_name = f"synthetic_same_day_{hour}.wav"
@@ -100,14 +184,18 @@ def test_two_same_day_uploads_keep_the_earlier_reviewed_visit_as_a_prep_source(
             expected_content_sha256=note_content_sha256(note.note),
             observed_at=observed_at,
         )
-        args = dict(
+        sources = load_reviewed_note_sources(
+            session=session,
+            doctor_id=doctor.id,
+            target_appointment_id=target.id,
+            observed_at=observed_at,
+        ).sources
+        overview = prior_note_overview(
             session=session,
             doctor_id=doctor.id,
             target_appointment_id=target.id,
             observed_at=observed_at,
         )
-        sources = load_reviewed_note_sources(**args).sources
-        overview = prior_note_overview(**args)
         assert [source.source_ref for source in sources] == [str(note.id)]
         assert overview.included_count == 1
         assert overview.notes[0].status == "included"

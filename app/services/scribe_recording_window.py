@@ -1,21 +1,23 @@
-"""Recoverable bind/issue/reserve sequence; never starts or authorizes a source.
+"""Recoverable first-window receiver; never starts or authorizes a source.
 
 The caller durably retains the exact recipe before dispatch. A lost response can
 replay these component keys, including a mutation already committed by Scribe.
-This is deliberately not an atomic transaction spanning services.
+Scribe retains all three ordinary component keys in its own transaction.
 """
 
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from app.services import scribe_capture_protocol as protocol
 from app.services.scribe_capture_admission import (
     AdmittedCaptureScope,
     CaptureCaller,
-    authorize_admitted_capture,
 )
 from app.services.scribe_capture_deadline import check_async_capture_deadline
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
@@ -30,79 +32,123 @@ class PreparedRecordingWindow(protocol.ProtectedContract):
     reservations: protocol.ReservationReceipt
 
 
+def validate_prepared_recording_window(
+    operation: PrepareRecordingWindow,
+    receipt: BaseModel,
+    scope: AdmittedCaptureScope,
+    *,
+    upload_origins: tuple[str, ...],
+    now: datetime | None = None,
+) -> PreparedRecordingWindow:
+    from app.services.scribe_capture_gateway import (
+        CaptureReceiptInvalid,
+        validate_receipt,
+    )
+
+    try:
+        result = PreparedRecordingWindow.model_validate(receipt.model_dump(mode="json"))
+    except (ValueError, TypeError, AttributeError):
+        raise CaptureReceiptInvalid from None
+    body = operation.payload
+    for component, evidence in (
+        (
+            protocol.BindKey(
+                kind="bind_key",
+                payload=protocol.KeyPayload(**body.binding.model_dump()),
+            ),
+            result.binding,
+        ),
+        (
+            protocol.IssueLease(kind="issue_lease", payload=protocol.ProtocolPayload()),
+            result.lease,
+        ),
+        (
+            protocol.ReserveChunks(
+                kind="reserve_chunks",
+                payload=protocol.ReservePayload(
+                    capture_lease_id=result.lease.lease_id,
+                    capture_lease_generation=result.lease.generation,
+                    channel=body.channel,
+                    first_sequence_number=0,
+                    count=body.reservation_count,
+                ),
+            ),
+            result.reservations,
+        ),
+    ):
+        validate_receipt(
+            component, evidence, scope, upload_origins=upload_origins, now=now
+        )
+    if result.reservations.capture_authorized_until != result.lease.expires_at:
+        raise CaptureReceiptInvalid
+    return result
+
+
 async def execute_recording_window(
     *,
     caller: CaptureCaller,
     binding_ref: str,
     workspace_id: UUID,
-    scope: AdmittedCaptureScope,
+    scope: AdmittedCaptureScope | None,
     operation: PrepareRecordingWindow,
     client_request_key: str,
     client: ScribeWorkflowClient,
     upload_origins: tuple[str, ...] = (),
 ) -> PreparedRecordingWindow:
-    # Import after the gateway has parsed and admitted the outer request. Each
-    # component then uses that same gateway's ordinary current authorization.
     from app.services.scribe_capture_gateway import (
         CaptureOperationUnavailable,
         CaptureReceiptInvalid,
-        execute_capture_operation,
+        _execute_creator_review,
+        authorize_admitted_capture,
+        component_request_key,
     )
 
     body = operation.payload
-    if not isinstance(scope.session_request, ConfiguredSessionCreate) or scope.creator_actor_id is None:
-        raise CaptureOperationUnavailable
-    if client_request_key in {body.bind_idempotency_key, body.lease_idempotency_key, body.reserve_idempotency_key}:
-        raise CaptureReceiptInvalid
-
-    async def invoke(component: protocol.CaptureOperation, key: str):
-        check_async_capture_deadline()
-        await asyncio.sleep(0)
-        check_async_capture_deadline()
-        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
-            raise CaptureReceiptInvalid
-        result = await execute_capture_operation(
-            caller=caller,
-            binding_ref=binding_ref,
-            workspace_id=workspace_id,
-            operation=component,
-            client_request_key=key,
-            client=client,
-            upload_origins=upload_origins,
-        )
-        check_async_capture_deadline()
-        if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
-            raise CaptureReceiptInvalid
-        return result
-
-    binding = await invoke(
-        protocol.BindKey(kind="bind_key", payload=protocol.KeyPayload(**body.binding.model_dump())),
+    if client_request_key in {
         body.bind_idempotency_key,
-    )
-    lease = await invoke(
-        protocol.IssueLease(kind="issue_lease", payload=protocol.ProtocolPayload()),
         body.lease_idempotency_key,
-    )
-    if not isinstance(binding, protocol.KeyReceipt) or not isinstance(lease, protocol.LeaseReceipt):
-        raise CaptureReceiptInvalid
-    if binding.session_id != scope.session_id or lease.session_id != scope.session_id:
-        raise CaptureReceiptInvalid
-    reservations = await invoke(
-        protocol.ReserveChunks(
-            kind="reserve_chunks",
-            payload=protocol.ReservePayload(
-                capture_lease_id=lease.lease_id,
-                capture_lease_generation=lease.generation,
-                channel=body.channel,
-                first_sequence_number=0,
-                count=body.reservation_count,
-            ),
-        ),
         body.reserve_idempotency_key,
-    )
-    if not isinstance(reservations, protocol.ReservationReceipt):
+    }:
         raise CaptureReceiptInvalid
-    if reservations.session_id != lease.session_id or reservations.capture_authorized_until != lease.expires_at:
-        raise CaptureReceiptInvalid
+
     check_async_capture_deadline()
-    return PreparedRecordingWindow(binding=binding, lease=lease, reservations=reservations)
+    await asyncio.sleep(0)
+    check_async_capture_deadline()
+    current = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    if scope is not None and current != scope:
+        raise CaptureReceiptInvalid
+    scope = current
+    if (
+        not isinstance(scope.session_request, ConfiguredSessionCreate)
+        or scope.creator_actor_id is None
+    ):
+        raise CaptureOperationUnavailable
+    # Preserve each original direct component namespace so old partial journals
+    # and lost responses recover the same receipts through the new receiver.
+    remote_operation = operation.model_copy(
+        update={
+            "payload": body.model_copy(
+                update={
+                    field: component_request_key(scope, kind, getattr(body, field))
+                    for field, kind in (
+                        ("bind_idempotency_key", "bind_key"),
+                        ("lease_idempotency_key", "issue_lease"),
+                        ("reserve_idempotency_key", "reserve_chunks"),
+                    )
+                }
+            )
+        }
+    )
+    result = await _execute_creator_review(
+        caller,
+        binding_ref,
+        workspace_id,
+        scope,
+        remote_operation,
+        component_request_key(scope, operation.kind, client_request_key),
+        client,
+    )
+    check_async_capture_deadline()
+    if not isinstance(result, PreparedRecordingWindow):
+        raise CaptureReceiptInvalid
+    return result

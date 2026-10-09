@@ -25,6 +25,7 @@ from app.services.view_as import (
     ViewAsError,
     context_token_rotation_blocked_by_view_as,
 )
+from app.utils.native_request_timing import phase
 
 from activemodel.session_manager import aglobal_session, get_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -107,7 +108,8 @@ def authenticate_embed_platform_session(
     ],
 ) -> VerifiedClerkIdentity:
     try:
-        auth_state = _authenticate_clerk_session(request, credentials)
+        with phase("clerk_auth"):
+            auth_state = _authenticate_clerk_session(request, credentials)
     except HTTPException:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

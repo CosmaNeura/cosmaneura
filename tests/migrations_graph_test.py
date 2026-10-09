@@ -93,6 +93,9 @@ def _revision_graph() -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
 
 def test_parents_exist() -> None:
     files, parents = _revision_graph()
+    assert parents, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for revision, revision_parents in parents.items():
         for parent in revision_parents:
             assert parent in parents, (

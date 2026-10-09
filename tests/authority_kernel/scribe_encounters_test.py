@@ -1,6 +1,7 @@
 """Repeat visits and current authorization on an explicitly owned local PG DB."""
 
 import importlib
+import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -63,7 +64,23 @@ def engine():
         55930,
         "scribe_ux_lab_owner",
     )
-    assert original_scope or ux_scope
+    desktop_scope = (url.database, url.host, url.port, url.username) == (
+        "core_ux_01_test",
+        "127.0.0.1",
+        55937,
+        "scribe_ux_lab_owner",
+    )
+    if desktop_scope:
+        marker = Path("/private/tmp/scribe-ux-latency-lab-20261007/ownership.json")
+        assert json.loads(marker.read_text()) == {
+            "created_for": "scribe-desktop-ux-20261007",
+            "host": "127.0.0.1",
+            "port": 55937,
+            "database": "core_ux_01_test",
+            "username": "scribe_ux_lab_owner",
+            "only_synthetic": True,
+        }
+    assert original_scope or ux_scope or desktop_scope
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)
@@ -92,14 +109,14 @@ def workflow(engine, monkeypatch):
     )
     provisioned = apply(engine, args, plan(engine, args).plan_sha256)
     with session_for(engine) as session:
-        actor_ref = str(
-            session.get(
-                ScribeCaptureProviderLink, provisioned.provider_link_ref
-            ).actor_id
+        stored_scribe_capture_provider_link = session.get(
+            ScribeCaptureProviderLink, provisioned.provider_link_ref
         )
+        assert stored_scribe_capture_provider_link is not None
+        actor_ref = str(stored_scribe_capture_provider_link.actor_id)
 
     def request(action="create", **values):
-        body = dict(
+        body: dict[str, object] = dict(
             action=action,
             expected_actor_ref=actor_ref,
             expected_tenant_ref=str(args["tenant_id"]),
@@ -200,10 +217,9 @@ def test_unknown_birth_date_persists_and_retries_same_patient(
     )
     assert invoke(retry)["encounter"] == first
     with session_for(engine) as session:
-        assert (
-            session.get(Patient, TypeID.from_string(first["patient_ref"])).date_of_birth
-            is None
-        )
+        stored_patient = session.get(Patient, TypeID.from_string(first["patient_ref"]))
+        assert stored_patient is not None
+        assert stored_patient.date_of_birth is None
     patients = invoke(request("patients", query="Invented unknown birthday"))[
         "patients"
     ]
@@ -282,6 +298,7 @@ def test_revocation_denies_retry_and_listing(engine, workflow):
     invoke(value)
     with session_for(engine) as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         link.revoked_at = datetime.now(UTC)
         session.add(link)
         session.commit()

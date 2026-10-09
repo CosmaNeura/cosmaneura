@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.types import Receive, Scope, Send
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -17,6 +18,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
     authenticate_scribe_capture_request,
+    request_signing_keys,
 )
 from app.routes.dependencies.view_as import view_as_browser_session_present
 from app.routes.embed_context import (
@@ -47,11 +49,39 @@ from app.services.scribe_native_capture import (
 from app.services.scribe_workflow import ScribeWorkflowClient
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
+from app.utils.native_request_timing import (
+    Ledger,
+    bind_ledger,
+    current_ledger,
+    phase,
+    request_timing,
+)
 
 from sqlalchemy.exc import SQLAlchemyError
 
+_TIMING_SCOPE = "cosmaneura.native_timing"
+
+
+class NativeTimingRoute(CaptureDeadlineRoute):
+    async def _dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
+        ledger = scope.get(_TIMING_SCOPE)
+        if isinstance(ledger, Ledger) and current_ledger() is not ledger:
+            with bind_ledger(ledger):
+                await super()._dispatch(scope, receive, send)
+        else:
+            await super()._dispatch(scope, receive, send)
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "POST":
+            with request_timing() as ledger:
+                private_scope = {**scope, _TIMING_SCOPE: ledger} if ledger else scope
+                await super().handle(private_scope, receive, send)
+        else:
+            await super().handle(scope, receive, send)
+
+
 native_capture_api_app = APIRouter(
-    prefix="/service/v1/agent", route_class=CaptureDeadlineRoute
+    prefix="/service/v1/agent", route_class=NativeTimingRoute
 )
 PATH = "/scribe/native-capture"
 MAX_BODY = 4_194_304
@@ -70,8 +100,11 @@ def authenticate_native_workload(request: Request) -> EntraServicePrincipal:
     credentials = HTTPAuthorizationCredentials(
         scheme="Bearer", credentials=values[0][7:]
     )
-    agent = authenticate_agent_api_request(credentials)
-    capture = authenticate_scribe_capture_request(credentials)
+    with request_signing_keys():
+        with phase("workload_agent"):
+            agent = authenticate_agent_api_request(credentials)
+        with phase("workload_capture"):
+            capture = authenticate_scribe_capture_request(credentials)
     if agent.client_id != capture.client_id:
         raise HTTPException(403, "Native capture unavailable")
     return capture

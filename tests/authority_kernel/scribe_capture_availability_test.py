@@ -56,6 +56,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
         return {"ok": True}
 
     entered, release, closed = Event(), Event(), Event()
+    first_returned = Event()
     observed = {"sql_threads": [], "closed": 0}
     observer = {}
     main_thread = get_ident()
@@ -81,8 +82,11 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
 
     monkeypatch.setattr(admission, "get_session", database)
     monkeypatch.setattr(
-        admission.CaptureCaller, "authorize",
-        lambda *args: SimpleNamespace(id="scribe_capture_binding_01j00000000000000000000000"),
+        admission.CaptureCaller,
+        "authorize",
+        lambda *args: SimpleNamespace(
+            id="scribe_capture_binding_01j00000000000000000000000"
+        ),
     )
 
     class Client:
@@ -99,6 +103,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=target), base_url="http://testserver"
     ) as connection:
+
         async def capture(sequence):
             return await connection.post(
                 "/service/v1/agent/scribe/capture-operations",
@@ -114,7 +119,8 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
                     "workspace_id": str(UUID(int=42)),
                     "request_nonce": str(UUID(int=sequence + 201)),
                     "operation": {
-                        "kind": "chunk_receipt", "object_id": str(UUID(int=sequence + 301)),
+                        "kind": "chunk_receipt",
+                        "object_id": str(UUID(int=sequence + 301)),
                     },
                 },
             )
@@ -130,9 +136,16 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
                 second = asyncio.run_coroutine_threadsafe(capture(8), loop)
                 read = asyncio.run_coroutine_threadsafe(unrelated(), loop)
                 done, _ = concurrent.futures.wait([read, second], timeout=0.2)
-                observer["read_before_release"] = read in done and read.result().status_code
-                observer["second_before_release"] = second in done and second.result().status_code
-                release.wait(0.4)
+                observer["read_before_release"] = (
+                    read in done and read.result().status_code
+                )
+                observer["second_before_release"] = (
+                    second in done and second.result().status_code
+                )
+                # Keep SQL blocked until the public deadline response is observed.
+                # A bounded fallback still detects a boundary that waits for SQL,
+                # without racing two unrelated thread scheduling windows.
+                assert first_returned.wait(2), "capture waited for blocked SQL"
                 release.set()
                 read.result(timeout=3)
                 second.result(timeout=3)
@@ -145,6 +158,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
         try:
             first = await capture(0)
             observer["first_before_release"] = not release.is_set()
+            first_returned.set()
             await asyncio.to_thread(thread.join, 3)
         finally:
             release.set()

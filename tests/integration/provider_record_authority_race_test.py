@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 import app.configuration.session_prep as configuration
 import app.routes.embed_context as embed_context
+import app.services.provider_context_exchange as provider_context_exchange
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.services.authority import AuthorityRequestDeniedError, exchange_context_token
 from app.services.session_prep_note_sources import (
@@ -29,7 +30,7 @@ from app.models.provider_record_authority import (
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 from app.models.superadmin_capability import SuperadminCapabilityEnvironment
 from sqlalchemy import text
-from sqlmodel import select
+from sqlmodel import col, select
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 from tests.routes.utils import provision_practice_in_force
@@ -53,8 +54,8 @@ def test_concurrent_exchanges_create_one_record_and_practice_scope(monkeypatch):
 
     def exchange():
         with get_session() as session:
-            session.exec(text("SET LOCAL lock_timeout = '3s'"))
-            session.exec(text("SET LOCAL statement_timeout = '5s'"))
+            session.execute(text("SET LOCAL lock_timeout = '3s'"))
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
             barrier.wait(timeout=5)
             return exchange_context_token(
                 session=session,
@@ -82,8 +83,8 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
 
     def review():
         with get_session() as session:
-            session.exec(text("SET LOCAL lock_timeout = '3s'"))
-            session.exec(text("SET LOCAL statement_timeout = '5s'"))
+            session.execute(text("SET LOCAL lock_timeout = '3s'"))
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
             barrier.wait(timeout=5)
             record = finalize_note_for_session_prep(
                 session=session,
@@ -104,7 +105,9 @@ def test_concurrent_review_actions_record_only_one_exact_revision():
 
 
 @pytest.mark.parametrize("via_http", [False, True])
-def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypatch, via_http):
+def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(
+    monkeypatch, via_http
+):
     doctor = DoctorFactory.build().save()
     practice = provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
@@ -117,7 +120,7 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
         SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
     )
     monkeypatch.setattr(
-        embed_context,
+        provider_context_exchange,
         "configured_superadmin_capability_environment",
         lambda: SuperadminCapabilityEnvironment.staging,
     )
@@ -129,14 +132,18 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
         # The real router's aglobal_session remains installed: its Doctor
         # lock must not precede the Practice lock during view-as checking.
         with get_session() as session:
-            session.exec(text("SET LOCAL statement_timeout = '5s'"))
-            pids.put(session.exec(text("SELECT pg_backend_pid()")).scalar_one())
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
+            pids.put(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
         return embed_context.VerifiedClerkIdentity(
             ISSUER, doctor.clerk_id, "sess_synthetic_race"
         )
 
-    api.dependency_overrides[embed_context.authenticate_embed_platform_session] = verified_identity
-    api.dependency_overrides[embed_context.get_authority_kernel_settings] = lambda: AUTHORITY_SETTINGS
+    api.dependency_overrides[embed_context.authenticate_embed_platform_session] = (
+        verified_identity
+    )
+    api.dependency_overrides[embed_context.get_authority_kernel_settings] = (
+        lambda: AUTHORITY_SETTINGS
+    )
 
     def exchange():
         if via_http:
@@ -144,15 +151,18 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
                 response = client.post(
                     "/embed/v1/context-tokens/exchange",
                     headers={"X-Cosmaneura-Embed-Version": "1.0"},
-                    json={"requested_surface": "provider_assistant", "record_ref": str(appointment.id)},
+                    json={
+                        "requested_surface": "provider_assistant",
+                        "record_ref": str(appointment.id),
+                    },
                 )
             assert response.status_code == 403, response.text
             assert response.json()["code"] == "REQUEST_DENIED"
             return "denied"
 
         with get_session() as session:
-            session.exec(text("SET LOCAL statement_timeout = '5s'"))
-            pids.put(session.exec(text("SELECT pg_backend_pid()")).scalar_one())
+            session.execute(text("SET LOCAL statement_timeout = '5s'"))
+            pids.put(session.execute(text("SELECT pg_backend_pid()")).scalar_one())
             try:
                 exchange_context_token(
                     session=session,
@@ -174,8 +184,8 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
             pid = pids.get(timeout=3)
             deadline = monotonic() + 3
             while True:
-                session.exec(text("SELECT pg_stat_clear_snapshot()"))
-                wait_type = session.exec(
+                session.execute(text("SELECT pg_stat_clear_snapshot()"))
+                wait_type = session.execute(
                     text(
                         "SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"
                     ),
@@ -191,11 +201,11 @@ def test_offboarding_can_lock_doctor_while_exchange_waits_for_practice(monkeypat
             # Doctor-first exchange would already hold this row and fail NOWAIT.
             session.exec(
                 select(Doctor)
-                .where(Doctor.id == doctor.id)
+                .where(col(Doctor.id) == doctor.id)
                 .with_for_update(nowait=True)
             ).one()
             member = session.exec(
-                select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
+                select(PracticeMember).where(col(PracticeMember.doctor_id) == doctor.id)
             ).one()
             member.seat_state = "inactive"
             session.add(member)

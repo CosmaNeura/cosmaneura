@@ -61,6 +61,9 @@ def test_default_range_lookup():
 
 
 def test_every_default_range_is_coherent():
+    assert DEFAULT_RANGES, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for spec in DEFAULT_RANGES.values():
         if spec.standard_low is not None and spec.standard_high is not None:
             assert spec.standard_low < spec.standard_high

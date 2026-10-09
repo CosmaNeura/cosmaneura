@@ -219,6 +219,10 @@ def test_contract_inventory_covers_all_workloads_and_sensitive_keys(contracts):
         )
     assert "STRIPE_SECRET_KEY" in by_name[WORKER]["secret_names"]
     assert "STRIPE_SECRET_KEY" not in by_name[SCHEDULER]["secret_names"]
+    for flag in ("SCRIBE_ENCOUNTER_CREATION_ENABLED", "COMPANION_SESSION_PREP_ENABLED"):
+        assert flag in by_name[API]["public_names"]
+        assert flag not in by_name[WORKER]["public_names"]
+        assert flag not in by_name[SCHEDULER]["public_names"]
 
 
 @pytest.mark.parametrize(

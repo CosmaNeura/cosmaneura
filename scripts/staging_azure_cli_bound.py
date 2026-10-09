@@ -447,6 +447,9 @@ def validate_argv(
 
 def validate_runtime_operation(argv: list[str], operation: str) -> None:
     """Exact commands for reviewed recovery and keeping the existing API warm."""
+    if operation == "web-image-only":
+        validate_web_image_operation(argv)
+        return
     require(operation in {"recover-core", "warm-scribe"})
     names = STAGING_CONTAINER_NAMES - {"cosmaneura-staging-migrate"}
     if operation == "warm-scribe":
@@ -509,6 +512,114 @@ def validate_runtime_operation(argv: list[str], operation: str) -> None:
                 *ending,
             ]
         )
+
+
+def validate_web_image_operation(argv: list[str]) -> None:
+    """Additive web-only release lane; no configuration or sibling mutation."""
+    core = {
+        "cosmaneura-staging-app",
+        "cosmaneura-staging-worker",
+        "cosmaneura-staging-scheduler",
+    }
+    name = flag_values(argv, {"--name"})
+    require(len(name) == 1 and name[0] in core)
+    suffix = ["--name", name[0], "--resource-group", STAGING_RESOURCE_GROUP]
+    ending = ["--subscription", SUBSCRIPTION, "--only-show-errors", "--output", "json"]
+    if argv[:2] == ["containerapp", "show"]:
+        require(argv == ["containerapp", "show", *suffix, *ending])
+        return
+    if argv[:3] == ["containerapp", "secret", "list"]:
+        require(
+            argv
+            == ["containerapp", "secret", "list", *suffix, "--show-values", *ending]
+        )
+        return
+    revision = flag_values(argv, {"--revision"})
+    if argv[:3] == ["containerapp", "revision", "show"]:
+        require(
+            len(revision) == 1
+            and re.fullmatch(re.escape(name[0]) + r"--[a-z0-9-]+", revision[0])
+        )
+        require(
+            argv
+            == [
+                "containerapp",
+                "revision",
+                "show",
+                *suffix,
+                "--revision",
+                revision[0],
+                *ending,
+            ]
+        )
+        return
+    require(name == ["cosmaneura-staging-app"])
+    if argv[:2] == ["containerapp", "update"]:
+        image = flag_values(argv, {"--image"})
+        require(
+            len(image) == 1
+            and re.fullmatch(
+                re.escape(STAGING_REGISTRY_HOST + "/" + STAGING_REPOSITORY)
+                + r"@sha256:[0-9a-f]{64}",
+                image[0],
+            )
+        )
+        require(
+            argv == ["containerapp", "update", *suffix, "--image", image[0], *ending]
+        )
+        return
+    require(
+        len(revision) == 1
+        and re.fullmatch(re.escape(name[0]) + r"--[a-z0-9-]+", revision[0])
+    )
+    if argv[:3] == ["containerapp", "replica", "list"]:
+        require(
+            argv
+            == [
+                "containerapp",
+                "replica",
+                "list",
+                *suffix,
+                "--revision",
+                revision[0],
+                *ending,
+            ]
+        )
+        return
+    require(argv[:2] == ["containerapp", "exec"])
+    replica, container, command = (
+        flag_values(argv, {flag}) for flag in ("--replica", "--container", "--command")
+    )
+    require(
+        len(replica) == len(container) == len(command) == 1
+        and re.fullmatch(re.escape(revision[0]) + r"-[a-z0-9-]+", replica[0])
+        and container == ["cosmaneura-staging-app-web"]
+    )
+    require(command == [WEB_SCHEMA_PROBE_COMMAND])
+    require(
+        argv
+        == [
+            "containerapp",
+            "exec",
+            *suffix,
+            "--revision",
+            revision[0],
+            "--replica",
+            replica[0],
+            "--container",
+            container[0],
+            "--command",
+            command[0],
+            *ending,
+        ]
+    )
+
+
+WEB_SCHEMA_PROBE_COMMAND = (
+    "/opt/venv/bin/python -I -B -c \"import base64,zlib;exec(zlib.decompress(base64.b64decode('"
+    + base64.b64encode(zlib.compress(SCHEMA_PROBE_SOURCE.encode())).decode()
+    + "')))\""
+)
 
 
 def normalized_scopes(scopes: object) -> set[str]:

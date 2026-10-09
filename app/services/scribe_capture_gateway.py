@@ -294,6 +294,34 @@ def validate_receipt(
     capture_profile: protocol.CaptureProfileReceipt | None = None,
 ) -> BaseModel:
     """Validate even injected clients; retained or malformed receipts grant nothing."""
+    if isinstance(operation, protocol.PrepareRecordingWindow):
+        from app.services.scribe_recording_window import (
+            validate_prepared_recording_window,
+        )
+
+        return validate_prepared_recording_window(
+            operation, receipt, scope, upload_origins=upload_origins, now=now
+        )
+    if operation.kind == "preparation_metadata":
+        try:
+            result = protocol.PreparationMetadata.model_validate(
+                receipt.model_dump(mode="json")
+            )
+        except (ValueError, TypeError, AttributeError):
+            raise CaptureReceiptInvalid from None
+        for read, component in (
+            (protocol.ReadOperation(kind="creator_review"), result.review),
+            (protocol.ReadOperation(kind="encryption_key"), result.encryption_key),
+            (protocol.ReadOperation(kind="capabilities"), result.capabilities),
+        ):
+            validate_receipt(
+                read,
+                component,
+                scope,
+                upload_origins=upload_origins,
+                now=now,
+            )
+        return result
     if isinstance(operation, protocol.NativeSourceExtension):
         try:
             if (
@@ -543,6 +571,7 @@ async def execute_capture_operation(
     client_request_key: str,
     client: ScribeWorkflowClient,
     upload_origins: tuple[str, ...] = (),
+    _expected_scope: AdmittedCaptureScope | None = None,
 ) -> BaseModel:
     try:
         if not re.fullmatch(r"[!-~]{8,255}", client_request_key):
@@ -555,6 +584,53 @@ async def execute_capture_operation(
         and client_request_key == operation.authorize_idempotency_key
     ):
         raise CaptureReceiptInvalid
+    # These helpers take their one fresh pre-dispatch decision after the
+    # cancellation yield, then reauthorize after validating the remote reply.
+    # Do not run another complete decision here before that same dispatch.
+    if operation.kind in {
+        "preparation_metadata",
+        "native_recording_preparation",
+    } or isinstance(operation, protocol.PrepareRecordingWindow):
+        if _expected_scope is not None:
+            raise CaptureReceiptInvalid
+        if operation.kind == "native_recording_preparation":
+            from app.services.scribe_preparation_metadata import (
+                execute_native_recording_preparation,
+            )
+
+            return await execute_native_recording_preparation(
+                caller=caller,
+                binding_ref=binding_ref,
+                workspace_id=workspace_id,
+                client_request_key=client_request_key,
+                client=client,
+            )
+        if operation.kind == "preparation_metadata":
+            from app.services.scribe_preparation_metadata import (
+                execute_preparation_metadata,
+            )
+
+            return await execute_preparation_metadata(
+                caller=caller,
+                binding_ref=binding_ref,
+                workspace_id=workspace_id,
+                scope=None,
+                client_request_key=client_request_key,
+                client=client,
+            )
+        from app.services.scribe_recording_window import execute_recording_window
+
+        assert isinstance(operation, protocol.PrepareRecordingWindow)
+        return await execute_recording_window(
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
+            scope=None,
+            operation=operation,
+            client_request_key=client_request_key,
+            client=client,
+            upload_origins=upload_origins,
+        )
     try:
         scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
     except AdmissionConsentRequired:
@@ -564,19 +640,26 @@ async def execute_capture_operation(
         if operation.kind == "provider_encounter":
             return protocol.ProviderEncounter(status="not_prepared", review=None)
         raise
-    if isinstance(operation, protocol.PrepareRecordingWindow):
-        from app.services.scribe_recording_window import execute_recording_window
-
-        return await execute_recording_window(
-            caller=caller,
-            binding_ref=binding_ref,
-            workspace_id=workspace_id,
-            scope=scope,
-            operation=operation,
-            client_request_key=client_request_key,
-            client=client,
-            upload_origins=upload_origins,
+    # Private compound callers supply immutable expected
+    # scope, never permission. Compare it with this component's ordinary fresh
+    # authorization before any downstream read or mutation. Each original
+    # post-I/O authorization below still checks against this same scope.
+    if _expected_scope is not None and (
+        not (
+            isinstance(
+                operation,
+                (protocol.BindKey, protocol.IssueLease, protocol.ReserveChunks),
+            )
+            or (
+                isinstance(operation, protocol.ReadOperation)
+                and operation.kind
+                in {"creator_review", "encryption_key", "capabilities"}
+                and operation.profile_receipt_id is None
+            )
         )
+        or scope != _expected_scope
+    ):
+        raise CaptureReceiptInvalid
     if isinstance(operation, protocol.NativeSourceStartSequence):
         # Both original intents and stop custody already live in the native
         # journal. Reuse each existing decision and its post-I/O access check.
@@ -768,7 +851,20 @@ async def execute_capture_operation(
         raise CaptureOperationUnavailable from None
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    # These configured metadata reads just returned from creator review's
+    # fresh post-validation authorization, with no intervening await. Only
+    # their overlapping caller check is removed. Other reads and all mutation,
+    # legacy status and creator-window branches retain their existing checks.
+    reviewed_metadata_read = (
+        configured
+        and isinstance(operation, protocol.ReadOperation)
+        and operation.kind in {"encryption_key", "capabilities"}
+        and operation.profile_receipt_id is None
+    )
+    if (
+        not reviewed_metadata_read
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
         raise CaptureReceiptInvalid
     capture_profile = None
     if getattr(operation, "profile_receipt_id", None) is not None:
@@ -849,7 +945,12 @@ async def execute_capture_operation(
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
     # The remote receipt/operation remains durable in Scribe if access changed.
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    # Compound components retain the wrapper's final publication fence after
+    # synchronous receipt validation instead of also checking immediately here.
+    if (
+        _expected_scope is None
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
         raise CaptureReceiptInvalid
     checked = validate_receipt(
         operation,
@@ -864,6 +965,11 @@ async def execute_capture_operation(
             checked.validate_raw(raw, scope.session_request.practitioner_id)
         except (ValueError, TypeError, AssertionError):
             raise CaptureReceiptInvalid from None
+    if (
+        _expected_scope is not None
+        and authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+    ):
+        raise CaptureReceiptInvalid
     return checked
 
 
@@ -896,10 +1002,13 @@ async def _execute_creator_review(
         raise CaptureOperationUnavailable from None
     except (ScribeWorkflowError, TimeoutError):
         raise CaptureOperationUnconfirmed from None
-    # Retained remote evidence grants nothing after local revocation or switch.
+    checked = validate_receipt(operation, result, scope, upload_origins=())
+    # Check after synchronous validation, immediately before returning to the
+    # next dispatch/publication boundary. This also catches changes made while
+    # validating remote evidence; the caller does not need a duplicate check.
     if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
         raise CaptureReceiptInvalid
-    return validate_receipt(operation, result, scope, upload_origins=())
+    return checked
 
 
 def component_request_key(

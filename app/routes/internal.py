@@ -45,6 +45,7 @@ from app.configuration.stripe import (
     stripe_webhook_configured,
 )
 from app.services import lab_ranges as lab_ranges_service
+from app.services.billing_header_contract import BillingHeaderSource
 from app.services.biomarkers import (
     BY_KEY as BIOMARKERS_BY_KEY,
 )
@@ -189,6 +190,8 @@ from sqlmodel import col, select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
+from .billing_header import billing_header_api, note_billing_sources
+from .cab_bff import router as cab_bff_router
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
@@ -239,6 +242,8 @@ internal_api_app = APIRouter(
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
 internal_api_app.include_router(session_prep_review_api)
+internal_api_app.include_router(billing_header_api)
+internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
 
 
@@ -352,6 +357,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     note_transcripts: list[AIVisitTranscript] = Field(default_factory=list)
     capture_workflow_required: bool = False
     engagement_role: EngagementRole | None = None
+    billing_header_sources: dict[str, BillingHeaderSource] = Field(default_factory=dict)
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
     session_prep_prior_notes: PriorNoteOverview | None = None
 
@@ -446,6 +452,7 @@ def note_detail(
         note_transcripts=note_transcripts,
         capture_workflow_required=capture_workflow_required,
         engagement_role=engagement_role,
+        billing_header_sources=note_billing_sources(request, visit_notes),
         session_prep_reviews=(
             note_review_statuses(doctor, visit_notes)
             if getattr(request.state, "view_as", None) is None
@@ -685,8 +692,14 @@ class VisitAudioUploadRequest(BaseModel, extra="forbid"):
     date_of_birth: datetime
 
 
+class VisitAudioUploadResponse(BaseModel):
+    appointment_id: str
+
+
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
+def upload_visit_audio_file(
+    request: Request, data: VisitAudioUploadRequest
+) -> VisitAudioUploadResponse:
     doctor: Doctor = request.state.doctor
 
     try:
@@ -738,7 +751,7 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
             event_code="clinical_upload_receipt_completion_deferred",
             upload_type=UploadType.VISIT.value,
         )
-    return result
+    return VisitAudioUploadResponse(appointment_id=result)
 
 
 class ExampleNoteUploadGrant(BaseModel, extra="forbid"):

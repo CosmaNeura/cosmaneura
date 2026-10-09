@@ -80,7 +80,9 @@ class Sequence:
             raise ScribeWorkflowRetryableError("synthetic lost response")
         if operation.action == "prepare":
             if self.cancel_after_prepare:
-                asyncio.current_task().cancel()
+                current_task_2 = asyncio.current_task()
+                assert current_task_2 is not None
+                current_task_2.cancel()
             return self.preparation
         assert operation.action == "authorize"
         return self.authorization

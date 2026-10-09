@@ -105,10 +105,8 @@ def _get_or_create_clerk_user(email: str):
         return user_list[0]
     elif len(user_list) == 0:
         return clerk.users.create(
-            request={
-                "email_address": [email],
-                "password": CLERK_DEV_USER_PASSWORD,
-            }
+            email_address=[email],
+            password=CLERK_DEV_USER_PASSWORD,
         )
     else:
         raise ValueError("more than one user found")

@@ -168,6 +168,8 @@ class ReadOperation(ProtectedContract):
         "capture_lease_state",
         "creator_review",
         "native_recording_context",
+        "native_recording_preparation",
+        "preparation_metadata",
         "provider_encounter",
     ]
     profile_receipt_id: UUID | None = None
@@ -296,6 +298,23 @@ class NativeRecordingContext(ProtectedContract):
     tenant_id: UUID
     session_id: UUID
     status: Literal["created", "capturing"]
+
+
+class NativeRecordingPreparation(ProtectedContract):
+    """Fresh native key namespace and public key; grants no source permission."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    context: NativeRecordingContext
+    encryption_key: EncryptionKey
+
+
+class PreparationMetadata(ProtectedContract):
+    """One fresh preparation result; contains no capture/start permission."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    review: CreatorReviewView
+    encryption_key: EncryptionKey
+    capabilities: Capabilities
 
 
 class ProviderEncounter(ProtectedContract):
