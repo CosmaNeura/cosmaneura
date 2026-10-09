@@ -163,8 +163,8 @@ def _lock_capture_owner(
     # Appointment/link input cannot choose the account whose rows are locked.
     # Stored bearer-owned mount fields and fresh identity/roster rows select
     # the lock owner; they never authorize a capture. The caller's complete
-    # authorize_interaction decision follows these locks, then runs again after
-    # every authority input is refreshed/locked. Do not recursively perform
+    # authorize_interaction decision follows after every authority input is
+    # refreshed/locked. Do not recursively perform
     # that complete record/access decision merely to discover the lock owner.
     if (
         mount.session_kind != "authenticated"
@@ -286,48 +286,60 @@ def _authorized_scope_with_rows(
         nonlocal owner
         owner = _lock_capture_owner(session, mount, settings, ownership)
 
-    # Match exchange/offboarding's Practice -> Doctor order before the complete
-    # existing view-as/token/lineage authorization; this hook grants no access.
-    authorized = authority.authorize_interaction(
-        **arguments, _before_view_as=lock_owner
+    locked_rows: dict[str, Any] = {}
+
+    def lock_context(stored_mount: MountContextSession) -> None:
+        if owner is None:
+            raise CaptureScopeDenied
+        mount = _locked(session, MountContextSession, stored_mount.id)
+        if (mount.id, mount.actor_id, mount.source_identity_id) != (
+            owner.mount_id,
+            owner.actor_id,
+            owner.identity_id,
+        ):
+            raise CaptureScopeDenied
+        actor = _locked(session, AuthorityActor, mount.actor_id)
+        identity = _locked(
+            session, AuthorityActorExternalIdentity, mount.source_identity_id
+        )
+        if (
+            identity.actor_id != owner.actor_id
+            or identity.issuer != settings.clerk_issuer
+            or identity.subject != owner.subject
+            or identity.revoked_at is not None
+        ):
+            raise CaptureScopeDenied
+        tenant = _locked(session, AuthorityTenant, mount.tenant_id)
+        person_binding = _locked(
+            session, AuthorityPersonBinding, mount.person_binding_id
+        )
+        _locked(session, AuthorityPerson, person_binding.person_id)
+        membership = session.exec(
+            select(AuthorityTenantMembership)
+            .where(
+                AuthorityTenantMembership.actor_id == actor.id,
+                AuthorityTenantMembership.tenant_id == tenant.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if membership is None:
+            raise CaptureScopeDenied
+        locked_rows.update(
+            actor=actor, identity=identity, tenant=tenant, person_binding=person_binding
+        )
+
+    # Bearer -> Practice -> Doctor -> view-as -> token -> current context rows.
+    # Each capture phase still makes a complete fresh authorization decision;
+    # take its original row locks first instead of repeating that decision.
+    authority.authorize_interaction(
+        **arguments, _before_view_as=lock_owner, _before_context=lock_context
     )
     if owner is None:
         raise CaptureScopeDenied
-    mount = _locked(session, MountContextSession, authorized.mount_session.id)
-    if (mount.id, mount.actor_id, mount.source_identity_id) != (
-        owner.mount_id,
-        owner.actor_id,
-        owner.identity_id,
-    ):
-        raise CaptureScopeDenied
-    actor = _locked(session, AuthorityActor, mount.actor_id)
-    identity = _locked(
-        session, AuthorityActorExternalIdentity, mount.source_identity_id
+    actor, identity, tenant, person_binding = (
+        locked_rows[name] for name in ("actor", "identity", "tenant", "person_binding")
     )
-    if (
-        identity.actor_id != owner.actor_id
-        or identity.issuer != settings.clerk_issuer
-        or identity.subject != owner.subject
-        or identity.revoked_at is not None
-    ):
-        raise CaptureScopeDenied
-    tenant = _locked(session, AuthorityTenant, mount.tenant_id)
-    person_binding = _locked(session, AuthorityPersonBinding, mount.person_binding_id)
-    _locked(session, AuthorityPerson, person_binding.person_id)
-    membership = session.exec(
-        select(AuthorityTenantMembership)
-        .where(
-            AuthorityTenantMembership.actor_id == actor.id,
-            AuthorityTenantMembership.tenant_id == tenant.id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if membership is None:
-        raise CaptureScopeDenied
-    # Re-derive lineage after refreshing/locking every authority input. This
-    # rejects concurrent revocation and stale ORM identity-map values alike.
-    authority.authorize_interaction(**arguments)
     if (
         person_binding.binding_kind != "provider_record"
         or person_binding.binding_ref != appointment_ref

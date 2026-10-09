@@ -180,6 +180,7 @@ def native(engine, workflow, monkeypatch):
         binding = initial.json()["result"]["binding_ref"]
         monkeypatch.setattr(service, "execute_capture_operation", original)
         yield SimpleNamespace(
+            connection=connection,
             post=post,
             row=row,
             args=args,

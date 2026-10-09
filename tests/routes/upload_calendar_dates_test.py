@@ -102,6 +102,9 @@ def test_registration_returns_its_authoritative_appointment_id(monkeypatch):
 
 
 def test_registration_openapi_declares_appointment_response():
+    import json
+    from pathlib import Path
+
     from tests.integration.server import api_app
 
     schema = api_app.openapi()
@@ -117,6 +120,20 @@ def test_registration_openapi_declares_appointment_response():
     assert schema["components"]["schemas"]["VisitAudioUploadResponse"]["required"] == [
         "appointment_id"
     ]
+    stored = json.loads(
+        (Path(__file__).resolve().parents[2] / "web/openapi.json").read_text()
+    )
+    stored_operation = stored["paths"]["/internal/v1/visit-audio-file/upload-complete"][
+        "post"
+    ]
+    assert (
+        stored_operation["responses"]["200"]["content"]["application/json"]["schema"]
+        == response_schema
+    )
+    assert (
+        stored["components"]["schemas"]["VisitAudioUploadResponse"]
+        == schema["components"]["schemas"]["VisitAudioUploadResponse"]
+    )
 
 
 def test_two_same_day_uploads_keep_the_earlier_reviewed_visit_as_a_prep_source(

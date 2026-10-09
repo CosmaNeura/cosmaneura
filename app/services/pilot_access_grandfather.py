@@ -762,6 +762,65 @@ def revoked_pilot_access_grant(
         )
 
 
+def owned_provider_tombstone_rows(
+    doctor: Doctor, *, ownership: DoctorAccessRowOwnership
+) -> (
+    tuple[PilotAccessGrandfatherGrant | None, PracticeMember | None, Practice | None]
+    | None
+):
+    """Read adjacent early tombstone/member inputs under their actual owner locks.
+
+    This supplies no grant or access decision. Default-clock callers still
+    sample time after these inputs, then read the current grant separately.
+    An invalid proof keeps the original individual reads.
+    """
+    try:
+        subject = _normalize_clerk_id(doctor.clerk_id)
+    except PilotAccessGrandfatherError:
+        return None
+    with get_session() as session:
+        if not ownership.matches(session, doctor, practice_id=ownership._practice_id):
+            return None
+        active = (
+            select(col(PilotAccessGrandfatherGrant.id))
+            .where(
+                PilotAccessGrandfatherGrant.clerk_id == subject,
+                PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
+            )
+            .correlate(None)
+            .exists()
+        )
+        tombstone = (
+            select(col(PilotAccessGrandfatherGrant.id))
+            .where(
+                PilotAccessGrandfatherGrant.clerk_id == subject,
+                PilotAccessGrandfatherGrant.revoked_at != None,  # noqa: E711
+                ~active,
+            )
+            .order_by(col(PilotAccessGrandfatherGrant.revoked_at).desc())
+            .limit(1)
+            .correlate(None)
+            .scalar_subquery()
+        )
+        row = session.exec(
+            select(PracticeMember, Practice, PilotAccessGrandfatherGrant)
+            .select_from(Doctor)
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+            .outerjoin(
+                PilotAccessGrandfatherGrant,
+                col(PilotAccessGrandfatherGrant.id) == tombstone,
+            )
+            .where(Doctor.id == doctor.id, Doctor.clerk_id == subject)
+        ).first()
+        if row is None or not ownership.matches(
+            session, doctor, practice_id=ownership._practice_id
+        ):
+            return None
+        member, practice, revoked = row
+        return revoked, member, practice
+
+
 def active_pilot_access_grant(
     doctor: Doctor,
     *,

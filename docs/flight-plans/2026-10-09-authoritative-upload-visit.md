@@ -19,3 +19,7 @@ regressions, full frontend suite, types/lint, and the local change budget. No
 live Azure, Clerk, patient-data or deployment acceptance is claimed. Receiver
 response is additive for older clients; newer clients fail safe if it is absent.
 Recovery: revert the merge commit. No data rollback or schema contraction.
+
+The checked-in frontend OpenAPI input must include this response reference and
+model; the contract test compares those two stored sections with the receiver.
+Keep unrelated historical schema differences out of this correction.

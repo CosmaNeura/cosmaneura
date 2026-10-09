@@ -944,7 +944,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VisitAudioUploadResponse"
+                }
               }
             }
           },
@@ -7653,6 +7655,19 @@
           "date_of_birth"
         ],
         "title": "VisitAudioUploadRequest"
+      },
+      "VisitAudioUploadResponse": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "appointment_id"
+        ],
+        "title": "VisitAudioUploadResponse"
       },
       "VisitPrepSettingsData": {
         "properties": {

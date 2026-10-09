@@ -23,6 +23,7 @@ from app.services.pilot_access_grandfather import (
     CurrentProviderAccessRows,
     active_pilot_access_grant,
     owned_provider_access_rows,
+    owned_provider_tombstone_rows,
     revoked_pilot_access_grant,
 )
 
@@ -232,6 +233,20 @@ def resolve_doctor_access(
         with get_session() as session:
             if not _ownership.matches(session, doctor, practice_id=_practice_id):
                 _ownership = None
+    if _ownership is not None and at is None and doctor.deleted_at is None:
+        early = owned_provider_tombstone_rows(doctor, ownership=_ownership)
+        if early is not None:
+            revoked, member, practice = early
+            if revoked is not None:
+                return _denied("pilot_grant_revoked")
+            return _decide(
+                doctor,
+                member,
+                practice,
+                require_entitlement=require_entitlement,
+                at=datetime.now(timezone.utc),
+                _ownership=_ownership,
+            )
     tombstone = doctor_tombstone(doctor, _ownership=_ownership)
     if tombstone is not None:
         return _denied(tombstone)
