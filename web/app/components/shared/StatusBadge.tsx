@@ -23,7 +23,7 @@ const TONES = {
       "bg-sidebar-primary",
     ],
     "not-started": [
-      "bg-sidebar-foreground/10 text-on-navy-muted",
+      "bg-sidebar-foreground/10 text-sidebar-foreground",
       "bg-sidebar-foreground/50",
     ],
   },

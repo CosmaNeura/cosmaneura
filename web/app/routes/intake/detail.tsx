@@ -39,7 +39,7 @@ export const meta: MetaFunction = () => {
   ]
 }
 
-function IntakeHeader({
+export function IntakeHeader({
   badge,
   title,
   dataFields,
@@ -127,7 +127,12 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
       <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
-          badge={intakeStatusBadge(loaderData.appointment.intake_status, t)}
+          // A written summary is the ground truth for completion, even if a
+          // re-run summary left an answer missing.
+          badge={intakeStatusBadge(
+            hasSummary ? "complete" : loaderData.appointment.intake_status,
+            t,
+          )}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,

@@ -147,7 +147,12 @@ function SelectionEntry({ entry }: { entry: SidebarEntry }) {
     <Link
       to={entry.url}
       aria-current={isCurrent ? "page" : undefined}
-      onClick={() => {
+      onClick={(event) => {
+        // Re-selecting the open entry should not refetch it, but modifier
+        // clicks still open it elsewhere.
+        const modified =
+          event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+        if (isCurrent && !modified) event.preventDefault()
         if (isMobile) setOpenMobile(false)
       }}
       className={cn(
@@ -197,9 +202,9 @@ function SelectionList({
       {entries.map((entry, index) => (
         <React.Fragment key={entry.id}>
           {entry.group && entry.group !== entries[index - 1]?.group && (
-            <h2 className="text-on-navy-muted px-4 pt-4 pb-2 text-xs font-semibold tracking-wide uppercase">
+            <h3 className="text-on-navy-muted px-4 pt-4 pb-2 text-xs font-semibold tracking-wide uppercase">
               {entry.group}
-            </h2>
+            </h3>
           )}
           <SelectionEntry entry={entry} />
         </React.Fragment>
@@ -224,9 +229,14 @@ function isTypingTarget(target: EventTarget | null) {
   )
 }
 
-// Focus the list search with "/" unless the user is already typing somewhere.
-function useSlashToFocus(inputRef: React.RefObject<HTMLInputElement | null>) {
+// Focus the list search with "/" unless the user is already typing, a dialog
+// owns focus, or the list panel is collapsed (its input stays mounted).
+function useSlashToFocus(
+  inputRef: React.RefObject<HTMLInputElement | null>,
+  enabled: boolean,
+) {
   React.useEffect(() => {
+    if (!enabled) return
     function onKeyDown(event: KeyboardEvent) {
       if (
         event.key !== "/" ||
@@ -235,6 +245,7 @@ function useSlashToFocus(inputRef: React.RefObject<HTMLInputElement | null>) {
         event.altKey ||
         event.defaultPrevented ||
         isTypingTarget(event.target) ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]') ||
         !inputRef.current
       ) {
         return
@@ -244,7 +255,7 @@ function useSlashToFocus(inputRef: React.RefObject<HTMLInputElement | null>) {
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [inputRef])
+  }, [inputRef, enabled])
 }
 
 function SelectionSidebar({
@@ -265,7 +276,7 @@ function SelectionSidebar({
   const [searchTerm, setSearchTerm] = React.useState("")
   const [showThisWeek, setShowThisWeek] = React.useState(false)
   const searchRef = React.useRef<HTMLInputElement>(null)
-  useSlashToFocus(searchRef)
+  useSlashToFocus(searchRef, isMobile || open)
 
   const filteredEntries = entries.filter(
     (entry) =>
@@ -278,9 +289,9 @@ function SelectionSidebar({
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <div className="text-sidebar-foreground text-base font-medium">
+          <h2 className="text-sidebar-foreground text-base font-medium">
             {header ?? "Appointments"}
-          </div>
+          </h2>
           <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
             <span>This Week</span>
             <Switch

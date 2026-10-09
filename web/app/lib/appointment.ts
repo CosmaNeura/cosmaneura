@@ -23,9 +23,8 @@ export function appointmentsToSidebarEntries(
     invariant(appointment.id, "appointment.id is required")
     const appointmentDate = parseAppointmentDate(appointment.appointment_date)
     // An older backend may omit status; a visit title says nothing about notes.
-    const status = Object.hasOwn(noteStatuses, appointment.id)
-      ? noteStatuses[appointment.id]
-      : "none"
+    const knownStatuses: Partial<NoteStatuses> = noteStatuses
+    const status = knownStatuses[appointment.id] ?? "none"
     return {
       id: appointment.id,
       url: linkTarget(appointment.id),

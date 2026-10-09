@@ -78,3 +78,18 @@ describe("note sidebar labels", () => {
     )
   })
 })
+
+describe("defensive note status lookup", () => {
+  it("treats a present but empty status as unknown", () => {
+    const [entry] = appointmentsToSidebarEntries(
+      appointments.slice(0, 1),
+      linkTarget,
+      { named_capture: undefined } as unknown as Record<
+        string,
+        "not-started" | "completed"
+      >,
+    )
+    expect(entry.status).toBe("none")
+    expect(entry.statusLabel).toBeUndefined()
+  })
+})

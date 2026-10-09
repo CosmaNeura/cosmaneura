@@ -228,10 +228,10 @@ describe("AppSidebar navigation and search", () => {
     ...overrides,
   })
 
-  function renderAt(path: string, entries: SidebarEntry[]) {
+  function renderAt(path: string, entries: SidebarEntry[], defaultOpen = true) {
     return render(
       <MemoryRouter initialEntries={[path]}>
-        <SidebarProvider>
+        <SidebarProvider defaultOpen={defaultOpen}>
           <AppSidebar
             isLoading={false}
             entries={entries}
@@ -324,6 +324,26 @@ describe("AppSidebar navigation and search", () => {
     expect(search).toHaveFocus()
   })
 
+  it("leaves / alone while the list panel is collapsed", () => {
+    renderAt("/notes", [visit({})], false)
+
+    fireEvent.keyDown(document.body, { key: "/" })
+
+    expect(screen.getByRole("searchbox", { hidden: true })).not.toHaveFocus()
+  })
+
+  it("leaves / alone while a dialog is open", () => {
+    renderAt("/notes", [visit({})])
+    const dialog = document.createElement("div")
+    dialog.setAttribute("role", "dialog")
+    document.body.append(dialog)
+
+    fireEvent.keyDown(document.body, { key: "/" })
+
+    expect(screen.getByRole("searchbox")).not.toHaveFocus()
+    dialog.remove()
+  })
+
   it("groups consecutive entries under one subheading", () => {
     renderAt("/schedule", [
       visit({ id: "a", title: "Meeting A", group: "Today" }),
@@ -332,7 +352,10 @@ describe("AppSidebar navigation and search", () => {
     ])
 
     expect(
-      screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+      screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
     ).toEqual(["Today", "Past"])
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Notes" }),
+    ).toBeInTheDocument()
   })
 })
