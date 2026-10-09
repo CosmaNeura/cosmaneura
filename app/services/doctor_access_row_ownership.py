@@ -257,6 +257,17 @@ def lookup_owns_subject_rows(session: Session, doctor_id: Any, subject: str) -> 
     )
 
 
+def lookup_uses_provider_session(session: Session) -> bool:
+    """Exact synchronous lookup session; no lock or access evidence is granted."""
+    scope = _LOOKUP_ROWS.get()
+    return (
+        isinstance(session, Session)
+        and scope is not None
+        and scope[0] is session
+        and _session_context.get() is session
+    )
+
+
 @contextmanager
 def capture_doctor_access_rows(
     session: Session, *, practice_id: Any, doctor_id: Any, subject: str

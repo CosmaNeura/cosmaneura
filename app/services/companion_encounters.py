@@ -39,6 +39,7 @@ from app.services.doctor_access import doctor_access_in_force
 from app.services.doctor_access_row_ownership import (
     lock_doctor_access_rows,
     lookup_owns_provider_rows,
+    lookup_uses_provider_session,
     provider_doctor_access_rows,
 )
 from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_as_exists
@@ -62,12 +63,18 @@ from sqlalchemy import select as sql_select
 from sqlmodel import Session, col, select
 
 
-def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
-    authority._ensure_enabled(settings)
-    if issuer != settings.clerk_issuer:
-        raise authority.AuthorityRequestDeniedError
-    # Follow current Core exchange/offboarding: Practice before Doctor, then
-    # view-as and authority rows. Recheck a practice move after waiting.
+def _provider_owner_discovery_rows(session, subject):
+    # Discovery identifies the original lock owner, never permission. A real
+    # synchronous lookup reads both inputs together; all post-wait checks and
+    # individual locks still run. Other callers retain their original reads.
+    if lookup_uses_provider_session(session):
+        rows = session.exec(
+            select(Doctor, PracticeMember)
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .where(Doctor.clerk_id == subject)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None)
     owner = session.exec(
         select(Doctor)
         .where(Doctor.clerk_id == subject)
@@ -82,6 +89,16 @@ def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
         if owner is not None
         else None
     )
+    return owner, member
+
+
+def _provider(session, *, issuer, subject, session_id, tenant_ref, settings):
+    authority._ensure_enabled(settings)
+    if issuer != settings.clerk_issuer:
+        raise authority.AuthorityRequestDeniedError
+    # Follow current Core exchange/offboarding: Practice before Doctor, then
+    # view-as and authority rows. Recheck a practice move after waiting.
+    owner, member = _provider_owner_discovery_rows(session, subject)
     if owner is None or member is None:
         raise authority.AuthorityRequestDeniedError
     practice_id, doctor_id = member.practice_id, owner.id
