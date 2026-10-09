@@ -226,7 +226,7 @@ def test_absent_discovery_components_keep_original_refusal(
                         if component == "member"
                         else "user_absent_" + uuid4().hex,
                         session_id="session_invented_scribe",
-                        tenant_ref=native.provisioned.tenant_ref,
+                        tenant_ref=native.args["tenant_id"],
                         settings=SETTINGS,
                     )
 
