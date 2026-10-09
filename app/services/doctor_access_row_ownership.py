@@ -221,6 +221,19 @@ def current_capture_doctor_rows(
     return None
 
 
+def lookup_owns_provider_rows(
+    session: Session, doctor: Doctor, ownership: DoctorAccessRowOwnership
+) -> bool:
+    """Only a matching synchronous lookup may combine current provider reads."""
+    scope = _LOOKUP_ROWS.get()
+    return (
+        scope is not None
+        and scope[0] is session
+        and _session_context.get() is session
+        and ownership.matches(session, doctor, practice_id=ownership._practice_id)
+    )
+
+
 @contextmanager
 def capture_doctor_access_rows(
     session: Session, *, practice_id: Any, doctor_id: Any, subject: str
