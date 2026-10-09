@@ -665,11 +665,21 @@ def test_workflow_inputs_are_never_interpolated_into_shell_source() -> None:
     workflow_paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
     action_paths = sorted((ROOT / ".github/actions").glob("*/action.yml"))
 
+    assert workflow_paths, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
+
+    inspected = 0
     for path in (*workflow_paths, *action_paths):
         for run_source in _workflow_run_sources(path.read_text(encoding="utf-8")):
+            inspected += 1
             assert (
                 re.search(r"\$\{\{\s*(?:github\.event\.)?inputs\.", run_source) is None
             ), path
+
+    # If the extractor ever stops recognising `run:` blocks this guard fails
+    # instead of reporting a clean scan of nothing.
+    assert inspected, "no run steps were extracted, so no shell source was scanned"
 
 
 def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:

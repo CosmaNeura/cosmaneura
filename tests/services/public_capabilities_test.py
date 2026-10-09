@@ -121,7 +121,12 @@ def test_each_failed_gate_denies_every_capability(
 ) -> None:
     facts = replace(_authorized(), **{field: value})
 
-    for key, decision in capability_decisions(facts).items():
+    decisions = capability_decisions(facts)
+
+    assert decisions, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
+    for key, decision in decisions.items():
         assert decision["decision"] == "denied", key
         assert decision["data_mode"] == "none", key
         assert expected_reason in _reason_codes(decision), key
@@ -142,6 +147,9 @@ def test_unknown_rollout_fails_closed_as_policy_unavailable() -> None:
         rollouts={"soap_note": "experimental"},  # type: ignore[dict-item]
     )
 
+    assert decisions, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for key, decision in decisions.items():
         assert decision["decision"] == "denied", key
         assert decision["rollout"] == "disabled", key

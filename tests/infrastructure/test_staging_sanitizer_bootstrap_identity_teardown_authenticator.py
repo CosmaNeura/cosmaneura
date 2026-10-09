@@ -390,6 +390,9 @@ def test_exact_field_provenance(
             lambda value: tuple(reversed(value._evidence_digests)),
         ),
     )
+    assert mutations, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for name, mutation in mutations:
         value = auth.authenticate_bootstrap_identity_teardown_evidence(
             evidence_directory=directory
