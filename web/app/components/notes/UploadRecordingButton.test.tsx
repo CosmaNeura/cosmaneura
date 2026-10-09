@@ -28,6 +28,11 @@ vi.mock("@tanstack/react-query", () => ({
             name: "Synthetic unknown date",
             date_of_birth: null,
           },
+          {
+            id: "patient_stored_with_space",
+            name: "Synthetic spaced name ",
+            date_of_birth: "1990-05-06T00:00:00Z",
+          },
         ],
   }),
 }))
@@ -75,6 +80,14 @@ vi.mock("~/components/shared/SimpleComboBox", () => ({
     renderItem: (item: { value: string; label: string }) => React.ReactNode
   }) => (
     <>
+      <button
+        type="button"
+        onClick={() =>
+          onSelectedItemChange({ value: "new_item", label: "  Typed person  " })
+        }
+      >
+        Type a new name
+      </button>
       {items.map((item) => (
         <button
           key={item.value}
@@ -160,7 +173,40 @@ describe("upload form guidance", () => {
     expect(screen.queryByText("Loading...")).toBeNull()
   })
 
-  it("keeps an accessible trigger on every screen size", () => {
+  it("keeps a selected name exactly as stored so the patient is matched", async () => {
+    upload.mockResolvedValue({ ok: true })
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic spaced name/ }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+    expect(upload.mock.calls[0][0].patientName).toBe("Synthetic spaced name ")
+  })
+
+  it("trims a newly typed name", async () => {
+    upload.mockResolvedValue({ ok: true })
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(screen.getByRole("button", { name: "Type a new name" }))
+    fireEvent.change(screen.getByLabelText("Date of Birth"), {
+      target: { value: "1995-02-03" },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+    expect(upload.mock.calls[0][0].patientName).toBe("Typed person")
+  })
+
+  it("does not render the trigger hidden at any breakpoint", () => {
     render(<UploadRecordingButton />)
     const trigger = screen.getByRole("button", { name: "Upload Recording" })
     expect(trigger.className).not.toMatch(/(^|\s)hidden(\s|$)/)

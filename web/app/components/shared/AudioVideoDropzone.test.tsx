@@ -7,7 +7,7 @@ describe("AudioVideoDropzone", () => {
   it("states the size limit derived from the upload ceiling", () => {
     render(<AudioVideoDropzone file={null} onDropFile={vi.fn()} />)
 
-    expect(screen.getByText(/smaller than 2 GB/)).toBeInTheDocument()
+    expect(screen.getByText(/smaller than 1.9 GB/)).toBeInTheDocument()
   })
 
   it("shows the chosen file with its size and a way to change it", () => {

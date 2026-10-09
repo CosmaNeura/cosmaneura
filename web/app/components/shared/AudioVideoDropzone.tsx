@@ -10,7 +10,7 @@ import {
 import { VISIT_UPLOAD_MAX_BYTES } from "~/lib/azure-upload"
 import { formatFileSize } from "~/lib/file-size"
 
-// Mirrors _CONTENT_TYPE_BY_EXTENSION["visit_audio"] in app/commands/uploads/sas.py;
+// Mirrors _CONTENT_TYPE_BY_EXTENSION[UploadType.VISIT] in app/commands/uploads/sas.py;
 // the server refuses any other extension.
 const ACCEPTED_TYPES = {
   "audio/*": [".mp3", ".wav", ".m4a"],
@@ -56,7 +56,7 @@ export function AudioVideoDropzone({
         <DropzoneMessage />
       </div>
       <DropZoneArea>
-        <DropzoneTrigger className="my-6 flex gap-8 bg-transparent text-sm">
+        <DropzoneTrigger className="my-6 flex max-w-full min-w-0 gap-8 bg-transparent text-sm">
           {children}
           {!children && !file && (
             <div className="flex items-center gap-4 font-semibold">
@@ -67,7 +67,7 @@ export function AudioVideoDropzone({
                 <p>Upload Audio or Video</p>
                 <p className="text-muted-foreground text-xs">
                   Click here or drag in an audio or video file smaller than{" "}
-                  {formatFileSize(VISIT_UPLOAD_MAX_BYTES)}
+                  {formatFileSize(VISIT_UPLOAD_MAX_BYTES, "down")}
                 </p>
               </div>
             </div>

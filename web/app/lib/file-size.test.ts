@@ -13,4 +13,8 @@ describe("formatFileSize", () => {
   ])("formats %d bytes as %s", (bytes, label) => {
     expect(formatFileSize(bytes)).toBe(label)
   })
+
+  it("never overstates a limit", () => {
+    expect(formatFileSize(VISIT_UPLOAD_MAX_BYTES, "down")).toBe("1.9 GB")
+  })
 })

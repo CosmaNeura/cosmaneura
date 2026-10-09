@@ -108,7 +108,7 @@ function PatientComboboxSearch({
     // `new_item` is a special key to used to indicate that a value was typed in, and it wasn't selected from the list
     // when this occurs, we want to set the field value to the inputted text (label)
     if (item.value == "new_item") {
-      onChange(item.label)
+      onChange(item.label.trim())
     } else {
       const selected_patient_id = item.value
       const patient = patients.find(
@@ -188,10 +188,14 @@ function VisitAudioUploadForm({
         subMonths(new Date(), 2),
         "Appointment date cannot be more than 2 months in the past",
       ),
+    // Validate without trimming: the backend matches existing patients by
+    // their exact stored name, so a selected name must pass through as-is.
     patient_name: z
       .string({ required_error: `Enter the ${t.patientPossessive} name` })
-      .trim()
-      .min(1, `Enter the ${t.patientPossessive} name`),
+      .refine(
+        (name) => name.trim().length > 0,
+        `Enter the ${t.patientPossessive} name`,
+      ),
     date_of_birth: z
       .date({
         required_error: "Enter a date of birth",
@@ -363,7 +367,11 @@ export function UploadRecordingButton() {
         <Dialog open={open} onOpenChange={setOpen}>
           <TooltipTrigger asChild>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm">
+              <Button
+                variant="outline"
+                size="sm"
+                className="size-9 md:h-8 md:w-auto"
+              >
                 <Upload className="h-4 w-4 md:mr-2" aria-hidden="true" />
                 {/* Icon-only on phones; the name stays available to assistive tech. */}
                 <span className="sr-only md:not-sr-only">Upload Recording</span>
