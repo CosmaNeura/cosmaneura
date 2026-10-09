@@ -30,7 +30,7 @@ from app.services.superadmin_capability import (
 from activemodel.session_manager import get_session
 from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
-from app.models.practice import PracticeMember
+from app.models.practice import Practice, PracticeMember
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError, MultipleResultsFound
 from sqlmodel import Session, col, select
@@ -863,3 +863,86 @@ def active_pilot_access_grant(
         if not hmac.compare_digest(grant.email_sha256, email_sha256):
             return None
         return grant
+
+
+@dataclass(frozen=True)
+class CurrentProviderAccessRows:
+    """Fresh inputs to one locked access decision, never retained permission."""
+
+    member: PracticeMember | None
+    practice: Practice | None
+    pilot_grant: PilotAccessGrandfatherGrant | None
+
+
+def owned_provider_access_rows(
+    doctor: Doctor,
+    *,
+    at: datetime,
+    ownership: DoctorAccessRowOwnership,
+) -> CurrentProviderAccessRows | None:
+    """Read the existing member/practice and late grant inputs together.
+
+    Only explicit-clock decisions under actual row ownership use this path.
+    Default-clock callers retain their original sampling/query order. Invalid
+    evidence or malformed subjects select the existing individual reads.
+    """
+    current = _aware(at)
+    if doctor.deleted_at is not None or not doctor.clerk_id or not doctor.email:
+        return None
+    try:
+        subject = _normalize_clerk_id(doctor.clerk_id)
+    except PilotAccessGrandfatherError:
+        return None
+    with get_session() as session:
+        if not ownership.matches(session, doctor, practice_id=ownership._practice_id):
+            return None
+        rows = session.exec(
+            select(Doctor, PracticeMember, Practice, PilotAccessGrandfatherGrant)
+            .select_from(Doctor)
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
+            .outerjoin(
+                PilotAccessGrandfatherGrant,
+                and_(
+                    PilotAccessGrandfatherGrant.clerk_id == subject,
+                    PilotAccessGrandfatherGrant.granted_at <= current,
+                    or_(
+                        PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
+                        PilotAccessGrandfatherGrant.revoked_at > current,
+                    ),
+                ),
+            )
+            .where(Doctor.id == doctor.id, Doctor.clerk_id == subject)
+            .limit(2)
+        ).all()
+        if not ownership.matches(session, doctor, practice_id=ownership._practice_id):
+            return None
+        persisted = rows[0][0] if rows else None
+        member, practice = rows[0][1:3] if rows else (None, None)
+        grant = None
+        # Preserve Doctor validation before grant cardinality refusal, including
+        # the existing identity-map behavior (no populate_existing added here).
+        if persisted is not None and persisted.deleted_at is None and persisted.email:
+            try:
+                email = _normalize_email(persisted.email)
+            except PilotAccessGrandfatherError:
+                email = None
+            if email is not None:
+                if len(rows) > 1:
+                    raise MultipleResultsFound(
+                        "Multiple rows were found when one or none was required"
+                    )
+                candidate = rows[0][3]
+                if (
+                    candidate is not None
+                    and (
+                        candidate.doctor_id_snapshot is None
+                        or candidate.doctor_id_snapshot == doctor.id
+                    )
+                    and candidate.email_snapshot == email
+                    and hmac.compare_digest(
+                        candidate.email_sha256, _email_sha256(email)
+                    )
+                ):
+                    grant = candidate
+        return CurrentProviderAccessRows(member, practice, grant)

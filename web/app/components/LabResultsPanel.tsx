@@ -177,7 +177,7 @@ export function LabResultsPanel({ patientId }: { patientId: string }) {
                             href={e.source_url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
+                            className="text-primary hover:underline"
                           >
                             source ↗
                           </a>

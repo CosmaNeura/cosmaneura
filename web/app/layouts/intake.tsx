@@ -3,11 +3,11 @@ import { Outlet, href } from "react-router"
 import { Route } from "./+types/intake"
 
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
-import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { Appointment, IntakeStatus, intakeList } from "~/configuration/client"
-import { standardDateTimeFormat } from "~/lib/date"
-import { useTerminology } from "~/utils/terminology"
+import { Appointment, intakeList } from "~/configuration/client"
+import { parseAppointmentDate, relativeDayLabel } from "~/lib/date"
+import { intakeStatusBadge } from "~/lib/intake-status"
+import { type LabelSet, useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -20,29 +20,24 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
 
 export function appointmentsToSidebarEntries(
   appointments: Appointment[],
+  t: Pick<LabelSet, "patient">,
+  now: Date = new Date(),
 ): SidebarEntry[] {
-  const STATUS_MAP: Record<IntakeStatus, StatusBadgeOptions> = {
-    pending: "not-started",
-    processing: "in-progress",
-    complete: "completed",
-    // this should never occur, but makes TS happy
-    none: "not-started",
-  }
-
   return appointments.map((appointment) => {
     invariant(appointment.id, "appointment.id is required")
+    const appointmentDate = parseAppointmentDate(appointment.appointment_date)
+    const badge = intakeStatusBadge(appointment.intake_status, t)
     return {
       id: appointment.id,
       url: href("/intake/:id", { id: appointment.id }),
       title: appointment.patient_name,
-      // location: appointment.location,
-      // TODO wire up type of appointment
-      // subTitle: appointment.appointment_name,
-      date: standardDateTimeFormat(appointment.appointment_date),
-      // status: appointment.status,
-      status: STATUS_MAP[appointment.intake_status],
-      preview: appointment.appointment_name,
-    } as SidebarEntry
+      location: "",
+      date: relativeDayLabel(appointmentDate, now),
+      isoDate: appointmentDate.toISOString(),
+      status: badge.status,
+      statusLabel: badge.label,
+      preview: appointment.appointment_name ?? "",
+    }
   })
 }
 
@@ -61,7 +56,12 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
       <AppSidebar
         isLoading={!appointments}
         header={`${t.patientTitle} Intake`}
-        entries={appointmentsToSidebarEntries(appointments)}
+        emptyState={{
+          title: "No intakes yet",
+          description: `When a ${t.patient} is sent an intake link, their intake will appear here.`,
+        }}
+        searchPlaceholder={`Search ${t.patientPlural}…`}
+        entries={appointmentsToSidebarEntries(appointments, t)}
       />
       <Outlet />
     </SidebarProvider>

@@ -2,6 +2,7 @@
 
 import inspect
 from collections import Counter
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -58,18 +59,24 @@ def test_existing_companion_connection_setup_and_revocation_on_owned_database(
 
 
 @pytest.mark.parametrize(
-    "kind,before,after,eligible,total",
+    "kind,eligible",
     [
-        ("mount", 1043, 963, 20, 45),
-        ("creator_review", 821, 757, 16, 36),
-        ("capabilities", 1031, 967, 16, 44),
+        ("mount", 20),
+        ("creator_review", 16),
+        ("capabilities", 16),
     ],
 )
 def test_real_native_reduces_only_explicit_owned_provider_queries(
-    native, engine, monkeypatch, kind, before, after, eligible, total, record_property
+    native, engine, monkeypatch, kind, eligible, record_property
 ):
     # Preserve this older comparison's original record-lineage baseline.
     monkeypatch.setattr(records, "_record_lineage_rows", original_rows)
+    # Compare the original explicit provider-proof change independently of
+    # newer lookup retention. Later native batching legitimately changed the
+    # absolute totals; preserve exact per-decision savings and lock parity.
+    monkeypatch.setattr(
+        scribe_encounters, "lookup_doctor_access_row_scope", lambda _: nullcontext()
+    )
     # Isolate the older owned-access-query change in this original regression.
     # The joined final-provider path has its own response/lock/count comparison.
     monkeypatch.setattr(
@@ -92,6 +99,7 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
     original = access.resolve_doctor_access
     original_matches = DoctorAccessRowOwnership.matches
     observed = Counter()
+    decision_queries = []
     locks = []
 
     def resolve(doctor, **kwargs):
@@ -111,6 +119,11 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
                 # alive, changing the SQLAlchemy identity-map query counts.
                 del caller_frame
         observed[proof is not None] += 1
+        if proof is not None:
+            with query_counts(engine) as counts:
+                result = original(doctor, **kwargs)
+            decision_queries.append(counts["all_selects"])
+            return result
         return original(doctor, **kwargs)
 
     def capture_locks(_connection, _cursor, statement, *_args):
@@ -123,6 +136,7 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
     runs = []
     for optimized in (False, True):
         observed.clear()
+        decision_queries.clear()
         locks.clear()
         with monkeypatch.context() as patch:
             if not optimized:
@@ -136,18 +150,29 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
             finally:
                 event.remove(engine, "before_cursor_execute", capture_locks)
         assert response.status_code == 200
-        assert observed == {True: eligible, False: total - eligible}
-        runs.append((counts["all_selects"], list(locks)))
-    assert [x[0] for x in runs] == [before, after]
+        assert observed[True] == eligible
+        assert decision_queries == [3 if optimized else 6] * eligible
+        runs.append(
+            (counts["all_selects"], list(locks), dict(observed), response.json())
+        )
+    assert runs[0][0] > runs[1][0]
     assert runs[0][1] == runs[1][1]  # same lock statements and ordering
-    record_property("selects", f"{before}->{after}")
-    record_property("access_decisions", total)
+    assert runs[0][2] == runs[1][2]  # every complete access decision remains
+    field = "encounter" if kind == "mount" else "receipt"
+    assert runs[0][3]["result"][field] == runs[1][3]["result"][field]
+    record_property("selects", f"{runs[0][0]}->{runs[1][0]}")
+    record_property("access_decisions", sum(runs[1][2].values()))
     record_property("explicit_owned_decisions", eligible)
 
 
 @pytest.mark.parametrize("writer_kind", ["billing", "membership", "pilot_revoke"])
 def test_actual_writer_waits_then_commits_and_next_native_open_denies(
-    native, engine, monkeypatch, writer_kind, record_property
+    native,
+    engine,
+    monkeypatch,
+    writer_kind,
+    record_property,
+    _expected_access_queries=3,
 ):
     at = datetime.now(UTC)
     with session_for(engine) as setup:
@@ -261,7 +286,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
             observed.append("writer_blocked_no_side_effect")
             with query_counts(engine) as counts:
                 result = original(doctor, **kwargs)
-            assert counts["all_selects"] == 3
+            assert counts["all_selects"] == _expected_access_queries
             return result
         return original(doctor, **kwargs)
 

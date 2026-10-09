@@ -114,6 +114,15 @@ function show({
   )
 }
 
+describe("note detail page heading", () => {
+  it("renders the patient name as the only page-level heading", () => {
+    show()
+    const headings = screen.getAllByRole("heading", { level: 1 })
+    expect(headings).toHaveLength(1)
+    expect(headings[0]).toHaveTextContent("Synthetic Patient")
+  })
+})
+
 describe("note transcript provenance", () => {
   afterEach(() => vi.restoreAllMocks())
   it("opens the exact note requested from the prior-visit review list", () => {

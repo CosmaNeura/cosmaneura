@@ -2,10 +2,9 @@ import { useState } from "react"
 import { useRouteLoaderData } from "react-router"
 
 import { Button } from "@/components/ui/button"
-import { Separator } from "@/components/ui/separator"
 import { SidebarInset } from "@/components/ui/sidebar"
-import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
+import { PageHeader } from "~/components/shared/PageHeader"
 import { getClient } from "~/configuration/clerk"
 import { internalApiFetch } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
@@ -135,11 +134,7 @@ export default function ScheduleIndexPage() {
 
   return (
     <SidebarInset>
-      <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mr-2 h-4" />
-        <h1 className="text-lg font-semibold">Schedule</h1>
-      </header>
+      <PageHeader title="Schedule" isPageTitle />
       {loaderData?.zoom_connected === false ? (
         <ZoomConnectPrompt />
       ) : (

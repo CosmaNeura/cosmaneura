@@ -27,6 +27,7 @@ import { APP_LOADING_DELAY_COPY } from "~/lib/channel"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
+import { MotionConfig } from "motion/react"
 
 export const links: LinksFunction = () => [
   { rel: "icon", href: "/cosmas.ico", sizes: "any" },
@@ -121,7 +122,11 @@ const AppWithProviders = withProviders(App)
 // React Router 7.9+ requires route modules to export a function component.
 // Keep the existing provider composition while presenting that stable shape.
 export default function Root() {
-  return <AppWithProviders />
+  return (
+    <MotionConfig reducedMotion="user">
+      <AppWithProviders />
+    </MotionConfig>
+  )
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
