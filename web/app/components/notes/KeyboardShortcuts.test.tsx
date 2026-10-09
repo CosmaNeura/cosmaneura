@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { setSingleKeyShortcutsEnabled } from "~/lib/keyboard-shortcuts"
+
 import { NotesKeyboardShortcuts } from "./KeyboardShortcuts"
 import { fireEvent, render, screen } from "@testing-library/react"
 
 const toast = vi.hoisted(() => vi.fn())
 vi.mock("~/hooks/use-toast", () => ({ toast }))
 
-afterEach(() => toast.mockReset())
+afterEach(() => {
+  toast.mockReset()
+  setSingleKeyShortcutsEnabled(true)
+})
 
 describe("Notes keyboard shortcuts", () => {
-  it("opens the shortcut list with ? and from its button", () => {
+  it("opens the shortcut list with ?", () => {
     render(<NotesKeyboardShortcuts />)
 
     fireEvent.keyDown(document.body, { key: "?" })
@@ -17,6 +22,91 @@ describe("Notes keyboard shortcuts", () => {
       screen.getByRole("dialog", { name: "Keyboard shortcuts" }),
     ).toBeVisible()
     expect(screen.getByText("Copy the open note")).toBeVisible()
+  })
+
+  it("opens the shortcut list from its button", () => {
+    render(<NotesKeyboardShortcuts />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }))
+
+    expect(
+      screen.getByRole("dialog", { name: "Keyboard shortcuts" }),
+    ).toBeVisible()
+  })
+
+  it("lets the user turn single-key shortcuts off", () => {
+    const copy = vi.fn()
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <button type="button" data-shortcut="copy-note" onClick={copy}>
+          Copy
+        </button>
+      </>,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Keyboard shortcuts" }))
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Single-key shortcuts" }),
+    )
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
+
+    fireEvent.keyDown(document.body, { key: "c" })
+    fireEvent.keyDown(document.body, { key: "?" })
+
+    expect(copy).not.toHaveBeenCalled()
+    expect(screen.queryByRole("dialog")).toBeNull()
+    expect(window.localStorage.getItem("cosmas.single-key-shortcuts")).toBe(
+      "off",
+    )
+  })
+
+  it("copies the note the user is working in when several are open", () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <section data-note-viewer="">
+          <button type="button" data-shortcut="copy-note" onClick={first}>
+            Copy
+          </button>
+        </section>
+        <section data-note-viewer="">
+          <a href="#plan">Plan</a>
+          <button type="button" data-shortcut="copy-note" onClick={second}>
+            Copy
+          </button>
+        </section>
+      </>,
+    )
+
+    screen.getByRole("link", { name: "Plan" }).focus()
+    fireEvent.keyDown(document.activeElement!, { key: "c" })
+
+    expect(second).toHaveBeenCalledOnce()
+    expect(first).not.toHaveBeenCalled()
+  })
+
+  it("asks rather than guessing when several notes are open", () => {
+    const copy = vi.fn()
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <button type="button" data-shortcut="copy-note" onClick={copy}>
+          Copy
+        </button>
+        <button type="button" data-shortcut="copy-note" onClick={copy}>
+          Copy
+        </button>
+      </>,
+    )
+
+    fireEvent.keyDown(document.body, { key: "c" })
+
+    expect(copy).not.toHaveBeenCalled()
+    expect(toast).toHaveBeenCalledWith({
+      title: "Click into the note you want to copy",
+    })
   })
 
   it("copies the open note with c", () => {
@@ -41,6 +131,23 @@ describe("Notes keyboard shortcuts", () => {
     fireEvent.keyDown(document.body, { key: "c" })
 
     expect(toast).toHaveBeenCalledWith({ title: "Open a note to copy it" })
+  })
+
+  it("ignores c inside a widget that handles its own typing", () => {
+    const copy = vi.fn()
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <div role="listbox" tabIndex={0} aria-label="Accounts" />
+        <button type="button" data-shortcut="copy-note" onClick={copy}>
+          Copy
+        </button>
+      </>,
+    )
+
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "c" })
+
+    expect(copy).not.toHaveBeenCalled()
   })
 
   it("ignores c while typing", () => {

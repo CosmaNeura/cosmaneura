@@ -56,6 +56,7 @@ export default function VisitNoteViewer({
     <Collapsible
       ref={noteRef}
       id={`note-${note.id}`}
+      data-note-viewer=""
       className="mb-5 scroll-mt-24"
       open={isOpen}
       onOpenChange={setOpen}

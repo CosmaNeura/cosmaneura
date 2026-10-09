@@ -10,8 +10,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import { toast } from "~/hooks/use-toast"
-import { shouldIgnoreShortcut } from "~/lib/keyboard-shortcuts"
+import {
+  noteCopyButtonFor,
+  setSingleKeyShortcutsEnabled,
+  shouldIgnoreShortcut,
+  useSingleKeyShortcutsEnabled,
+} from "~/lib/keyboard-shortcuts"
 
 const SHORTCUTS = [
   ["j", "Next visit"],
@@ -25,20 +32,24 @@ const SHORTCUTS = [
 // with the list they move through.
 export function NotesKeyboardShortcuts() {
   const [open, setOpen] = useState(false)
+  const shortcutsEnabled = useSingleKeyShortcutsEnabled()
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "?" && event.key !== "c") return
       if (shouldIgnoreShortcut(event)) return
+      event.preventDefault()
       if (event.key === "?") {
-        event.preventDefault()
         setOpen(true)
-      } else if (event.key === "c") {
-        const copy = document.querySelector<HTMLButtonElement>(
-          '[data-shortcut="copy-note"]',
-        )
-        event.preventDefault()
-        if (copy) copy.click()
-        else toast({ title: "Open a note to copy it" })
+        return
+      }
+      const copy = noteCopyButtonFor(document.activeElement)
+      if (copy) {
+        copy.click()
+      } else if (document.querySelector('[data-shortcut="copy-note"]')) {
+        toast({ title: "Click into the note you want to copy" })
+      } else {
+        toast({ title: "Open a note to copy it" })
       }
     }
     window.addEventListener("keydown", onKeyDown)
@@ -66,6 +77,13 @@ export function NotesKeyboardShortcuts() {
               Available in Notes while you are not typing.
             </DialogDescription>
           </DialogHeader>
+          <Label className="flex items-center justify-between gap-4 text-sm font-normal">
+            <span>Single-key shortcuts</span>
+            <Switch
+              checked={shortcutsEnabled}
+              onCheckedChange={setSingleKeyShortcutsEnabled}
+            />
+          </Label>
           <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
             {SHORTCUTS.map(([key, action]) => (
               <div key={key} className="contents">

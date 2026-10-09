@@ -235,14 +235,6 @@ function matchesSearch(entry: SidebarEntry, term: string) {
     .some((field) => field!.toLowerCase().includes(needle))
 }
 
-function isTypingTarget(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-  )
-}
-
 // Focus the list search with "/" unless the user is already typing, a dialog
 // owns focus, or the list panel is collapsed (its input stays mounted).
 function useSlashToFocus(
@@ -254,12 +246,7 @@ function useSlashToFocus(
     function onKeyDown(event: KeyboardEvent) {
       if (
         event.key !== "/" ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.defaultPrevented ||
-        isTypingTarget(event.target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]') ||
+        shouldIgnoreShortcut(event) ||
         !inputRef.current
       ) {
         return
@@ -325,7 +312,9 @@ function SelectionSidebar({
       matchesSearch(entry, searchTerm) &&
       (!showThisWeek || isInCurrentWeek(new Date(entry.isoDate))),
   )
-  useListShortcuts(filteredEntries, listShortcuts && (isMobile || open))
+  // Desktop only: on small screens the list is a sheet (a dialog) and the
+  // shortcuts would only act while it is hidden.
+  useListShortcuts(filteredEntries, listShortcuts && !isMobile && open)
 
   const content = (
     <>
