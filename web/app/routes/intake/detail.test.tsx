@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { EmptyState } from "./detail"
-import { render, screen } from "@testing-library/react"
+import { EmptyState, IntakeSummary } from "./detail"
+import { fireEvent, render, screen } from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({ intakeDetail: vi.fn() }))
 vi.mock("~/utils/terminology", () => ({
@@ -33,5 +33,19 @@ describe("intake waiting state", () => {
     expect(
       screen.queryByRole("button", { name: "Copy intake link" }),
     ).toBeNull()
+  })
+})
+
+describe("intake summary", () => {
+  it("copies the rendered summary", async () => {
+    render(<IntakeSummary summary={"## Goals\n\nSynthetic goal"} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy summary" }))
+    await screen.findByRole("button", { name: "Copied" })
+
+    const [item] = await navigator.clipboard.read()
+    const text = await (await item.getType("text/plain")).text()
+    expect(text).toContain("Goals")
+    expect(text).toContain("Synthetic goal")
   })
 })
