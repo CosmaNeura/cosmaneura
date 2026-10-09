@@ -83,6 +83,8 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
       try {
         const { data } = await noteDetail({
           throwOnError: false,
+          // A hung request must not stall later polls.
+          signal: AbortSignal.timeout(NOTE_PROCESSING_POLL_MS),
           path: { appointment_id: appointmentId },
         })
         if (data?.notes?.length) void revalidate.current()

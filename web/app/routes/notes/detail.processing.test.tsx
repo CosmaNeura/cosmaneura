@@ -57,10 +57,13 @@ describe("note processing state", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
     })
-    expect(client.noteDetail).toHaveBeenCalledWith({
-      throwOnError: false,
-      path: { appointment_id: "appointment_new" },
-    })
+    expect(client.noteDetail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        throwOnError: false,
+        path: { appointment_id: "appointment_new" },
+        signal: expect.any(AbortSignal),
+      }),
+    )
     expect(vi.mocked(loader).mock.calls.length).toBe(initialLoads)
 
     client.noteDetail.mockResolvedValue({ data: { notes: [{ id: "n" }] } })

@@ -1,4 +1,4 @@
-import { loadNotesLayoutData } from "~/layouts/notes"
+import { loadNotesLayoutData } from "~/lib/notes-list"
 
 export const UPLOADED_VISIT_LOOKUP_MS = 5_000
 

@@ -41,7 +41,7 @@ import {
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import type { NotesLayoutData } from "~/layouts/notes"
+import type { NotesLayoutData } from "~/lib/notes-list"
 import { markProcessing } from "~/lib/recent-uploads"
 import { findUploadedAppointmentId } from "~/lib/uploaded-visit"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
@@ -186,12 +186,13 @@ function VisitAudioUploadForm({
     | NotesLayoutData
     | undefined
   const mounted = useRef(true)
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode runs this effect's cleanup once on mount; set it back.
+    mounted.current = true
+    return () => {
       mounted.current = false
-    },
-    [],
-  )
+    }
+  }, [])
   const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({

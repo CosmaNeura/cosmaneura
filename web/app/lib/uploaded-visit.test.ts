@@ -6,7 +6,7 @@ import {
 } from "./uploaded-visit"
 
 const layout = vi.hoisted(() => ({ load: vi.fn() }))
-vi.mock("~/layouts/notes", () => ({ loadNotesLayoutData: layout.load }))
+vi.mock("~/lib/notes-list", () => ({ loadNotesLayoutData: layout.load }))
 
 const listing = (...ids: string[]) => ({
   appointments: ids.map((id) => ({ id })),

@@ -1,4 +1,5 @@
 import { format, parseISO } from "date-fns"
+import { StrictMode } from "react"
 import { RouterProvider, createMemoryRouter } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
@@ -26,7 +27,12 @@ function renderButton() {
     ],
     { initialEntries: ["/notes"] },
   )
-  return render(<RouterProvider router={router} />)
+  // StrictMode matches React Router's default client entry.
+  return render(
+    <StrictMode>
+      <RouterProvider router={router} />
+    </StrictMode>,
+  )
 }
 
 const { upload } = vi.hoisted(() => ({ upload: vi.fn() }))
