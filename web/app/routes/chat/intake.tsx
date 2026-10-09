@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react"
-import { MetaFunction, useParams } from "react-router"
+import { type MetaFunction, useParams, useRevalidator } from "react-router"
+
+import { Loader2 } from "lucide-react"
 
 import type { Route } from "./+types/intake"
 
 import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
 import { IntakeThread } from "~/components/chat/intake/IntakeThread"
+import { AnimatedCheckmark } from "~/components/shared/AnimatedCheckmark"
 import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
@@ -17,10 +20,10 @@ function chatEndpoint(intakeId: string) {
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Your Doctor's Intake" },
+    { title: "Your visit intake" },
     {
       name: "description",
-      content: "Your doctor is requesting information about your health.",
+      content: "Your provider would like a few details before your visit.",
     },
   ]
 }
@@ -68,29 +71,68 @@ function IntakeLayout({ children }: { children: React.ReactNode }) {
   )
 }
 
-function IntakeComplete() {
+export function IntakeComplete() {
   return (
     <IntakeLayout>
-      <p className="mt-4 text-lg font-medium">Intake Complete</p>
-      <p className="mt-4">Thank you for your responses! </p>
+      <div className="flex max-w-md flex-col items-center gap-4 text-center">
+        <AnimatedCheckmark />
+        <h1 className="mt-2 text-2xl font-semibold">Thank you</h1>
+        <p className="text-muted-foreground">
+          Your answers are on their way to your provider. You can close this
+          page.
+        </p>
+      </div>
     </IntakeLayout>
   )
 }
 
-function IntakeProcessing() {
-  // reload every 10s until we are ready
-  useEffect(() => {
-    const reloadTimer = setTimeout(() => {
-      window.location.reload()
-    }, 10000)
+export const INTAKE_PROCESSING_POLL_MS = 10_000
 
-    return () => clearTimeout(reloadTimer)
-  }, [])
+export function IntakeProcessing() {
+  const revalidator = useRevalidator()
+
+  // Re-run the loader rather than reloading the page; the timer restarts
+  // after each check and stops once the questions are ready.
+  useEffect(() => {
+    if (revalidator.state !== "idle") return
+    const timer = setTimeout(
+      () => void revalidator.revalidate(),
+      INTAKE_PROCESSING_POLL_MS,
+    )
+    return () => clearTimeout(timer)
+  }, [revalidator])
 
   return (
     <IntakeLayout>
-      <h1 className="text-2xl font-bold">Loading...</h1>
-      <p className="mt-4 text-lg">Please wait while we load your intake.</p>
+      <div
+        role="status"
+        className="flex max-w-md flex-col items-center gap-4 text-center"
+      >
+        <Loader2
+          className="text-muted-foreground size-8 motion-safe:animate-spin"
+          aria-hidden="true"
+        />
+        <h1 className="text-2xl font-semibold">Preparing your questions…</h1>
+        <p className="text-muted-foreground">
+          This usually takes less than a minute. You can keep this page open.
+        </p>
+      </div>
+    </IntakeLayout>
+  )
+}
+
+// Patients reach this page from a link, so failures explain what to do next
+// without technical detail or any route into the clinician app.
+export function ErrorBoundary() {
+  return (
+    <IntakeLayout>
+      <div className="flex max-w-md flex-col items-center gap-3 text-center">
+        <h1 className="text-2xl font-semibold">This link isn&apos;t working</h1>
+        <p className="text-muted-foreground">
+          It may have expired. Please contact your provider&apos;s office for a
+          new link.
+        </p>
+      </div>
     </IntakeLayout>
   )
 }
@@ -108,7 +150,9 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
     return <IntakeComplete />
   }
 
-  if (loaderData.status === "processing") {
+  // While the intake is still being prepared the API answers "in_progress"
+  // with no question yet, rather than "processing".
+  if (loaderData.status === "processing" || !loaderData.question) {
     return <IntakeProcessing />
   }
 

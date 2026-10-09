@@ -1,5 +1,5 @@
 // https://www.assistant-ui.com/docs/runtimes/custom/external-store
-import { ReactNode, useState } from "react"
+import { ReactNode, createContext, useContext, useState } from "react"
 
 import {
   AppendMessage,
@@ -51,6 +51,20 @@ export const getNextQuestion = async (
   return intakeResponse
 }
 
+type IntakeSendState = {
+  failed: boolean
+  retry: () => void
+}
+
+const IntakeSendContext = createContext<IntakeSendState>({
+  failed: false,
+  retry: () => {},
+})
+
+export function useIntakeSend() {
+  return useContext(IntakeSendContext)
+}
+
 export function IntakeRuntimeProvider({
   api,
   initialMessages,
@@ -64,6 +78,31 @@ export function IntakeRuntimeProvider({
 }>) {
   const [isRunning, setIsRunning] = useState(false)
   const [messages, setMessages] = useState<IntakeMessage[]>(initialMessages)
+  // The unsent answer stays in the thread as the patient's message; a retry
+  // resends it rather than appending it again.
+  const [failedAnswer, setFailedAnswer] = useState<string | null>(null)
+
+  async function send(answer: string) {
+    setFailedAnswer(null)
+    setIsRunning(true)
+    try {
+      const questionResponse = await getNextQuestion(api, answer)
+
+      if (questionResponse.status === "completed") {
+        setIsFinished(true)
+        return
+      }
+
+      setMessages((currentConversation) => [
+        ...currentConversation,
+        { role: "assistant", content: questionResponse.question },
+      ])
+    } catch {
+      setFailedAnswer(answer)
+    } finally {
+      setIsRunning(false)
+    }
+  }
 
   const onNew = async (message: AppendMessage) => {
     if (message.content[0]?.type !== "text") {
@@ -77,40 +116,31 @@ export function IntakeRuntimeProvider({
       { role: "user", content: latestMessageInput },
     ])
 
-    // waiting for backend response
-    setIsRunning(true)
-
-    const questionResponse = await getNextQuestion(api, latestMessageInput)
-
-    if (questionResponse.status === "completed") {
-      setIsFinished(true)
-      return
-    }
-
-    const assistantMessage: IntakeMessage = {
-      role: "assistant",
-      content: questionResponse.question,
-    }
-
-    setMessages((currentConversation) => [
-      ...currentConversation,
-      assistantMessage,
-    ])
-
-    // finished consuming backend response
-    setIsRunning(false)
+    await send(latestMessageInput)
   }
 
   const runtime = useExternalStoreRuntime({
     isRunning,
+    // Keep the composer closed while an unsent answer waits for a retry, so a
+    // second answer cannot be sent to the wrong question.
+    isDisabled: failedAnswer !== null,
     messages,
     convertMessage,
     onNew,
   })
 
+  const sendState: IntakeSendState = {
+    failed: failedAnswer !== null,
+    retry: () => {
+      if (failedAnswer !== null && !isRunning) void send(failedAnswer)
+    },
+  }
+
   return (
     <AssistantRuntimeProvider runtime={runtime}>
-      {children}
+      <IntakeSendContext.Provider value={sendState}>
+        {children}
+      </IntakeSendContext.Provider>
     </AssistantRuntimeProvider>
   )
 }

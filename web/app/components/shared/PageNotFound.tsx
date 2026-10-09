@@ -1,3 +1,5 @@
+import { ErrorPage } from "./ErrorPage"
+
 function PageNotFoundIcon() {
   return (
     <svg
@@ -5,6 +7,7 @@ function PageNotFoundIcon() {
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"
+      aria-hidden="true"
     >
       <path
         strokeLinecap="round"
@@ -18,19 +21,17 @@ function PageNotFoundIcon() {
 
 export default function PageNotFound() {
   return (
-    <div className="bg-background flex min-h-screen items-center justify-center px-4">
-      <div className="text-center">
-        <h1 className="text-primary text-9xl font-bold">404</h1>
-        <div className="mt-4 motion-safe:animate-bounce">
-          <PageNotFoundIcon />
-        </div>
-        <h2 className="text-foreground mt-6 text-4xl font-bold tracking-tight sm:text-5xl">
-          Page not found
-        </h2>
-        <p className="text-muted-foreground mt-4 text-lg">
-          Sorry, we couldn't find the page you're looking for.
-        </p>
-      </div>
-    </div>
+    <ErrorPage
+      eyebrow={
+        <>
+          <p className="text-primary text-7xl font-bold sm:text-8xl">404</p>
+          <div className="mt-4 motion-safe:animate-bounce">
+            <PageNotFoundIcon />
+          </div>
+        </>
+      }
+      title="Page not found"
+      description="Sorry, we couldn't find the page you're looking for."
+    />
   )
 }
