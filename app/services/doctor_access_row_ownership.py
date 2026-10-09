@@ -221,6 +221,16 @@ def current_capture_doctor_rows(
     return None
 
 
+def capture_owns_subject_rows(session: Session, subject: str) -> bool:
+    """Current subject evidence only, before a fresh record-owner query."""
+    proof = _CAPTURE_ROWS.get()
+    return (
+        proof is not None
+        and _session_context.get() is session
+        and proof.matches_subject(session, subject)
+    )
+
+
 def lookup_owns_provider_rows(
     session: Session, doctor: Doctor, ownership: DoctorAccessRowOwnership
 ) -> bool:
