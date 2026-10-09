@@ -12,28 +12,32 @@ vi.mock("~/configuration/client", () => ({ client: {} }))
 vi.mock("client/@tanstack/react-query.gen", () => ({
   patientListOptions: () => ({}),
 }))
+const patientQuery = vi.hoisted(() => ({ loading: false }))
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({
-    data: [
-      {
-        id: "patient_synthetic",
-        name: "Synthetic date check",
-        date_of_birth: "2000-01-01T00:00:00Z",
-      },
-      {
-        id: "patient_unknown_dob",
-        name: "Synthetic unknown date",
-        date_of_birth: null,
-      },
-    ],
+    data: patientQuery.loading
+      ? undefined
+      : [
+          {
+            id: "patient_synthetic",
+            name: "Synthetic date check",
+            date_of_birth: "2000-01-01T00:00:00Z",
+          },
+          {
+            id: "patient_unknown_dob",
+            name: "Synthetic unknown date",
+            date_of_birth: null,
+          },
+        ],
   }),
 }))
 vi.mock("~/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }))
 vi.mock("~/utils/terminology", () => ({
   useTerminology: () => ({
-    patient: "patient",
-    patientTitle: "Patient",
-    patientPossessive: "patient’s",
+    patient: "client",
+    patientTitle: "Client",
+    patientPlural: "clients",
+    patientPossessive: "client’s",
   }),
 }))
 // Keep the actual form, validation, selection handler, and upload submission.
@@ -105,6 +109,62 @@ vi.mock("~/components/shared/AudioVideoDropzone", () => ({
 afterEach(() => {
   vi.useRealTimers()
   upload.mockReset()
+  patientQuery.loading = false
+})
+
+describe("upload form guidance", () => {
+  it("explains each missing field instead of submitting", async () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    expect(await screen.findByText("Enter the client’s name")).toBeVisible()
+    expect(screen.getByText("Enter a date of birth")).toBeVisible()
+    expect(screen.getByText("Choose a recording to upload")).toBeVisible()
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it("clears the file error as soon as a recording is chosen", async () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await screen.findByText("Choose a recording to upload")
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByText("Choose a recording to upload")).toBeNull(),
+    )
+  })
+
+  it("uses the doctor's terminology in the date of birth help", () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    expect(
+      screen.getByText(/It is used to identify this client in the future/),
+    ).toBeInTheDocument()
+  })
+
+  it("shows a placeholder input while the list loads", () => {
+    patientQuery.loading = true
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    expect(
+      screen.getByRole("status", { name: "Loading clients" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Loading...")).toBeNull()
+  })
+
+  it("keeps an accessible trigger on every screen size", () => {
+    render(<UploadRecordingButton />)
+    const trigger = screen.getByRole("button", { name: "Upload Recording" })
+    expect(trigger.className).not.toMatch(/(^|\s)hidden(\s|$)/)
+  })
 })
 
 describe("date-only recording upload", () => {

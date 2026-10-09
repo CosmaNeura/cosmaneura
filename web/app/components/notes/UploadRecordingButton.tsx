@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
   TooltipContent,
@@ -74,11 +75,16 @@ function PatientComboboxSearch({
     "patient_name"
   >["value"]
 }) {
+  const t = useTerminology()
   const { data } = useQuery({ ...patientListOptions({ client }) })
   const patients = data ?? []
 
   if (!data) {
-    return <div>Loading...</div>
+    return (
+      <div role="status" aria-label={`Loading ${t.patientPlural}`}>
+        <Skeleton className="h-9 w-full" />
+      </div>
+    )
   }
 
   // TODO I need to better document this entire mess and upstream some of the combobox improvements
@@ -182,13 +188,21 @@ function VisitAudioUploadForm({
         subMonths(new Date(), 2),
         "Appointment date cannot be more than 2 months in the past",
       ),
-    patient_name: z.string(),
-    date_of_birth: z.date().max(tomorrow, {
-      message: "Date of birth cannot be in the future",
-    }),
+    patient_name: z
+      .string({ required_error: `Enter the ${t.patientPossessive} name` })
+      .trim()
+      .min(1, `Enter the ${t.patientPossessive} name`),
+    date_of_birth: z
+      .date({
+        required_error: "Enter a date of birth",
+        invalid_type_error: "Enter a date of birth",
+      })
+      .max(tomorrow, {
+        message: "Date of birth cannot be in the future",
+      }),
     // most of the file validation is done within the dropzone component
     file: z.instanceof(File, {
-      message: "Please select a valid audio or video file",
+      message: "Choose a recording to upload",
     }),
   })
 
@@ -295,8 +309,8 @@ function VisitAudioUploadForm({
                 />
               </FormControl>
               <FormDescription>
-                Use an accurate DOB. This will be required to identify the
-                patient in the future.
+                Use an accurate date of birth. It is used to identify this{" "}
+                {t.patient} in the future.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -313,7 +327,9 @@ function VisitAudioUploadForm({
               </FormDescription>
               <FormControl>
                 <AudioVideoDropzone
-                  onDropFile={(file: File) => form.setValue("file", file)}
+                  onDropFile={(file: File) =>
+                    form.setValue("file", file, { shouldValidate: true })
+                  }
                   file={form.watch("file")}
                 />
               </FormControl>
@@ -347,14 +363,18 @@ export function UploadRecordingButton() {
         <Dialog open={open} onOpenChange={setOpen}>
           <TooltipTrigger asChild>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm" className="hidden md:flex">
-                <Upload className="mr-2 h-4 w-4" />
-                Upload Recording
+              <Button variant="outline" size="sm">
+                <Upload className="h-4 w-4 md:mr-2" aria-hidden="true" />
+                {/* Icon-only on phones; the name stays available to assistive tech. */}
+                <span className="sr-only md:not-sr-only">Upload Recording</span>
               </Button>
             </DialogTrigger>
           </TooltipTrigger>
           {/* onOpenAutoFocus is a very important line! Prevents the automatic date popup */}
-          <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DialogContent
+            className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto rounded-lg"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
             </DialogHeader>
