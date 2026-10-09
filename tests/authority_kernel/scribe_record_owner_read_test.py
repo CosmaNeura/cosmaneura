@@ -1,6 +1,7 @@
 """Current exact-bound record owner reads under existing synthetic provider locks."""
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
 from typeid import TypeID
@@ -149,7 +150,7 @@ def test_committed_doctor_change_after_existing_locks_is_denied(native, engine, 
         if change == "disabled":
             doctor.deleted_at = datetime.now(UTC)
         else:
-            doctor.clerk_id = "user_changed_record_owner"
+            doctor.clerk_id = f"user_changed_record_owner_{uuid4()}"
         writer.add(doctor)
         writer.commit()
     assert native.post().status_code == 403
