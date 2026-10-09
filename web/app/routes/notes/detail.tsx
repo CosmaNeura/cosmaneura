@@ -4,19 +4,19 @@ import type { Route } from "./+types/detail"
 
 import { CaptureNoteReadiness } from "@/components/notes/CaptureNoteReadiness"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
-import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
-import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset } from "@/components/ui/sidebar"
 import { LabResultsPanel } from "~/components/LabResultsPanel"
 import { MedicationPanel } from "~/components/MedicationPanel"
 import { SessionPrepPriorNotes } from "~/components/SessionPrepPriorNotes"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
+import { Header } from "~/components/notes/Header"
 import { EngagementBadge } from "~/components/shared/EngagementBadge"
 import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import type { EngagementRole } from "~/configuration/client"
+import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
@@ -25,7 +25,6 @@ import {
   isReferenceLabsEnabled,
   isReferenceToolkitEnabled,
 } from "~/utils/reference-toolkit-feature"
-import { useTerminology } from "~/utils/terminology"
 
 import { useUser } from "@clerk/clerk-react"
 
@@ -83,25 +82,9 @@ export const meta: MetaFunction = () => {
     { title: "Notetaking" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "Your visit notes",
     },
   ]
-}
-
-function Header({ title }: { title?: string }) {
-  const t = useTerminology()
-  return (
-    <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
-      <SidebarTrigger className="-ml-1" />
-      <Separator orientation="vertical" className="mr-2 h-4" />
-      <h1 className="text-lg font-semibold">
-        {title ? title : `Select a ${t.patient}`}
-      </h1>
-      <div className="ml-auto">
-        <UploadRecordingButton />
-      </div>
-    </header>
-  )
 }
 
 function NoteHeader({
@@ -119,8 +102,14 @@ function NoteHeader({
     <div className="mb-6 flex items-start justify-between">
       <div className="text-left">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">{title}</h1>
-          <StatusBadge status={status} />
+          <h1
+            className="text-2xl font-semibold"
+            data-ph-no-capture=""
+            data-sentry-block=""
+          >
+            {title}
+          </h1>
+          <StatusBadge status={status} label={NOTE_STATUS_LABELS[status]} />
         </div>
         {engagementRole ? (
           <div className="mt-2">

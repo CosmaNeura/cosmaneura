@@ -28,6 +28,10 @@ const { detail, list, settings, status, observe } = vi.hoisted(() => ({
   status: vi.fn(),
   observe: vi.fn((value) => value),
 }))
+vi.mock("~/utils/terminology", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/utils/terminology")>()
+  return { ...actual, useTerminology: () => actual.getTerminology(null) }
+})
 vi.mock("~/configuration/client", () => ({
   noteDetail: detail,
   noteList: list,

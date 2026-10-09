@@ -12,7 +12,7 @@ export const IntakeThreadWelcome: FC = () => {
           get more done in your appointment.
         </p>
       </div>
-      <div className="my-4 w-full border-t border-gray-200"></div>
+      <div className="border-border my-4 w-full border-t"></div>
     </div>
   )
 }

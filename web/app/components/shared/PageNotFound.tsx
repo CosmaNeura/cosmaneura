@@ -1,7 +1,7 @@
 function PageNotFoundIcon() {
   return (
     <svg
-      className="mx-auto h-16 w-16 text-blue-500"
+      className="text-accent mx-auto h-16 w-16"
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"
@@ -18,16 +18,16 @@ function PageNotFoundIcon() {
 
 export default function PageNotFound() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-blue-50 to-blue-100 px-4">
+    <div className="bg-background flex min-h-screen items-center justify-center px-4">
       <div className="text-center">
-        <h1 className="text-9xl font-bold text-blue-600">404</h1>
-        <div className="mt-4 animate-bounce">
+        <h1 className="text-primary text-9xl font-bold">404</h1>
+        <div className="mt-4 motion-safe:animate-bounce">
           <PageNotFoundIcon />
         </div>
-        <h2 className="mt-6 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">
+        <h2 className="text-foreground mt-6 text-4xl font-bold tracking-tight sm:text-5xl">
           Page not found
         </h2>
-        <p className="mt-4 text-lg text-gray-600">
+        <p className="text-muted-foreground mt-4 text-lg">
           Sorry, we couldn't find the page you're looking for.
         </p>
       </div>

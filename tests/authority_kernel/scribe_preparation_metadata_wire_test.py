@@ -88,7 +88,7 @@ async def test_one_closed_workflow_call_validates_all_components(
                 await invoke()
         else:
             assert (await invoke()).model_dump(mode="json") == value
-            assert len(checks) == 3
+            assert len(checks) == 2
     assert len(calls) == 1
     request = calls[0]
     assert request.method == "GET"

@@ -89,7 +89,7 @@ async def execute_recording_window(
     caller: CaptureCaller,
     binding_ref: str,
     workspace_id: UUID,
-    scope: AdmittedCaptureScope,
+    scope: AdmittedCaptureScope | None,
     operation: PrepareRecordingWindow,
     client_request_key: str,
     client: ScribeWorkflowClient,
@@ -104,11 +104,6 @@ async def execute_recording_window(
     )
 
     body = operation.payload
-    if (
-        not isinstance(scope.session_request, ConfiguredSessionCreate)
-        or scope.creator_actor_id is None
-    ):
-        raise CaptureOperationUnavailable
     if client_request_key in {
         body.bind_idempotency_key,
         body.lease_idempotency_key,
@@ -119,8 +114,15 @@ async def execute_recording_window(
     check_async_capture_deadline()
     await asyncio.sleep(0)
     check_async_capture_deadline()
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    current = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    if scope is not None and current != scope:
         raise CaptureReceiptInvalid
+    scope = current
+    if (
+        not isinstance(scope.session_request, ConfiguredSessionCreate)
+        or scope.creator_actor_id is None
+    ):
+        raise CaptureOperationUnavailable
     # Preserve each original direct component namespace so old partial journals
     # and lost responses recover the same receipts through the new receiver.
     remote_operation = operation.model_copy(
