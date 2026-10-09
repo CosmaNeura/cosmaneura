@@ -3,6 +3,7 @@ import { Outlet, data, href, isRouteErrorResponse } from "react-router"
 import type { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { NotesKeyboardShortcuts } from "@/components/notes/KeyboardShortcuts"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
@@ -130,6 +131,8 @@ export default function NotesLayout({
         isLoading={!appointments}
         header={"Notes"}
         searchPlaceholder={`Search ${t.patientPlural} or visits…`}
+        headerAction={<NotesKeyboardShortcuts />}
+        listShortcuts
         emptyState={{
           title: "No visits yet",
           description: "Upload a visit recording to create your first note.",

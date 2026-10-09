@@ -71,7 +71,14 @@ export default function VisitNoteViewer({
             <span className="text-xl font-semibold">{note.note_type}</span>
           </Button>
         </CollapsibleTrigger>
-        {isOpen && <CopyButton htmlRef={contentRef} className="mt-1 ml-5" />}
+        {isOpen && (
+          <CopyButton
+            htmlRef={contentRef}
+            className="mt-1 ml-5"
+            data-shortcut="copy-note"
+            aria-keyshortcuts="c"
+          />
+        )}
         {visibleBillingSource && (
           <BillingHeaderButton
             noteId={note.id}
