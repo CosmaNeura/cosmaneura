@@ -32,6 +32,7 @@ NATIVE_READ_OPERATIONS = frozenset(
         "provider_encounter",
         "capabilities",
         "native_recording_context",
+        "native_recording_preparation",
         # Existing public wrapping key read; no private key or key mutation.
         "encryption_key",
         "preparation_metadata",
