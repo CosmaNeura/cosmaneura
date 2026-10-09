@@ -10,11 +10,10 @@ import { PageHeader } from "~/components/shared/PageHeader"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
+import { intakeStatusBadge } from "~/lib/intake-status"
 import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
-
-type Status = Parameters<typeof StatusBadge>[0]["status"]
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   const { data } = await intakeDetail({
@@ -41,11 +40,11 @@ export const meta: MetaFunction = () => {
 }
 
 function IntakeHeader({
-  status,
+  badge,
   title,
   dataFields,
 }: {
-  status: Status
+  badge: ReturnType<typeof intakeStatusBadge>
   title: string
   dataFields: Record<string, string>
 }) {
@@ -60,7 +59,7 @@ function IntakeHeader({
           >
             {title}
           </h1>
-          <StatusBadge status={status} />
+          <StatusBadge status={badge.status} label={badge.label} />
         </div>
         <div className="mt-1 space-y-1">
           {Object.entries(dataFields).map(([key, value]) => (
@@ -118,6 +117,7 @@ export function EmptyState({
 }
 
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
+  const t = useTerminology()
   const { intake } = loaderData
   const hasSummary = !!intake.summary
 
@@ -127,7 +127,7 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
       <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
-          status={hasSummary ? "completed" : "not-started"}
+          badge={intakeStatusBadge(loaderData.appointment.intake_status, t)}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
