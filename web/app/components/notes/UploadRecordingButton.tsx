@@ -1,6 +1,7 @@
 import { addDays, format, parseISO, subMonths } from "date-fns"
 import { useState } from "react"
 import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
+import { href, useNavigate, useRevalidator } from "react-router"
 import { z } from "zod"
 
 import { CheckIcon, Upload } from "lucide-react"
@@ -35,6 +36,11 @@ import {
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
+import { markProcessing } from "~/lib/recent-uploads"
+import {
+  findUploadedAppointmentId,
+  knownAppointmentIds,
+} from "~/lib/uploaded-visit"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
@@ -171,6 +177,8 @@ function VisitAudioUploadForm({
 }) {
   const t = useTerminology()
   const { toast } = useToast()
+  const navigate = useNavigate()
+  const revalidator = useRevalidator()
   const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({
@@ -198,6 +206,7 @@ function VisitAudioUploadForm({
 
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    const listedBefore = knownAppointmentIds()
     const result = await submitVisitAudioUpload({
       // Encounters retain their instant and ordering; birthdays are calendar days.
       appointmentDate: values.appointment_date.toISOString(),
@@ -219,13 +228,25 @@ function VisitAudioUploadForm({
       return
     }
 
-    toast({
-      title: "Upload complete",
-      description:
-        "Your recording has been uploaded successfully. Check back in a couple minutes.",
-    })
-
+    const uploadedId = await findUploadedAppointmentId(listedBefore)
     closeDialogBox()
+
+    if (uploadedId) {
+      markProcessing(uploadedId)
+      toast({
+        title: "Recording uploaded",
+        description:
+          "We're writing your note now. It usually takes a couple of minutes.",
+      })
+      navigate(href("/notes/:id", { id: uploadedId }))
+      return
+    }
+
+    toast({
+      title: "Recording uploaded",
+      description: "Your note will appear in the list in a couple of minutes.",
+    })
+    void revalidator.revalidate()
   }
 
   // TODO should move a project constant

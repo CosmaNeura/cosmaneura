@@ -1,4 +1,11 @@
-import { type MetaFunction, isRouteErrorResponse } from "react-router"
+import { useEffect } from "react"
+import {
+  type MetaFunction,
+  isRouteErrorResponse,
+  useRevalidator,
+} from "react-router"
+
+import { Loader2 } from "lucide-react"
 
 import type { Route } from "./+types/detail"
 
@@ -16,9 +23,11 @@ import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import type { EngagementRole } from "~/configuration/client"
+import { toast } from "~/hooks/use-toast"
 import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
+import { markReady, stopTracking, useRecentUploads } from "~/lib/recent-uploads"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 import {
@@ -41,7 +50,47 @@ export function EmptyNotes({
       <div className="text-muted-foreground text-sm italic">
         {captureRequired
           ? "This visit was started in Scribe. Reopen it in Scribe to resume the recording and prepare its note. A recording uploaded separately cannot generate a note for this visit. Use a new visit for a separate upload."
-          : "No Notes Available. Upload some!"}
+          : "No note for this visit yet."}
+      </div>
+    </div>
+  )
+}
+
+export const NOTE_PROCESSING_POLL_MS = 15_000
+export const NOTE_PROCESSING_TIMEOUT_MS = 15 * 60_000
+
+// Shown only for a visit this session just uploaded. Re-checks while the
+// page is open and gives up quietly after the timeout, since the visit is
+// then no longer known to be processing.
+export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
+  const revalidator = useRevalidator()
+
+  useEffect(() => {
+    const poll = setInterval(() => {
+      if (revalidator.state === "idle") void revalidator.revalidate()
+    }, NOTE_PROCESSING_POLL_MS)
+    const giveUp = setTimeout(
+      () => stopTracking(appointmentId),
+      NOTE_PROCESSING_TIMEOUT_MS,
+    )
+    return () => {
+      clearInterval(poll)
+      clearTimeout(giveUp)
+    }
+  }, [appointmentId, revalidator])
+
+  return (
+    <div role="status" className="mb-4 flex items-start gap-3">
+      <Loader2
+        className="text-muted-foreground mt-1 size-5 motion-safe:animate-spin"
+        aria-hidden="true"
+      />
+      <div>
+        <div className="text-xl font-semibold">Writing your note…</div>
+        <p className="text-muted-foreground text-sm">
+          This usually takes a couple of minutes. You can stay here or come back
+          later.
+        </p>
       </div>
     </div>
   )
@@ -135,6 +184,16 @@ function NoteHeader({
 export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const { transcript, notes, note_transcripts } = loaderData
   const hasNotes = notes && notes.length > 0
+  const appointmentId = loaderData.appointment.id
+  const { processing } = useRecentUploads()
+  const isProcessing = !hasNotes && processing.has(appointmentId)
+
+  useEffect(() => {
+    if (hasNotes && processing.has(appointmentId)) {
+      markReady(appointmentId)
+      toast({ title: "Your note is ready" })
+    }
+  }, [hasNotes, processing, appointmentId])
   const distinctNoteSources =
     new Set((notes ?? []).map((note) => note.ai_transcript_id)).size > 1
   // The fallback supports a prior backend without attaching its transcript to
@@ -164,7 +223,13 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
       <InnerScrollableContent>
         <NoteHeader
           title={loaderData.patient.name}
-          status={hasNotes ? "completed" : "not-started"}
+          status={
+            hasNotes
+              ? "completed"
+              : isProcessing
+                ? "in-progress"
+                : "not-started"
+          }
           engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
             "Appointment Date": appointmentDateFormat(
@@ -204,6 +269,8 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               }
             />
           ))
+        ) : isProcessing ? (
+          <NoteProcessing appointmentId={appointmentId} />
         ) : loaderData.capture_workflow_required && transcript ? (
           <CaptureNoteReadiness key={loaderData.appointment.id} />
         ) : (

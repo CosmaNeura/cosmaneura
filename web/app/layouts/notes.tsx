@@ -2,7 +2,7 @@ import { Outlet, data, href, isRouteErrorResponse } from "react-router"
 
 import type { Route } from "./+types/notes"
 
-import { AppSidebar } from "@/components/app-sidebar"
+import { AppSidebar, type SidebarEntry } from "@/components/app-sidebar"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
@@ -10,6 +10,7 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { type Appointment, noteList } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
 import {
+  NOTE_STATUS_LABELS,
   type NoteStatuses,
   appointmentsToSidebarEntries,
 } from "~/lib/appointment"
@@ -20,6 +21,7 @@ import {
   practiceAgreementBlockFromRouteFailure,
 } from "~/lib/practice-gate-error"
 import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
+import { useRecentUploads } from "~/lib/recent-uploads"
 import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
@@ -105,12 +107,29 @@ export function ErrorBoundary({ error }: { error: unknown }) {
   throw error
 }
 
+// A visit uploaded in this session reads "Writing note" until its note
+// arrives, then is highlighted for a moment.
+export function withUploadProgress(
+  entry: SidebarEntry,
+  { processing, justReady }: ReturnType<typeof useRecentUploads>,
+): SidebarEntry {
+  if (processing.has(entry.id) && entry.status !== "completed") {
+    return {
+      ...entry,
+      status: "in-progress",
+      statusLabel: NOTE_STATUS_LABELS["in-progress"],
+    }
+  }
+  return justReady.has(entry.id) ? { ...entry, highlight: true } : entry
+}
+
 export default function NotesLayout({
   loaderData,
 }: {
   loaderData: NotesLayoutData
 }) {
   const t = useTerminology()
+  const recentUploads = useRecentUploads()
 
   if (loaderData.blocked) {
     return <PracticeAgreementWall block={loaderData.blocked} />
@@ -139,7 +158,7 @@ export default function NotesLayout({
           appointments,
           (id: string) => href("/notes/:id", { id }),
           noteStatuses,
-        )}
+        ).map((entry) => withUploadProgress(entry, recentUploads))}
       />
       <Outlet />
     </SidebarProvider>

@@ -1,4 +1,5 @@
 import { format, parseISO } from "date-fns"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { appointmentDateFormat } from "~/lib/date"
@@ -6,7 +7,25 @@ import { appointmentDateFormat } from "~/lib/date"
 import { UploadRecordingButton } from "./UploadRecordingButton"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
+function renderButton() {
+  const router = createMemoryRouter(
+    [
+      { path: "/notes", element: <UploadRecordingButton /> },
+      { path: "/notes/:id", element: <p>Opened uploaded visit</p> },
+    ],
+    { initialEntries: ["/notes"] },
+  )
+  return render(<RouterProvider router={router} />)
+}
+
 const { upload } = vi.hoisted(() => ({ upload: vi.fn() }))
+const uploadedVisit = vi.hoisted(() => ({
+  find: vi.fn(async () => null as string | null),
+}))
+vi.mock("~/lib/uploaded-visit", () => ({
+  knownAppointmentIds: () => new Set(["appointment_existing"]),
+  findUploadedAppointmentId: uploadedVisit.find,
+}))
 vi.mock("~/lib/visit-audio-upload", () => ({ submitVisitAudioUpload: upload }))
 vi.mock("~/configuration/client", () => ({ client: {} }))
 vi.mock("client/@tanstack/react-query.gen", () => ({
@@ -105,12 +124,14 @@ vi.mock("~/components/shared/AudioVideoDropzone", () => ({
 afterEach(() => {
   vi.useRealTimers()
   upload.mockReset()
+  uploadedVisit.find.mockReset()
+  uploadedVisit.find.mockResolvedValue(null)
 })
 
 describe("date-only recording upload", () => {
   it("clears the previous birthday for a patient with no date and still requires an entered date for legacy upload", async () => {
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
+    renderButton()
     fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
     fireEvent.click(
       screen.getByRole("button", { name: /Synthetic date check/ }),
@@ -154,7 +175,7 @@ describe("date-only recording upload", () => {
     vi.useFakeTimers({ toFake: ["Date"] })
     vi.setSystemTime(new Date(now))
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
+    renderButton()
     fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
     const displayedDay = format(new Date(), "yyyy-MM-dd")
     expect(screen.getByLabelText("Appointment Date")).toHaveValue(displayedDay)
@@ -191,7 +212,7 @@ describe("date-only recording upload", () => {
     upload.mockResolvedValue({ ok: true })
     for (const hour of [9, 15]) {
       vi.setSystemTime(new Date(2026, 8, 24, hour, 30))
-      const view = render(<UploadRecordingButton />)
+      const view = renderButton()
       fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
       fireEvent.click(
         screen.getByRole("button", { name: /Synthetic date check/ }),
@@ -211,5 +232,26 @@ describe("date-only recording upload", () => {
     expect(Date.parse(afternoon) - Date.parse(morning)).toBe(6 * 60 * 60 * 1000)
     expect(appointmentDateFormat(morning.slice(0, -1))).toBe("9/24/26")
     expect(appointmentDateFormat(afternoon.slice(0, -1))).toBe("9/24/26")
+  })
+})
+
+describe("after a successful upload", () => {
+  it("opens the uploaded visit when it can be identified", async () => {
+    upload.mockResolvedValue({ ok: true })
+    uploadedVisit.find.mockResolvedValue("appointment_new")
+    renderButton()
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic date check/ }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    expect(await screen.findByText("Opened uploaded visit")).toBeVisible()
+    expect(uploadedVisit.find).toHaveBeenCalledWith(
+      new Set(["appointment_existing"]),
+    )
   })
 })
