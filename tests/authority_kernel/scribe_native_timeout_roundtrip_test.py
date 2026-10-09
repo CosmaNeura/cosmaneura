@@ -29,6 +29,10 @@ engine, native, workflow = _engine, _native, _workflow
 def test_actual_native_uses_one_timeout_call_for_every_owned_statement(
     native, engine, kind, monkeypatch, record_property
 ):
+    # Preserve this preceding round-trip optimization's isolated comparison.
+    # Equal-setting reuse is qualified separately against the same SQL/locks.
+    monkeypatch.setattr(deadline, "timeout_setting_in_force", lambda *_: False)
+    monkeypatch.setattr(records, "timeout_setting_in_force", lambda *_: False)
     counts = Counter()
 
     class Cursor(psycopg.Cursor):

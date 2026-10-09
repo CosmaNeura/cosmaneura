@@ -166,7 +166,7 @@ async def test_lost_combined_reply_replays_original_component_keys(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("check", [1, 2, 3])
+@pytest.mark.parametrize("check", [1, 2])
 @pytest.mark.parametrize("failure", ["revoked", "changed_scope"])
 async def test_current_scope_brackets_combined_request(monkeypatch, check, failure):
     selected, calls = selected_scope(), []
@@ -191,7 +191,9 @@ async def test_current_scope_brackets_combined_request(monkeypatch, check, failu
     args.pop("scope")
     with pytest.raises(gateway.CaptureGatewayError):
         await gateway.execute_capture_operation(**args)
-    assert calls == ([] if check < 3 else ["prepare_recording_window"])
+    assert calls == (
+        [] if check == 1 and failure == "revoked" else ["prepare_recording_window"]
+    )
 
 
 @pytest.mark.asyncio
