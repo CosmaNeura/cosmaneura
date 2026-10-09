@@ -26,7 +26,7 @@ export type VisitAudioUploadFailureStage =
   | "registration"
 
 export type VisitAudioUploadResult =
-  | { ok: true }
+  | { ok: true; appointmentId?: string }
   | { ok: false; stage: VisitAudioUploadFailureStage }
 
 type UploadGrant = {
@@ -45,7 +45,7 @@ type VisitAudioUploadDependencies = {
     date_of_birth: string
     patient_name: string
     registration_token: string
-  }) => Promise<{ error?: unknown }>
+  }) => Promise<{ data?: { appointment_id: string } | null; error?: unknown }>
   uploadBlob: (
     file: File,
     uploadUrl: string,
@@ -62,8 +62,8 @@ const defaultDependencies: VisitAudioUploadDependencies = {
     return { data, error }
   },
   registerUpload: async (body) => {
-    const { error } = await uploadVisitAudioFile({ body })
-    return { error }
+    const { data, error } = await uploadVisitAudioFile({ body })
+    return { data, error }
   },
   uploadBlob: (file, uploadUrl, contentType, onProgress) =>
     onProgress
@@ -119,9 +119,15 @@ export async function submitVisitAudioUpload(
       registration_token: grant.registration_token,
     })
     if (registered.error) return { ok: false, stage: "registration" }
+    // An older receiver returns no ID. Keep its successful upload but never
+    // infer the visit from a list that may be stale or contain unrelated work.
+    return {
+      ok: true,
+      ...(registered.data?.appointment_id
+        ? { appointmentId: registered.data.appointment_id }
+        : {}),
+    }
   } catch {
     return { ok: false, stage: "registration" }
   }
-
-  return { ok: true }
 }

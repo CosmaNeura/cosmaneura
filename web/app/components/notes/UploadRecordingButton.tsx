@@ -1,6 +1,7 @@
 import { addDays, format, parseISO, subMonths } from "date-fns"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
+import { href, useNavigate, useRevalidator } from "react-router"
 import { z } from "zod"
 
 import { CheckIcon, Upload } from "lucide-react"
@@ -37,6 +38,7 @@ import {
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
+import { markProcessing } from "~/lib/recent-uploads"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
@@ -216,6 +218,16 @@ function VisitAudioUploadForm({
 }) {
   const t = useTerminology()
   const { toast } = useToast()
+  const navigate = useNavigate()
+  const revalidator = useRevalidator()
+  const mounted = useRef(true)
+  useEffect(() => {
+    // StrictMode runs this effect's cleanup once on mount; set it back.
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
   const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({
@@ -279,13 +291,29 @@ function VisitAudioUploadForm({
       return
     }
 
-    toast({
-      title: "Upload complete",
-      description:
-        "Your recording has been uploaded successfully. Check back in a couple minutes.",
-    })
-
+    const uploadedId = result.appointmentId
+    // If the dialog was closed during the upload the user has moved on;
+    // don't pull them to the new visit.
+    const stillHere = mounted.current
     closeDialogBox()
+
+    if (uploadedId) {
+      markProcessing(uploadedId)
+      toast({
+        title: "Recording uploaded",
+        description:
+          "We're writing your note now. It usually takes a couple of minutes.",
+      })
+      if (stillHere) navigate(href("/notes/:id", { id: uploadedId }))
+      else void revalidator.revalidate()
+      return
+    }
+
+    toast({
+      title: "Recording uploaded",
+      description: "Your note will appear in the list in a couple of minutes.",
+    })
+    void revalidator.revalidate()
   }
 
   // TODO should move a project constant

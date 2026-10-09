@@ -119,6 +119,8 @@ export interface SidebarEntry {
   preview: string
   // consecutive entries with the same group render under one subheading
   group?: string
+  // briefly draws attention to an entry that just changed, e.g. a note landing
+  highlight?: boolean
 }
 
 export interface SidebarEmptyState {
@@ -172,6 +174,8 @@ function SelectionEntry({ entry }: { entry: SidebarEntry }) {
       className={cn(
         "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground focus-visible:ring-sidebar-ring flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-inset",
         isCurrent && "bg-sidebar-accent text-sidebar-accent-foreground",
+        entry.highlight &&
+          "bg-sidebar-primary/25 transition-colors duration-700",
       )}
     >
       <div className="flex w-full items-center justify-between gap-2">

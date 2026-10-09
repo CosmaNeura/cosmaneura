@@ -1,10 +1,39 @@
 import { format, parseISO } from "date-fns"
+import { StrictMode } from "react"
+import { RouterProvider, createMemoryRouter } from "react-router"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { appointmentDateFormat } from "~/lib/date"
 
 import { UploadProgress, UploadRecordingButton } from "./UploadRecordingButton"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+
+function renderButton() {
+  const router = createMemoryRouter(
+    [
+      {
+        id: "layouts/notes",
+        path: "/notes",
+        loader: () => ({
+          appointments: [{ id: "appointment_existing" }],
+          noteStatuses: {},
+          blocked: null,
+        }),
+        children: [
+          { index: true, element: <UploadRecordingButton /> },
+          { path: ":id", element: <p>Opened uploaded visit</p> },
+        ],
+      },
+    ],
+    { initialEntries: ["/notes"] },
+  )
+  // StrictMode matches React Router's default client entry.
+  return render(
+    <StrictMode>
+      <RouterProvider router={router} />
+    </StrictMode>,
+  )
+}
 
 const { upload } = vi.hoisted(() => ({ upload: vi.fn() }))
 vi.mock("~/lib/visit-audio-upload", () => ({ submitVisitAudioUpload: upload }))
@@ -127,8 +156,10 @@ afterEach(() => {
 
 describe("upload form guidance", () => {
   it("explains each missing field instead of submitting", async () => {
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
 
     fireEvent.click(screen.getByRole("button", { name: "Upload" }))
 
@@ -139,8 +170,10 @@ describe("upload form guidance", () => {
   })
 
   it("clears the file error as soon as a recording is chosen", async () => {
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(screen.getByRole("button", { name: "Upload" }))
     await screen.findByText("Choose a recording to upload")
 
@@ -153,19 +186,23 @@ describe("upload form guidance", () => {
     )
   })
 
-  it("uses the doctor's terminology in the date of birth help", () => {
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+  it("uses the doctor's terminology in the date of birth help", async () => {
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
 
     expect(
       screen.getByText(/It is used to identify this client in the future/),
     ).toBeInTheDocument()
   })
 
-  it("shows a placeholder input while the list loads", () => {
+  it("shows a placeholder input while the list loads", async () => {
     patientQuery.loading = true
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
 
     expect(
       screen.getByRole("status", { name: "Loading clients" }),
@@ -175,8 +212,10 @@ describe("upload form guidance", () => {
 
   it("keeps a selected name exactly as stored so the patient is matched", async () => {
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(
       screen.getByRole("button", { name: /Synthetic spaced name/ }),
     )
@@ -191,8 +230,10 @@ describe("upload form guidance", () => {
 
   it("trims a newly typed name", async () => {
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(screen.getByRole("button", { name: "Type a new name" }))
     fireEvent.change(screen.getByLabelText("Date of Birth"), {
       target: { value: "1995-02-03" },
@@ -206,9 +247,11 @@ describe("upload form guidance", () => {
     expect(upload.mock.calls[0][0].patientName).toBe("Typed person")
   })
 
-  it("does not render the trigger hidden at any breakpoint", () => {
-    render(<UploadRecordingButton />)
-    const trigger = screen.getByRole("button", { name: "Upload Recording" })
+  it("does not render the trigger hidden at any breakpoint", async () => {
+    renderButton()
+    const trigger = await screen.findByRole("button", {
+      name: "Upload Recording",
+    })
     expect(trigger.className).not.toMatch(/(^|\s)hidden(\s|$)/)
   })
 })
@@ -216,8 +259,10 @@ describe("upload form guidance", () => {
 describe("date-only recording upload", () => {
   it("clears the previous birthday for a patient with no date and still requires an entered date for legacy upload", async () => {
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(
       screen.getByRole("button", { name: /Synthetic date check/ }),
     )
@@ -260,8 +305,10 @@ describe("date-only recording upload", () => {
     vi.useFakeTimers({ toFake: ["Date"] })
     vi.setSystemTime(new Date(now))
     upload.mockResolvedValue({ ok: true })
-    render(<UploadRecordingButton />)
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     const displayedDay = format(new Date(), "yyyy-MM-dd")
     expect(screen.getByLabelText("Appointment Date")).toHaveValue(displayedDay)
     // A birthday is a calendar day even if the API representation carries Z.
@@ -297,8 +344,10 @@ describe("date-only recording upload", () => {
     upload.mockResolvedValue({ ok: true })
     for (const hour of [9, 15]) {
       vi.setSystemTime(new Date(2026, 8, 24, hour, 30))
-      const view = render(<UploadRecordingButton />)
-      fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+      const view = renderButton()
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Upload Recording" }),
+      )
       fireEvent.click(
         screen.getByRole("button", { name: /Synthetic date check/ }),
       )
@@ -317,6 +366,42 @@ describe("date-only recording upload", () => {
     expect(Date.parse(afternoon) - Date.parse(morning)).toBe(6 * 60 * 60 * 1000)
     expect(appointmentDateFormat(morning.slice(0, -1))).toBe("9/24/26")
     expect(appointmentDateFormat(afternoon.slice(0, -1))).toBe("9/24/26")
+  })
+})
+
+describe("after a successful upload", () => {
+  it("opens the exact visit returned by registration, regardless of the list", async () => {
+    upload.mockResolvedValue({ ok: true, appointmentId: "appointment_new" })
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic date check/ }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    expect(await screen.findByText("Opened uploaded visit")).toBeVisible()
+  })
+
+  it("does not guess a visit when an older receiver returns no ID", async () => {
+    upload.mockResolvedValue({ ok: true })
+    renderButton()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic date check/ }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+    expect(screen.queryByText("Opened uploaded visit")).toBeNull()
   })
 })
 

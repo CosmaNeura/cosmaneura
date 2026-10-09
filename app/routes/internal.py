@@ -692,8 +692,14 @@ class VisitAudioUploadRequest(BaseModel, extra="forbid"):
     date_of_birth: datetime
 
 
+class VisitAudioUploadResponse(BaseModel):
+    appointment_id: str
+
+
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
+def upload_visit_audio_file(
+    request: Request, data: VisitAudioUploadRequest
+) -> VisitAudioUploadResponse:
     doctor: Doctor = request.state.doctor
 
     try:
@@ -745,7 +751,7 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
             event_code="clinical_upload_receipt_completion_deferred",
             upload_type=UploadType.VISIT.value,
         )
-    return result
+    return VisitAudioUploadResponse(appointment_id=result)
 
 
 class ExampleNoteUploadGrant(BaseModel, extra="forbid"):
