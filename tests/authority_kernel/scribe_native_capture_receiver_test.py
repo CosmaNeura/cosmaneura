@@ -354,3 +354,37 @@ def test_actual_server_registers_facade_without_request_wide_session():
     assert all(
         item.call is not aglobal_session for item in routes[0].dependant.dependencies
     )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "operation",
+        "opening_nonce",
+        "missing_binding",
+        "missing_preparation",
+        "unknown_preparation",
+        "extra",
+    ],
+)
+def test_server_preparation_context_rejects_mixed_or_unknown_intent(monkeypatch, field):
+    connection, calls = client(monkeypatch)
+    value = body(
+        action="preparation_context",
+        preparation="admission",
+        binding_ref="scribe_capture_binding_00000000000000000000000003",
+    )
+    if field == "operation":
+        value["operation"] = {"kind": "creator_review"}
+    elif field == "opening_nonce":
+        value["opening_nonce"] = str(uuid4())
+    elif field == "missing_binding":
+        value.pop("binding_ref")
+    elif field == "missing_preparation":
+        value.pop("preparation")
+    elif field == "unknown_preparation":
+        value["preparation"] = "source_start"
+    else:
+        value["caller_session_id"] = str(uuid4())
+    response = connection.post(PATH, json=value, headers=headers())
+    assert response.status_code == 422 and all(isinstance(c, str) for c in calls)

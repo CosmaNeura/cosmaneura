@@ -4,7 +4,7 @@ import asyncio
 from contextlib import nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import FastAPI
@@ -65,6 +65,8 @@ def fixture(monkeypatch):
     def lookup(**kwargs):
         calls.append("lookup")
         assert kwargs["session_id"] == "session_test"
+        if kwargs.get("expected_capture_binding_ref") not in (None, BINDING):
+            raise authority.AuthorityRequestDeniedError
         if state["revoked"]:
             raise authority.AuthorityRequestDeniedError
         return {"encounter": row.copy()}
@@ -451,4 +453,208 @@ def test_actual_router_closes_phase_transactions_before_read_and_sees_revocation
     assert result.status_code == 403
     assert observed == ["revocation_committed_without_held_locks"]
     assert "opening_review" not in result.text
+    assert engine.pool.checkedout() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["admission", "recording_window"])
+async def test_preparation_context_reuses_services_without_capture_mutation(
+    monkeypatch, kind
+):
+    original, calls, _, invoke = fixture(monkeypatch)
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation=kind,
+        workspace_id=original.workspace_id,
+        request_nonce=original.request_nonce,
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        binding_ref=BINDING,
+    )
+    value = await invoke(data)
+    assert not any(isinstance(c, tuple) for c in calls)
+    assert calls == [
+        "lookup",
+        "exchange",
+        "lookup",
+        "resolve",
+        "lookup",
+    ]
+    result = value["result"]
+    assert (
+        result["context_token"] == "never-return-context-token"
+        and result["interaction_ref"] == "never-return-interaction"
+    )
+    assert result["preparation"] == kind and result["binding_ref"] == BINDING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["admission", "recording_window"])
+@pytest.mark.parametrize("change", ["workspace_id", "appointment_ref", "patient_ref"])
+async def test_preparation_publication_checks_current_record_after_last_service(
+    monkeypatch, kind, change
+):
+    original, calls, _, invoke = fixture(monkeypatch)
+    lookup = service.scribe_encounters.encounter_workflow
+    boundary = "resolve"
+
+    def reassigned(**kwargs):
+        value = lookup(**kwargs)
+        if boundary in calls:
+            value["encounter"][change] = "different-current-record"
+        return value
+
+    monkeypatch.setattr(service.scribe_encounters, "encounter_workflow", reassigned)
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation=kind,
+        workspace_id=original.workspace_id,
+        request_nonce=original.request_nonce,
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        binding_ref=BINDING,
+    )
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        await invoke(data)
+    assert not any(isinstance(c, tuple) for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_preparation_context_binding_mismatch_never_returns_credentials(
+    monkeypatch,
+):
+    original, calls, _, invoke = fixture(monkeypatch)
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation="admission",
+        workspace_id=original.workspace_id,
+        request_nonce=original.request_nonce,
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        binding_ref="scribe_capture_binding_00000000000000000000000009",
+    )
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        await invoke(data)
+    assert not any(isinstance(c, tuple) for c in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "phase"),
+    [
+        ("admission", "exchange"),
+        ("admission", "resolve"),
+        ("recording_window", "exchange"),
+        ("recording_window", "resolve"),
+    ],
+)
+async def test_preparation_context_revocation_at_every_original_boundary(
+    monkeypatch, kind, phase
+):
+    original, calls, state, invoke = fixture(monkeypatch)
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation=kind,
+        workspace_id=original.workspace_id,
+        request_nonce=original.request_nonce,
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        binding_ref=BINDING,
+    )
+    owner, name = {
+        "exchange": (authority, "exchange_context_token"),
+        "resolve": (authority, "resolve_mount_context"),
+        "binding": (service.scribe_capture_scope, "resolve_capture_binding"),
+    }[phase]
+    original_call = getattr(owner, name)
+
+    def changed(**kw):
+        value = original_call(**kw)
+        state["revoked"] = True
+        return value
+
+    monkeypatch.setattr(owner, name, changed)
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        await invoke(data)
+    assert not any(isinstance(c, tuple) for c in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["admission", "recording_window"])
+async def test_real_preparation_context_commits_and_closes_all_policy_transactions(
+    engine, workflow, monkeypatch, kind
+):
+    args, _, request, invoke = workflow
+    created = invoke(request())
+    row, account = created["encounter"], created["account"]
+    monkeypatch.setattr(
+        service.scribe_encounters, "global_session", session_manager.global_session
+    )
+    monkeypatch.setattr(
+        session_manager.SessionManager.get_instance(), "_engine", engine
+    )
+    monkeypatch.setattr(
+        provider_context_exchange,
+        "configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+
+    async def call(data):
+        with capture_budget(CaptureBudget(20)):
+            return await service.execute_native_capture(
+                issuer=SETTINGS.clerk_issuer,
+                subject=args["verified_clerk_subject"],
+                clerk_session_id="session_invented_scribe",
+                workload_client_id="11111111-1111-4111-8111-111111111111",
+                data=data,
+                key="original-preparation-key",
+                authority_settings=SETTINGS,
+                capture_settings=ScribeCaptureSettings(enabled=True),
+                encounter_settings=ScribeEncounterSettings(enabled=True),
+                client=DisabledScribeWorkflowClient(),
+            )
+
+    mounted = await call(
+        service.NativeCaptureRequest(
+            action="mount",
+            workspace_id=row["workspace_id"],
+            request_nonce=uuid4(),
+            expected_actor_ref=account["actor_ref"],
+            expected_tenant_ref=account["tenant_ref"],
+        )
+    )
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation=kind,
+        workspace_id=row["workspace_id"],
+        request_nonce=uuid4(),
+        binding_ref=mounted["result"]["binding_ref"],
+        expected_actor_ref=account["actor_ref"],
+        expected_tenant_ref=account["tenant_ref"],
+    )
+    prepared = await call(data)
+    assert (
+        prepared["result"]["preparation"] == kind
+        and session_manager._session_context.get() is None
+        and engine.pool.checkedout() == 0
+    )
+    # Existing resolve route accepts the context issued by the compound service.
+    resolved = authority.resolve_mount_context(
+        workload_client_id="11111111-1111-4111-8111-111111111111",
+        mount_context_token=prepared["result"]["context_token"],
+        client_turn_id=UUID(prepared["result"]["client_turn_id"]),
+        settings=SETTINGS,
+    )
+    assert resolved.interaction_ref == prepared["result"]["interaction_ref"]
+    with Session(engine) as session:
+        binding = session.exec(
+            select(ScribeCaptureBinding)
+            .where(ScribeCaptureBinding.workspace_id == data.workspace_id)
+            .with_for_update(nowait=True)
+        ).one()
+        binding.revoked_at = datetime.now(UTC)
+        session.add(binding)
+        session.commit()
+    with pytest.raises(authority.AuthorityKernelError):
+        await call(data)
     assert engine.pool.checkedout() == 0

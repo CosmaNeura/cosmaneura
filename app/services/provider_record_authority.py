@@ -16,6 +16,10 @@ from typeid.errors import TypeIDException
 
 import app.configuration.session_prep as configuration
 from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access_row_ownership import (
+    capture_owns_subject_rows,
+    provider_record_owner_rows,
+)
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
@@ -100,14 +104,24 @@ def validate_provider_record_scope(
     clerk_subject: str,
 ) -> ProviderRecordAuthority | None:
     """A stored real-record binding can never fall back to synthetic authority."""
-    scope = session.exec(
-        select(ProviderRecordAuthority).where(
-            ProviderRecordAuthority.binding_id == binding.id
+    if capture_owns_subject_rows(session, clerk_subject):
+        current = _record_owner_rows(session, binding)
+        if current is None:
+            return None
+        scope, doctor = current
+    else:
+        scope = session.exec(
+            select(ProviderRecordAuthority).where(
+                ProviderRecordAuthority.binding_id == binding.id
+            )
+        ).one_or_none()
+        doctor = (
+            session.get(Doctor, scope.doctor_id, populate_existing=True)
+            if scope is not None
+            else None
         )
-    ).one_or_none()
     if scope is None:
         return None
-    doctor = session.get(Doctor, scope.doctor_id, populate_existing=True)
     if doctor is None or doctor.clerk_id != clerk_subject:
         raise ProviderRecordScopeDenied
     practice = _current_practice(session, doctor)
@@ -149,6 +163,17 @@ def validate_provider_record_scope(
     return scope
 
 
+def _record_owner_rows(session: Session, binding: AuthorityPersonBinding):
+    """Fresh exact-bound scope and Doctor; later full authorization remains."""
+    return session.exec(
+        select(ProviderRecordAuthority, Doctor)
+        .select_from(ProviderRecordAuthority)
+        .outerjoin(Doctor, col(Doctor.id) == col(ProviderRecordAuthority.doctor_id))
+        .where(ProviderRecordAuthority.binding_id == binding.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+
+
 def lock_provider_record_owner(
     *, session: Session, clerk_subject: str
 ) -> tuple[Doctor, Practice]:
@@ -164,18 +189,12 @@ def lock_provider_record_owner(
     if doctor is None:
         raise ProviderRecordScopeDenied
     practice = _current_practice(session, doctor)
-    session.exec(
-        select(Practice).where(Practice.id == practice.id).with_for_update()
-    ).one()
-    doctor = session.exec(
-        select(Doctor)
-        .where(Doctor.clerk_id == clerk_subject)
-        .with_for_update(of=Doctor)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if doctor is None or _current_practice(session, doctor).id != practice.id:
-        raise ProviderRecordScopeDenied
-    return doctor, practice
+    with provider_record_owner_rows(
+        session, practice_id=practice.id, subject=clerk_subject
+    ) as doctor:
+        if doctor is None or _current_practice(session, doctor).id != practice.id:
+            raise ProviderRecordScopeDenied
+        return doctor, practice
 
 
 def ensure_provider_record_scope(

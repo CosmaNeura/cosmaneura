@@ -20,7 +20,9 @@ from app.services.doctor_access_row_ownership import (
 )
 from app.services.organization_access import member_authorization_basis
 from app.services.pilot_access_grandfather import (
+    CurrentProviderAccessRows,
     active_pilot_access_grant,
+    owned_provider_access_rows,
     revoked_pilot_access_grant,
 )
 
@@ -128,15 +130,19 @@ def _decide(
     require_entitlement: bool,
     at: datetime,
     _ownership: DoctorAccessRowOwnership | None = None,
+    _access_rows: CurrentProviderAccessRows | None = None,
 ) -> DoctorAccessDecision:
     """The access rules for a Doctor whose own tombstones are already cleared."""
 
     baa_in_force = bool(practice and practice.baa_in_force(at=at))
-    pilot_grant = (
-        active_pilot_access_grant(doctor, at=at, _ownership=_ownership)
-        if _ownership is not None
-        else active_pilot_access_grant(doctor, at=at)
-    )
+    if _access_rows is not None:
+        pilot_grant = _access_rows.pilot_grant
+    else:
+        pilot_grant = (
+            active_pilot_access_grant(doctor, at=at, _ownership=_ownership)
+            if _ownership is not None
+            else active_pilot_access_grant(doctor, at=at)
+        )
     pilot_entitlement_in_force = bool(
         practice and pilot_grant and pilot_grant.practice_id_snapshot == practice.id
     )
@@ -230,6 +236,18 @@ def resolve_doctor_access(
     if tombstone is not None:
         return _denied(tombstone)
 
+    if _ownership is not None and at is not None:
+        rows = owned_provider_access_rows(doctor, at=at, ownership=_ownership)
+        if rows is not None:
+            return _decide(
+                doctor,
+                rows.member,
+                rows.practice,
+                require_entitlement=require_entitlement,
+                at=at,
+                _ownership=_ownership,
+                _access_rows=rows,
+            )
     if _ownership is None:
         member = PracticeMember.get(doctor_id=doctor.id)
         practice = Practice.get(id=member.practice_id) if member is not None else None
