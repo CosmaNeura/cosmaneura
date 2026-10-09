@@ -108,6 +108,8 @@ async def execute_native_capture(
     await. The existing capture worker owns SQL, cancellation and publication.
     Local Scribe registry checks bracket this request in the native receiver.
     """
+    if data.preparation == "admission" and not capture_settings.enabled:
+        raise authority.AuthorityKernelDisabledError
 
     def lookup(*, include_status=False):
         check_async_capture_deadline()
@@ -131,6 +133,12 @@ async def execute_native_capture(
                 # This shorter SQL budget supplements the unchanged capture budget.
                 deadline=time.monotonic() + min(15, remaining),
                 include_lookup_status=include_status,
+                # Admission already supplies the binding created at mount.
+                # Validate its complete current scope in every fresh lookup;
+                # the durable admission service authorizes it again before I/O.
+                expected_capture_binding_ref=(
+                    data.binding_ref if data.preparation == "admission" else None
+                ),
             )
         check_async_capture_deadline()
         row = result["encounter"]
@@ -201,7 +209,7 @@ async def execute_native_capture(
         capture_settings=capture_settings,
     )
     binding = data.binding_ref
-    if data.action == "mount" or data.preparation == "admission":
+    if data.action == "mount":
         with phase("policy_binding"):
             snapshot = scribe_capture_scope.resolve_capture_binding(
                 workload_client_id=caller.workload_client_id,
@@ -214,8 +222,6 @@ async def execute_native_capture(
                 appointment_ref=first["appointment_ref"],
                 request_nonce=data.request_nonce,
             )
-        if data.action == "preparation_context" and binding != snapshot.binding_ref:
-            raise authority.AuthorityRequestDeniedError
         binding = snapshot.binding_ref
         last = current()
     if binding is None:
@@ -241,7 +247,9 @@ async def execute_native_capture(
     # A preparation request cannot contain an operation. Its current row was
     # just read after the last synchronous service boundary (mount or binding),
     # with no intervening service call or await. Do not repeat that same final
-    # lookup. Ordinary reads still reauthorize after I/O, and mounts still
+    # lookup. Admission's existing binding is checked in these lookups, rather
+    # than resolving/creating it again. Ordinary reads still reauthorize after
+    # I/O, and mounts still
     # obtain their display status in the final publication lookup.
     if data.action != "preparation_context":
         last = current(include_status=data.action == "mount")

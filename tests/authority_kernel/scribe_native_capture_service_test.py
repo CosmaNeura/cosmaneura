@@ -65,6 +65,8 @@ def fixture(monkeypatch):
     def lookup(**kwargs):
         calls.append("lookup")
         assert kwargs["session_id"] == "session_test"
+        if kwargs.get("expected_capture_binding_ref") not in (None, BINDING):
+            raise authority.AuthorityRequestDeniedError
         if state["revoked"]:
             raise authority.AuthorityRequestDeniedError
         return {"encounter": row.copy()}
@@ -477,7 +479,6 @@ async def test_preparation_context_reuses_services_without_capture_mutation(
         "lookup",
         "resolve",
         "lookup",
-        *(["binding", "lookup"] if kind == "admission" else []),
     ]
     result = value["result"]
     assert (
@@ -495,7 +496,7 @@ async def test_preparation_publication_checks_current_record_after_last_service(
 ):
     original, calls, _, invoke = fixture(monkeypatch)
     lookup = service.scribe_encounters.encounter_workflow
-    boundary = "binding" if kind == "admission" else "resolve"
+    boundary = "resolve"
 
     def reassigned(**kwargs):
         value = lookup(**kwargs)
@@ -543,7 +544,6 @@ async def test_preparation_context_binding_mismatch_never_returns_credentials(
     [
         ("admission", "exchange"),
         ("admission", "resolve"),
-        ("admission", "binding"),
         ("recording_window", "exchange"),
         ("recording_window", "resolve"),
     ],
