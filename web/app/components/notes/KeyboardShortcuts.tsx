@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { Keyboard } from "lucide-react"
 
@@ -33,6 +33,25 @@ const SHORTCUTS = [
 export function NotesKeyboardShortcuts() {
   const [open, setOpen] = useState(false)
   const shortcutsEnabled = useSingleKeyShortcutsEnabled()
+  // Clicking note text does not move focus (and Safari does not focus clicked
+  // buttons), so remember the note the user last pointed at or focused.
+  const lastNote = useRef<Element | null>(null)
+
+  useEffect(() => {
+    function remember(event: Event) {
+      const note =
+        event.target instanceof Element
+          ? event.target.closest("[data-note-viewer]")
+          : null
+      if (note) lastNote.current = note
+    }
+    document.addEventListener("pointerdown", remember, true)
+    document.addEventListener("focusin", remember, true)
+    return () => {
+      document.removeEventListener("pointerdown", remember, true)
+      document.removeEventListener("focusin", remember, true)
+    }
+  }, [])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -43,7 +62,14 @@ export function NotesKeyboardShortcuts() {
         setOpen(true)
         return
       }
-      const copy = noteCopyButtonFor(document.activeElement)
+      const active = document.activeElement
+      const copy = noteCopyButtonFor(
+        active?.closest("[data-note-viewer]")
+          ? active
+          : lastNote.current?.isConnected
+            ? lastNote.current
+            : null,
+      )
       if (copy) {
         copy.click()
       } else if (document.querySelector('[data-shortcut="copy-note"]')) {

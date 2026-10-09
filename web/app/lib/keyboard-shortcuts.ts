@@ -33,6 +33,7 @@ export function useSingleKeyShortcutsEnabled() {
       return () => listeners.delete(listener)
     },
     () => enabled,
+    () => true,
   )
 }
 

@@ -87,6 +87,34 @@ describe("Notes keyboard shortcuts", () => {
     expect(first).not.toHaveBeenCalled()
   })
 
+  it("copies the note the user last clicked in, even without focus", () => {
+    const first = vi.fn()
+    const second = vi.fn()
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <section data-note-viewer="">
+          <p>First note text</p>
+          <button type="button" data-shortcut="copy-note" onClick={first}>
+            Copy
+          </button>
+        </section>
+        <section data-note-viewer="">
+          <p>Second note text</p>
+          <button type="button" data-shortcut="copy-note" onClick={second}>
+            Copy
+          </button>
+        </section>
+      </>,
+    )
+
+    fireEvent.pointerDown(screen.getByText("Second note text"))
+    fireEvent.keyDown(document.body, { key: "c" })
+
+    expect(second).toHaveBeenCalledOnce()
+    expect(first).not.toHaveBeenCalled()
+  })
+
   it("asks rather than guessing when several notes are open", () => {
     const copy = vi.fn()
     render(
