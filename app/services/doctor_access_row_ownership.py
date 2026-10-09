@@ -244,6 +244,19 @@ def lookup_owns_provider_rows(
     )
 
 
+def lookup_owns_subject_rows(session: Session, doctor_id: Any, subject: str) -> bool:
+    """Exact current lookup owner, for combining reads without new authority."""
+    scope, proof = _LOOKUP_ROWS.get(), _CAPTURE_ROWS.get()
+    return (
+        scope is not None
+        and scope[0] is session
+        and _session_context.get() is session
+        and proof is not None
+        and proof._doctor_id == doctor_id
+        and proof.matches_subject(session, subject)
+    )
+
+
 @contextmanager
 def capture_doctor_access_rows(
     session: Session, *, practice_id: Any, doctor_id: Any, subject: str
