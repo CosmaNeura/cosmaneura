@@ -81,7 +81,9 @@ function CaptureAuthorization({
   if (meeting.capture_authorized) {
     return (
       <div className="border-success/30 bg-success/10 rounded-lg border p-4">
-        <p className="text-success font-medium">Cosmas meeting bot enabled</p>
+        <p className="text-foreground font-medium">
+          Cosmas meeting bot enabled
+        </p>
         <p className="text-foreground mt-1 text-sm">
           Cosmas is authorized to join this Zoom meeting and prepare notes.
         </p>
@@ -264,7 +266,13 @@ export function MeetingDetail({
   return (
     <div>
       <div className="mb-6">
-        <h1 className="mb-1 text-2xl font-semibold">{meeting.topic}</h1>
+        <h1
+          className="mb-1 text-2xl font-semibold"
+          data-ph-no-capture=""
+          data-sentry-block=""
+        >
+          {meeting.topic}
+        </h1>
         <p className="text-muted-foreground text-sm">
           {formatDateTime(meeting.start_time)} · {meeting.duration} min
         </p>

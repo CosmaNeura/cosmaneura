@@ -35,7 +35,7 @@ export const meta: MetaFunction = () => {
     { title: "Intake" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "Intake summary",
     },
   ]
 }
@@ -53,7 +53,13 @@ function IntakeHeader({
     <div className="mb-6 flex items-start justify-between">
       <div className="text-left">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">{title}</h1>
+          <h1
+            className="text-2xl font-semibold"
+            data-ph-no-capture=""
+            data-sentry-block=""
+          >
+            {title}
+          </h1>
           <StatusBadge status={status} />
         </div>
         <div className="mt-1 space-y-1">

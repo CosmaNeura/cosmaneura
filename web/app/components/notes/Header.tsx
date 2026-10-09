@@ -5,7 +5,7 @@ export function Header({ title }: { title?: string }) {
   return (
     <PageHeader
       title={title ?? "Notes"}
-      isPageTitle={!title}
+      isPageTitle={title === undefined}
       actions={<UploadRecordingButton />}
     />
   )

@@ -81,7 +81,7 @@ export const meta: MetaFunction = () => {
     { title: "Notetaking" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "Your visit notes",
     },
   ]
 }
@@ -101,7 +101,13 @@ function NoteHeader({
     <div className="mb-6 flex items-start justify-between">
       <div className="text-left">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-semibold">{title}</h1>
+          <h1
+            className="text-2xl font-semibold"
+            data-ph-no-capture=""
+            data-sentry-block=""
+          >
+            {title}
+          </h1>
           <StatusBadge status={status} />
         </div>
         {engagementRole ? (

@@ -7,7 +7,7 @@ export const meta = () => {
     { title: "Intake" },
     {
       name: "description",
-      content: "Your patient intake chats",
+      content: "Your intake conversations",
     },
   ]
 }
