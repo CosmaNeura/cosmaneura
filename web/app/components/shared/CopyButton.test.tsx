@@ -36,7 +36,8 @@ describe("CopyButton", () => {
 
     fireEvent.click(button)
 
-    expect(await screen.findByRole("button", { name: "Copied" })).toBeVisible()
+    expect(await screen.findByText("Copied to clipboard")).toBeInTheDocument()
+    expect(button).toHaveAccessibleName("Copy Plan")
   })
 
   it("builds HTML at click time", async () => {
@@ -50,6 +51,18 @@ describe("CopyButton", () => {
       "<h3>Plan</h3><p>Rest</p>",
     )
     expect(await (await item.getType("text/plain")).text()).toContain("Plan")
+  })
+
+  it("does not blame the browser when there is nothing to copy", async () => {
+    render(<CopyButton text="" />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy to Clipboard" }))
+
+    await vi.waitFor(() =>
+      expect(toast).toHaveBeenCalledWith({
+        title: "There's nothing to copy yet",
+      }),
+    )
   })
 
   it("tells the user when the browser refuses the copy", async () => {

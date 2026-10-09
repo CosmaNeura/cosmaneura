@@ -66,7 +66,7 @@ describe("VisitTranscriptViewer", () => {
     )
   })
 
-  it("explains a deleted transcript", () => {
+  it("explains a deleted transcript without blaming retention", () => {
     render(
       <VisitTranscriptViewer
         transcript={transcript({ deleted_at: new Date().toISOString() })}
@@ -74,8 +74,21 @@ describe("VisitTranscriptViewer", () => {
     )
 
     expect(
+      screen.getByText("This transcript has been deleted."),
+    ).toBeInTheDocument()
+  })
+
+  it("states the retention rule when the creation time is unknown", () => {
+    render(
+      <VisitTranscriptViewer
+        transcript={transcript({ created_at: undefined })}
+      />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Visit Transcript" }))
+
+    expect(
       screen.getByText(
-        "This transcript has been deleted. Transcripts are kept for 14 days.",
+        "Transcripts are deleted 14 days after they are created.",
       ),
     ).toBeInTheDocument()
   })
@@ -87,6 +100,10 @@ describe("VisitTranscriptViewer", () => {
       />,
     )
 
-    expect(screen.getByText(/has been deleted/)).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        "This transcript has been deleted. Transcripts are kept for 14 days.",
+      ),
+    ).toBeInTheDocument()
   })
 })

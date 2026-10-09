@@ -65,7 +65,11 @@ export default function VisitTranscriptViewer({
   if (transcript.deleted_at || expired) {
     return (
       <TranscriptUnavailable
-        message={`This transcript has been deleted. Transcripts are kept for ${TRANSCRIPT_RETENTION_DAYS} days.`}
+        message={
+          expired
+            ? `This transcript has been deleted. Transcripts are kept for ${TRANSCRIPT_RETENTION_DAYS} days.`
+            : "This transcript has been deleted."
+        }
       />
     )
   }

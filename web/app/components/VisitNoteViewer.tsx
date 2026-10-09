@@ -34,7 +34,7 @@ function sectionHtml(title: string, content: HTMLElement | null | undefined) {
 // Hover-capable pointers reveal the control on hover or focus; touch devices
 // have no hover, so the control stays visible there.
 const REVEAL_ON_HOVER =
-  "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
+  "[@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
 
 export default function VisitNoteViewer({
   note,
@@ -122,7 +122,7 @@ export default function VisitNoteViewer({
                       sectionRefs.current.get(sectionTitle),
                     )
                   }
-                  className={cn("transition-opacity", REVEAL_ON_HOVER)}
+                  className={cn("-my-1 transition-opacity", REVEAL_ON_HOVER)}
                 />
               </div>
               <div

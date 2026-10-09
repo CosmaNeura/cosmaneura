@@ -82,6 +82,10 @@ describe("VisitNoteViewer", () => {
     )
     const html = await (await clipboardItem.getType("text/html")).text()
     expect(html).not.toContain("<button")
+    const order = ["content", "Subjective", "Objective", "Assessment", "Plan"]
+    const positions = order.map((title) => html.indexOf(`<h3>${title}</h3>`))
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
   })
 
   it("copies a single section with its heading", async () => {
@@ -101,12 +105,14 @@ describe("VisitNoteViewer", () => {
     )
 
     fireEvent.click(screen.getByRole("button", { name: "Copy Plan" }))
-    await screen.findByRole("button", { name: "Copied" })
+    await screen.findByText("Copied to clipboard")
 
     const [clipboardItem] = await navigator.clipboard.read()
     const plainText = await (await clipboardItem.getType("text/plain")).text()
     expect(plainText).toContain("Plan")
     expect(plainText).toContain("Follow-up plan")
     expect(plainText).not.toContain("Reported concern")
+    const html = await (await clipboardItem.getType("text/html")).text()
+    expect(html).toMatch(/^<h3>Plan<\/h3><p>Follow-up plan<\/p>/)
   })
 })

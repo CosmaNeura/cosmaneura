@@ -10,6 +10,8 @@ import { toast } from "~/hooks/use-toast"
 
 const COPIED_DURATION_MS = 2000
 
+class NothingToCopyError extends Error {}
+
 interface CopyButtonProps extends React.ComponentProps<typeof Button> {
   text?: string
   html?: string
@@ -55,7 +57,7 @@ export function CopyButton({
         htmlRef,
         getHtml,
       })
-      if (!textContent) throw new Error("nothing to copy")
+      if (!textContent) throw new NothingToCopyError()
 
       if (htmlContent) {
         await navigator.clipboard.write([
@@ -74,13 +76,17 @@ export function CopyButton({
         () => setCopied(false),
         COPIED_DURATION_MS,
       )
-    } catch {
-      toast({
-        title: "Couldn't copy",
-        description:
-          "Your browser blocked clipboard access. Try selecting the text and copying it instead.",
-        variant: "destructive",
-      })
+    } catch (error) {
+      toast(
+        error instanceof NothingToCopyError
+          ? { title: "There's nothing to copy yet" }
+          : {
+              title: "Couldn't copy",
+              description:
+                "Your browser blocked clipboard access. Try selecting the text and copying it instead.",
+              variant: "destructive",
+            },
+      )
     }
   }
 
@@ -93,7 +99,7 @@ export function CopyButton({
         size={iconOnly ? "icon" : "sm"}
         className={cn(iconOnly && "size-7", className)}
         onClick={copyToClipboard}
-        aria-label={iconOnly ? (copied ? "Copied" : label) : undefined}
+        aria-label={iconOnly ? label : undefined}
         {...props}
       >
         <Icon
