@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { appointmentDateFormat } from "~/lib/date"
 
-import { UploadRecordingButton } from "./UploadRecordingButton"
+import { UploadProgress, UploadRecordingButton } from "./UploadRecordingButton"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const { upload } = vi.hoisted(() => ({ upload: vi.fn() }))
@@ -317,5 +317,26 @@ describe("date-only recording upload", () => {
     expect(Date.parse(afternoon) - Date.parse(morning)).toBe(6 * 60 * 60 * 1000)
     expect(appointmentDateFormat(morning.slice(0, -1))).toBe("9/24/26")
     expect(appointmentDateFormat(afternoon.slice(0, -1))).toBe("9/24/26")
+  })
+})
+
+describe("upload progress", () => {
+  it.each([
+    [0, "Preparing upload…", "Preparing upload…"],
+    [0.42, "Uploading… 42%", "Uploading, 25%"],
+    [0.999, "Uploading… 99%", "Uploading, 75%"],
+    [1, "Finishing up…", "Finishing up…"],
+  ])("at %s shows %s and announces %s", (fraction, visible, announced) => {
+    render(<UploadProgress fraction={fraction} />)
+
+    expect(
+      screen.getByText(visible, { selector: "[aria-hidden]" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(announced, { selector: "[aria-live]" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("progressbar", { name: "Upload progress" }),
+    ).toHaveAttribute("aria-valuenow", String(Math.floor(fraction * 100)))
   })
 })

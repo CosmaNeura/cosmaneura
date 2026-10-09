@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Tooltip,
@@ -170,6 +171,44 @@ function PatientComboboxSearch({
   )
 }
 
+// Progress covers the file transfer; the short steps before (requesting an
+// upload slot) and after (registering the visit) are named instead.
+export function UploadProgress({ fraction }: { fraction: number }) {
+  // Floor so the bar never claims 100% while bytes are still being sent.
+  const percent = Math.floor(fraction * 100)
+  const label =
+    fraction <= 0
+      ? "Preparing upload…"
+      : fraction >= 1
+        ? "Finishing up…"
+        : `Uploading… ${percent}%`
+  // Screen readers hear quarter steps rather than every percent.
+  const announced =
+    fraction > 0 && fraction < 1
+      ? `Uploading, ${Math.floor(percent / 25) * 25}%`
+      : label
+  return (
+    <div className="space-y-2">
+      {/* The shared Progress wrapper keeps `value` for its indicator and does
+          not forward it to Radix (components/ui is vendored and not edited
+          here), so the ARIA values are supplied at the call site. */}
+      <Progress
+        value={percent}
+        aria-label="Upload progress"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={percent}
+      />
+      <p className="text-muted-foreground text-sm" aria-hidden="true">
+        {label}
+      </p>
+      <p className="sr-only" aria-live="polite">
+        {announced}
+      </p>
+    </div>
+  )
+}
+
 function VisitAudioUploadForm({
   closeDialogBox,
 }: {
@@ -213,10 +252,13 @@ function VisitAudioUploadForm({
   const form = useForm<UploadRecordingFormValues>({
     resolver: zodResolver(formSchema),
   })
+  const [uploadProgress, setUploadProgress] = useState(0)
 
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
+    setUploadProgress(0)
     const result = await submitVisitAudioUpload({
+      onUploadProgress: setUploadProgress,
       // Encounters retain their instant and ordering; birthdays are calendar days.
       appointmentDate: values.appointment_date.toISOString(),
       dateOfBirth: format(values.date_of_birth, "yyyy-MM-dd'T'00:00:00"),
@@ -351,6 +393,9 @@ function VisitAudioUploadForm({
             "Upload"
           )}
         </Button>
+        {form.formState.isSubmitting && (
+          <UploadProgress fraction={uploadProgress} />
+        )}
       </form>
     </Form>
   )
