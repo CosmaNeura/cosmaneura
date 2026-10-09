@@ -70,6 +70,7 @@ export default function VisitNoteViewer({
     <Collapsible
       ref={noteRef}
       id={`note-${note.id}`}
+      data-note-viewer=""
       className="mb-5 scroll-mt-24"
       open={isOpen}
       onOpenChange={setOpen}
@@ -95,6 +96,8 @@ export default function VisitNoteViewer({
                 .join("")
             }
             className="mt-1 ml-5"
+            data-shortcut="copy-note"
+            aria-keyshortcuts="c"
           />
         )}
         {visibleBillingSource && (
