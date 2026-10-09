@@ -87,6 +87,72 @@ class _CaptureOwner:
     practice_id: TypeIDType
 
 
+def _capture_owner_discovery_rows(
+    session: Session, mount: MountContextSession, settings: AuthorityKernelSettings
+):
+    """Current bearer-owned identity/Doctor/member inputs, never authority."""
+    if isinstance(session, Session):
+        rows = session.exec(
+            select(AuthorityActorExternalIdentity, Doctor, PracticeMember)
+            .select_from(AuthorityActorExternalIdentity)
+            .outerjoin(
+                Doctor,
+                col(Doctor.clerk_id) == col(AuthorityActorExternalIdentity.subject),
+            )
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .where(AuthorityActorExternalIdentity.id == mount.source_identity_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None, None)
+    # Nontransactional adapters keep the original reads and refusal order.
+    identity = session.get(
+        AuthorityActorExternalIdentity, mount.source_identity_id, populate_existing=True
+    )
+    if (
+        identity is None
+        or identity.actor_id != mount.actor_id
+        or identity.issuer != settings.clerk_issuer
+        or identity.revoked_at is not None
+    ):
+        raise CaptureScopeDenied
+    doctor = session.exec(
+        select(Doctor)
+        .where(Doctor.clerk_id == identity.subject)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    member = (
+        session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor.id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if doctor is not None
+        else None
+    )
+    return identity, doctor, member
+
+
+def _capture_owner_current_identity(session: Session, owner: _CaptureOwner):
+    """Refresh exact identity/mount inputs after the original provider locks."""
+    if isinstance(session, Session):
+        rows = session.exec(
+            select(AuthorityActorExternalIdentity, MountContextSession)
+            .select_from(AuthorityActorExternalIdentity)
+            .outerjoin(
+                MountContextSession, col(MountContextSession.id) == owner.mount_id
+            )
+            .where(AuthorityActorExternalIdentity.id == owner.identity_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None)
+    return (
+        session.get(
+            AuthorityActorExternalIdentity, owner.identity_id, populate_existing=True
+        ),
+        session.get(MountContextSession, owner.mount_id, populate_existing=True),
+    )
+
+
 def _lock_capture_owner(
     session: Session,
     mount: MountContextSession,
@@ -110,9 +176,7 @@ def _lock_capture_owner(
         or mount.actor_id is None
     ):
         raise authority.AuthorityRequestDeniedError
-    identity = session.get(
-        AuthorityActorExternalIdentity, mount.source_identity_id, populate_existing=True
-    )
+    identity, doctor, member = _capture_owner_discovery_rows(session, mount, settings)
     if (
         identity is None
         or identity.actor_id != mount.actor_id
@@ -120,18 +184,8 @@ def _lock_capture_owner(
         or identity.revoked_at is not None
     ):
         raise CaptureScopeDenied
-    doctor = session.exec(
-        select(Doctor)
-        .where(Doctor.clerk_id == identity.subject)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
     if doctor is None:
         raise CaptureScopeDenied
-    member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
     if member is None:
         raise CaptureScopeDenied
     owner = _CaptureOwner(
@@ -165,12 +219,7 @@ def _lock_capture_owner(
         ).one_or_none()
     # A practice move or identity rebind can win while the first lock waits.
     # Deny instead of taking a different owner's locks in the reverse order.
-    identity = session.get(
-        AuthorityActorExternalIdentity, owner.identity_id, populate_existing=True
-    )
-    current_mount = session.get(
-        MountContextSession, owner.mount_id, populate_existing=True
-    )
+    identity, current_mount = _capture_owner_current_identity(session, owner)
     if (
         doctor.clerk_id != owner.subject
         or doctor.deleted_at is not None

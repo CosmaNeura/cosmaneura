@@ -201,7 +201,7 @@ def test_cancelled_component_never_returns_partial_metadata_or_dispatches_later_
     assert len(calls) == phase and engine.pool.checkedout() == 0
 
 
-def test_changed_fresh_component_scope_is_rejected_before_downstream_read(
+def test_changed_post_read_scope_is_rejected_before_metadata_publication(
     native, engine, remote_reads, monkeypatch
 ):
     arguments = admitted_arguments(native, monkeypatch)
@@ -219,4 +219,8 @@ def test_changed_fresh_component_scope_is_rejected_before_downstream_read(
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
     with pytest.raises(gateway.CaptureReceiptInvalid):
         asyncio.run(gateway.execute_capture_operation(**arguments))
-    assert len(checks) == 2 and calls == [] and engine.pool.checkedout() == 0
+    assert (
+        len(checks) == 2
+        and calls == ["preparation_metadata"]
+        and engine.pool.checkedout() == 0
+    )

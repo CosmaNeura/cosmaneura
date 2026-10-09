@@ -24,6 +24,7 @@ const meeting: SidebarEntry = {
   title: "Synthetic meeting",
   location: "Zoom",
   date: "Aug 28",
+  isoDate: "2026-08-28T14:00:00.000Z",
   status: "none",
   preview: "10:00 AM",
 }
@@ -87,7 +88,7 @@ describe("AppSidebar on mobile", () => {
     fireEvent.click(screen.getByRole("button", { name: "Toggle Sidebar" }))
 
     expect(document.querySelector('[data-mobile="true"]')).toBeInTheDocument()
-    const meetingButton = await screen.findByRole("button", {
+    const meetingButton = await screen.findByRole("link", {
       name: /synthetic meeting/i,
     })
     expect(screen.getByLabelText("Mobile drawer state")).toHaveTextContent(
@@ -179,11 +180,182 @@ describe("AppSidebar empty states", () => {
       emptyState: { title: "No intakes yet", description: "Nothing yet." },
     })
 
-    fireEvent.change(screen.getByPlaceholderText("Type to search..."), {
+    fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "zzz" },
     })
 
     expect(screen.getByText("No results found")).toBeInTheDocument()
     expect(screen.queryByText("No intakes yet")).toBeNull()
+  })
+})
+
+describe("AppSidebar navigation and search", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1280,
+    })
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  const visit = (overrides: Partial<SidebarEntry>): SidebarEntry => ({
+    id: "visit",
+    url: "/notes/visit",
+    title: "Synthetic Person",
+    location: "",
+    date: "Today",
+    isoDate: new Date().toISOString(),
+    status: "completed",
+    statusLabel: "Note ready",
+    preview: "Follow-up",
+    ...overrides,
+  })
+
+  function renderAt(path: string, entries: SidebarEntry[], defaultOpen = true) {
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <SidebarProvider defaultOpen={defaultOpen}>
+          <AppSidebar
+            isLoading={false}
+            entries={entries}
+            header="Notes"
+            searchPlaceholder="Search patients or visits…"
+          />
+          <input aria-label="Other field" />
+        </SidebarProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it("uses real links for sections and marks only the current one", () => {
+    renderAt("/notes/visit", [visit({})])
+
+    const notes = screen.getByRole("link", { name: "Notetaking" })
+    expect(notes).toHaveAttribute("href", "/notes")
+    expect(notes).toHaveAttribute("data-active", "true")
+    expect(screen.getByRole("link", { name: "Schedule" })).toHaveAttribute(
+      "data-active",
+      "false",
+    )
+    expect(screen.getByRole("link", { name: "Cosmas home" })).toHaveAttribute(
+      "href",
+      "/",
+    )
+    expect(
+      screen.getByRole("link", { name: /Synthetic Person/ }),
+    ).toHaveAttribute("aria-current", "page")
+  })
+
+  it.each([
+    ["the visit type", "follow"],
+    ["the date label", "yesterday"],
+    ["the status", "no note"],
+  ])("finds an entry by %s", (_, term) => {
+    renderAt("/notes", [
+      visit({ id: "a", title: "First Person", preview: "Intake" }),
+      visit({
+        id: "b",
+        url: "/notes/b",
+        title: "Second Person",
+        preview: "Follow-up",
+        date: "Yesterday",
+        status: "not-started",
+        statusLabel: "No note yet",
+      }),
+    ])
+
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search patients or visits" }),
+      { target: { value: term } },
+    )
+
+    expect(screen.getByRole("link", { name: /Second Person/ })).toBeVisible()
+    expect(screen.queryByRole("link", { name: /First Person/ })).toBeNull()
+  })
+
+  it("filters this week by the raw date, not the display label", () => {
+    const old = new Date()
+    old.setDate(old.getDate() - 30)
+    renderAt("/notes", [
+      visit({ id: "now", title: "Recent Person", date: "Today" }),
+      visit({
+        id: "old",
+        url: "/notes/old",
+        title: "Older Person",
+        date: "Today",
+        isoDate: old.toISOString(),
+      }),
+    ])
+
+    fireEvent.click(screen.getByRole("switch"))
+
+    expect(screen.getByRole("link", { name: /Recent Person/ })).toBeVisible()
+    expect(screen.queryByRole("link", { name: /Older Person/ })).toBeNull()
+  })
+
+  it("focuses search with / unless the user is typing", () => {
+    renderAt("/notes", [visit({})])
+    const search = screen.getByRole("searchbox")
+
+    const other = screen.getByLabelText("Other field")
+    other.focus()
+    fireEvent.keyDown(other, { key: "/" })
+    expect(other).toHaveFocus()
+
+    other.blur()
+    fireEvent.keyDown(document.body, { key: "/" })
+    expect(search).toHaveFocus()
+  })
+
+  it("leaves / alone while the list panel is collapsed", () => {
+    renderAt("/notes", [visit({})], false)
+
+    fireEvent.keyDown(document.body, { key: "/" })
+
+    expect(screen.getByRole("searchbox", { hidden: true })).not.toHaveFocus()
+  })
+
+  it("leaves / alone while a dialog is open", () => {
+    renderAt("/notes", [visit({})])
+    const dialog = document.createElement("div")
+    dialog.setAttribute("role", "dialog")
+    document.body.append(dialog)
+
+    fireEvent.keyDown(document.body, { key: "/" })
+
+    expect(screen.getByRole("searchbox")).not.toHaveFocus()
+    dialog.remove()
+  })
+
+  it("groups consecutive entries under one subheading", () => {
+    renderAt("/schedule", [
+      visit({ id: "a", title: "Meeting A", group: "Today" }),
+      visit({ id: "b", url: "/b", title: "Meeting B", group: "Today" }),
+      visit({ id: "c", url: "/c", title: "Meeting C", group: "Past" }),
+    ])
+
+    expect(
+      screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent),
+    ).toEqual(["Today", "Past"])
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Notes" }),
+    ).toBeInTheDocument()
   })
 })

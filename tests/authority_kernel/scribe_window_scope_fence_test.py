@@ -109,6 +109,14 @@ def test_real_gateway_window_removes_requests_with_current_lock_order(
     )
 
     current = window.execute_recording_window
+
+    async def previous_gateway(**kwargs):
+        # Reproduce the former outer gateway decision for the legacy helper.
+        kwargs["scope"] = gateway.authorize_admitted_capture(
+            kwargs["caller"], kwargs["binding_ref"], kwargs["workspace_id"]
+        )
+        return await legacy(**kwargs)
+
     results = []
     for previous in (True, False):
         transactions = []
@@ -133,7 +141,9 @@ def test_real_gateway_window_removes_requests_with_current_lock_order(
         try:
             with monkeypatch.context() as patch, query_counts(engine) as count:
                 patch.setattr(
-                    window, "execute_recording_window", legacy if previous else current
+                    window,
+                    "execute_recording_window",
+                    previous_gateway if previous else current,
                 )
                 response = asyncio.run(invoke(arguments))
         finally:
@@ -153,7 +163,7 @@ def test_real_gateway_window_removes_requests_with_current_lock_order(
     assert [row[0] for row in results[1][3]] == ["prepare_recording_window"]
     assert results[1][1]["all_selects"] < results[0][1]["all_selects"]
     before, after = results[0][2], results[1][2]
-    assert len(after) == 3 and len(before) == 11
+    assert len(after) == 2 and len(before) == 11
     assert all(transaction == before[0] for transaction in before + after)
     record_property("previous_selects", results[0][1]["all_selects"])
     record_property("current_selects", results[1][1]["all_selects"])
