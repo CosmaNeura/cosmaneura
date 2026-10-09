@@ -303,7 +303,7 @@ def test_invalid_or_reused_proof_uses_all_original_queries(engine, invalid):
         assert counts["all_selects"] == 6
 
 
-def test_valid_proof_has_three_fresh_queries_and_default_clock_stays_at_same_stage(
+def test_valid_proof_keeps_default_clock_after_early_inputs_and_before_late_grant(
     engine, monkeypatch
 ):
     args, at = owned_case(engine)
@@ -329,8 +329,96 @@ def test_valid_proof_has_three_fresh_queries_and_default_clock_stays_at_same_sta
                 assert decision(session, args, None, locked[3]).allowed
         finally:
             event.remove(engine, "before_cursor_execute", selected)
-        assert counts["all_selects"] == 3
-        assert order == ["other", "member", "clock", "other"]
+        assert counts["all_selects"] == 2
+        assert order == ["other", "clock", "other"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "normal",
+        "pilot",
+        "pilot_hash",
+        "pilot_email",
+        "pilot_doctor",
+        "pilot_future",
+        "pilot_unonboarded",
+        "inactive",
+        "revoked_member",
+        "ending_before",
+        "ending_at",
+        "grant_revoked",
+        "replacement",
+        "baa_stale",
+        "baa_future",
+        "baa_effective",
+        "no_entitlement",
+        "exemption_before",
+        "exemption_at",
+    ],
+)
+@pytest.mark.parametrize("require_entitlement", [True, False])
+def test_default_clock_combined_early_inputs_match_original_decision(
+    engine, monkeypatch, name, require_entitlement
+):
+    args, at = owned_case(engine, name)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at
+
+    monkeypatch.setattr(access, "datetime", Clock)
+    monkeypatch.setattr(previous, "datetime", Clock)
+    with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
+        expected = previous.resolve_doctor_access(
+            locked[1], require_entitlement=require_entitlement
+        )
+        actual = access.resolve_doctor_access(
+            locked[1],
+            require_entitlement=require_entitlement,
+            _ownership=locked[3],
+            _practice_id=args["practice_id"],
+        )
+        assert actual == expected
+
+
+def test_default_clock_keeps_late_grant_refresh_after_early_inputs(engine, monkeypatch):
+    args, at = owned_case(engine, "pilot")
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at
+
+    monkeypatch.setattr(access, "datetime", Clock)
+    original = access.owned_provider_tombstone_rows
+
+    def expire_grant(doctor, **kwargs):
+        result = original(doctor, **kwargs)
+        with access.get_session() as session:
+            row = session.exec(
+                select(pilot.PilotAccessGrandfatherGrant).where(
+                    pilot.PilotAccessGrandfatherGrant.clerk_id == doctor.clerk_id
+                )
+            ).one()
+            row.granted_at = at + timedelta(seconds=1)
+            session.add(row)
+            session.flush()
+        return result
+
+    monkeypatch.setattr(access, "owned_provider_tombstone_rows", expire_grant)
+    with session_for(engine) as session:
+        practice = session.get(Practice, args["practice_id"])
+        assert practice is not None
+        practice.billing_exempt = False
+        session.add(practice)
+        session.commit()
+    with session_for(engine) as session, owner(session, args) as locked:
+        assert locked is not None
+        # A pilot-only member needs the current grant, not the early snapshot.
+        assert not decision(session, args, None, locked[3]).allowed
 
 
 @pytest.mark.parametrize(

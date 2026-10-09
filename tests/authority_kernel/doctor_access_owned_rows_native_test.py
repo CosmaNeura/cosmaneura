@@ -151,7 +151,7 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
                 event.remove(engine, "before_cursor_execute", capture_locks)
         assert response.status_code == 200
         assert observed[True] == eligible
-        assert decision_queries == [3 if optimized else 6] * eligible
+        assert decision_queries == [2 if optimized else 6] * eligible
         runs.append(
             (counts["all_selects"], list(locks), dict(observed), response.json())
         )
@@ -172,7 +172,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
     monkeypatch,
     writer_kind,
     record_property,
-    _expected_access_queries=3,
+    _expected_access_queries=2,
 ):
     at = datetime.now(UTC)
     with session_for(engine) as setup:
