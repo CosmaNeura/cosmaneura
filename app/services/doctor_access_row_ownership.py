@@ -1,6 +1,6 @@
 """Private evidence of actual provider row locks, never an access decision."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -16,6 +16,55 @@ _ISSUER = object()
 _CAPTURE_ROWS: ContextVar["DoctorAccessRowOwnership | None"] = ContextVar(
     "capture_doctor_access_rows", default=None
 )
+_LOOKUP_ROWS: ContextVar[tuple[Session, ExitStack] | None] = ContextVar(
+    "lookup_doctor_access_row_scope", default=None
+)
+
+
+@contextmanager
+def lookup_doctor_access_row_scope(session: Session):
+    """Retain actual lock evidence only inside one synchronous encounter lookup.
+
+    This scope changes neither the ActiveModel session nor the transaction.
+    Each provider validator still takes its original locks and reads current
+    access. Evidence expires on transaction/savepoint transitions and is reset
+    before the caller's managed session closes, including on exceptions.
+    """
+    with ExitStack() as stack:
+        token = _LOOKUP_ROWS.set((session, stack))
+        try:
+            yield
+        finally:
+            _LOOKUP_ROWS.reset(token)
+
+
+@contextmanager
+def provider_doctor_access_rows(
+    session: Session, *, practice_id: Any, doctor_id: Any, subject: str
+):
+    """Take the original locks; make their evidence available to a local lookup."""
+    scope = _LOOKUP_ROWS.get()
+    if (
+        scope is None
+        or scope[0] is not session
+        or _session_context.get() is not session
+    ):
+        with lock_doctor_access_rows(
+            session, practice_id=practice_id, doctor_id=doctor_id, subject=subject
+        ) as locked:
+            yield locked
+        return
+    # The scope retains this exact factory, not an earlier decision or result.
+    # Keeping the rows loaded avoids implicit re-reads; all eligibility queries
+    # still execute at their original stages under the same row locks.
+    locked = scope[1].enter_context(
+        lock_doctor_access_rows(
+            session, practice_id=practice_id, doctor_id=doctor_id, subject=subject
+        )
+    )
+    token = _CAPTURE_ROWS.set(None if locked is None else locked[3])
+    scope[1].callback(_CAPTURE_ROWS.reset, token)
+    yield locked
 
 
 @dataclass(frozen=True, eq=False)
