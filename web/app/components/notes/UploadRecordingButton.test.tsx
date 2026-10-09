@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { appointmentDateFormat } from "~/lib/date"
 
-import { UploadRecordingButton } from "./UploadRecordingButton"
+import { UploadProgress, UploadRecordingButton } from "./UploadRecordingButton"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const { upload } = vi.hoisted(() => ({ upload: vi.fn() }))
@@ -12,28 +12,37 @@ vi.mock("~/configuration/client", () => ({ client: {} }))
 vi.mock("client/@tanstack/react-query.gen", () => ({
   patientListOptions: () => ({}),
 }))
+const patientQuery = vi.hoisted(() => ({ loading: false }))
 vi.mock("@tanstack/react-query", () => ({
   useQuery: () => ({
-    data: [
-      {
-        id: "patient_synthetic",
-        name: "Synthetic date check",
-        date_of_birth: "2000-01-01T00:00:00Z",
-      },
-      {
-        id: "patient_unknown_dob",
-        name: "Synthetic unknown date",
-        date_of_birth: null,
-      },
-    ],
+    data: patientQuery.loading
+      ? undefined
+      : [
+          {
+            id: "patient_synthetic",
+            name: "Synthetic date check",
+            date_of_birth: "2000-01-01T00:00:00Z",
+          },
+          {
+            id: "patient_unknown_dob",
+            name: "Synthetic unknown date",
+            date_of_birth: null,
+          },
+          {
+            id: "patient_stored_with_space",
+            name: "Synthetic spaced name ",
+            date_of_birth: "1990-05-06T00:00:00Z",
+          },
+        ],
   }),
 }))
 vi.mock("~/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }))
 vi.mock("~/utils/terminology", () => ({
   useTerminology: () => ({
-    patient: "patient",
-    patientTitle: "Patient",
-    patientPossessive: "patient’s",
+    patient: "client",
+    patientTitle: "Client",
+    patientPlural: "clients",
+    patientPossessive: "client’s",
   }),
 }))
 // Keep the actual form, validation, selection handler, and upload submission.
@@ -71,6 +80,14 @@ vi.mock("~/components/shared/SimpleComboBox", () => ({
     renderItem: (item: { value: string; label: string }) => React.ReactNode
   }) => (
     <>
+      <button
+        type="button"
+        onClick={() =>
+          onSelectedItemChange({ value: "new_item", label: "  Typed person  " })
+        }
+      >
+        Type a new name
+      </button>
       {items.map((item) => (
         <button
           key={item.value}
@@ -105,6 +122,95 @@ vi.mock("~/components/shared/AudioVideoDropzone", () => ({
 afterEach(() => {
   vi.useRealTimers()
   upload.mockReset()
+  patientQuery.loading = false
+})
+
+describe("upload form guidance", () => {
+  it("explains each missing field instead of submitting", async () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    expect(await screen.findByText("Enter the client’s name")).toBeVisible()
+    expect(screen.getByText("Enter a date of birth")).toBeVisible()
+    expect(screen.getByText("Choose a recording to upload")).toBeVisible()
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it("clears the file error as soon as a recording is chosen", async () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+    await screen.findByText("Choose a recording to upload")
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+
+    await waitFor(() =>
+      expect(screen.queryByText("Choose a recording to upload")).toBeNull(),
+    )
+  })
+
+  it("uses the doctor's terminology in the date of birth help", () => {
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    expect(
+      screen.getByText(/It is used to identify this client in the future/),
+    ).toBeInTheDocument()
+  })
+
+  it("shows a placeholder input while the list loads", () => {
+    patientQuery.loading = true
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+
+    expect(
+      screen.getByRole("status", { name: "Loading clients" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Loading...")).toBeNull()
+  })
+
+  it("keeps a selected name exactly as stored so the patient is matched", async () => {
+    upload.mockResolvedValue({ ok: true })
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: /Synthetic spaced name/ }),
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+    expect(upload.mock.calls[0][0].patientName).toBe("Synthetic spaced name ")
+  })
+
+  it("trims a newly typed name", async () => {
+    upload.mockResolvedValue({ ok: true })
+    render(<UploadRecordingButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(screen.getByRole("button", { name: "Type a new name" }))
+    fireEvent.change(screen.getByLabelText("Date of Birth"), {
+      target: { value: "1995-02-03" },
+    })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Choose synthetic audio" }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload" }))
+
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+    expect(upload.mock.calls[0][0].patientName).toBe("Typed person")
+  })
+
+  it("does not render the trigger hidden at any breakpoint", () => {
+    render(<UploadRecordingButton />)
+    const trigger = screen.getByRole("button", { name: "Upload Recording" })
+    expect(trigger.className).not.toMatch(/(^|\s)hidden(\s|$)/)
+  })
 })
 
 describe("date-only recording upload", () => {
@@ -211,5 +317,26 @@ describe("date-only recording upload", () => {
     expect(Date.parse(afternoon) - Date.parse(morning)).toBe(6 * 60 * 60 * 1000)
     expect(appointmentDateFormat(morning.slice(0, -1))).toBe("9/24/26")
     expect(appointmentDateFormat(afternoon.slice(0, -1))).toBe("9/24/26")
+  })
+})
+
+describe("upload progress", () => {
+  it.each([
+    [0, "Preparing upload…", "Preparing upload…"],
+    [0.42, "Uploading… 42%", "Uploading, 25%"],
+    [0.999, "Uploading… 99%", "Uploading, 75%"],
+    [1, "Finishing up…", "Finishing up…"],
+  ])("at %s shows %s and announces %s", (fraction, visible, announced) => {
+    render(<UploadProgress fraction={fraction} />)
+
+    expect(
+      screen.getByText(visible, { selector: "[aria-hidden]" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(announced, { selector: "[aria-live]" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("progressbar", { name: "Upload progress" }),
+    ).toHaveAttribute("aria-valuenow", String(Math.floor(fraction * 100)))
   })
 })

@@ -402,3 +402,120 @@ describe("settings current practice agreement", () => {
     expect(practiceApi.acceptPracticeBaa).not.toHaveBeenCalled()
   })
 })
+
+describe("settings layout", () => {
+  it("has one page heading, a heading per section, and jump links to them", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    openSettings()
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Settings sections",
+    })
+    expect(
+      Array.from(nav.querySelectorAll("a")).map((a) => a.textContent),
+    ).toEqual(["Practice", "Biography", "Note types", "Zoom"])
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
+    for (const name of ["Practice", "Biography", "Zoom Integration"]) {
+      expect(screen.getByRole("heading", { level: 2, name })).toBeVisible()
+    }
+  })
+
+  it("moves to a section and focuses it, without smooth scrolling under reduced motion", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, "scrollIntoView")
+      .mockImplementation(() => {})
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(prefers-reduced-motion: reduce)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
+    )
+    openSettings()
+
+    const link = await screen.findByRole("link", { name: "Zoom" })
+    expect(link).toHaveAttribute("href", "#settings-zoom")
+    fireEvent.click(link)
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "auto",
+      block: "start",
+    })
+    expect(screen.getByRole("region", { name: "Zoom" })).toHaveFocus()
+    scrollIntoView.mockRestore()
+    vi.unstubAllGlobals()
+  })
+
+  it("keeps the router's history entry when jumping", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {})
+    window.history.replaceState({ usr: null, key: "abc123", idx: 4 }, "")
+    openSettings()
+
+    fireEvent.click(await screen.findByRole("link", { name: "Biography" }))
+
+    expect(window.history.state).toMatchObject({ key: "abc123", idx: 4 })
+    expect(window.location.hash).toBe("#settings-biography")
+    vi.restoreAllMocks()
+  })
+
+  it("leaves modifier clicks to the browser", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    openSettings()
+
+    const link = await screen.findByRole("link", { name: "Zoom" })
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    })
+    link.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("omits links for sections that are not shown", async () => {
+    practiceApi.getPractice.mockResolvedValue(null)
+    openSettings()
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Settings sections",
+    })
+    const labels = Array.from(nav.querySelectorAll("a")).map(
+      (a) => a.textContent,
+    )
+    expect(labels).not.toContain("Practice")
+    expect(labels).not.toContain("AI output")
+    expect(screen.queryByRole("region", { name: "Practice" })).toBeNull()
+  })
+
+  it("offers no jump links in the billing-recovery-only view", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice({ entitled: false }))
+    client.settingsData.mockResolvedValue({
+      data: {
+        biography: "",
+        notes_schema: [],
+        note_customizations: [],
+        zoom_connected: false,
+        has_natmed_subscription: false,
+        terminology: "doctor_patient",
+        billing_recovery_required: true,
+      },
+      response: new Response(null, { status: 200 }),
+    })
+    openSettings()
+
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Practice" }),
+    ).toBeVisible()
+    expect(
+      screen.queryByRole("navigation", { name: "Settings sections" }),
+    ).toBeNull()
+    expect(screen.queryByRole("heading", { name: "Biography" })).toBeNull()
+  })
+})

@@ -3,8 +3,10 @@ import {
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import {
+  type UploadProgressHandler,
   VISIT_UPLOAD_MAX_BYTES,
   uploadToExactAzureUrl,
+  uploadToExactAzureUrlWithProgress,
 } from "~/lib/azure-upload"
 
 export { VISIT_UPLOAD_MAX_BYTES } from "~/lib/azure-upload"
@@ -14,6 +16,7 @@ export type VisitAudioUploadInput = {
   dateOfBirth: string
   file: File
   patientName: string
+  onUploadProgress?: UploadProgressHandler
 }
 
 export type VisitAudioUploadFailureStage =
@@ -47,6 +50,7 @@ type VisitAudioUploadDependencies = {
     file: File,
     uploadUrl: string,
     contentType: string,
+    onProgress?: UploadProgressHandler,
   ) => Promise<{ error: boolean }>
 }
 
@@ -61,7 +65,15 @@ const defaultDependencies: VisitAudioUploadDependencies = {
     const { error } = await uploadVisitAudioFile({ body })
     return { error }
   },
-  uploadBlob: uploadToExactAzureUrl,
+  uploadBlob: (file, uploadUrl, contentType, onProgress) =>
+    onProgress
+      ? uploadToExactAzureUrlWithProgress(
+          file,
+          uploadUrl,
+          contentType,
+          onProgress,
+        )
+      : uploadToExactAzureUrl(file, uploadUrl, contentType),
 }
 
 /** Complete all three phases without ever treating a partial upload as success. */
@@ -92,6 +104,7 @@ export async function submitVisitAudioUpload(
       input.file,
       grant.upload_url,
       grant.content_type,
+      input.onUploadProgress,
     )
     if (uploaded.error) return { ok: false, stage: "azure" }
   } catch {

@@ -7,7 +7,7 @@ export const meta = () => {
     { title: "Notetaking" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "Your visit notes",
     },
   ]
 }

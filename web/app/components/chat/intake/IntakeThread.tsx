@@ -1,13 +1,15 @@
 import type { FC } from "react"
 
+import { Loader2, SendHorizontalIcon } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import { MarkdownText } from "~/components/assistant-ui/markdown-text"
 import {
-  Composer,
-  ComposerAction,
   EditComposer,
   ThreadScrollToBottom,
 } from "~/components/assistant-ui/thread"
 
+import { useIntakeSend } from "./IntakeRuntimeProvider"
 import { IntakeThreadWelcome } from "./IntakeThreadWelcome"
 import { ComposerPrimitive, ThreadPrimitive } from "@assistant-ui/react"
 import { MessagePrimitive } from "@assistant-ui/react"
@@ -32,20 +34,102 @@ export const IntakeAssistantMessage: FC = () => {
   )
 }
 
+export const IntakeTypingIndicator: FC = () => {
+  return (
+    <div
+      role="status"
+      aria-label="Preparing the next question"
+      className="flex w-full max-w-[var(--thread-max-width)] py-4"
+    >
+      <span className="sr-only">Preparing the next question</span>
+      <div className="bg-chat-assistant flex items-center gap-1.5 rounded-3xl px-5 py-4">
+        {[0, 150, 300].map((delay) => (
+          <span
+            key={delay}
+            aria-hidden="true"
+            className="bg-muted-foreground size-2 rounded-full opacity-70 motion-safe:animate-bounce"
+            style={{ animationDelay: `${delay}ms` }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+export const IntakeSendError: FC = () => {
+  const { failure, retry } = useIntakeSend()
+  if (!failure) return null
+  return (
+    <div
+      role="alert"
+      className="border-destructive/30 bg-destructive/5 flex w-full max-w-[var(--thread-max-width)] flex-wrap items-center justify-between gap-3 rounded-2xl border px-5 py-3 text-sm"
+    >
+      {failure === "fatal" ? (
+        <p>
+          We couldn&apos;t confirm your answer. Please contact your
+          provider&apos;s office.
+        </p>
+      ) : (
+        <>
+          <p>We couldn&apos;t confirm that sent. Your answer is still here.</p>
+          <Button type="button" size="sm" variant="outline" onClick={retry}>
+            Try again
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Intake answers cannot be cancelled mid-request, so the composer only ever
+// offers Send, shown as busy while the next question loads.
+const IntakeComposerAction: FC = () => {
+  return (
+    <>
+      <ThreadPrimitive.If running={false}>
+        <ComposerPrimitive.Send asChild>
+          <Button size="sm" className="my-2.5">
+            Send
+            <SendHorizontalIcon className="ml-1.5 size-4" aria-hidden="true" />
+          </Button>
+        </ComposerPrimitive.Send>
+      </ThreadPrimitive.If>
+      <ThreadPrimitive.If running>
+        <Button type="button" size="sm" className="my-2.5" disabled>
+          <Loader2
+            className="mr-1.5 size-4 motion-safe:animate-spin"
+            aria-hidden="true"
+          />
+          Sending
+        </Button>
+      </ThreadPrimitive.If>
+    </>
+  )
+}
+
 export const IntakeComposer: FC = () => {
   return (
-    <ComposerPrimitive.Root className="focus-within:border-ring/20 flex w-full flex-wrap items-end rounded-lg border bg-inherit px-2.5 shadow-sm transition-colors ease-in">
-      <ComposerPrimitive.Input
-        rows={10}
-        autoFocus
-        placeholder="Include a long and detailed response to the above question.
-
-Use as many lines and add as many details as you'd like!"
-        submitOnEnter={false}
-        className="placeholder:text-muted-foreground max-h-200 flex-grow resize-none border-none bg-transparent px-2 py-4 text-sm outline-none focus:ring-0 disabled:cursor-not-allowed"
-      />
-      <ComposerAction />
-    </ComposerPrimitive.Root>
+    <div className="w-full">
+      <ComposerPrimitive.Root className="focus-within:border-ring/20 flex w-full flex-wrap items-end rounded-lg border bg-inherit px-2.5 shadow-sm transition-colors ease-in">
+        <ComposerPrimitive.Input
+          minRows={3}
+          maxRows={12}
+          autoFocus
+          aria-label="Your answer"
+          aria-describedby="intake-composer-hint"
+          placeholder="Share as much or as little as you like."
+          submitOnEnter={false}
+          className="placeholder:text-muted-foreground flex-grow resize-none border-none bg-transparent px-2 py-4 text-base outline-none focus:ring-0 disabled:cursor-not-allowed sm:text-sm"
+        />
+        <IntakeComposerAction />
+      </ComposerPrimitive.Root>
+      <p
+        id="intake-composer-hint"
+        className="text-muted-foreground mt-2 text-center text-xs"
+      >
+        Enter adds a new line. Tap Send when you&apos;re done.
+      </p>
+    </div>
   )
 }
 
@@ -67,6 +151,11 @@ export const IntakeThread: FC = () => {
             AssistantMessage: IntakeAssistantMessage,
           }}
         />
+
+        <ThreadPrimitive.If running>
+          <IntakeTypingIndicator />
+        </ThreadPrimitive.If>
+        <IntakeSendError />
 
         <ThreadPrimitive.If empty={false}>
           <div className="min-h-8 flex-grow" />

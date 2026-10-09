@@ -58,7 +58,7 @@ describe("VisitNoteViewer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy to Clipboard" }))
 
-    await screen.findByRole("button", { name: "Copied!" })
+    await screen.findByRole("button", { name: "Copied" })
 
     expect(
       screen.queryByRole("button", { name: "Billing header" }),
@@ -80,5 +80,39 @@ describe("VisitNoteViewer", () => {
     expect(plainText).not.toContain(
       "Synthetic transcript excluded from note copy",
     )
+    const html = await (await clipboardItem.getType("text/html")).text()
+    expect(html).not.toContain("<button")
+    const order = ["content", "Subjective", "Objective", "Assessment", "Plan"]
+    const positions = order.map((title) => html.indexOf(`<h3>${title}</h3>`))
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect([...positions].sort((a, b) => a - b)).toEqual(positions)
+  })
+
+  it("copies a single section with its heading", async () => {
+    render(
+      <VisitNoteViewer
+        defaultOpen
+        note={{
+          id: "visit_note_test",
+          doctor_id: "doctor_test",
+          appointment_id: "appointment_test",
+          ai_transcript_id: "ai_visit_transcript_test",
+          doctor_note_schema_id: "doctor_note_schema_test",
+          note_type: "SOAP",
+          note: { Subjective: "Reported concern", Plan: "Follow-up plan" },
+        }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy Plan" }))
+    await screen.findByText("Copied to clipboard")
+
+    const [clipboardItem] = await navigator.clipboard.read()
+    const plainText = await (await clipboardItem.getType("text/plain")).text()
+    expect(plainText).toContain("Plan")
+    expect(plainText).toContain("Follow-up plan")
+    expect(plainText).not.toContain("Reported concern")
+    const html = await (await clipboardItem.getType("text/html")).text()
+    expect(html).toMatch(/^<h3>Plan<\/h3><p>Follow-up plan<\/p>/)
   })
 })
