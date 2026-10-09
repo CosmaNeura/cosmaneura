@@ -1,11 +1,14 @@
 """One native request composes existing Core decisions; no cached authority."""
 
+import hashlib
+import re
 import time
+from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -13,18 +16,25 @@ from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_capture_scope, scribe_encounters
 from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
-from app.services.scribe_capture_admission import CaptureCaller
+from app.services.scribe_capture_admission import (
+    CaptureCaller,
+    ConsentAttestation,
+    admit_capture,
+)
 from app.services.scribe_capture_deadline import (
     check_async_capture_deadline,
     check_capture_deadline,
 )
 from app.services.scribe_capture_gateway import execute_capture_operation
 from app.services.scribe_capture_protocol import CaptureOperation, ReadOperation
+from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
 from app.services.scribe_encounter_contract import LookupRequest
 from app.services.scribe_workflow import ScribeWorkflowClient
 from app.utils.native_request_timing import phase
 
 from activemodel.session_manager import global_session
+from app.models.authority import MountContextToken
+from sqlmodel import select
 
 NATIVE_READ_OPERATIONS = frozenset(
     {
@@ -40,9 +50,28 @@ NATIVE_READ_OPERATIONS = frozenset(
 )
 
 
+class PreparedWindowContext(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    context_token: SecretStr = Field(repr=False)
+    interaction_ref: str = Field(pattern=r"^[A-Za-z0-9._~-]{16,160}$")
+    client_turn_id: UUID
+
+    @model_validator(mode="after")
+    def bounded_token(self):
+        if not re.fullmatch(r"[!-~]{16,8192}", self.context_token.get_secret_value()):
+            raise ValueError("invalid_prepared_context")
+        return self
+
+
 class NativeCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-    action: Literal["mount", "operation", "preparation_context"]
+    action: Literal[
+        "mount",
+        "operation",
+        "preparation_context",
+        "prepared_window",
+        "prepared_admission",
+    ]
     workspace_id: UUID
     request_nonce: UUID
     expected_actor_ref: str = Field(
@@ -57,9 +86,44 @@ class NativeCaptureRequest(BaseModel):
     operation: CaptureOperation | None = None
     opening_nonce: UUID | None = None
     preparation: Literal["admission", "recording_window"] | None = None
+    prepared_context: PreparedWindowContext | None = Field(default=None, repr=False)
+    retain_preparation_context: Literal[True] | None = None
+    attestation: ConsentAttestation | None = None
+    configured_capture: ConfiguredCaptureSelection | None = None
 
     @model_validator(mode="after")
     def action_fields(self):
+        if self.retain_preparation_context is not None and self.action != "mount":
+            raise ValueError("unexpected_context_retention")
+        if self.action == "prepared_admission":
+            if (
+                self.binding_ref is None
+                or self.prepared_context is None
+                or self.attestation is None
+                or self.configured_capture is None
+                or self.operation is not None
+                or self.opening_nonce is not None
+                or self.preparation is not None
+            ):
+                raise ValueError("invalid_prepared_admission")
+            return self
+        if any(
+            value is not None for value in (self.attestation, self.configured_capture)
+        ):
+            raise ValueError("unexpected_admission_fields")
+        if self.action == "prepared_window":
+            if (
+                self.binding_ref is None
+                or self.operation is None
+                or self.operation.kind != "prepare_recording_window"
+                or self.prepared_context is None
+                or self.opening_nonce is not None
+                or self.preparation is not None
+            ):
+                raise ValueError("invalid_prepared_window")
+            return self
+        if self.prepared_context is not None:
+            raise ValueError("unexpected_prepared_context")
         if self.action == "mount":
             if (
                 self.binding_ref is not None
@@ -138,7 +202,10 @@ async def execute_native_capture(
                 # Validate its complete current scope in every fresh lookup;
                 # the durable admission service authorizes it again before I/O.
                 expected_capture_binding_ref=(
-                    data.binding_ref if data.preparation == "admission" else None
+                    data.binding_ref
+                    if data.preparation == "admission"
+                    or data.action == "prepared_admission"
+                    else None
                 ),
             )
         check_async_capture_deadline()
@@ -157,6 +224,130 @@ async def execute_native_capture(
         ):
             raise authority.AuthorityRequestDeniedError
         return row
+
+    if data.action in {"prepared_window", "prepared_admission"}:
+        # The native route still verifies current Clerk identity, both workload
+        # policies and encounter/capture enablement. These complete current
+        # visit lookups retain its provider-session/view-as checks. Only token
+        # issuance and new interaction construction are omitted; the ordinary
+        # window dispatcher locks and reauthorizes all token/clinical/consent
+        # inputs before mutation and after remote I/O.
+        assert data.prepared_context is not None
+        assert data.binding_ref is not None
+        context = data.prepared_context
+        token = context.context_token.get_secret_value()
+        with global_session() as session:
+            stored = session.exec(
+                select(MountContextToken).where(
+                    MountContextToken.token_hash
+                    == hashlib.sha256(token.encode()).hexdigest()
+                )
+            ).one_or_none()
+            if stored is None:
+                raise authority.ContextTokenInvalidError
+            now = datetime.now(UTC)
+            if stored.issued_at.tzinfo is None:
+                now = now.replace(tzinfo=None)
+            if not 0 <= (now - stored.issued_at).total_seconds() < 30:
+                raise authority.ContextTokenExpiredError
+
+        class SameProviderCaller(CaptureCaller):
+            def authorize(self, session, binding_ref, workspace_id):
+                binding = super().authorize(session, binding_ref, workspace_id)
+                if (
+                    str(binding.actor_id) != data.expected_actor_ref
+                    or str(binding.tenant_id) != data.expected_tenant_ref
+                    or str(binding.appointment_id) != first["appointment_ref"]
+                    or str(binding.patient_id) != first["patient_ref"]
+                ):
+                    raise authority.AuthorityRequestDeniedError
+                stored = session.exec(
+                    select(MountContextToken)
+                    .where(
+                        MountContextToken.token_hash
+                        == hashlib.sha256(token.encode()).hexdigest()
+                    )
+                    .execution_options(populate_existing=True)
+                ).one_or_none()
+                if stored is None:
+                    raise authority.ContextTokenInvalidError
+                now = datetime.now(UTC)
+                if stored.issued_at.tzinfo is None:
+                    now = now.replace(tzinfo=None)
+                if not 0 <= (now - stored.issued_at).total_seconds() < 30:
+                    raise authority.ContextTokenExpiredError
+                return binding
+
+        caller = SameProviderCaller(
+            workload_client_id=workload_client_id,
+            mount_context_token=token,
+            interaction_ref=context.interaction_ref,
+            client_turn_id=context.client_turn_id,
+            settings=authority_settings,
+            capture_settings=capture_settings,
+        )
+        if data.action == "prepared_admission":
+            with phase("operation"):
+                admitted = await admit_capture(
+                    caller=caller,
+                    binding_ref=data.binding_ref,
+                    workspace_id=data.workspace_id,
+                    client_request_key=key,
+                    attestation=data.attestation,
+                    configured_capture=data.configured_capture,
+                    client=client,
+                )
+            check_async_capture_deadline()
+            current()
+            result: dict[str, object] = {
+                "contract_version": "1",
+                **{
+                    name: str(value)
+                    for name, value in asdict(admitted).items()
+                    if name != "configured_capture"
+                },
+                "request_nonce": str(data.request_nonce),
+                "checked_at": datetime.now(UTC).isoformat(),
+            }
+            if admitted.configured_capture is not None:
+                result["configured_capture"] = admitted.configured_capture.model_dump(
+                    mode="json"
+                )
+            return {
+                "version": "1",
+                "action": data.action,
+                "actor_ref": data.expected_actor_ref,
+                "tenant_ref": data.expected_tenant_ref,
+                "result": result,
+            }
+        assert data.operation is not None
+        with phase("operation"):
+            receipt = await execute_capture_operation(
+                caller=caller,
+                binding_ref=data.binding_ref,
+                workspace_id=data.workspace_id,
+                operation=data.operation,
+                client_request_key=key,
+                client=client,
+                upload_origins=capture_settings.upload_origins,
+            )
+        check_async_capture_deadline()
+        current()
+        return {
+            "version": "1",
+            "action": data.action,
+            "actor_ref": data.expected_actor_ref,
+            "tenant_ref": data.expected_tenant_ref,
+            "result": {
+                "contract_version": "1",
+                "workspace_id": str(data.workspace_id),
+                "binding_ref": data.binding_ref,
+                "request_nonce": str(data.request_nonce),
+                "checked_at": datetime.now(UTC).isoformat(),
+                "operation": data.operation.kind,
+                "receipt": receipt.model_dump(mode="json"),
+            },
+        }
 
     # Retain the exchange route's guard/issuance transaction and lock ordering.
     # Close it before the next lookup or any downstream await.
@@ -292,6 +483,14 @@ async def execute_native_capture(
                 "request_nonce": str(data.opening_nonce),
                 "operation": "provider_encounter",
                 "receipt": receipt.model_dump(mode="json"),
+            }
+        if data.retain_preparation_context:
+            # Private server-to-server field, stripped before native publication.
+            # Reuse never skips fresh provider/token/consent authorization.
+            result["prepared_context"] = {
+                "context_token": issued.context_token,
+                "interaction_ref": resolved.interaction_ref,
+                "client_turn_id": str(turn),
             }
     # Ordinary native responses contain no credentials. A preparation context
     # replaces the existing server-side negotiation and must never reach a device.
