@@ -15,7 +15,10 @@ from app.services.companion_records import (
     check_deadline,
     transaction_budget,
 )
-from app.services.doctor_access_row_ownership import lookup_doctor_access_row_scope
+from app.services.doctor_access_row_ownership import (
+    lookup_doctor_access_row_scope,
+    lookup_owns_subject_rows,
+)
 from app.services.scribe_capture_scope import _scope_digest as capture_scope_digest
 from app.services.scribe_encounter_contract import (
     AddBirthDateRequest,
@@ -60,8 +63,13 @@ def _visit(
 ):
     if row.doctor_id != doctor_id or row.provider_link_id != link.id:
         raise authority.AuthorityRequestDeniedError
-    appointment = session.get(Appointment, row.appointment_id)
-    patient = session.get(Patient, row.patient_id)
+    owned = lookup_owns_subject_rows(session, doctor_id, subject)
+    if owned:
+        appointment, patient, binding = _visit_input_rows(session, row)
+    else:
+        appointment = session.get(Appointment, row.appointment_id)
+        patient = session.get(Patient, row.patient_id)
+        binding = None
     if (
         appointment is None
         or patient is None
@@ -70,11 +78,12 @@ def _visit(
         or appointment.patient_id != patient.id
     ):
         raise authority.AuthorityRequestDeniedError
-    binding = session.exec(
-        select(AuthorityPersonBinding).where(
-            AuthorityPersonBinding.binding_ref == str(appointment.id),
-        )
-    ).one_or_none()
+    if not owned:
+        binding = session.exec(
+            select(AuthorityPersonBinding).where(
+                AuthorityPersonBinding.binding_ref == str(appointment.id),
+            )
+        ).one_or_none()
     if (
         binding is None
         or binding.actor_id != link.actor_id
@@ -146,6 +155,26 @@ def _visit(
         "appointment_at": appointment.appointment_date.replace(tzinfo=UTC).isoformat(),
         **({"status": status} if status else {}),
     }
+
+
+def _visit_input_rows(session, row):
+    """Exact visit inputs after original lookup locks; all validators remain.
+
+    Preserve the original identity-map behavior. These inputs confer no access:
+    complete current record lineage, provenance, capture binding and final
+    provider authorization still follow at their original boundaries.
+    """
+    current = session.exec(
+        select(Appointment, Patient, AuthorityPersonBinding)
+        .select_from(Appointment)
+        .outerjoin(Patient, col(Patient.id) == row.patient_id)
+        .outerjoin(
+            AuthorityPersonBinding,
+            col(AuthorityPersonBinding.binding_ref) == str(row.appointment_id),
+        )
+        .where(Appointment.id == row.appointment_id)
+    ).one_or_none()
+    return current if current is not None else (None, None, None)
 
 
 def _create(session, request, doctor_id, link, issuer, subject):
