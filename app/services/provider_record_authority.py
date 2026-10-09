@@ -7,6 +7,7 @@ access and the immutable binding; client record references never confer access.
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 from uuid import uuid4
@@ -46,6 +47,7 @@ from app.models.provider_record_authority import (
     ProviderRecordAuthority,
 )
 from sqlalchemy import select as sql_select
+from sqlalchemy.exc import MultipleResultsFound
 from sqlmodel import Session, col, select
 
 
@@ -83,9 +85,18 @@ def _current_practice(session: Session, doctor: Doctor) -> Practice:
     return practice
 
 
+@dataclass(frozen=True)
+class _RecordLineageRows:
+    rows: tuple[Any, Any, Any, Any]
+    origins: tuple[AuthorityPersonOrigin | None, ...]
+
+    def __iter__(self):
+        return iter(self.rows)
+
+
 def _record_lineage_rows(session, scope, binding):
-    """Fresh exact-key lineage rows; never a provider access decision."""
-    return session.exec(
+    """Fresh exact-key lineage and bounded provenance; no access decision."""
+    statement = (
         sql_select(ProviderPracticeAuthority, Appointment, Patient, AuthorityPerson)
         .select_from(ProviderPracticeAuthority)
         .join(Appointment, Appointment.id == scope.appointment_id)
@@ -93,7 +104,34 @@ def _record_lineage_rows(session, scope, binding):
         .join(AuthorityPerson, AuthorityPerson.id == binding.person_id)
         .where(ProviderPracticeAuthority.id == scope.practice_authority_id)
         .execution_options(populate_existing=True)
-    ).one_or_none()
+    )
+    # Adapters retain the original four-row read and later exact origin query.
+    if not isinstance(session, Session):
+        return session.exec(statement).one_or_none()
+    # Both reads previously followed the same complete current access check,
+    # with only local lineage checks between them. Read append-only provenance
+    # in that fresh snapshot; do not turn it into retained permission. Two rows
+    # suffice to preserve the later duplicate refusal without unbounded reads.
+    current = (
+        cast(Any, session)
+        .exec(
+            statement.add_columns(AuthorityPersonOrigin)
+            .outerjoin(
+                AuthorityPersonOrigin,
+                (col(AuthorityPersonOrigin.person_id) == col(AuthorityPerson.id))
+                & (col(AuthorityPersonOrigin.origin) == "provider_entry")
+                & (col(AuthorityPersonOrigin.source_ref) == str(scope.patient_id)),
+            )
+            .limit(2)
+        )
+        .all()
+    )
+    if not current:
+        return None
+    return _RecordLineageRows(
+        (current[0][0], current[0][1], current[0][2], current[0][3]),
+        tuple(row[4] for row in current),
+    )
 
 
 def validate_provider_record_scope(
@@ -127,7 +165,7 @@ def validate_provider_record_scope(
     practice = _current_practice(session, doctor)
     # Keep this fresh record-lineage boundary after the complete current
     # practice/access decision. Nothing becomes cached permission, and the
-    # separate exact provenance check still follows these ownership checks.
+    # exact provenance decision still follows these ownership checks.
     current = _record_lineage_rows(session, scope, binding)
     if current is None:
         raise ProviderRecordScopeDenied
@@ -151,13 +189,18 @@ def validate_provider_record_scope(
         or patient.doctor_id != doctor.id
     ):
         raise ProviderRecordScopeDenied
-    origin = session.exec(
-        select(AuthorityPersonOrigin).where(
-            AuthorityPersonOrigin.person_id == person.id,
-            AuthorityPersonOrigin.origin == "provider_entry",
-            AuthorityPersonOrigin.source_ref == str(patient.id),
-        )
-    ).one_or_none()
+    if isinstance(current, _RecordLineageRows):
+        if len(current.origins) > 1:
+            raise MultipleResultsFound
+        origin = next(iter(current.origins), None)
+    else:
+        origin = session.exec(
+            select(AuthorityPersonOrigin).where(
+                AuthorityPersonOrigin.person_id == person.id,
+                AuthorityPersonOrigin.origin == "provider_entry",
+                AuthorityPersonOrigin.source_ref == str(patient.id),
+            )
+        ).one_or_none()
     if origin is None:
         raise ProviderRecordScopeDenied
     return scope
