@@ -313,6 +313,11 @@ def test_real_writer_remains_blocked_by_exchange_locks_then_revokes(
     monkeypatch.setattr(companion_encounters, "doctor_access_in_force", lookup_access)
     monkeypatch.setattr(records, "doctor_access_in_force", record_access)
     test_actual_writer_waits_then_commits_and_next_native_open_denies(
-        native, engine, monkeypatch, writer_kind, record_property
+        native,
+        engine,
+        monkeypatch,
+        writer_kind,
+        record_property,
+        _expected_access_queries=2,
     )
     assert owned._RECORD_ROWS.get() is None and owned._CAPTURE_ROWS.get() is None

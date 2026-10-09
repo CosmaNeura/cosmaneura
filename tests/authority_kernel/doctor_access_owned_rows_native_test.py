@@ -167,7 +167,12 @@ def test_real_native_reduces_only_explicit_owned_provider_queries(
 
 @pytest.mark.parametrize("writer_kind", ["billing", "membership", "pilot_revoke"])
 def test_actual_writer_waits_then_commits_and_next_native_open_denies(
-    native, engine, monkeypatch, writer_kind, record_property
+    native,
+    engine,
+    monkeypatch,
+    writer_kind,
+    record_property,
+    _expected_access_queries=3,
 ):
     at = datetime.now(UTC)
     with session_for(engine) as setup:
@@ -281,7 +286,7 @@ def test_actual_writer_waits_then_commits_and_next_native_open_denies(
             observed.append("writer_blocked_no_side_effect")
             with query_counts(engine) as counts:
                 result = original(doctor, **kwargs)
-            assert counts["all_selects"] == 3
+            assert counts["all_selects"] == _expected_access_queries
             return result
         return original(doctor, **kwargs)
 
