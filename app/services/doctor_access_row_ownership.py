@@ -67,6 +67,100 @@ def provider_doctor_access_rows(
     yield locked
 
 
+_RECORD_ROWS: ContextVar[tuple[Session, ExitStack] | None] = ContextVar(
+    "provider_record_access_row_scope", default=None
+)
+
+
+@contextmanager
+def provider_record_access_row_scope(session: Session):
+    """Retain only actual provider lock evidence in a synchronous exchange."""
+    with ExitStack() as stack:
+        token = _RECORD_ROWS.set((session, stack))
+        try:
+            yield
+        finally:
+            _RECORD_ROWS.reset(token)
+
+
+@contextmanager
+def _locked_record_owner_rows(session: Session, *, practice_id: Any, subject: str):
+    # Exact original provider-record-owner locks and query order. Other callers
+    # still execute only these two original statements; scoped exchanges read
+    # the current member once after both locks, before publishing row evidence.
+    practice = session.exec(
+        select(Practice).where(Practice.id == practice_id).with_for_update()
+    ).one()
+    doctor = session.exec(
+        select(Doctor)
+        .where(Doctor.clerk_id == subject)
+        .with_for_update(of=Doctor)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    scope = _RECORD_ROWS.get()
+    if (
+        doctor is None
+        or scope is None
+        or scope[0] is not session
+        or _session_context.get() is not session
+    ):
+        yield doctor, None
+        return
+    member = session.exec(
+        select(PracticeMember)
+        .where(PracticeMember.doctor_id == doctor.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    transaction = session.get_nested_transaction() or session.get_transaction()
+    if (
+        transaction is None
+        or doctor.deleted_at is not None
+        or member is None
+        or member.practice_id != practice_id
+    ):
+        yield doctor, None
+        return
+    proof = DoctorAccessRowOwnership(
+        session,
+        transaction,
+        doctor.id,
+        practice_id,
+        subject,
+        _ISSUER,
+        (doctor, practice, member),
+    )
+    for name in ("after_transaction_create", "after_transaction_end"):
+        event.listen(session, name, proof._invalidate)
+    try:
+        yield doctor, proof
+    finally:
+        proof._invalidate()
+        for name in ("after_transaction_create", "after_transaction_end"):
+            event.remove(session, name, proof._invalidate)
+
+
+@contextmanager
+def provider_record_owner_rows(session: Session, *, practice_id: Any, subject: str):
+    """Own the exact original locks; keep evidence only in the matching scope."""
+    scope = _RECORD_ROWS.get()
+    if (
+        scope is None
+        or scope[0] is not session
+        or _session_context.get() is not session
+    ):
+        with _locked_record_owner_rows(
+            session, practice_id=practice_id, subject=subject
+        ) as locked:
+            yield locked[0]
+        return
+    locked = scope[1].enter_context(
+        _locked_record_owner_rows(session, practice_id=practice_id, subject=subject)
+    )
+    token = _CAPTURE_ROWS.set(locked[1])
+    scope[1].callback(_CAPTURE_ROWS.reset, token)
+    yield locked[0]
+
+
 @dataclass(frozen=True, eq=False)
 class DoctorAccessRowOwnership:
     """Usable only in the exact lock-taking transaction and factory scope."""

@@ -16,6 +16,7 @@ from typeid.errors import TypeIDException
 
 import app.configuration.session_prep as configuration
 from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access_row_ownership import provider_record_owner_rows
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
@@ -164,18 +165,12 @@ def lock_provider_record_owner(
     if doctor is None:
         raise ProviderRecordScopeDenied
     practice = _current_practice(session, doctor)
-    session.exec(
-        select(Practice).where(Practice.id == practice.id).with_for_update()
-    ).one()
-    doctor = session.exec(
-        select(Doctor)
-        .where(Doctor.clerk_id == clerk_subject)
-        .with_for_update(of=Doctor)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if doctor is None or _current_practice(session, doctor).id != practice.id:
-        raise ProviderRecordScopeDenied
-    return doctor, practice
+    with provider_record_owner_rows(
+        session, practice_id=practice.id, subject=clerk_subject
+    ) as doctor:
+        if doctor is None or _current_practice(session, doctor).id != practice.id:
+            raise ProviderRecordScopeDenied
+        return doctor, practice
 
 
 def ensure_provider_record_scope(

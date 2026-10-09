@@ -11,6 +11,7 @@ from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_capture_scope, scribe_encounters
+from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import CaptureCaller
 from app.services.scribe_capture_deadline import (
@@ -151,7 +152,7 @@ async def execute_native_capture(
     # Retain the exchange route's guard/issuance transaction and lock ordering.
     # Close it before the next lookup or any downstream await.
     with phase("policy_exchange"):
-        with global_session():
+        with global_session() as session, provider_record_access_row_scope(session):
             if provider_exchange_blocked(
                 issuer=issuer,
                 subject=subject,
