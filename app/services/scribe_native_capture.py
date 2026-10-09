@@ -40,7 +40,7 @@ NATIVE_READ_OPERATIONS = frozenset(
 
 class NativeCaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
-    action: Literal["mount", "operation"]
+    action: Literal["mount", "operation", "preparation_context"]
     workspace_id: UUID
     request_nonce: UUID
     expected_actor_ref: str = Field(
@@ -54,16 +54,30 @@ class NativeCaptureRequest(BaseModel):
     )
     operation: CaptureOperation | None = None
     opening_nonce: UUID | None = None
+    preparation: Literal["admission", "recording_window"] | None = None
 
     @model_validator(mode="after")
     def action_fields(self):
         if self.action == "mount":
-            if self.binding_ref is not None or self.operation is not None:
+            if (
+                self.binding_ref is not None
+                or self.operation is not None
+                or self.preparation is not None
+            ):
                 raise ValueError("invalid_native_mount")
+        elif self.action == "preparation_context":
+            if (
+                self.binding_ref is None
+                or self.preparation is None
+                or self.operation is not None
+                or self.opening_nonce is not None
+            ):
+                raise ValueError("invalid_native_preparation_context")
         elif (
             self.binding_ref is None
             or self.operation is None
             or self.opening_nonce is not None
+            or self.preparation is not None
         ):
             raise ValueError("invalid_native_operation")
         if (
@@ -186,7 +200,7 @@ async def execute_native_capture(
         capture_settings=capture_settings,
     )
     binding = data.binding_ref
-    if data.action == "mount":
+    if data.action == "mount" or data.preparation == "admission":
         with phase("policy_binding"):
             snapshot = scribe_capture_scope.resolve_capture_binding(
                 workload_client_id=caller.workload_client_id,
@@ -199,6 +213,8 @@ async def execute_native_capture(
                 appointment_ref=first["appointment_ref"],
                 request_nonce=data.request_nonce,
             )
+        if data.action == "preparation_context" and binding != snapshot.binding_ref:
+            raise authority.AuthorityRequestDeniedError
         binding = snapshot.binding_ref
         current()
     if binding is None:
@@ -229,7 +245,19 @@ async def execute_native_capture(
         "request_nonce": str(data.request_nonce),
         "checked_at": datetime.now(UTC).isoformat(),
     }
-    if data.action == "operation":
+    if data.action == "preparation_context":
+        # This replaces the existing server-to-server negotiation only. No
+        # admission/window mutation runs here. The native receiver consumes the
+        # credential once in this invocation after its fresh account fence.
+        result = {
+            **envelope,
+            "appointment_ref": last["appointment_ref"],
+            "preparation": data.preparation,
+            "context_token": issued.context_token,
+            "interaction_ref": resolved.interaction_ref,
+            "client_turn_id": str(turn),
+        }
+    elif data.action == "operation":
         assert operation is not None and receipt is not None
         result = {
             **envelope,
@@ -249,7 +277,8 @@ async def execute_native_capture(
                 "operation": "provider_encounter",
                 "receipt": receipt.model_dump(mode="json"),
             }
-    # Context and workload credentials never leave this service invocation.
+    # Ordinary native responses contain no credentials. A preparation context
+    # replaces the existing server-side negotiation and must never reach a device.
     return {
         "version": "1",
         "action": data.action,
