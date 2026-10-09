@@ -61,6 +61,10 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
       <AppSidebar
         isLoading={!appointments}
         header={`${t.patientTitle} Intake`}
+        emptyState={{
+          title: "No intakes yet",
+          description: `When a ${t.patient} is sent an intake link, their intake will appear here.`,
+        }}
         entries={appointmentsToSidebarEntries(appointments)}
       />
       <Outlet />

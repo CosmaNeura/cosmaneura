@@ -15,9 +15,9 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset } from "@/components/ui/sidebar"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
+import { PageHeader } from "~/components/shared/PageHeader"
 import { authorizeZoomCapture, cancelMeeting } from "~/configuration/client"
 import type {
   Appointment,
@@ -25,6 +25,7 @@ import type {
   ZoomMeetingResponse,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { useTerminology } from "~/utils/terminology"
 
 function formatDateTime(isoString: string): string {
   return new Date(isoString).toLocaleString(undefined, {
@@ -56,6 +57,8 @@ function CaptureAuthorization({
   meeting: ZoomMeetingResponse
   patients: Patient[]
 }) {
+  const t = useTerminology()
+
   const [open, setOpen] = useState(false)
   const [selectedAppointmentId, setSelectedAppointmentId] = useState("")
   const [submitting, setSubmitting] = useState(false)
@@ -77,11 +80,11 @@ function CaptureAuthorization({
 
   if (meeting.capture_authorized) {
     return (
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-900 dark:bg-emerald-950/30">
-        <p className="font-medium text-emerald-900 dark:text-emerald-100">
+      <div className="border-success/30 bg-success/10 rounded-lg border p-4">
+        <p className="text-foreground font-medium">
           Cosmas meeting bot enabled
         </p>
-        <p className="mt-1 text-sm text-emerald-800 dark:text-emerald-200">
+        <p className="text-foreground mt-1 text-sm">
           Cosmas is authorized to join this Zoom meeting and prepare notes.
         </p>
       </div>
@@ -138,8 +141,8 @@ function CaptureAuthorization({
     <div className="rounded-lg border p-4">
       <p className="font-medium">Enable the Cosmas meeting bot</p>
       <p className="text-muted-foreground mt-1 text-sm">
-        Link this Zoom meeting to an existing Cosmas appointment. The patient
-        will still be asked for recording consent in Zoom.
+        Link this Zoom meeting to an existing Cosmas appointment. Your{" "}
+        {t.patient} will still be asked for recording consent in Zoom.
       </p>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogTrigger asChild>
@@ -154,7 +157,7 @@ function CaptureAuthorization({
             <DialogTitle>Select the appointment</DialogTitle>
             <DialogDescription>
               Choose the existing Cosmas appointment that belongs to this Zoom
-              visit. This does not replace the patient&apos;s in-meeting
+              visit. This does not replace your {t.patientPossessive} in-meeting
               recording consent.
             </DialogDescription>
           </DialogHeader>
@@ -263,7 +266,13 @@ export function MeetingDetail({
   return (
     <div>
       <div className="mb-6">
-        <h1 className="mb-1 text-2xl font-semibold">{meeting.topic}</h1>
+        <h1
+          className="mb-1 text-2xl font-semibold"
+          data-ph-no-capture=""
+          data-sentry-block=""
+        >
+          {meeting.topic}
+        </h1>
         <p className="text-muted-foreground text-sm">
           {formatDateTime(meeting.start_time)} · {meeting.duration} min
         </p>
@@ -323,7 +332,7 @@ export function MeetingDetail({
             </div>
           ) : (
             <p className="text-muted-foreground text-sm italic">
-              Notes will appear here after the meeting ends and Cosma processes
+              Notes will appear here after the meeting ends and Cosmas processes
               the recording.
             </p>
           )}
@@ -397,11 +406,7 @@ export default function ScheduleDetailPage({
 
   return (
     <SidebarInset>
-      <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
-        <SidebarTrigger className="-ml-1" />
-        <Separator orientation="vertical" className="mr-2 h-4" />
-        <h1 className="text-lg font-semibold">{meeting.topic}</h1>
-      </header>
+      <PageHeader title={meeting.topic} />
       <InnerScrollableContent>
         {appointmentsUnavailable ? (
           <p className="text-muted-foreground mb-4 rounded-md border p-3 text-sm">

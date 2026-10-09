@@ -61,6 +61,19 @@ export default function ScheduleLayout({ loaderData }: Route.ComponentProps) {
       <AppSidebar
         isLoading={!meetings}
         header="Schedule"
+        emptyState={
+          zoom_connected
+            ? {
+                title: "No upcoming meetings",
+                description:
+                  "Meetings scheduled in your connected Zoom account will appear here.",
+              }
+            : {
+                title: "Connect Zoom to see your meetings",
+                description:
+                  "Once Zoom is connected, your scheduled meetings will appear here.",
+              }
+        }
         entries={zoom_connected ? meetingsToSidebarEntries(meetings) : []}
       />
       <Outlet />

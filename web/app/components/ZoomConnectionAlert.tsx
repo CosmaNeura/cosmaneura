@@ -77,7 +77,7 @@ export function ZoomConnectionAlert() {
   return (
     <div
       role="alert"
-      className="flex items-center gap-3 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-100"
+      className="border-warning/40 bg-warning/15 text-foreground flex items-center gap-3 border-b px-4 py-2 text-sm"
     >
       <AlertCircle className="h-4 w-4 shrink-0" />
       <span className="flex-1">

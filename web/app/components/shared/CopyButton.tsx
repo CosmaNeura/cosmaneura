@@ -12,12 +12,14 @@ interface CopyButtonProps extends React.ComponentProps<typeof Button> {
   text?: string
   html?: string
   htmlRef?: React.RefObject<HTMLElement | null>
+  label?: string
 }
 
 export function CopyButton({
   text,
   html,
   htmlRef,
+  label = "Copy to Clipboard",
   className,
   ...props
 }: CopyButtonProps) {
@@ -69,7 +71,7 @@ export function CopyButton({
       {...props}
     >
       <Copy className="mr-2 h-4 w-4" />
-      {copied ? "Copied!" : "Copy to Clipboard"}
+      {copied ? "Copied!" : label}
     </Button>
   )
 }
