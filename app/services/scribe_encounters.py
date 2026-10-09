@@ -16,6 +16,7 @@ from app.services.companion_records import (
     transaction_budget,
 )
 from app.services.doctor_access_row_ownership import lookup_doctor_access_row_scope
+from app.services.scribe_capture_scope import _scope_digest as capture_scope_digest
 from app.services.scribe_encounter_contract import (
     AddBirthDateRequest,
     CatalogRequest,
@@ -47,7 +48,16 @@ class EncounterConflict(RecordUnavailable):
     """The retained creation key was already used for different visit details."""
 
 
-def _visit(session, row, *, doctor_id, link, subject, saved_statuses=None):
+def _visit(
+    session,
+    row,
+    *,
+    doctor_id,
+    link,
+    subject,
+    saved_statuses=None,
+    expected_capture_binding_ref=None,
+):
     if row.doctor_id != doctor_id or row.provider_link_id != link.id:
         raise authority.AuthorityRequestDeniedError
     appointment = session.get(Appointment, row.appointment_id)
@@ -84,18 +94,43 @@ def _visit(session, row, *, doctor_id, link, subject, saved_statuses=None):
         is None
     ):
         raise authority.AuthorityRequestDeniedError
-    capture = session.exec(
-        select(ScribeCaptureBinding).where(
-            ScribeCaptureBinding.appointment_id == appointment.id,
-            ScribeCaptureBinding.actor_id == link.actor_id,
-        )
-    ).one_or_none()
+    capture_query = select(ScribeCaptureBinding).where(
+        ScribeCaptureBinding.appointment_id == appointment.id,
+        ScribeCaptureBinding.actor_id == link.actor_id,
+    )
+    if expected_capture_binding_ref is not None:
+        capture_query = capture_query.execution_options(populate_existing=True)
+    capture = session.exec(capture_query).one_or_none()
     if capture is not None and (
         capture.revoked_at is not None
         or capture.workspace_id != row.workspace_id
         or capture.provider_link_id != link.id
     ):
         raise authority.AuthorityRequestDeniedError
+    if expected_capture_binding_ref is not None:
+        # Mount alone creates a binding. Admission requires that exact existing
+        # binding and the complete current visit/link/identity scope, using the
+        # rows already read under this lookup's original provider locks. These
+        # checks grant no future permission; admission locks/revalidates again.
+        scope = {
+            "provider_link_id": link.id,
+            "actor_id": link.actor_id,
+            "tenant_id": link.tenant_id,
+            "source_identity_id": link.source_identity_id,
+            "person_binding_id": binding.id,
+            "doctor_id": doctor_id,
+            "patient_id": patient.id,
+            "appointment_id": appointment.id,
+            "practice_id": link.practice_id,
+            "scribe_tenant_id": link.scribe_tenant_id,
+        }
+        if (
+            capture is None
+            or str(capture.id) != expected_capture_binding_ref
+            or capture.scope_sha256 != capture_scope_digest(scope)
+            or any(getattr(capture, key) != value for key, value in scope.items())
+        ):
+            raise authority.AuthorityRequestDeniedError
     if saved_statuses is None:
         saved_statuses = saved_encounter_statuses(session, doctor_id, [appointment.id])
     status = saved_statuses.get(str(appointment.id))
@@ -241,12 +276,17 @@ def encounter_workflow(
     authority_settings,
     deadline,
     include_lookup_status: bool = True,
+    expected_capture_binding_ref: str | None = None,
 ):
     """Authorize each request; optionally omit unpublished lookup display status.
 
     The native facade uses this internal option for intermediate reauthorization
     only. Public lookup callers and catalog/create responses retain enrichment.
     """
+    if expected_capture_binding_ref is not None and not isinstance(
+        request, LookupRequest
+    ):
+        raise ValueError("capture_binding_requires_lookup")
 
     def available():
         check_deadline(deadline)
@@ -380,6 +420,7 @@ def encounter_workflow(
                         link=link,
                         subject=subject,
                         saved_statuses=None if include_lookup_status else {},
+                        expected_capture_binding_ref=expected_capture_binding_ref,
                     )
                 elif isinstance(request, AddBirthDateRequest):
                     row = session.exec(
