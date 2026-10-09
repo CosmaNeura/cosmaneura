@@ -34,6 +34,8 @@ from app.utils.statement_timeout_scope import (
     consume_record_timeout,
     current_record_timeout_scope,
     record_timeout_scope,
+    remember_timeout_setting,
+    timeout_setting_in_force,
 )
 
 from activemodel.session_manager import global_session
@@ -119,15 +121,22 @@ def transaction_budget(session: Session, deadline: float | RecordBudget):
             lock_ms = min(lock_ms, max(1, min(2000, int(capture.check() * 1000))))
         # Integers only; raw cursor avoids event recursion. Both settings are
         # transaction-local and never alter another request or database policy.
-        cursor.execute(
-            "SELECT set_config('statement_timeout', %s, true), "
-            "set_config('lock_timeout', %s, true)",
-            (str(statement_ms), str(lock_ms)),
-        )
+        current_limits = statement_ms, lock_ms
+        if not combined or not timeout_setting_in_force(
+            connection, cursor, context, scope, capture, current_limits
+        ):
+            cursor.execute(
+                "SELECT set_config('statement_timeout', %s, true), "
+                "set_config('lock_timeout', %s, true)",
+                (str(statement_ms), str(lock_ms)),
+            )
         check_deadline(deadline)
         if combined:
             assert capture is not None
             capture.check()
+            remember_timeout_setting(
+                connection, cursor, context, scope, capture, current_limits
+            )
             acknowledge_record_timeout(context, scope, capture, "record")
 
     with record_timeout_scope(connection, limits) as scope:
