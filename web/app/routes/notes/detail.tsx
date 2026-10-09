@@ -27,6 +27,7 @@ import { toast } from "~/hooks/use-toast"
 import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
+import { withReadDeadline } from "~/lib/read-deadline"
 import {
   NOTE_PROCESSING_TIMEOUT_MS,
   isProcessing,
@@ -77,22 +78,43 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
 
   useEffect(() => {
     let checking = false
+    let active = true
+    let pending: AbortController | undefined
     const poll = setInterval(async () => {
       if (checking || document.hidden) return
       checking = true
+      const controller = new AbortController()
+      pending = controller
+      const timeout = setTimeout(
+        () => controller.abort(),
+        NOTE_PROCESSING_POLL_MS,
+      )
       try {
-        const { data } = await noteDetail({
-          throwOnError: false,
-          // A hung request must not stall later polls.
-          signal: AbortSignal.timeout(NOTE_PROCESSING_POLL_MS),
-          path: { appointment_id: appointmentId },
-        })
-        if (data?.notes?.length) void revalidate.current()
+        const { data } = await withReadDeadline(
+          (signal) =>
+            noteDetail({
+              throwOnError: false,
+              signal,
+              path: { appointment_id: appointmentId },
+            }),
+          { signal: controller.signal },
+        )
+        if (active && !controller.signal.aborted && data?.notes?.length)
+          await revalidate.current()
+      } catch {
+        // SDK/auth/network failures may reject even with throwOnError false.
+        // Keep the bounded processing state and let a later poll recover.
       } finally {
+        clearTimeout(timeout)
+        pending = undefined
         checking = false
       }
     }, NOTE_PROCESSING_POLL_MS)
-    return () => clearInterval(poll)
+    return () => {
+      active = false
+      clearInterval(poll)
+      pending?.abort()
+    }
   }, [appointmentId])
 
   useEffect(() => {

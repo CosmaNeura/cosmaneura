@@ -16,7 +16,7 @@ def perform(
     patient_name: str,
     appointment_date: datetime,
     date_of_birth: datetime,
-) -> None:
+) -> str:
     """
     Handles processing a doctor uploading a visit audio file for an appointment
     """
@@ -31,7 +31,7 @@ def perform(
     if existing_file is not None:
         log.info("resuming registered audio upload", id=existing_file.id)
         app.jobs.transcribe.queue(existing_file.id)
-        return
+        return str(existing_file.appointment_id)
 
     # TODO wrap in transaction, needs to be added to activemodel
 
@@ -61,3 +61,4 @@ def perform(
     log.info("processing audio file", id=file.id)
 
     app.jobs.transcribe.queue(file.id)
+    return str(appointment.id)

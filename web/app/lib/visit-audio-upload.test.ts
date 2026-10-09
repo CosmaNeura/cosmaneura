@@ -41,6 +41,17 @@ function dependencies() {
 }
 
 describe("visit audio upload", () => {
+  it("returns only the appointment ID provided by durable registration", async () => {
+    const deps = dependencies()
+    deps.registerUpload.mockResolvedValue({
+      data: { appointment_id: "appointment_exact" },
+    })
+    await expect(submitVisitAudioUpload(input(), deps)).resolves.toEqual({
+      ok: true,
+      appointmentId: "appointment_exact",
+    })
+  })
+
   it("binds the selected byte size and completes only after Azure succeeds", async () => {
     const deps = dependencies()
 

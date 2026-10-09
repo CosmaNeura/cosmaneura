@@ -24,7 +24,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
-  resetRecentUploadsForTests()
+  act(() => resetRecentUploadsForTests())
   Object.defineProperty(document, "hidden", {
     configurable: true,
     value: false,
@@ -42,15 +42,15 @@ function renderProcessing(loader: () => unknown = vi.fn(() => null)) {
     ],
     { initialEntries: ["/"] },
   )
-  render(<RouterProvider router={router} />)
-  return loader
+  const view = render(<RouterProvider router={router} />)
+  return { loader, ...view }
 }
 
 describe("note processing state", () => {
   it("checks the visit record and refreshes the page only once a note exists", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     markProcessing("appointment_new")
-    const loader = renderProcessing()
+    const { loader } = renderProcessing()
     expect(await screen.findByText("Writing your note…")).toBeVisible()
     const initialLoads = vi.mocked(loader).mock.calls.length
 
@@ -87,6 +87,59 @@ describe("note processing state", () => {
       await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS * 2)
     })
     expect(client.noteDetail).not.toHaveBeenCalled()
+  })
+
+  it("recovers on the next poll after an SDK rejection", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    client.noteDetail.mockRejectedValueOnce(
+      new Error("Synthetic authentication failure"),
+    )
+    const { loader } = renderProcessing()
+    await screen.findByText("Writing your note…")
+    const initialLoads = vi.mocked(loader).mock.calls.length
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+    })
+    client.noteDetail.mockResolvedValue({ data: { notes: [{ id: "n" }] } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+    })
+    expect(client.noteDetail).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(loader).mock.calls.length).toBeGreaterThan(initialLoads)
+  })
+
+  it("bounds a reader that ignores abort so later polls can run", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    client.noteDetail.mockReturnValueOnce(new Promise(() => {}))
+    renderProcessing()
+    await screen.findByText("Writing your note…")
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS * 3)
+    })
+    expect(client.noteDetail.mock.calls.length).toBeGreaterThan(1)
+    expect(client.noteDetail.mock.calls[0][0].signal.aborted).toBe(true)
+  })
+
+  it("aborts on unmount and ignores a late ready response", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let finish!: (value: unknown) => void
+    client.noteDetail.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve
+      }),
+    )
+    const { loader, unmount } = renderProcessing()
+    await screen.findByText("Writing your note…")
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+    })
+    const initialLoads = vi.mocked(loader).mock.calls.length
+    unmount()
+    expect(client.noteDetail.mock.calls[0][0].signal.aborted).toBe(true)
+    await act(async () => {
+      finish({ data: { notes: [{ id: "n" }] } })
+    })
+    expect(vi.mocked(loader).mock.calls.length).toBe(initialLoads)
   })
 
   it("stops tracking at the upload's timeout even across slow polls", async () => {
