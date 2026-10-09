@@ -1,6 +1,4 @@
-import { formatDuration, intervalToDuration } from "date-fns"
 import { useState } from "react"
-import Markdown from "react-markdown"
 
 import { ChevronDown } from "lucide-react"
 
@@ -14,43 +12,70 @@ import {
 import type { AiVisitTranscript, TranscriptEntry } from "~/configuration/client"
 import { secondsToMinutes } from "~/lib/date"
 
+// Mirrors CLEANUP_AGE_DAYS in app/jobs/transcript_cleanup.py.
+export const TRANSCRIPT_RETENTION_DAYS = 14
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export function transcriptExpiry(createdAt: string): Date {
+  return new Date(
+    new Date(createdAt).getTime() + TRANSCRIPT_RETENTION_DAYS * DAY_MS,
+  )
+}
+
+function RetentionNotice({ createdAt }: { createdAt?: string | null }) {
+  if (!createdAt) {
+    return (
+      <>
+        Transcripts are deleted {TRANSCRIPT_RETENTION_DAYS} days after they are
+        created.
+      </>
+    )
+  }
+  const expiry = transcriptExpiry(createdAt).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  })
+  return <>Available until {expiry}.</>
+}
+
+function TranscriptUnavailable({ message }: { message: string }) {
+  return (
+    <>
+      <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
+      <div className="text-muted-foreground text-sm italic">{message}</div>
+    </>
+  )
+}
+
 export default function VisitTranscriptViewer({
   transcript,
 }: {
   transcript: AiVisitTranscript | null
 }) {
-  if (!transcript) {
-    return (
-      <>
-        <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
-        <div className="text-muted-foreground text-sm italic">
-          No Transcript Available.
-        </div>
-      </>
-    )
-  }
-
-  const now = new Date()
-  const createdAt = transcript.created_at
-    ? new Date(transcript.created_at)
-    : now
-  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
-  if (transcript.deleted_at || createdAt < twoWeeksAgo) {
-    return (
-      <>
-        <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
-        <div className="text-muted-foreground text-sm italic">
-          Transcript has been deleted.
-        </div>
-      </>
-    )
-  }
-
-  // hook required for chevron state
   const [isOpen, setOpen] = useState(false)
 
+  if (!transcript) {
+    return <TranscriptUnavailable message="No Transcript Available." />
+  }
+
+  const expired =
+    !!transcript.created_at &&
+    transcriptExpiry(transcript.created_at) < new Date()
+  if (transcript.deleted_at || expired) {
+    return (
+      <TranscriptUnavailable
+        message={
+          expired
+            ? `This transcript has been deleted. Transcripts are kept for ${TRANSCRIPT_RETENTION_DAYS} days.`
+            : "This transcript has been deleted."
+        }
+      />
+    )
+  }
+
   return (
-    <Collapsible defaultOpen open={isOpen} onOpenChange={setOpen}>
+    <Collapsible open={isOpen} onOpenChange={setOpen}>
       <div className="flex items-start">
         <CollapsibleTrigger asChild>
           <Button variant="ghost" size="sm" className="h-auto p-2">
@@ -68,11 +93,11 @@ export default function VisitTranscriptViewer({
           Duration: {secondsToMinutes(transcript.duration ?? undefined)}
         </div>
         <div className="text-muted-foreground mb-2 text-sm italic">
-          Transcripts are automatically deleted after a couple weeks.
+          <RetentionNotice createdAt={transcript.created_at} />
         </div>
         {transcript.transcript_data.map((transcriptEntry: TranscriptEntry) => {
           return (
-            <div className="mb-2 break-all" key={transcriptEntry.startTime}>
+            <div className="mb-2 break-words" key={transcriptEntry.startTime}>
               <span className="font-bold">{transcriptEntry.speaker}: </span>
               {transcriptEntry.content}
             </div>

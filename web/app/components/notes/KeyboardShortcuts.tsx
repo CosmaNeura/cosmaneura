@@ -9,6 +9,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -36,6 +37,7 @@ export function NotesKeyboardShortcuts() {
   // Clicking note text does not move focus (and Safari does not focus clicked
   // buttons), so remember the note the user last pointed at or focused.
   const lastNote = useRef<Element | null>(null)
+  const shortcutOrigin = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     function remember(event: Event) {
@@ -59,6 +61,10 @@ export function NotesKeyboardShortcuts() {
       if (shouldIgnoreShortcut(event)) return
       event.preventDefault()
       if (event.key === "?") {
+        shortcutOrigin.current =
+          document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null
         setOpen(true)
         return
       }
@@ -83,47 +89,59 @@ export function NotesKeyboardShortcuts() {
   }, [])
 
   return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="text-on-navy-muted hover:text-sidebar-foreground size-7"
-        aria-label="Keyboard shortcuts"
-        aria-keyshortcuts="?"
-        onClick={() => setOpen(true)}
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="text-on-navy-muted hover:text-sidebar-foreground size-7"
+          aria-label="Keyboard shortcuts"
+          aria-keyshortcuts="?"
+          onClick={() => {
+            shortcutOrigin.current = null
+          }}
+        >
+          <Keyboard className="size-4" aria-hidden="true" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        className="w-[calc(100%-2rem)] rounded-lg sm:max-w-sm"
+        onCloseAutoFocus={(event) => {
+          const origin = shortcutOrigin.current
+          shortcutOrigin.current = null
+          if (origin?.isConnected) {
+            event.preventDefault()
+            origin.focus()
+          }
+        }}
       >
-        <Keyboard className="size-4" aria-hidden="true" />
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[calc(100%-2rem)] rounded-lg sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Keyboard shortcuts</DialogTitle>
-            <DialogDescription>
-              Available in Notes while you are not typing.
-            </DialogDescription>
-          </DialogHeader>
-          <Label className="flex items-center justify-between gap-4 text-sm font-normal">
-            <span>Single-key shortcuts</span>
-            <Switch
-              checked={shortcutsEnabled}
-              onCheckedChange={setSingleKeyShortcutsEnabled}
-            />
-          </Label>
-          <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
-            {SHORTCUTS.map(([key, action]) => (
-              <div key={key} className="contents">
-                <dt>
-                  <kbd className="bg-muted rounded border px-2 py-0.5 font-mono text-xs">
-                    {key}
-                  </kbd>
-                </dt>
-                <dd>{action}</dd>
-              </div>
-            ))}
-          </dl>
-        </DialogContent>
-      </Dialog>
-    </>
+        <DialogHeader>
+          <DialogTitle>Keyboard shortcuts</DialogTitle>
+          <DialogDescription>
+            Available in Notes while you are not typing.
+          </DialogDescription>
+        </DialogHeader>
+        <Label className="flex items-center justify-between gap-4 text-sm font-normal">
+          <span>Single-key shortcuts</span>
+          <Switch
+            checked={shortcutsEnabled}
+            onCheckedChange={setSingleKeyShortcutsEnabled}
+          />
+        </Label>
+        <dl className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-2 text-sm">
+          {SHORTCUTS.map(([key, action]) => (
+            <div key={key} className="contents">
+              <dt>
+                <kbd className="bg-muted rounded border px-2 py-0.5 font-mono text-xs">
+                  {key}
+                </kbd>
+              </dt>
+              <dd>{action}</dd>
+            </div>
+          ))}
+        </dl>
+      </DialogContent>
+    </Dialog>
   )
 }

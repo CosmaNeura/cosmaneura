@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { setSingleKeyShortcutsEnabled } from "~/lib/keyboard-shortcuts"
 
 import { NotesKeyboardShortcuts } from "./KeyboardShortcuts"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const toast = vi.hoisted(() => vi.fn())
 vi.mock("~/hooks/use-toast", () => ({ toast }))
@@ -14,6 +14,29 @@ afterEach(() => {
 })
 
 describe("Notes keyboard shortcuts", () => {
+  it("returns focus to the help button after Escape", async () => {
+    render(<NotesKeyboardShortcuts />)
+    const trigger = screen.getByRole("button", { name: "Keyboard shortcuts" })
+    trigger.focus()
+    fireEvent.click(trigger)
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it("returns focus to the shortcut's originating control", async () => {
+    render(
+      <>
+        <NotesKeyboardShortcuts />
+        <a href="#visit">Synthetic visit</a>
+      </>,
+    )
+    const origin = screen.getByRole("link", { name: "Synthetic visit" })
+    origin.focus()
+    fireEvent.keyDown(origin, { key: "?" })
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
+    await waitFor(() => expect(origin).toHaveFocus())
+  })
+
   it("opens the shortcut list with ?", () => {
     render(<NotesKeyboardShortcuts />)
 
