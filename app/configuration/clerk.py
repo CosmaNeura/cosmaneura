@@ -103,6 +103,7 @@ def provision_manual_qa_users(passwords: dict[str, str]) -> dict[str, str]:
             existing[email] = user.id
     return existing
 
+
 def _owner_identity_provenance() -> tuple[str, str] | None:
     environment = python_environment().strip().lower()
     if environment not in {"development", "test", "staging", "production"}:
