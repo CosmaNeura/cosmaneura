@@ -1,5 +1,6 @@
 """Create Core visits atomically, then use the existing Scribe consent/capture path."""
 
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, time, timedelta
 from uuid import uuid4
 
@@ -14,6 +15,7 @@ from app.services.companion_records import (
     check_deadline,
     transaction_budget,
 )
+from app.services.doctor_access_row_ownership import lookup_doctor_access_row_scope
 from app.services.scribe_encounter_contract import (
     AddBirthDateRequest,
     CatalogRequest,
@@ -268,7 +270,12 @@ def encounter_workflow(
             provider_locks_current = False
 
         try:
-            with transaction_budget(session, deadline):
+            with (
+                transaction_budget(session, deadline),
+                lookup_doctor_access_row_scope(session)
+                if isinstance(request, LookupRequest)
+                else nullcontext(),
+            ):
                 connection, doctor_id, link = _current_provider(session, args)
                 if isinstance(request, LookupRequest):
                     # The initial routine individually locks the full provider

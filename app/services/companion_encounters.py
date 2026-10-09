@@ -36,7 +36,10 @@ from app.services.companion_records import (
     transaction_budget,
 )
 from app.services.doctor_access import doctor_access_in_force
-from app.services.doctor_access_row_ownership import lock_doctor_access_rows
+from app.services.doctor_access_row_ownership import (
+    lock_doctor_access_rows,
+    provider_doctor_access_rows,
+)
 from app.services.view_as import ViewAsActorIdentity, actor_bound_unended_view_as_exists
 
 from activemodel.session_manager import global_session
@@ -207,7 +210,7 @@ def _locked_provider(session, *, expected, doctor_id, args):
     issuer, subject = args["issuer"], args["subject"]
     if issuer != args["settings"].clerk_issuer:
         raise authority.AuthorityRequestDeniedError
-    with lock_doctor_access_rows(
+    with provider_doctor_access_rows(
         session,
         practice_id=TypeID.from_string(expected.practice_ref),
         doctor_id=doctor_id,
