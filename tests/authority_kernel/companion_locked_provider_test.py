@@ -91,8 +91,9 @@ def test_native_keeps_identical_receipts_and_lock_order_with_fewer_reads(
         results.append((published, counts["all_selects"], locks))
     assert results[0][0] == results[1][0]
     assert results[0][2] == results[1][2]
-    # Each final recheck replaces eight fresh nonlocking reads with one.
-    assert results[0][1] - results[1][1] == (70 if kind == "mount" else 56)
+    # The default-clock input combination also shortens the original resolver;
+    # final joined checks still retain identical complete decisions and locks.
+    assert results[0][1] - results[1][1] == (50 if kind == "mount" else 40)
     record_property("operation", kind)
     record_property("original_selects", results[0][1])
     record_property("joined_selects", results[1][1])
