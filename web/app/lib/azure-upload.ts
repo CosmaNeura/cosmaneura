@@ -89,9 +89,13 @@ export function uploadToExactAzureUrlWithProgress(
     request.setRequestHeader("Content-Type", contentType)
     request.setRequestHeader("If-None-Match", "*")
     request.upload.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) {
-        onProgress(Math.min(event.loaded / event.total, 1))
-      }
+      // Without a known total, still leave "preparing" so the transfer reads
+      // as under way; a tiny fraction keeps the bar honest.
+      onProgress(
+        event.lengthComputable && event.total > 0
+          ? Math.min(event.loaded / event.total, 0.999)
+          : 0.01,
+      )
     }
     request.onload = () => {
       const ok = request.status >= 200 && request.status < 300

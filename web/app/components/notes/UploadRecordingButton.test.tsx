@@ -324,6 +324,7 @@ describe("upload progress", () => {
   it.each([
     [0, "Preparing upload…", "Preparing upload…"],
     [0.42, "Uploading… 42%", "Uploading, 25%"],
+    [0.999, "Uploading… 99%", "Uploading, 75%"],
     [1, "Finishing up…", "Finishing up…"],
   ])("at %s shows %s and announces %s", (fraction, visible, announced) => {
     render(<UploadProgress fraction={fraction} />)
@@ -336,6 +337,6 @@ describe("upload progress", () => {
     ).toBeInTheDocument()
     expect(
       screen.getByRole("progressbar", { name: "Upload progress" }),
-    ).toHaveAttribute("aria-valuenow", String(Math.round(fraction * 100)))
+    ).toHaveAttribute("aria-valuenow", String(Math.floor(fraction * 100)))
   })
 })

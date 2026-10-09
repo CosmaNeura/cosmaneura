@@ -77,6 +77,26 @@ describe("upload with progress", () => {
     ])
   })
 
+  it("only reports completion once the blob service accepts the upload", async () => {
+    vi.stubGlobal("XMLHttpRequest", FakeXhr)
+    const onProgress = vi.fn()
+    const pending = uploadToExactAzureUrlWithProgress(
+      file,
+      URL_,
+      "audio/wav",
+      onProgress,
+    )
+    FakeXhr.last.progress(100, 100)
+    FakeXhr.last.upload.onprogress?.({
+      lengthComputable: false,
+    } as ProgressEvent)
+    FakeXhr.last.status = 412
+    FakeXhr.last.onload?.()
+
+    await expect(pending).resolves.toEqual({ error: true })
+    expect(onProgress.mock.calls.map(([value]) => value)).toEqual([0.999, 0.01])
+  })
+
   it("reports a rejected upload as an error", async () => {
     vi.stubGlobal("XMLHttpRequest", FakeXhr)
     const pending = uploadToExactAzureUrlWithProgress(
@@ -103,4 +123,20 @@ describe("upload with progress", () => {
 
     await expect(pending).rejects.toThrow()
   })
+
+  it.each(["onabort", "ontimeout"] as const)(
+    "rejects when the request ends via %s",
+    async (handler) => {
+      vi.stubGlobal("XMLHttpRequest", FakeXhr)
+      const pending = uploadToExactAzureUrlWithProgress(
+        file,
+        URL_,
+        "audio/wav",
+        vi.fn(),
+      )
+      FakeXhr.last[handler]?.()
+
+      await expect(pending).rejects.toThrow()
+    },
+  )
 })

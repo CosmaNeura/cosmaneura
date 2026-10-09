@@ -174,7 +174,8 @@ function PatientComboboxSearch({
 // Progress covers the file transfer; the short steps before (requesting an
 // upload slot) and after (registering the visit) are named instead.
 export function UploadProgress({ fraction }: { fraction: number }) {
-  const percent = Math.round(fraction * 100)
+  // Floor so the bar never claims 100% while bytes are still being sent.
+  const percent = Math.floor(fraction * 100)
   const label =
     fraction <= 0
       ? "Preparing upload…"
@@ -189,7 +190,8 @@ export function UploadProgress({ fraction }: { fraction: number }) {
   return (
     <div className="space-y-2">
       {/* The shared Progress wrapper keeps `value` for its indicator and does
-          not forward it to Radix, so the ARIA values are supplied here. */}
+          not forward it to Radix (components/ui is vendored and not edited
+          here), so the ARIA values are supplied at the call site. */}
       <Progress
         value={percent}
         aria-label="Upload progress"
