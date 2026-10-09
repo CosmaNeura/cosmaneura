@@ -478,7 +478,6 @@ async def test_preparation_context_reuses_services_without_capture_mutation(
         "resolve",
         "lookup",
         *(["binding", "lookup"] if kind == "admission" else []),
-        "lookup",
     ]
     result = value["result"]
     assert (
@@ -486,6 +485,37 @@ async def test_preparation_context_reuses_services_without_capture_mutation(
         and result["interaction_ref"] == "never-return-interaction"
     )
     assert result["preparation"] == kind and result["binding_ref"] == BINDING
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["admission", "recording_window"])
+@pytest.mark.parametrize("change", ["workspace_id", "appointment_ref", "patient_ref"])
+async def test_preparation_publication_checks_current_record_after_last_service(
+    monkeypatch, kind, change
+):
+    original, calls, _, invoke = fixture(monkeypatch)
+    lookup = service.scribe_encounters.encounter_workflow
+    boundary = "binding" if kind == "admission" else "resolve"
+
+    def reassigned(**kwargs):
+        value = lookup(**kwargs)
+        if boundary in calls:
+            value["encounter"][change] = "different-current-record"
+        return value
+
+    monkeypatch.setattr(service.scribe_encounters, "encounter_workflow", reassigned)
+    data = service.NativeCaptureRequest(
+        action="preparation_context",
+        preparation=kind,
+        workspace_id=original.workspace_id,
+        request_nonce=original.request_nonce,
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        binding_ref=BINDING,
+    )
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        await invoke(data)
+    assert not any(isinstance(c, tuple) for c in calls)
 
 
 @pytest.mark.asyncio
@@ -508,14 +538,23 @@ async def test_preparation_context_binding_mismatch_never_returns_credentials(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("phase", ["exchange", "resolve", "binding"])
+@pytest.mark.parametrize(
+    ("kind", "phase"),
+    [
+        ("admission", "exchange"),
+        ("admission", "resolve"),
+        ("admission", "binding"),
+        ("recording_window", "exchange"),
+        ("recording_window", "resolve"),
+    ],
+)
 async def test_preparation_context_revocation_at_every_original_boundary(
-    monkeypatch, phase
+    monkeypatch, kind, phase
 ):
     original, calls, state, invoke = fixture(monkeypatch)
     data = service.NativeCaptureRequest(
         action="preparation_context",
-        preparation="admission",
+        preparation=kind,
         workspace_id=original.workspace_id,
         request_nonce=original.request_nonce,
         expected_actor_ref=ACTOR,
@@ -541,8 +580,9 @@ async def test_preparation_context_revocation_at_every_original_boundary(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["admission", "recording_window"])
 async def test_real_preparation_context_commits_and_closes_all_policy_transactions(
-    engine, workflow, monkeypatch
+    engine, workflow, monkeypatch, kind
 ):
     args, _, request, invoke = workflow
     created = invoke(request())
@@ -585,7 +625,7 @@ async def test_real_preparation_context_commits_and_closes_all_policy_transactio
     )
     data = service.NativeCaptureRequest(
         action="preparation_context",
-        preparation="admission",
+        preparation=kind,
         workspace_id=row["workspace_id"],
         request_nonce=uuid4(),
         binding_ref=mounted["result"]["binding_ref"],
@@ -594,7 +634,7 @@ async def test_real_preparation_context_commits_and_closes_all_policy_transactio
     )
     prepared = await call(data)
     assert (
-        prepared["result"]["preparation"] == "admission"
+        prepared["result"]["preparation"] == kind
         and session_manager._session_context.get() is None
         and engine.pool.checkedout() == 0
     )
