@@ -35,8 +35,9 @@ def setting_calls(connection, monkeypatch):
 
     class Cursor(psycopg.Cursor):
         def execute(self, query, *args, **kwargs):
-            if isinstance(query, str) and query.startswith(
-                "SELECT set_config('statement_timeout'"
+            if query == (
+                "SELECT set_config('statement_timeout', %s, true), "
+                "set_config('lock_timeout', %s, true)"
             ):
                 calls.append(tuple(map(int, args[0])))
             return super().execute(query, *args, **kwargs)
