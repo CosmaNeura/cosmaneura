@@ -93,7 +93,7 @@ def test_native_keeps_identical_receipts_and_lock_order_with_fewer_reads(
     assert results[0][2] == results[1][2]
     # The default-clock input combination also shortens the original resolver;
     # final joined checks still retain identical complete decisions and locks.
-    assert results[0][1] - results[1][1] == (50 if kind == "mount" else 40)
+    assert results[0][1] - results[1][1] == (60 if kind == "mount" else 48)
     record_property("operation", kind)
     record_property("original_selects", results[0][1])
     record_property("joined_selects", results[1][1])

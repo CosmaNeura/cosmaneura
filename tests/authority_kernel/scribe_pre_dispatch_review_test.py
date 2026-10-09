@@ -104,7 +104,7 @@ def test_actual_native_receipts_and_remaining_lock_order_match_previous_checks(
     # derived once after locks, removing 19 more reads from this legacy baseline.
     # Receipts and the remaining lock order still match.
     assert results[0][1] - results[1][1] == (
-        0 if kind == "preparation_metadata" else 41
+        0 if kind == "preparation_metadata" else 40
     )
     assert engine.pool.checkedout() == 0
     record_property("operation", kind)

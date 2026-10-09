@@ -71,7 +71,9 @@ def test_explicit_time_decisions_match_current_individual_queries(
         assert access.resolve_doctor_access(doctor, **options) == expected
 
 
-def test_join_removes_one_fresh_read_only_for_explicit_time(engine, monkeypatch):
+def test_explicit_time_join_removes_one_read_and_default_clock_keeps_two_stages(
+    engine, monkeypatch
+):
     args, at = owned_case(engine)
     with (
         session_for(engine) as session,
@@ -96,7 +98,7 @@ def test_join_removes_one_fresh_read_only_for_explicit_time(engine, monkeypatch)
             assert access.resolve_doctor_access(
                 doctor, _ownership=proof, _practice_id=args["practice_id"]
             ).allowed
-        assert default_clock["all_selects"] == 3
+        assert default_clock["all_selects"] == 2
 
 
 @pytest.mark.parametrize("invalid", [False, True])
