@@ -413,7 +413,7 @@ describe("settings layout", () => {
     })
     expect(
       Array.from(nav.querySelectorAll("a")).map((a) => a.textContent),
-    ).toEqual(["Practice", "Biography", "Note types", "AI output", "Zoom"])
+    ).toEqual(["Practice", "Biography", "Note types", "Zoom"])
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
     for (const name of ["Practice", "Biography", "Zoom Integration"]) {
       expect(screen.getByRole("heading", { level: 2, name })).toBeVisible()
@@ -446,9 +446,52 @@ describe("settings layout", () => {
       behavior: "auto",
       block: "start",
     })
-    expect(document.getElementById("settings-zoom")).toHaveFocus()
+    expect(screen.getByRole("region", { name: "Zoom" })).toHaveFocus()
     scrollIntoView.mockRestore()
     vi.unstubAllGlobals()
+  })
+
+  it("keeps the router's history entry when jumping", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {})
+    window.history.replaceState({ usr: null, key: "abc123", idx: 4 }, "")
+    openSettings()
+
+    fireEvent.click(await screen.findByRole("link", { name: "Biography" }))
+
+    expect(window.history.state).toMatchObject({ key: "abc123", idx: 4 })
+    expect(window.location.hash).toBe("#settings-biography")
+    vi.restoreAllMocks()
+  })
+
+  it("leaves modifier clicks to the browser", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    openSettings()
+
+    const link = await screen.findByRole("link", { name: "Zoom" })
+    const event = new MouseEvent("click", {
+      bubbles: true,
+      cancelable: true,
+      metaKey: true,
+    })
+    link.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it("omits links for sections that are not shown", async () => {
+    practiceApi.getPractice.mockResolvedValue(null)
+    openSettings()
+
+    const nav = await screen.findByRole("navigation", {
+      name: "Settings sections",
+    })
+    const labels = Array.from(nav.querySelectorAll("a")).map(
+      (a) => a.textContent,
+    )
+    expect(labels).not.toContain("Practice")
+    expect(labels).not.toContain("AI output")
+    expect(screen.queryByRole("region", { name: "Practice" })).toBeNull()
   })
 
   it("offers no jump links in the billing-recovery-only view", async () => {

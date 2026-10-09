@@ -94,7 +94,7 @@ export function LabRangeSettings() {
   if (loading) {
     return (
       <section className="prose-headings prose w-full max-w-2xl space-y-4">
-        <h2 className="!mt-0 text-xl font-semibold">Lab reference ranges</h2>
+        <h2 className="!mt-0 text-lg font-semibold">Lab reference ranges</h2>
         <p className="text-muted-foreground text-sm">Loading…</p>
       </section>
     )
@@ -102,7 +102,7 @@ export function LabRangeSettings() {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">Lab reference ranges</h2>
+      <h2 className="!mt-0 text-lg font-semibold">Lab reference ranges</h2>
       <p className="text-muted-foreground text-sm">
         Standard ranges are common reference intervals; optimal ranges are
         editable defaults — tune them to your functional-medicine source and add

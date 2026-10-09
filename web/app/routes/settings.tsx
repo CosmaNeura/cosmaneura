@@ -151,7 +151,7 @@ function PracticeSettings({
         practice={practice}
         onPracticeChange={onPracticeChange}
       />
-      <h2 className="!mt-0 text-xl font-semibold">Practice</h2>
+      <h2 className="!mt-0 text-lg font-semibold">Practice</h2>
       <PracticeAccessEndingNotice practice={practice} />
       <PracticeJoinPanel
         practice={practice}
@@ -238,7 +238,7 @@ function BiographyInput({ biography }: { biography: string | null }) {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">Biography</h2>
+      <h2 className="!mt-0 text-lg font-semibold">Biography</h2>
       <p className="text-muted-foreground text-sm">
         This is the information that will be used to personalize your
         experience, including intake. You can change this at any time.
@@ -364,7 +364,7 @@ function NoteCustomization({
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">AI Output Customization</h2>
+      <h2 className="!mt-0 text-lg font-semibold">AI Output Customization</h2>
       <p className="text-sm">
         Tune how Cosmas writes each of your note types. Changes affect only the
         note type you edit.
@@ -453,7 +453,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
       >
         <section className="w-full max-w-2xl space-y-4">
           <div className="space-y-2">
-            <h2 className="text-left text-xl font-semibold">Notetaking</h2>
+            <h2 className="text-left text-lg font-semibold">Notetaking</h2>
             <p className="text-muted-foreground text-left text-sm">
               Upload high quality examples of the different types of notes that
               you use. These examples will be used to generate future notes for
@@ -581,7 +581,7 @@ export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     return (
       <section className="prose-headings prose w-full max-w-2xl space-y-4">
         <div className="flex items-center gap-2">
-          <h2 className="!my-0 text-xl font-semibold">Zoom Integration</h2>
+          <h2 className="!my-0 text-lg font-semibold">Zoom Integration</h2>
           <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
             Coming Soon
           </span>
@@ -597,7 +597,7 @@ export function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">Zoom Integration</h2>
+      <h2 className="!mt-0 text-lg font-semibold">Zoom Integration</h2>
       <p className="text-muted-foreground text-sm">
         Connect your Zoom account so Cosmas can automatically join your meetings
         and generate visit notes.
@@ -740,7 +740,7 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">NatMed Pro connection</h2>
+      <h2 className="!mt-0 text-lg font-semibold">NatMed Pro connection</h2>
       <p className="text-muted-foreground text-sm">
         If you have a NatMed Pro (Natural Medicines) subscription, turn this on
         to add its interaction checker and nutrient-depletion lookups as
@@ -770,6 +770,15 @@ function anchorId(id: string) {
 // The content area, not the window, scrolls; focus follows the jump so
 // keyboard and screen reader users land on the section too.
 function jumpToSection(event: React.MouseEvent<HTMLAnchorElement>, id: string) {
+  if (
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey ||
+    event.button !== 0
+  ) {
+    return
+  }
   const target = document.getElementById(anchorId(id))
   if (!target) return
   event.preventDefault()
@@ -781,7 +790,9 @@ function jumpToSection(event: React.MouseEvent<HTMLAnchorElement>, id: string) {
     block: "start",
   })
   target.focus({ preventScroll: true })
-  window.history.replaceState(null, "", `#${anchorId(id)}`)
+  // Keep React Router's entry state (key, idx); clearing it breaks back
+  // navigation blockers and scroll restoration.
+  window.history.replaceState(window.history.state, "", `#${anchorId(id)}`)
 }
 
 function SettingsJumpLinks({ anchors }: { anchors: SettingsAnchor[] }) {
@@ -805,15 +816,17 @@ function SettingsJumpLinks({ anchors }: { anchors: SettingsAnchor[] }) {
 }
 
 function SettingsAnchorTarget({
-  id,
+  anchor,
   children,
 }: {
-  id: string
+  anchor: SettingsAnchor
   children: React.ReactNode
 }) {
   return (
     <div
-      id={anchorId(id)}
+      id={anchorId(anchor.id)}
+      role="region"
+      aria-label={anchor.label}
       tabIndex={-1}
       className="w-full scroll-mt-4 focus:outline-none"
     >
@@ -848,21 +861,30 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const terminologyEnabled = isTerminologyEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const hasNoteTypes = loaderData.notes_schema.length > 0
+  const ANCHORS = {
+    practice: { id: "practice", label: "Practice" },
+    biography: { id: "biography", label: "Biography" },
+    terminology: { id: "terminology", label: "Terminology" },
+    noteTypes: { id: "note-types", label: "Note types" },
+    aiOutput: { id: "ai-output", label: "AI output" },
+    zoom: { id: "zoom", label: "Zoom" },
+    natmed: { id: "natmed", label: "NatMed" },
+    labRanges: { id: "lab-ranges", label: "Lab ranges" },
+  } satisfies Record<string, SettingsAnchor>
+  // List exactly the sections that render below, so no link lands on an
+  // empty target.
   const anchors: SettingsAnchor[] = billingRecoveryOnly
     ? []
     : [
-        ...(practice ? [{ id: "practice", label: "Practice" }] : []),
-        { id: "biography", label: "Biography" },
-        ...(terminologyEnabled
-          ? [{ id: "terminology", label: "Terminology" }]
-          : []),
-        { id: "note-types", label: "Note types" },
-        { id: "ai-output", label: "AI output" },
-        { id: "zoom", label: "Zoom" },
-        ...(referenceToolkitEnabled ? [{ id: "natmed", label: "NatMed" }] : []),
-        ...(referenceLabsEnabled
-          ? [{ id: "lab-ranges", label: "Lab ranges" }]
-          : []),
+        ...(practice ? [ANCHORS.practice] : []),
+        ANCHORS.biography,
+        ...(terminologyEnabled ? [ANCHORS.terminology] : []),
+        ANCHORS.noteTypes,
+        ...(hasNoteTypes ? [ANCHORS.aiOutput] : []),
+        ANCHORS.zoom,
+        ...(referenceToolkitEnabled ? [ANCHORS.natmed] : []),
+        ...(referenceLabsEnabled ? [ANCHORS.labRanges] : []),
       ]
 
   return (
@@ -878,49 +900,53 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           {anchors.length > 0 && <SettingsJumpLinks anchors={anchors} />}
         </header>
         <InnerScrollableContent>
-          <SettingsAnchorTarget id="practice">
-            <PracticeSettings
-              practice={practice}
-              roster={loaderData.practice_roster}
-              acceptances={loaderData.baa_acceptances}
-              onPracticeChange={handlePracticeChange}
-              billingReturnTo={billingReturnTo}
-            />
-          </SettingsAnchorTarget>
+          {practice && (
+            <SettingsAnchorTarget anchor={ANCHORS.practice}>
+              <PracticeSettings
+                practice={practice}
+                roster={loaderData.practice_roster}
+                acceptances={loaderData.baa_acceptances}
+                onPracticeChange={handlePracticeChange}
+                billingReturnTo={billingReturnTo}
+              />
+            </SettingsAnchorTarget>
+          )}
           {!billingRecoveryOnly ? (
             <>
-              <SettingsAnchorTarget id="biography">
+              <SettingsAnchorTarget anchor={ANCHORS.biography}>
                 <BiographyInput biography={loaderData.biography} />
               </SettingsAnchorTarget>
               {terminologyEnabled && (
-                <SettingsAnchorTarget id="terminology">
+                <SettingsAnchorTarget anchor={ANCHORS.terminology}>
                   <TerminologySettings
                     terminology={loaderData.terminology}
                     biography={loaderData.biography}
                   />
                 </SettingsAnchorTarget>
               )}
-              <SettingsAnchorTarget id="note-types">
+              <SettingsAnchorTarget anchor={ANCHORS.noteTypes}>
                 <NoteUpload noteSchemas={loaderData.notes_schema} />
               </SettingsAnchorTarget>
-              <SettingsAnchorTarget id="ai-output">
-                <NoteCustomization
-                  noteSchemas={loaderData.notes_schema}
-                  customizations={loaderData.note_customizations}
-                />
-              </SettingsAnchorTarget>
-              <SettingsAnchorTarget id="zoom">
+              {hasNoteTypes && (
+                <SettingsAnchorTarget anchor={ANCHORS.aiOutput}>
+                  <NoteCustomization
+                    noteSchemas={loaderData.notes_schema}
+                    customizations={loaderData.note_customizations}
+                  />
+                </SettingsAnchorTarget>
+              )}
+              <SettingsAnchorTarget anchor={ANCHORS.zoom}>
                 <ZoomConnect zoomConnected={loaderData.zoom_connected} />
               </SettingsAnchorTarget>
               {referenceToolkitEnabled && (
-                <SettingsAnchorTarget id="natmed">
+                <SettingsAnchorTarget anchor={ANCHORS.natmed}>
                   <NatMedConnection
                     hasSubscription={loaderData.has_natmed_subscription}
                   />
                 </SettingsAnchorTarget>
               )}
               {referenceLabsEnabled && (
-                <SettingsAnchorTarget id="lab-ranges">
+                <SettingsAnchorTarget anchor={ANCHORS.labRanges}>
                   <LabRangeSettings />
                 </SettingsAnchorTarget>
               )}

@@ -71,7 +71,7 @@ export function TerminologySettings({
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h2 className="!mt-0 text-xl font-semibold">Terminology</h2>
+      <h2 className="!mt-0 text-lg font-semibold">Terminology</h2>
       <p className="text-muted-foreground text-sm">
         Choose how the app refers to you and the people you care for. This
         changes labels across the app and the wording of generated notes and
