@@ -35,6 +35,7 @@ from app.utils.statement_timeout_scope import (
     current_record_timeout_scope,
     record_timeout_scope,
     remember_timeout_setting,
+    reusable_timeout_limits,
     timeout_setting_in_force,
 )
 
@@ -125,10 +126,14 @@ def transaction_budget(session: Session, deadline: float | RecordBudget):
         if not combined or not timeout_setting_in_force(
             connection, cursor, context, scope, capture, current_limits
         ):
+            if combined:
+                current_limits = reusable_timeout_limits(
+                    connection, cursor, context, scope, current_limits
+                )
             cursor.execute(
                 "SELECT set_config('statement_timeout', %s, true), "
                 "set_config('lock_timeout', %s, true)",
-                (str(statement_ms), str(lock_ms)),
+                tuple(map(str, current_limits)),
             )
         check_deadline(deadline)
         if combined:
