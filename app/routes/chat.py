@@ -2,7 +2,7 @@
 Public, unauthenticated API endpoints for the chat interface.
 """
 
-from typing import Literal
+from typing import Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from fastapi.responses import JSONResponse
@@ -15,11 +15,12 @@ from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.routes.errors import EarlyResponseException
 from app.services.doctor_access import doctor_access_in_force
 
-from activemodel.session_manager import aglobal_session
+from activemodel.session_manager import aglobal_session, get_session
 from app.models.ai_visit_transcript import PydanticBaseModel
 from app.models.doctor import Doctor
-from app.models.intake.intake import Intake
+from app.models.intake.intake import Intake, IntakeSchemaQuestion
 from sqlalchemy.exc import NoResultFound
+from sqlmodel import Session, select
 
 chat_api_app = APIRouter(
     prefix="/external/chat",
@@ -70,13 +71,13 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake | JSONRes
 
 class ChatInput(PydanticBaseModel):
     answer: str
-    # TODO do we need the question to be posted back? Would probably provide another layer of validation?
-    # question: str
+    expected_question: str | None = None
 
 
 class ChatResponse(PydanticBaseModel):
     question: str | None
     status: Literal["processing", "completed", "in_progress"]
+    retry_safe: bool = True
 
 
 @chat_api_app.get("/intake/{intake_id}/question")
@@ -94,7 +95,27 @@ def get_last_question(
 def get_next_question(
     request: Request, data: ChatInput, intake: Intake = Depends(process_intake)
 ) -> ChatResponse:
-    chat = app.commands.intake.chat.perform(intake, data.answer)
+    # Refresh under the lock: a GET before retry is not an atomic comparison.
+    # All public answer submissions share this lock, including legacy clients.
+    with get_session() as managed:
+        session = cast(Session, managed)
+        locked = session.exec(
+            select(Intake)
+            .where(Intake.id == intake.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+        # Direct SQL refresh bypasses ActiveModel's Pydantic JSON conversion.
+        locked.intake_questions = [
+            IntakeSchemaQuestion.model_validate(question)
+            for question in locked.intake_questions
+        ]
+        try:
+            chat = app.commands.intake.chat.perform(
+                locked, data.answer, expected_question=data.expected_question
+            )
+        except app.commands.intake.chat.IntakeAnswerConflict:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT) from None
 
     return ChatResponse(
         question=chat and chat.question,

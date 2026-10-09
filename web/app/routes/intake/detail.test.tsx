@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
-import IntakeDetailPage, { EmptyState } from "./detail"
-import { render, screen } from "@testing-library/react"
+import IntakeDetailPage, { EmptyState, IntakeSummary } from "./detail"
+import { fireEvent, render, screen } from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({ intakeDetail: vi.fn() }))
 vi.mock("~/components/shared/PageHeader", () => ({ PageHeader: () => null }))
@@ -78,5 +78,19 @@ describe("intake detail status", () => {
   ] as const)("shows %s with summary %s as %s", (status, summary, label) => {
     showIntake(status, summary)
     expect(screen.getByText(label)).toBeInTheDocument()
+  })
+})
+
+describe("intake summary", () => {
+  it("copies the rendered summary", async () => {
+    render(<IntakeSummary summary={"## Goals\n\nSynthetic goal"} />)
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy summary" }))
+    await screen.findByRole("button", { name: "Copied" })
+
+    const [item] = await navigator.clipboard.read()
+    const text = await (await item.getType("text/plain")).text()
+    expect(text).toContain("Goals")
+    expect(text).toContain("Synthetic goal")
   })
 })

@@ -111,3 +111,19 @@ describe("visit audio upload", () => {
     expect(deps.uploadBlob).toHaveBeenCalledOnce()
   })
 })
+
+describe("visit audio upload progress", () => {
+  it("passes the progress handler to the file transfer only", async () => {
+    const deps = dependencies()
+    const onUploadProgress = vi.fn()
+
+    await submitVisitAudioUpload({ ...input(), onUploadProgress }, deps)
+
+    expect(deps.uploadBlob).toHaveBeenCalledWith(
+      expect.any(File),
+      "https://uploads.invalid/visit_opaque.wav?sig=secret",
+      "audio/wav",
+      onUploadProgress,
+    )
+  })
+})

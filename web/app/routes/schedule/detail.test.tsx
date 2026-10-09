@@ -90,6 +90,7 @@ function renderMeeting(
           />
         ),
       },
+      { path: "/schedule", element: <p>Schedule index</p> },
     ],
     { initialEntries: ["/"] },
   )
@@ -112,6 +113,71 @@ beforeEach(() => {
   toast.mockReset()
   settingsData.mockReset()
   settingsData.mockResolvedValue({ terminology: "doctor_patient" })
+})
+
+describe("meeting cancellation", () => {
+  it("asks before cancelling and keeps the meeting by default", async () => {
+    renderMeeting(meeting, [appointment], [patient], false)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel meeting" }),
+    )
+
+    const dialog = await screen.findByRole("alertdialog")
+    expect(dialog).toHaveAccessibleName(/^Cancel your .+ meeting\?$/)
+    expect(dialog).toHaveAccessibleDescription(
+      /The meeting link will stop working for your patient/,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Keep meeting" }))
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    expect(cancelMeeting).not.toHaveBeenCalled()
+    expect(screen.getByRole("button", { name: "Cancel meeting" })).toHaveFocus()
+  })
+
+  it("cancels after confirmation", async () => {
+    cancelMeeting.mockResolvedValue({ data: {}, error: undefined })
+    renderMeeting(meeting, [appointment], [patient], false)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel meeting" }),
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Yes, cancel meeting" }),
+    )
+
+    await waitFor(() =>
+      expect(cancelMeeting).toHaveBeenCalledWith({
+        path: { zoom_meeting_id: "123456789" },
+      }),
+    )
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith({ title: "Meeting cancelled" }),
+    )
+    expect(await screen.findByText("Schedule index")).toBeInTheDocument()
+  })
+
+  it("keeps the dialog open when cancelling fails", async () => {
+    cancelMeeting.mockResolvedValue({ data: undefined, error: { detail: "x" } })
+    renderMeeting(meeting, [appointment], [patient], false)
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Cancel meeting" }),
+    )
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Yes, cancel meeting" }),
+    )
+
+    await waitFor(() =>
+      expect(toast).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't cancel the meeting" }),
+      ),
+    )
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Yes, cancel meeting" }),
+    ).toBeEnabled()
+  })
 })
 
 describe("meeting bot copy", () => {

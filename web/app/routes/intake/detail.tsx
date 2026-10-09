@@ -1,3 +1,4 @@
+import { useRef } from "react"
 import Markdown from "react-markdown"
 import type { MetaFunction } from "react-router"
 
@@ -116,6 +117,18 @@ export function EmptyState({
   )
 }
 
+export function IntakeSummary({ summary }: { summary: string }) {
+  const summaryRef = useRef<HTMLDivElement>(null)
+  return (
+    <div className="space-y-3">
+      <CopyButton htmlRef={summaryRef} label="Copy summary" />
+      <div ref={summaryRef} className="prose-headings prose max-w-full">
+        <Markdown>{summary}</Markdown>
+      </div>
+    </div>
+  )
+}
+
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
   const t = useTerminology()
   const { intake } = loaderData
@@ -139,11 +152,7 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
             ),
           }}
         />
-        {hasSummary && (
-          <div className="prose-headings prose max-w-full">
-            <Markdown>{intake.summary}</Markdown>
-          </div>
-        )}
+        {intake.summary && <IntakeSummary summary={intake.summary} />}
 
         {!hasSummary && <EmptyState intake={intake} />}
       </InnerScrollableContent>

@@ -7,7 +7,16 @@ from app.services.external_webhook_inbox import provider_log_ref
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
 
 
-def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion | None:
+class IntakeAnswerConflict(ValueError):
+    pass
+
+
+def perform(
+    intake: Intake,
+    user_chat_input: str | None,
+    *,
+    expected_question: str | None = None,
+) -> IntakeSchemaQuestion | None:
     """
     Handles processing a user chat input for an intake process and letting the user know what to answer next
 
@@ -21,6 +30,21 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     validate_question_structure(intake)
 
     current_question = intake.next_unanswered_question()
+    if user_chat_input and expected_question is not None:
+        expected = next(
+            (q for q in intake.intake_questions if q.question == expected_question),
+            None,
+        )
+        if expected is None:
+            raise IntakeAnswerConflict("The intake question changed")
+        if expected.answer:
+            if expected.answer != user_chat_input:
+                raise IntakeAnswerConflict("The intake question was already answered")
+            # The question itself is the stable operation identity. Replaying
+            # its exact answer returns progress without writing or queueing again.
+            return current_question
+        if current_question is None or current_question.question != expected_question:
+            raise IntakeAnswerConflict("The intake question changed")
     if not current_question:
         # This should never happen.
         log.error(

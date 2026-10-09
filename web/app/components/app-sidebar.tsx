@@ -1,5 +1,12 @@
 import * as React from "react"
-import { Link, NavLink, href, matchPath, useLocation } from "react-router"
+import {
+  Link,
+  NavLink,
+  href,
+  matchPath,
+  useLocation,
+  useNavigate,
+} from "react-router"
 
 import { Calendar, File, Inbox, Settings } from "lucide-react"
 
@@ -25,6 +32,7 @@ import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { isInCurrentWeek } from "~/lib/date"
+import { adjacentUrl, shouldIgnoreShortcut } from "~/lib/keyboard-shortcuts"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { motion } from "motion/react"
@@ -144,9 +152,15 @@ function SelectionEntry({ entry }: { entry: SidebarEntry }) {
   const { isMobile, setOpenMobile } = useSidebar()
   const { pathname } = useLocation()
   const isCurrent = pathname === entry.url
+  const linkRef = React.useRef<HTMLAnchorElement>(null)
+
+  React.useEffect(() => {
+    if (isCurrent) linkRef.current?.scrollIntoView?.({ block: "nearest" })
+  }, [isCurrent])
 
   return (
     <Link
+      ref={linkRef}
       to={entry.url}
       aria-current={isCurrent ? "page" : undefined}
       onClick={(event) => {
@@ -225,14 +239,6 @@ function matchesSearch(entry: SidebarEntry, term: string) {
     .some((field) => field!.toLowerCase().includes(needle))
 }
 
-function isTypingTarget(target: EventTarget | null) {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-  )
-}
-
 // Focus the list search with "/" unless the user is already typing, a dialog
 // owns focus, or the list panel is collapsed (its input stays mounted).
 function useSlashToFocus(
@@ -244,12 +250,7 @@ function useSlashToFocus(
     function onKeyDown(event: KeyboardEvent) {
       if (
         event.key !== "/" ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.defaultPrevented ||
-        isTypingTarget(event.target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]') ||
+        shouldIgnoreShortcut(event) ||
         !inputRef.current
       ) {
         return
@@ -262,18 +263,46 @@ function useSlashToFocus(
   }, [inputRef, enabled])
 }
 
+// j and k step through the list as currently filtered.
+function useListShortcuts(entries: SidebarEntry[], enabled: boolean) {
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+
+  React.useEffect(() => {
+    if (!enabled) return
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "j" && event.key !== "k") return
+      if (shouldIgnoreShortcut(event)) return
+      const next = adjacentUrl(
+        entries.map((entry) => entry.url),
+        pathname,
+        event.key === "j" ? 1 : -1,
+      )
+      if (!next) return
+      event.preventDefault()
+      navigate(next)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [entries, enabled, navigate, pathname])
+}
+
 function SelectionSidebar({
   header,
+  headerAction,
   isLoading,
   entries,
   emptyState = DEFAULT_EMPTY_STATE,
   searchPlaceholder = "Search…",
+  listShortcuts = false,
 }: {
   header?: string
+  headerAction?: React.ReactNode
   isLoading: boolean
   entries: SidebarEntry[]
   emptyState?: SidebarEmptyState
   searchPlaceholder?: string
+  listShortcuts?: boolean
 }) {
   const { isMobile, open } = useSidebar()
 
@@ -287,15 +316,21 @@ function SelectionSidebar({
       matchesSearch(entry, searchTerm) &&
       (!showThisWeek || isInCurrentWeek(new Date(entry.isoDate))),
   )
+  // Desktop only: on small screens the list is a sheet (a dialog) and the
+  // shortcuts would only act while it is hidden.
+  useListShortcuts(filteredEntries, listShortcuts && !isMobile && open)
 
   const content = (
     <>
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <h2 className="text-sidebar-foreground text-base font-medium">
-            {header ?? "Appointments"}
-          </h2>
+          <div className="flex items-center gap-1">
+            <h2 className="text-sidebar-foreground text-base font-medium">
+              {header ?? "Appointments"}
+            </h2>
+            {headerAction}
+          </div>
           <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
             <span>This Week</span>
             <Switch
@@ -383,6 +418,8 @@ export function AppSidebar({
   header,
   emptyState,
   searchPlaceholder,
+  headerAction,
+  listShortcuts,
   ...props
 }: {
   isLoading: boolean
@@ -390,6 +427,8 @@ export function AppSidebar({
   header?: string
   emptyState?: SidebarEmptyState
   searchPlaceholder?: string
+  headerAction?: React.ReactNode
+  listShortcuts?: boolean
 }) {
   const showSidebar = entries !== false
 
@@ -406,6 +445,8 @@ export function AppSidebar({
           entries={entries}
           emptyState={emptyState}
           searchPlaceholder={searchPlaceholder}
+          headerAction={headerAction}
+          listShortcuts={listShortcuts}
         />
       )}
     </div>

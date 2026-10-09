@@ -359,3 +359,92 @@ describe("AppSidebar navigation and search", () => {
     ).toBeInTheDocument()
   })
 })
+
+describe("AppSidebar list shortcuts", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1280,
+    })
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const entry = (id: string, title: string): SidebarEntry => ({
+    id,
+    url: `/notes/${id}`,
+    title,
+    location: "",
+    date: "Today",
+    isoDate: new Date().toISOString(),
+    status: "none",
+    preview: "",
+  })
+
+  function renderList(listShortcuts: boolean) {
+    render(
+      <MemoryRouter initialEntries={["/notes/a"]}>
+        <SidebarProvider>
+          <AppSidebar
+            isLoading={false}
+            entries={[
+              entry("a", "First"),
+              entry("b", "Second"),
+              entry("c", "Third"),
+            ]}
+            header="Notes"
+            listShortcuts={listShortcuts}
+          />
+          <CurrentLocation />
+        </SidebarProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it("moves through the filtered list with j and k", async () => {
+    renderList(true)
+
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "i" },
+    })
+    screen.getByRole("searchbox").blur()
+    fireEvent.keyDown(document.body, { key: "j" })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent(
+        "/notes/c",
+      ),
+    )
+    fireEvent.keyDown(document.body, { key: "k" })
+    await waitFor(() =>
+      expect(screen.getByLabelText("Current location")).toHaveTextContent(
+        "/notes/a",
+      ),
+    )
+  })
+
+  it("leaves j alone where the section does not opt in", () => {
+    renderList(false)
+
+    fireEvent.keyDown(document.body, { key: "j" })
+
+    expect(screen.getByLabelText("Current location")).toHaveTextContent(
+      "/notes/a",
+    )
+  })
+})

@@ -430,7 +430,14 @@ describe("root error boundary", () => {
         screen.queryByRole("status", { name: "Checking session security" }),
       ).not.toBeInTheDocument(),
     )
-    expect(screen.getByText("Oops!")).toBeInTheDocument()
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Something went wrong" }),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Try again" })).toBeVisible()
+    expect(screen.getByRole("link", { name: "Go to home" })).toHaveAttribute(
+      "href",
+      "/",
+    )
   })
 
   it("hides protected-route error details when status verification fails", async () => {

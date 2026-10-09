@@ -11,6 +11,7 @@ import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
+import { AnimatedCheckmark } from "~/components/shared/AnimatedCheckmark"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { PracticeAccessEndingNotice } from "~/components/shared/PracticeMemberAccess"
@@ -1117,7 +1118,7 @@ function OptionalSetup({
   return <AllSetStep practice={practice} />
 }
 
-function BiographyStep({
+export function BiographyStep({
   biography,
   onComplete,
   onSkip,
@@ -1136,7 +1137,15 @@ function BiographyStep({
   })
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    await updateSettingsData({ body: values })
+    const { error } = await updateSettingsData({ body: values })
+    if (error) {
+      toast({
+        title: "Couldn't save your biography",
+        description: "Your text is still here. Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
     onComplete()
   }
 
@@ -1407,48 +1416,31 @@ function ZoomStep({
   )
 }
 
-function AllSetStep({ practice }: { practice: PracticeStatus }) {
+export function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
 
   async function handleGoToCosmas() {
     setLoading(true)
-    await completeOnboarding()
+    const { error } = await completeOnboarding()
+    if (error) {
+      // The backend explains practice-access problems (no PHI) that a
+      // retry alone cannot fix.
+      const detail = (error as { detail?: unknown }).detail
+      toast({
+        title: "Couldn't finish setup",
+        description:
+          typeof detail === "string" ? detail : "Please try again in a moment.",
+        variant: "destructive",
+      })
+      setLoading(false)
+      return
+    }
     window.location.href = href("/notes")
   }
 
   return (
     <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
-      <motion.div
-        initial={{ scale: 0, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.1 }}
-        className="relative flex size-24 items-center justify-center rounded-full"
-        style={{ background: "var(--brand-navy-deep)" }}
-      >
-        <motion.span
-          initial={{ scale: 0.8, opacity: 0.6 }}
-          animate={{ scale: 1.6, opacity: 0 }}
-          transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
-          className="absolute inset-0 rounded-full"
-          style={{ background: "var(--brand-navy-deep)" }}
-        />
-        <svg
-          viewBox="0 0 52 52"
-          className="size-12"
-          fill="none"
-          stroke="var(--brand-gold)"
-          strokeWidth="4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <motion.path
-            d="M14 27 L23 36 L38 18"
-            initial={{ pathLength: 0 }}
-            animate={{ pathLength: 1 }}
-            transition={{ duration: 0.5, delay: 0.4, ease: "easeOut" }}
-          />
-        </svg>
-      </motion.div>
+      <AnimatedCheckmark />
 
       <motion.div
         initial={{ opacity: 0, y: 12 }}
