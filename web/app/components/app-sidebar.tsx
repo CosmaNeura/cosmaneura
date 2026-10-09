@@ -107,6 +107,31 @@ export interface SidebarEntry {
   preview: string
 }
 
+export interface SidebarEmptyState {
+  title: string
+  description: string
+  action?: React.ReactNode
+}
+
+const DEFAULT_EMPTY_STATE: SidebarEmptyState = {
+  title: "Nothing here yet",
+  description: "New items will appear here.",
+}
+
+function SidebarEmptyMessage({
+  title,
+  description,
+  action,
+}: SidebarEmptyState) {
+  return (
+    <div className="p-4 text-center text-sm">
+      <p className="text-sidebar-foreground font-medium">{title}</p>
+      <p className="text-on-navy-muted mt-2">{description}</p>
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
+    </div>
+  )
+}
+
 // not rendered unless entries has contents
 function SelectionList({
   isLoading,
@@ -155,10 +180,6 @@ function SelectionList({
               </span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
             </div>
-            {/* <span className="font-medium">{entry.subTitle}</span>
-            <span className="line-clamp-2 w-[260px] whitespace-break-spaces text-left text-xs text-slate-500">
-              {entry.preview}
-            </span> */}
           </button>
         ))
       )}
@@ -170,10 +191,12 @@ function SelectionSidebar({
   header,
   isLoading,
   entries,
+  emptyState = DEFAULT_EMPTY_STATE,
 }: {
   header?: string
   isLoading: boolean
   entries: SidebarEntry[]
+  emptyState?: SidebarEmptyState
 }) {
   const [searchTerm, setSearchTerm] = React.useState("")
   const [showThisWeek, setShowThisWeek] = React.useState(false)
@@ -225,17 +248,13 @@ function SelectionSidebar({
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup className="px-0">
-          {entries.length === 0 && (
-            <div className="text-on-navy-muted p-4 text-center text-sm">
-              <p>No Appointments</p>
-              <p className="mt-2">Upload a visit recording to get started.</p>
-            </div>
-          )}
-          {entries.length > 0 && filteredEntries.length === 0 ? (
-            <div className="text-on-navy-muted p-4 text-center text-sm">
-              <p>No results found.</p>
-              <p className="mt-2">Try adjusting your filters.</p>
-            </div>
+          {!isLoading && entries.length === 0 ? (
+            <SidebarEmptyMessage {...emptyState} />
+          ) : entries.length > 0 && filteredEntries.length === 0 ? (
+            <SidebarEmptyMessage
+              title="No results found"
+              description="Try adjusting your search or filters."
+            />
           ) : (
             <SelectionList isLoading={isLoading} entries={filteredEntries} />
           )}
@@ -293,11 +312,13 @@ export function AppSidebar({
   isLoading,
   entries,
   header,
+  emptyState,
   ...props
 }: {
   isLoading: boolean
   entries: SidebarEntry[] | false
   header?: string
+  emptyState?: SidebarEmptyState
 }) {
   const showSidebar = entries !== false
 
@@ -312,6 +333,7 @@ export function AppSidebar({
           header={header}
           isLoading={isLoading}
           entries={entries}
+          emptyState={emptyState}
         />
       )}
     </div>

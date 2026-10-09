@@ -5,6 +5,7 @@ import type { Route } from "./+types/notes"
 import { AppSidebar } from "@/components/app-sidebar"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
+import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { type Appointment, noteList } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
@@ -125,6 +126,11 @@ export default function NotesLayout({
       <AppSidebar
         isLoading={!appointments}
         header={"Notes"}
+        emptyState={{
+          title: "No visits yet",
+          description: "Upload a visit recording to create your first note.",
+          action: <UploadRecordingButton />,
+        }}
         entries={appointmentsToSidebarEntries(
           appointments,
           (id: string) => href("/notes/:id", { id }),

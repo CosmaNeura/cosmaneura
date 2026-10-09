@@ -8,6 +8,7 @@ import type {
 } from "~/configuration/client"
 
 import { MeetingDetail } from "./detail"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const authorizeZoomCapture = vi.fn()
@@ -21,6 +22,15 @@ vi.mock("~/configuration/client", () => ({
 
 vi.mock("~/hooks/use-toast", () => ({
   toast: (...args: unknown[]) => toast(...args),
+}))
+
+const settingsData = vi.fn()
+
+vi.mock("client/@tanstack/react-query.gen", () => ({
+  settingsDataOptions: () => ({
+    queryKey: ["settingsData"],
+    queryFn: () => settingsData(),
+  }),
 }))
 
 const meeting: ZoomMeetingResponse = {
@@ -84,7 +94,14 @@ function renderMeeting(
     { initialEntries: ["/"] },
   )
 
-  render(<RouterProvider router={router} />)
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
 
   return { loader }
 }
@@ -93,6 +110,20 @@ beforeEach(() => {
   authorizeZoomCapture.mockReset()
   cancelMeeting.mockReset()
   toast.mockReset()
+  settingsData.mockReset()
+  settingsData.mockResolvedValue({ terminology: "doctor_patient" })
+})
+
+describe("meeting bot copy", () => {
+  it("uses the doctor's terminology for consent copy", async () => {
+    settingsData.mockResolvedValue({ terminology: "therapist_client" })
+
+    renderMeeting()
+
+    expect(
+      await screen.findByText(/Your client will still be asked/),
+    ).toBeInTheDocument()
+  })
 })
 
 describe("meeting bot authorization", () => {

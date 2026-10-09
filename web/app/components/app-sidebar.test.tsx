@@ -106,3 +106,84 @@ describe("AppSidebar on mobile", () => {
     )
   })
 })
+
+describe("AppSidebar empty states", () => {
+  beforeEach(() => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1280,
+    })
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockImplementation((query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function renderSidebar(props: Partial<Parameters<typeof AppSidebar>[0]>) {
+    return render(
+      <MemoryRouter initialEntries={["/intake"]}>
+        <SidebarProvider>
+          <AppSidebar
+            isLoading={false}
+            entries={[]}
+            header="Intake"
+            {...props}
+          />
+        </SidebarProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  it("shows the section's own empty state and action", () => {
+    renderSidebar({
+      emptyState: {
+        title: "No intakes yet",
+        description: "Intakes appear after a link is sent.",
+        action: <button type="button">Send one</button>,
+      },
+    })
+
+    expect(screen.getByText("No intakes yet")).toBeInTheDocument()
+    expect(
+      screen.getByText("Intakes appear after a link is sent."),
+    ).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Send one" })).toBeInTheDocument()
+    expect(screen.queryByText(/upload a visit recording/i)).toBeNull()
+  })
+
+  it("does not show the empty state while entries are loading", () => {
+    renderSidebar({
+      isLoading: true,
+      emptyState: { title: "No intakes yet", description: "Nothing yet." },
+    })
+
+    expect(screen.queryByText("No intakes yet")).toBeNull()
+  })
+
+  it("distinguishes an empty search from an empty list", () => {
+    renderSidebar({
+      entries: [meeting],
+      emptyState: { title: "No intakes yet", description: "Nothing yet." },
+    })
+
+    fireEvent.change(screen.getByPlaceholderText("Type to search..."), {
+      target: { value: "zzz" },
+    })
+
+    expect(screen.getByText("No results found")).toBeInTheDocument()
+    expect(screen.queryByText("No intakes yet")).toBeNull()
+  })
+})

@@ -4,14 +4,13 @@ import type { Route } from "./+types/detail"
 
 import { CaptureNoteReadiness } from "@/components/notes/CaptureNoteReadiness"
 import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
-import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
-import { Separator } from "@/components/ui/separator"
-import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarInset } from "@/components/ui/sidebar"
 import { LabResultsPanel } from "~/components/LabResultsPanel"
 import { MedicationPanel } from "~/components/MedicationPanel"
 import { SessionPrepPriorNotes } from "~/components/SessionPrepPriorNotes"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
+import { Header } from "~/components/notes/Header"
 import { EngagementBadge } from "~/components/shared/EngagementBadge"
 import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
@@ -25,7 +24,6 @@ import {
   isReferenceLabsEnabled,
   isReferenceToolkitEnabled,
 } from "~/utils/reference-toolkit-feature"
-import { useTerminology } from "~/utils/terminology"
 
 import { useUser } from "@clerk/clerk-react"
 
@@ -86,22 +84,6 @@ export const meta: MetaFunction = () => {
       content: "Your patient meeting notes",
     },
   ]
-}
-
-function Header({ title }: { title?: string }) {
-  const t = useTerminology()
-  return (
-    <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
-      <SidebarTrigger className="-ml-1" />
-      <Separator orientation="vertical" className="mr-2 h-4" />
-      <h1 className="text-lg font-semibold">
-        {title ? title : `Select a ${t.patient}`}
-      </h1>
-      <div className="ml-auto">
-        <UploadRecordingButton />
-      </div>
-    </header>
-  )
 }
 
 function NoteHeader({

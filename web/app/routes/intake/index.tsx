@@ -1,5 +1,5 @@
 import { SidebarInset } from "@/components/ui/sidebar"
-import { Header } from "~/components/notes/Header"
+import { PageHeader } from "~/components/shared/PageHeader"
 import { useTerminology } from "~/utils/terminology"
 
 export const meta = () => {
@@ -26,11 +26,11 @@ export function EmptySelectionState() {
   )
 }
 
-export default function NotePage() {
+export default function IntakeIndexPage() {
   // the nested route will fill in the main content, so we can assume empty state here
   return (
     <SidebarInset>
-      <Header />
+      <PageHeader title="Intake" isPageTitle />
       <EmptySelectionState />
     </SidebarInset>
   )
