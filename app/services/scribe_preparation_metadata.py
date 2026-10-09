@@ -15,7 +15,7 @@ async def execute_preparation_metadata(
     caller: CaptureCaller,
     binding_ref: str,
     workspace_id: UUID,
-    scope: AdmittedCaptureScope,
+    scope: AdmittedCaptureScope | None,
     client_request_key: str,
     client: ScribeWorkflowClient,
 ) -> protocol.PreparationMetadata:
@@ -26,21 +26,22 @@ async def execute_preparation_metadata(
         authorize_admitted_capture,
     )
 
-    if (
-        not isinstance(scope.session_request, ConfiguredSessionCreate)
-        or scope.creator_actor_id is None
-    ):
-        raise CaptureOperationUnavailable
-
-    # The outer gateway supplied its ordinary fresh authorization. One remote
+    # Take the ordinary fresh authorization directly before dispatch. One remote
     # receiver now checks creator/consent before key I/O and again before its
     # complete response; it performs no source mutation. The helper validates
     # all three receipts and reauthorizes Core after that I/O before returning.
     check_async_capture_deadline()
     await asyncio.sleep(0)
     check_async_capture_deadline()
-    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+    current = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    if scope is not None and current != scope:
         raise CaptureReceiptInvalid
+    scope = current
+    if (
+        not isinstance(scope.session_request, ConfiguredSessionCreate)
+        or scope.creator_actor_id is None
+    ):
+        raise CaptureOperationUnavailable
     result = await _execute_creator_review(
         caller,
         binding_ref,
