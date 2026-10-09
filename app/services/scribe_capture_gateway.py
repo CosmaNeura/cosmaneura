@@ -584,6 +584,40 @@ async def execute_capture_operation(
         and client_request_key == operation.authorize_idempotency_key
     ):
         raise CaptureReceiptInvalid
+    # These helpers take their one fresh pre-dispatch decision after the
+    # cancellation yield, then reauthorize after validating the remote reply.
+    # Do not run another complete decision here before that same dispatch.
+    if operation.kind == "preparation_metadata" or isinstance(
+        operation, protocol.PrepareRecordingWindow
+    ):
+        if _expected_scope is not None:
+            raise CaptureReceiptInvalid
+        if operation.kind == "preparation_metadata":
+            from app.services.scribe_preparation_metadata import (
+                execute_preparation_metadata,
+            )
+
+            return await execute_preparation_metadata(
+                caller=caller,
+                binding_ref=binding_ref,
+                workspace_id=workspace_id,
+                scope=None,
+                client_request_key=client_request_key,
+                client=client,
+            )
+        from app.services.scribe_recording_window import execute_recording_window
+
+        assert isinstance(operation, protocol.PrepareRecordingWindow)
+        return await execute_recording_window(
+            caller=caller,
+            binding_ref=binding_ref,
+            workspace_id=workspace_id,
+            scope=None,
+            operation=operation,
+            client_request_key=client_request_key,
+            client=client,
+            upload_origins=upload_origins,
+        )
     try:
         scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
     except AdmissionConsentRequired:
@@ -613,32 +647,6 @@ async def execute_capture_operation(
         or scope != _expected_scope
     ):
         raise CaptureReceiptInvalid
-    if operation.kind == "preparation_metadata":
-        from app.services.scribe_preparation_metadata import (
-            execute_preparation_metadata,
-        )
-
-        return await execute_preparation_metadata(
-            caller=caller,
-            binding_ref=binding_ref,
-            workspace_id=workspace_id,
-            scope=scope,
-            client_request_key=client_request_key,
-            client=client,
-        )
-    if isinstance(operation, protocol.PrepareRecordingWindow):
-        from app.services.scribe_recording_window import execute_recording_window
-
-        return await execute_recording_window(
-            caller=caller,
-            binding_ref=binding_ref,
-            workspace_id=workspace_id,
-            scope=scope,
-            operation=operation,
-            client_request_key=client_request_key,
-            client=client,
-            upload_origins=upload_origins,
-        )
     if isinstance(operation, protocol.NativeSourceStartSequence):
         # Both original intents and stop custody already live in the native
         # journal. Reuse each existing decision and its post-I/O access check.
