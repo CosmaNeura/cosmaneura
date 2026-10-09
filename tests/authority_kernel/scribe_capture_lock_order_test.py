@@ -387,3 +387,66 @@ def test_mount_identity_changed_during_first_lock_is_denied_before_view_as(
     )
     with pytest.raises(capture.CaptureScopeDenied):
         capture._authorized_scope(**case.arguments)
+
+
+def test_context_is_derived_once_after_all_authority_locks(case, monkeypatch):
+    original = authority._context_for_session
+    calls = []
+
+    def current_context(session, mount, **kwargs):
+        calls.append(mount.id)
+        locked = {name for name, _ in case.transaction.locks}
+        assert {
+            "Practice",
+            "Doctor",
+            "MountContextToken",
+            "InteractionLineage",
+            "MountContextSession",
+            "AuthorityActor",
+            "AuthorityActorExternalIdentity",
+            "AuthorityTenant",
+            "AuthorityPersonBinding",
+            "AuthorityPerson",
+            "AuthorityTenantMembership",
+        } <= locked
+        return original(session, mount, **kwargs)
+
+    monkeypatch.setattr(authority, "_context_for_session", current_context)
+    assert capture._authorized_scope(**case.arguments)["doctor_id"] == case.doctor.id
+    assert calls == [case.mount.id]
+
+
+@pytest.mark.parametrize("target", [MountContextToken, MountContextSession])
+def test_expiry_while_waiting_for_context_locks_denies_before_derivation(
+    case, monkeypatch, target
+):
+    def expire(model, _):
+        if model is AuthorityTenantMembership:
+            row = case.transaction.rows[target][0]
+            field = (
+                "expires_at" if target is MountContextToken else "absolute_expires_at"
+            )
+            setattr(row, field, datetime.now(UTC) - timedelta(seconds=1))
+
+    case.transaction.on_lock = expire
+    monkeypatch.setattr(
+        authority,
+        "_context_for_session",
+        lambda *_args, **_kwargs: pytest.fail("expired context derived"),
+    )
+    with pytest.raises(authority.ContextTokenExpiredError):
+        capture._authorized_scope(**case.arguments)
+
+
+@pytest.mark.parametrize("target", [AuthorityActor, AuthorityPerson, AuthorityTenant])
+def test_row_revoked_during_context_locks_is_denied(case, target):
+    def revoke(model, row):
+        if model is target:
+            row.status = "revoked"
+
+    case.transaction.on_lock = revoke
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        capture._authorized_scope(**case.arguments)
+    assert not any(
+        name == "ScribeCaptureProviderLink" for name, _ in case.transaction.locks
+    )

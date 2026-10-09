@@ -821,26 +821,49 @@ def authorize_interaction(
     client_turn_id: UUID,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
     _before_view_as: Callable[[MountContextSession], None] | None = None,
+    _before_context: Callable[[MountContextSession], None] | None = None,
 ) -> AuthorizedInteraction:
     """Re-resolve and lock one exact provider interaction for a durable action."""
 
     _ensure_enabled(settings)
-    _, mount_session = _active_token(
+    token, mount_session = _active_token(
         session,
         mount_context_token,
         lock_for_update=True,
         _before_view_as=_before_view_as,
     )
+    lineage_statement = (
+        select(InteractionLineage)
+        .where(InteractionLineage.interaction_ref == interaction_ref)
+        .with_for_update()
+    )
+    lineage = None
+    if _before_context is not None:
+        # Capture previously held lineage before taking the remaining context
+        # locks. Preserve that order even though context is now derived once.
+        lineage = session.exec(lineage_statement).first()
+        # Capture takes its remaining authority locks before the single complete
+        # context decision. The callback supplies no earlier authorization.
+        _before_context(mount_session)
+        # Those locks can wait. Recheck both deadlines after the wait, keeping
+        # the same bearer/token and session revocation refusals.
+        if token.revoked_at is not None or mount_session.revoked_at is not None:
+            raise ContextTokenInvalidError
+        if mount_session.status != "active" or token.session_id != mount_session.id:
+            raise ContextTokenInvalidError
+        for expires_at in (token.expires_at, mount_session.absolute_expires_at):
+            now = datetime.now(UTC)
+            if expires_at.tzinfo is None:
+                now = now.replace(tzinfo=None)
+            if expires_at <= now:
+                raise ContextTokenExpiredError
     context = _context_for_session(
         session,
         mount_session,
         clerk_issuer=settings.clerk_issuer,
     )
-    lineage = session.exec(
-        select(InteractionLineage)
-        .where(InteractionLineage.interaction_ref == interaction_ref)
-        .with_for_update()
-    ).first()
+    if _before_context is None:
+        lineage = session.exec(lineage_statement).first()
     if lineage is None:
         raise InteractionInvalidError
     if (
