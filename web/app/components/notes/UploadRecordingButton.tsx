@@ -1,7 +1,12 @@
 import { addDays, format, parseISO, subMonths } from "date-fns"
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
-import { href, useNavigate, useRevalidator } from "react-router"
+import {
+  href,
+  useNavigate,
+  useRevalidator,
+  useRouteLoaderData,
+} from "react-router"
 import { z } from "zod"
 
 import { CheckIcon, Upload } from "lucide-react"
@@ -36,11 +41,9 @@ import {
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
+import type { NotesLayoutData } from "~/layouts/notes"
 import { markProcessing } from "~/lib/recent-uploads"
-import {
-  findUploadedAppointmentId,
-  knownAppointmentIds,
-} from "~/lib/uploaded-visit"
+import { findUploadedAppointmentId } from "~/lib/uploaded-visit"
 import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
@@ -179,6 +182,16 @@ function VisitAudioUploadForm({
   const { toast } = useToast()
   const navigate = useNavigate()
   const revalidator = useRevalidator()
+  const notesLayout = useRouteLoaderData("layouts/notes") as
+    | NotesLayoutData
+    | undefined
+  const mounted = useRef(true)
+  useEffect(
+    () => () => {
+      mounted.current = false
+    },
+    [],
+  )
   const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({
@@ -206,7 +219,9 @@ function VisitAudioUploadForm({
 
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const listedBefore = knownAppointmentIds()
+    const listedBefore = notesLayout
+      ? new Set(notesLayout.appointments.map(({ id }) => id))
+      : null
     const result = await submitVisitAudioUpload({
       // Encounters retain their instant and ordering; birthdays are calendar days.
       appointmentDate: values.appointment_date.toISOString(),
@@ -229,6 +244,9 @@ function VisitAudioUploadForm({
     }
 
     const uploadedId = await findUploadedAppointmentId(listedBefore)
+    // If the dialog was closed during the lookup the user has moved on;
+    // don't pull them to the new visit.
+    const stillHere = mounted.current
     closeDialogBox()
 
     if (uploadedId) {
@@ -238,7 +256,8 @@ function VisitAudioUploadForm({
         description:
           "We're writing your note now. It usually takes a couple of minutes.",
       })
-      navigate(href("/notes/:id", { id: uploadedId }))
+      if (stillHere) navigate(href("/notes/:id", { id: uploadedId }))
+      else void revalidator.revalidate()
       return
     }
 

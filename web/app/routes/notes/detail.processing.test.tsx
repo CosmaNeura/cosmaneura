@@ -1,62 +1,116 @@
 import { RouterProvider, createMemoryRouter } from "react-router"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { SidebarEntry } from "@/components/app-sidebar"
 import { withUploadProgress } from "~/layouts/notes"
 import {
+  NOTE_PROCESSING_TIMEOUT_MS,
+  isProcessing,
   markProcessing,
   resetRecentUploadsForTests,
   useRecentUploads,
 } from "~/lib/recent-uploads"
 
-import {
-  NOTE_PROCESSING_POLL_MS,
-  NOTE_PROCESSING_TIMEOUT_MS,
-  NoteProcessing,
-} from "./detail"
+import { NOTE_PROCESSING_POLL_MS, NoteProcessing } from "./detail"
 import { act, render, renderHook, screen } from "@testing-library/react"
 
-vi.mock("~/configuration/client", () => ({
-  noteDetail: vi.fn(),
-  noteList: vi.fn(),
-}))
+const client = vi.hoisted(() => ({ noteDetail: vi.fn(), noteList: vi.fn() }))
+vi.mock("~/configuration/client", () => client)
+
+beforeEach(() => {
+  client.noteDetail.mockReset()
+  client.noteDetail.mockResolvedValue({ data: { notes: [] } })
+})
 
 afterEach(() => {
   vi.useRealTimers()
   resetRecentUploadsForTests()
+  Object.defineProperty(document, "hidden", {
+    configurable: true,
+    value: false,
+  })
 })
 
-describe("note processing state", () => {
-  it("re-checks while open and gives up after the timeout", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    const loader = vi.fn(() => null)
-    markProcessing("appointment_new")
-    const router = createMemoryRouter(
-      [
-        {
-          path: "/",
-          loader,
-          element: <NoteProcessing appointmentId="appointment_new" />,
-        },
-      ],
-      { initialEntries: ["/"] },
-    )
-    render(<RouterProvider router={router} />)
+function renderProcessing(loader: () => unknown = vi.fn(() => null)) {
+  const router = createMemoryRouter(
+    [
+      {
+        path: "/",
+        loader,
+        element: <NoteProcessing appointmentId="appointment_new" />,
+      },
+    ],
+    { initialEntries: ["/"] },
+  )
+  render(<RouterProvider router={router} />)
+  return loader
+}
 
+describe("note processing state", () => {
+  it("checks the visit record and refreshes the page only once a note exists", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    markProcessing("appointment_new")
+    const loader = renderProcessing()
     expect(await screen.findByText("Writing your note…")).toBeVisible()
-    const initialCalls = loader.mock.calls.length
+    const initialLoads = vi.mocked(loader).mock.calls.length
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
     })
-    expect(loader.mock.calls.length).toBeGreaterThan(initialCalls)
-
-    const { result } = renderHook(() => useRecentUploads())
-    expect(result.current.processing.has("appointment_new")).toBe(true)
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_TIMEOUT_MS)
+    expect(client.noteDetail).toHaveBeenCalledWith({
+      throwOnError: false,
+      path: { appointment_id: "appointment_new" },
     })
-    expect(result.current.processing.has("appointment_new")).toBe(false)
+    expect(vi.mocked(loader).mock.calls.length).toBe(initialLoads)
+
+    client.noteDetail.mockResolvedValue({ data: { notes: [{ id: "n" }] } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+    })
+    expect(vi.mocked(loader).mock.calls.length).toBeGreaterThan(initialLoads)
+  })
+
+  it("does not poll while the tab is hidden", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    markProcessing("appointment_new")
+    Object.defineProperty(document, "hidden", {
+      configurable: true,
+      value: true,
+    })
+    renderProcessing()
+    await screen.findByText("Writing your note…")
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS * 2)
+    })
+    expect(client.noteDetail).not.toHaveBeenCalled()
+  })
+
+  it("stops tracking at the upload's timeout even across slow polls", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    markProcessing("appointment_new")
+    client.noteDetail.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ data: { notes: [] } }), 500),
+        ),
+    )
+    renderProcessing(
+      vi.fn(
+        () => new Promise((resolve) => setTimeout(() => resolve(null), 500)),
+      ),
+    )
+    await screen.findByText("Writing your note…")
+    const { result } = renderHook(() => useRecentUploads())
+
+    for (let elapsed = 0; elapsed <= NOTE_PROCESSING_TIMEOUT_MS; ) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(NOTE_PROCESSING_POLL_MS)
+      })
+      elapsed += NOTE_PROCESSING_POLL_MS
+    }
+
+    expect(result.current.startedAt.has("appointment_new")).toBe(false)
   })
 })
 
@@ -74,11 +128,10 @@ describe("sidebar upload progress", () => {
   }
 
   it("shows a just-uploaded visit as being written", () => {
-    const result = withUploadProgress(entry, {
-      processing: new Set(["appointment_new"]),
-      justReady: new Set(),
-    })
-    expect(result).toMatchObject({
+    markProcessing("appointment_new")
+    const { result } = renderHook(() => useRecentUploads())
+    expect(isProcessing(result.current, "appointment_new")).toBe(true)
+    expect(withUploadProgress(entry, result.current)).toMatchObject({
       status: "in-progress",
       statusLabel: "Writing note",
     })
@@ -87,7 +140,7 @@ describe("sidebar upload progress", () => {
   it("highlights a visit whose note just arrived", () => {
     const result = withUploadProgress(
       { ...entry, status: "completed", statusLabel: "Note ready" },
-      { processing: new Set(), justReady: new Set(["appointment_new"]) },
+      { startedAt: new Map(), justReady: new Set(["appointment_new"]) },
     )
     expect(result.highlight).toBe(true)
     expect(result.status).toBe("completed")

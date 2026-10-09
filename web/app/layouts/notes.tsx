@@ -21,7 +21,7 @@ import {
   practiceAgreementBlockFromRouteFailure,
 } from "~/lib/practice-gate-error"
 import { ReadDeadlineError, withReadDeadline } from "~/lib/read-deadline"
-import { useRecentUploads } from "~/lib/recent-uploads"
+import { isProcessing, useRecentUploads } from "~/lib/recent-uploads"
 import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
@@ -111,16 +111,16 @@ export function ErrorBoundary({ error }: { error: unknown }) {
 // arrives, then is highlighted for a moment.
 export function withUploadProgress(
   entry: SidebarEntry,
-  { processing, justReady }: ReturnType<typeof useRecentUploads>,
+  uploads: ReturnType<typeof useRecentUploads>,
 ): SidebarEntry {
-  if (processing.has(entry.id) && entry.status !== "completed") {
+  if (isProcessing(uploads, entry.id) && entry.status !== "completed") {
     return {
       ...entry,
       status: "in-progress",
       statusLabel: NOTE_STATUS_LABELS["in-progress"],
     }
   }
-  return justReady.has(entry.id) ? { ...entry, highlight: true } : entry
+  return uploads.justReady.has(entry.id) ? { ...entry, highlight: true } : entry
 }
 
 export default function NotesLayout({

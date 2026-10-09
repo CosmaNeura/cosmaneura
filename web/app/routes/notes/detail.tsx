@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useRef } from "react"
 import {
   type MetaFunction,
   isRouteErrorResponse,
@@ -22,12 +22,18 @@ import { EngagementBadge } from "~/components/shared/EngagementBadge"
 import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import type { EngagementRole } from "~/configuration/client"
+import { type EngagementRole, noteDetail } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
 import { loadNoteDetail } from "~/lib/note-detail-load"
-import { markReady, stopTracking, useRecentUploads } from "~/lib/recent-uploads"
+import {
+  NOTE_PROCESSING_TIMEOUT_MS,
+  isProcessing,
+  markReady,
+  stopTracking,
+  useRecentUploads,
+} from "~/lib/recent-uploads"
 import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 import {
@@ -57,27 +63,45 @@ export function EmptyNotes({
 }
 
 export const NOTE_PROCESSING_POLL_MS = 15_000
-export const NOTE_PROCESSING_TIMEOUT_MS = 15 * 60_000
 
-// Shown only for a visit this session just uploaded. Re-checks while the
-// page is open and gives up quietly after the timeout, since the visit is
-// then no longer known to be processing.
+// Shown only for a visit this session just uploaded. While the page is open
+// and visible it checks the visit's own record, and refreshes the page only
+// once a note exists, so polling never reloads the whole notes tree. The
+// store expires the visit after its timeout.
 export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
   const revalidator = useRevalidator()
+  const revalidate = useRef(revalidator.revalidate)
+  revalidate.current = revalidator.revalidate
+  const uploads = useRecentUploads()
+  const startedAt = uploads.startedAt.get(appointmentId)
 
   useEffect(() => {
-    const poll = setInterval(() => {
-      if (revalidator.state === "idle") void revalidator.revalidate()
+    let checking = false
+    const poll = setInterval(async () => {
+      if (checking || document.hidden) return
+      checking = true
+      try {
+        const { data } = await noteDetail({
+          throwOnError: false,
+          path: { appointment_id: appointmentId },
+        })
+        if (data?.notes?.length) void revalidate.current()
+      } finally {
+        checking = false
+      }
     }, NOTE_PROCESSING_POLL_MS)
+    return () => clearInterval(poll)
+  }, [appointmentId])
+
+  useEffect(() => {
+    if (startedAt === undefined) return
+    const remaining = startedAt + NOTE_PROCESSING_TIMEOUT_MS - Date.now()
     const giveUp = setTimeout(
       () => stopTracking(appointmentId),
-      NOTE_PROCESSING_TIMEOUT_MS,
+      Math.max(remaining, 0),
     )
-    return () => {
-      clearInterval(poll)
-      clearTimeout(giveUp)
-    }
-  }, [appointmentId, revalidator])
+    return () => clearTimeout(giveUp)
+  }, [appointmentId, startedAt])
 
   return (
     <div role="status" className="mb-4 flex items-start gap-3">
@@ -185,15 +209,16 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const { transcript, notes, note_transcripts } = loaderData
   const hasNotes = notes && notes.length > 0
   const appointmentId = loaderData.appointment.id
-  const { processing } = useRecentUploads()
-  const isProcessing = !hasNotes && processing.has(appointmentId)
+  const uploads = useRecentUploads()
+  const awaitingNote = !hasNotes && isProcessing(uploads, appointmentId)
 
   useEffect(() => {
-    if (hasNotes && processing.has(appointmentId)) {
-      markReady(appointmentId)
+    // markReady reports whether this visit was being tracked, so the toast
+    // fires once even if the effect re-runs.
+    if (hasNotes && markReady(appointmentId)) {
       toast({ title: "Your note is ready" })
     }
-  }, [hasNotes, processing, appointmentId])
+  }, [hasNotes, appointmentId])
   const distinctNoteSources =
     new Set((notes ?? []).map((note) => note.ai_transcript_id)).size > 1
   // The fallback supports a prior backend without attaching its transcript to
@@ -226,7 +251,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           status={
             hasNotes
               ? "completed"
-              : isProcessing
+              : awaitingNote
                 ? "in-progress"
                 : "not-started"
           }
@@ -269,7 +294,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               }
             />
           ))
-        ) : isProcessing ? (
+        ) : awaitingNote ? (
           <NoteProcessing appointmentId={appointmentId} />
         ) : loaderData.capture_workflow_required && transcript ? (
           <CaptureNoteReadiness key={loaderData.appointment.id} />

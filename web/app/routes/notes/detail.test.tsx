@@ -22,6 +22,8 @@ import {
 } from "@testing-library/react"
 
 vi.mock("~/configuration/client", () => ({ noteDetail: vi.fn() }))
+const toast = vi.hoisted(() => vi.fn())
+vi.mock("~/hooks/use-toast", () => ({ toast }))
 vi.mock("@clerk/clerk-react", () => ({ useUser: () => ({ user: null }) }))
 vi.mock("~/utils/terminology", () => ({
   useTerminology: () => ({ patient: "patient" }),
@@ -135,15 +137,20 @@ describe("note detail page heading", () => {
 })
 
 describe("a note arriving for a just-uploaded visit", () => {
-  afterEach(() => resetRecentUploadsForTests())
+  afterEach(() => {
+    resetRecentUploadsForTests()
+    toast.mockReset()
+  })
 
   it("is announced and stops being tracked", () => {
     markProcessing("appointment_fixture")
     show()
 
     const { result } = renderHook(() => useRecentUploads())
-    expect(result.current.processing.has("appointment_fixture")).toBe(false)
+    expect(result.current.startedAt.has("appointment_fixture")).toBe(false)
     expect(result.current.justReady.has("appointment_fixture")).toBe(true)
+    expect(toast).toHaveBeenCalledOnce()
+    expect(toast).toHaveBeenCalledWith({ title: "Your note is ready" })
   })
 
   it("says plainly when a visit has no note", () => {

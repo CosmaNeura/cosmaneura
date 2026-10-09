@@ -10,8 +10,19 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 function renderButton() {
   const router = createMemoryRouter(
     [
-      { path: "/notes", element: <UploadRecordingButton /> },
-      { path: "/notes/:id", element: <p>Opened uploaded visit</p> },
+      {
+        id: "layouts/notes",
+        path: "/notes",
+        loader: () => ({
+          appointments: [{ id: "appointment_existing" }],
+          noteStatuses: {},
+          blocked: null,
+        }),
+        children: [
+          { index: true, element: <UploadRecordingButton /> },
+          { path: ":id", element: <p>Opened uploaded visit</p> },
+        ],
+      },
     ],
     { initialEntries: ["/notes"] },
   )
@@ -23,7 +34,6 @@ const uploadedVisit = vi.hoisted(() => ({
   find: vi.fn(async () => null as string | null),
 }))
 vi.mock("~/lib/uploaded-visit", () => ({
-  knownAppointmentIds: () => new Set(["appointment_existing"]),
   findUploadedAppointmentId: uploadedVisit.find,
 }))
 vi.mock("~/lib/visit-audio-upload", () => ({ submitVisitAudioUpload: upload }))
@@ -132,7 +142,9 @@ describe("date-only recording upload", () => {
   it("clears the previous birthday for a patient with no date and still requires an entered date for legacy upload", async () => {
     upload.mockResolvedValue({ ok: true })
     renderButton()
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(
       screen.getByRole("button", { name: /Synthetic date check/ }),
     )
@@ -176,7 +188,9 @@ describe("date-only recording upload", () => {
     vi.setSystemTime(new Date(now))
     upload.mockResolvedValue({ ok: true })
     renderButton()
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     const displayedDay = format(new Date(), "yyyy-MM-dd")
     expect(screen.getByLabelText("Appointment Date")).toHaveValue(displayedDay)
     // A birthday is a calendar day even if the API representation carries Z.
@@ -213,7 +227,9 @@ describe("date-only recording upload", () => {
     for (const hour of [9, 15]) {
       vi.setSystemTime(new Date(2026, 8, 24, hour, 30))
       const view = renderButton()
-      fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Upload Recording" }),
+      )
       fireEvent.click(
         screen.getByRole("button", { name: /Synthetic date check/ }),
       )
@@ -240,7 +256,9 @@ describe("after a successful upload", () => {
     upload.mockResolvedValue({ ok: true })
     uploadedVisit.find.mockResolvedValue("appointment_new")
     renderButton()
-    fireEvent.click(screen.getByRole("button", { name: "Upload Recording" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Upload Recording" }),
+    )
     fireEvent.click(
       screen.getByRole("button", { name: /Synthetic date check/ }),
     )

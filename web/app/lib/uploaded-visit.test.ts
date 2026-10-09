@@ -1,51 +1,56 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { queryClient } from "~/configuration/tanstack-query"
-
 import {
+  UPLOADED_VISIT_LOOKUP_MS,
   findUploadedAppointmentId,
-  knownAppointmentIds,
 } from "./uploaded-visit"
 
-const noteList = vi.hoisted(() => vi.fn())
-vi.mock("client/@tanstack/react-query.gen", () => ({
-  noteListOptions: () => ({ queryKey: ["noteList"], queryFn: noteList }),
-}))
+const layout = vi.hoisted(() => ({ load: vi.fn() }))
+vi.mock("~/layouts/notes", () => ({ loadNotesLayoutData: layout.load }))
 
 const listing = (...ids: string[]) => ({
   appointments: ids.map((id) => ({ id })),
+  noteStatuses: {},
+  blocked: null,
 })
 
 beforeEach(() => {
-  queryClient.clear()
-  noteList.mockReset()
+  layout.load.mockReset()
 })
 
 describe("finding the uploaded visit", () => {
-  it("reads the visits already listed", () => {
-    expect(knownAppointmentIds()).toBeNull()
-    queryClient.setQueryData(["noteList"], listing("a", "b"))
-    expect(knownAppointmentIds()).toEqual(new Set(["a", "b"]))
-  })
-
-  it("returns the single visit that appeared", async () => {
-    noteList.mockResolvedValue(listing("a", "b", "new"))
+  it("returns the single visit that appeared, using the layout's gated read", async () => {
+    layout.load.mockResolvedValue(listing("a", "b", "new"))
     await expect(findUploadedAppointmentId(new Set(["a", "b"]))).resolves.toBe(
       "new",
     )
+    expect(layout.load).toHaveBeenCalledOnce()
   })
 
   it.each([
     ["nothing new", listing("a")],
     ["several new", listing("a", "x", "y")],
+    ["a practice-agreement block", { ...listing("a", "new"), blocked: {} }],
   ])("does not guess when there is %s", async (_, after) => {
-    noteList.mockResolvedValue(after)
+    layout.load.mockResolvedValue(after)
     await expect(findUploadedAppointmentId(new Set(["a"]))).resolves.toBeNull()
   })
 
   it("does not guess without a prior list or when the read fails", async () => {
     await expect(findUploadedAppointmentId(null)).resolves.toBeNull()
-    noteList.mockRejectedValue(new Error("offline"))
+    expect(layout.load).not.toHaveBeenCalled()
+    layout.load.mockRejectedValue(new Error("offline"))
     await expect(findUploadedAppointmentId(new Set(["a"]))).resolves.toBeNull()
+  })
+
+  it("gives up on a slow read instead of holding the upload open", async () => {
+    vi.useFakeTimers()
+    layout.load.mockReturnValue(new Promise(() => {}))
+    const pending = findUploadedAppointmentId(new Set(["a"]))
+
+    await vi.advanceTimersByTimeAsync(UPLOADED_VISIT_LOOKUP_MS)
+
+    await expect(pending).resolves.toBeNull()
+    vi.useRealTimers()
   })
 })
