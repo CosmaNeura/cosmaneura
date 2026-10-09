@@ -10,6 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import { cn } from "@/lib/utils"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { CopyButton } from "~/components/shared/CopyButton"
 import type {
@@ -21,6 +22,19 @@ import type {
 import { usableBillingSource } from "~/lib/cab-billing-header"
 
 import { SessionPrepNoteReviewButton } from "./SessionPrepNoteReviewButton"
+
+// Build clipboard HTML from the rendered section rather than the surrounding
+// markup, so per-section copy controls never end up in a pasted note.
+function sectionHtml(title: string, content: HTMLElement | null | undefined) {
+  const heading = document.createElement("h3")
+  heading.textContent = title
+  return heading.outerHTML + (content?.innerHTML ?? "")
+}
+
+// Hover-capable pointers reveal the control on hover or focus; touch devices
+// have no hover, so the control stays visible there.
+const REVEAL_ON_HOVER =
+  "[@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 focus-visible:opacity-100"
 
 export default function VisitNoteViewer({
   note,
@@ -38,7 +52,7 @@ export default function VisitNoteViewer({
   billingSource?: BillingHeaderSource
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
-  const contentRef = useRef<HTMLDivElement>(null)
+  const sectionRefs = useRef(new Map<string, HTMLDivElement | null>())
   const noteRef = useRef<HTMLDivElement>(null)
   const retainedBillingSource = useRef<BillingHeaderSource | null>(null)
   const billingAvailable = usableBillingSource(billingSource, note)
@@ -71,7 +85,18 @@ export default function VisitNoteViewer({
             <span className="text-xl font-semibold">{note.note_type}</span>
           </Button>
         </CollapsibleTrigger>
-        {isOpen && <CopyButton htmlRef={contentRef} className="mt-1 ml-5" />}
+        {isOpen && (
+          <CopyButton
+            getHtml={() =>
+              Object.keys(note.note)
+                .map((title) =>
+                  sectionHtml(title, sectionRefs.current.get(title)),
+                )
+                .join("")
+            }
+            className="mt-1 ml-5"
+          />
+        )}
         {visibleBillingSource && (
           <BillingHeaderButton
             noteId={note.id}
@@ -82,11 +107,30 @@ export default function VisitNoteViewer({
       </div>
 
       <CollapsibleContent className="mt-3">
-        <div ref={contentRef}>
+        <div>
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
-            <div className="mb-2" key={sectionTitle}>
-              <h3 className="text-md font-semibold">{sectionTitle}</h3>
-              <div className="prose-headings prose max-w-full">
+            <div className="group mb-2" key={sectionTitle}>
+              <div className="flex items-center gap-1">
+                <h3 className="text-md font-semibold">{sectionTitle}</h3>
+                <CopyButton
+                  iconOnly
+                  variant="ghost"
+                  label={`Copy ${sectionTitle}`}
+                  getHtml={() =>
+                    sectionHtml(
+                      sectionTitle,
+                      sectionRefs.current.get(sectionTitle),
+                    )
+                  }
+                  className={cn("transition-opacity", REVEAL_ON_HOVER)}
+                />
+              </div>
+              <div
+                className="prose-headings prose max-w-full"
+                ref={(element) => {
+                  sectionRefs.current.set(sectionTitle, element)
+                }}
+              >
                 <Markdown>{noteContent as string}</Markdown>
               </div>
             </div>
