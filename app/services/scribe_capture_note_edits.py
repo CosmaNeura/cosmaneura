@@ -5,6 +5,7 @@ commit together; retrying cannot overwrite an intervening edit or restore.
 """
 
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
@@ -16,7 +17,6 @@ from typeid import TypeID
 from app.services import scribe_capture_notes as notes
 from app.services.scribe_capture_admission import (
     CaptureCaller,
-    authorize_admitted_capture,
 )
 from app.services.scribe_workflow import ScribeWorkflowClient
 
@@ -111,7 +111,8 @@ async def resolve_capture_note_save(
     """Confirm a retained save or prevent an unpublished request from committing."""
     notes._enabled(caller)
     edit = NoteEdit.model_validate(edit.model_dump())
-    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = notes._authorize_note_scope(caller, binding_ref, workspace_id)
     if scope.session_id != expected_session_id:
         raise notes.CaptureNoteConflict
     digest = request_hash(edit, schema_ref, scope.session_id, workspace_id)
@@ -240,7 +241,8 @@ async def save_capture_note(
 ) -> notes.DraftReceipt:
     notes._enabled(caller)
     edit = NoteEdit.model_validate(edit.model_dump())
-    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = notes._authorize_note_scope(caller, binding_ref, workspace_id)
     if scope.session_id != expected_session_id:
         raise notes.CaptureNoteConflict
     source = await notes._read_source(caller, binding_ref, workspace_id, scope, client)

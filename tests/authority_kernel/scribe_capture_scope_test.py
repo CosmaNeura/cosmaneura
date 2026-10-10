@@ -239,8 +239,17 @@ def capture_engine(monkeypatch):
             "username": "scribe_ux_lab_owner",
             "only_synthetic": True,
         }
+    private_recording_scope = (
+        url.database == "scribe_configured_core_test"
+        and url.username == "scribe_configured_owner"
+        and url.host is None
+        and isinstance(url.query.get("host"), str)
+        and url.query["host"].startswith("/private/tmp/scribe-configured-core.")
+        and url.query.get("port") == "55458"
+    )
     if not (
-        original_scope
+        private_recording_scope
+        or original_scope
         or resolution_scope
         or operational_beta_scope
         or ux_scope

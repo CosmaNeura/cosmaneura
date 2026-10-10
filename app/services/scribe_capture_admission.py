@@ -86,6 +86,10 @@ class AdmissionConsentUnavailable(AdmissionError):
     pass
 
 
+class AdmissionRecordingConsentRequired(AdmissionConsentRequired):
+    """No exact recording or canonical legacy request journal exists."""
+
+
 class ConsentAttestation(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
@@ -118,6 +122,8 @@ class CaptureCaller:
     client_turn_id: UUID
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS
     capture_settings: ScribeCaptureSettings = SCRIBE_CAPTURE_SETTINGS
+    # Selection only: ordinary creator/tenant/visit authorization still runs.
+    selected_session_id: UUID | None = None
 
     def authorize(
         self, session: Session, binding_ref: str, workspace_id: UUID
@@ -156,6 +162,7 @@ class AdmittedCaptureScope:
     # Reauthorized internal actor, never inferred from a doctor ID or caller header.
     # None keeps legacy injected callers compatible but cannot authorize review.
     creator_actor_id: str | None = None
+    recording_key_sha256: str = "legacy"
 
 
 def authorize_admitted_capture(
@@ -177,11 +184,18 @@ def authorize_admitted_capture_locked(
     binding = caller.authorize(session, binding_ref, workspace_id)
     operation = session.exec(
         select(ScribeCaptureAdmission)
-        .where(ScribeCaptureAdmission.binding_id == binding.id)
+        .where(
+            ScribeCaptureAdmission.binding_id == binding.id,
+            ScribeCaptureAdmission.session_id == caller.selected_session_id
+            if caller.selected_session_id is not None
+            else ScribeCaptureAdmission.recording_key_sha256 == "legacy",
+        )
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
     if operation is None:
+        if caller.selected_session_id is not None:
+            raise AdmissionConflict
         raise AdmissionConsentRequired
     consent_payload = _validate_operation(operation, binding)
     if operation.status == "consent_unavailable":
@@ -215,6 +229,7 @@ def authorize_admitted_capture_locked(
         session_id=receipt.id,
         session_request=request,
         creator_actor_id=str(binding.actor_id),
+        recording_key_sha256=operation.recording_key_sha256,
     )
     return result
 
@@ -252,12 +267,18 @@ def _digest(
     binding: ScribeCaptureBinding,
     document: dict[str, Any],
     configured: dict[str, Any] | None = None,
+    recording_key_sha256: str = "legacy",
 ) -> str:
     return hashlib.sha256(
         json.dumps(
             {
                 "scope_sha256": binding.scope_sha256,
                 "consent": document,
+                **(
+                    {"recording_key_sha256": recording_key_sha256}
+                    if recording_key_sha256 != "legacy"
+                    else {}
+                ),
                 **(
                     {"configured_capture": configured} if configured is not None else {}
                 ),
@@ -308,7 +329,12 @@ def _validate_operation(
             operation.binding_id != binding.id
             or operation.scribe_tenant_id != binding.scribe_tenant_id
             or operation.request_sha256
-            != _digest(binding, _document(consent), operation.configured_capture)
+            != _digest(
+                binding,
+                _document(consent),
+                operation.configured_capture,
+                operation.recording_key_sha256,
+            )
             or consent.appointment_id != str(binding.appointment_id)
             or consent.practitioner_id != str(binding.doctor_id)
             or consent.patient_id != str(binding.patient_id)
@@ -372,7 +398,26 @@ def _prepared_operation(
     *,
     expected_session_id: UUID | None = None,
     resume_current: bool = False,
+    recording_key_sha256: str | None = None,
+    recover_legacy_request: bool = False,
 ):
+    if (
+        type(recover_legacy_request) is not bool
+        or recover_legacy_request
+        and (
+            not isinstance(recording_key_sha256, str)
+            or attestation is None
+            or client_request_key != "saved:" + recording_key_sha256
+        )
+    ):
+        raise AdmissionConflict
+    if recording_key_sha256 is not None and (
+        not isinstance(recording_key_sha256, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", recording_key_sha256)
+        or expected_session_id is not None
+        or resume_current
+    ):
+        raise AdmissionConflict
     try:
         validate_resume_request(
             expected_session_id, resume_current, attestation, configured_capture
@@ -399,10 +444,29 @@ def _prepared_operation(
             select(ScribeCaptureAdmission)
             .where(
                 ScribeCaptureAdmission.binding_id == binding.id,
+                ScribeCaptureAdmission.session_id == expected_session_id
+                if expected_session_id is not None
+                else ScribeCaptureAdmission.recording_key_sha256
+                == (recording_key_sha256 or "legacy"),
             )
             .with_for_update()
             .execution_options(populate_existing=True)
         ).one_or_none()
+        if operation is None and recover_legacy_request:
+            # Pre-expansion saved uploads used the same canonical source key.
+            # Recover only that exact immutable request; unrelated visit
+            # admission is never treated as this recording's reservation.
+            operation = session.exec(
+                select(ScribeCaptureAdmission)
+                .where(
+                    ScribeCaptureAdmission.binding_id == binding.id,
+                    ScribeCaptureAdmission.recording_key_sha256 == "legacy",
+                    ScribeCaptureAdmission.client_key_sha256
+                    == hashlib.sha256(client_request_key.encode()).hexdigest(),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).one_or_none()
         if operation is None:
             if expected_session_id is not None:
                 raise AdmissionConflict
@@ -414,6 +478,10 @@ def _prepared_operation(
                 <= attestation.granted_at
                 <= now + timedelta(seconds=5)
             ):
+                if recover_legacy_request and attestation.granted_at < now - timedelta(
+                    minutes=10
+                ):
+                    raise AdmissionRecordingConsentRequired
                 raise AdmissionConsentRequired
             document = _document(_consent_payload(binding, attestation))
             configured = (
@@ -428,7 +496,10 @@ def _prepared_operation(
             operation = ScribeCaptureAdmission(
                 binding_id=binding.id,
                 scribe_tenant_id=binding.scribe_tenant_id,
-                request_sha256=_digest(binding, document, configured),
+                recording_key_sha256=recording_key_sha256 or "legacy",
+                request_sha256=_digest(
+                    binding, document, configured, recording_key_sha256 or "legacy"
+                ),
                 configured_capture=configured,
                 consent_payload=document,
                 client_key_sha256=hashlib.sha256(
@@ -471,6 +542,7 @@ def _prepared_operation(
                 binding,
                 _document(_consent_payload(binding, attestation)),
                 operation.configured_capture,
+                operation.recording_key_sha256,
             ):
                 raise AdmissionConflict
         yield session, binding, operation
@@ -486,6 +558,7 @@ def _prepare(
     *,
     expected_session_id: UUID | None = None,
     resume_current: bool = False,
+    recording_key_sha256: str | None = None,
 ) -> str:
     # Keep the existing prepare-only primitive for retained-work recovery.
     with _prepared_operation(
@@ -497,6 +570,7 @@ def _prepare(
         configured_capture,
         expected_session_id=expected_session_id,
         resume_current=resume_current,
+        recording_key_sha256=recording_key_sha256,
     ) as (session, _binding, operation):
         reference = str(operation.id)
         session.commit()
@@ -513,6 +587,8 @@ def _prepare_and_claim(
     *,
     expected_session_id: UUID | None = None,
     resume_current: bool = False,
+    recording_key_sha256: str | None = None,
+    recover_legacy_request: bool = False,
 ) -> _PhaseClaim:
     # Fresh authority and the first durable claim share one uninterrupted local
     # transaction. Its locks end before downstream I/O; subsequent phases still
@@ -526,6 +602,8 @@ def _prepare_and_claim(
         configured_capture,
         expected_session_id=expected_session_id,
         resume_current=resume_current,
+        recording_key_sha256=recording_key_sha256,
+        recover_legacy_request=recover_legacy_request,
     ) as (session, binding, operation):
         claim = _claim_locked(session, binding, operation)
         session.commit()
@@ -750,6 +828,8 @@ async def admit_capture(
     configured_capture: ConfiguredCaptureSelection | None = None,
     expected_session_id: UUID | None = None,
     resume_current: bool = False,
+    recording_key_sha256: str | None = None,
+    recover_legacy_request: bool = False,
 ) -> AdmissionSnapshot:
     """Explicitly admit/resume one capture; never start a microphone.
 
@@ -765,6 +845,8 @@ async def admit_capture(
         configured_capture,
         expected_session_id=expected_session_id,
         resume_current=resume_current,
+        recording_key_sha256=recording_key_sha256,
+        recover_legacy_request=recover_legacy_request,
     )
     for index in range(2):
         if index:

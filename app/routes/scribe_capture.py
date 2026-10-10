@@ -86,15 +86,25 @@ class AdmissionRequest(BaseModel):
     configured_capture: ConfiguredCaptureSelection | None = None
     expected_session_id: UUID | None = None
     resume_current: StrictBool = False
+    recording_key_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    recover_legacy_request: StrictBool = False
 
     @model_validator(mode="after")
     def resume_only(self) -> AdmissionRequest:
+        if self.recover_legacy_request and (
+            self.recording_key_sha256 is None or self.attestation is None
+        ):
+            raise ValueError("invalid_legacy_recording_recovery")
         admission.validate_resume_request(
             self.expected_session_id,
             self.resume_current,
             self.attestation,
             self.configured_capture,
         )
+        if self.recording_key_sha256 is not None and (
+            self.expected_session_id is not None or self.resume_current
+        ):
+            raise ValueError("invalid_recording_selection")
         return self
 
 
@@ -107,6 +117,7 @@ class OperationRequest(BaseModel):
     workspace_id: UUID
     request_nonce: UUID
     operation: CaptureOperation
+    expected_session_id: UUID | None = None
 
 
 class NoteScopeRequest(BaseModel):
@@ -326,6 +337,7 @@ async def perform_capture_operation(
                 **interaction.model_dump(),
                 settings=authority_settings,
                 capture_settings=capture_settings,
+                selected_session_id=data.expected_session_id,
             ),
             binding_ref=data.binding_ref,
             workspace_id=data.workspace_id,
@@ -589,12 +601,16 @@ async def admit_session(
             configured_capture=data.configured_capture,
             expected_session_id=data.expected_session_id,
             resume_current=data.resume_current,
+            recording_key_sha256=data.recording_key_sha256,
+            recover_legacy_request=data.recover_legacy_request,
             client=client,
         )
     except authority.AuthorityKernelDisabledError:
         return _problem(503)
     except authority.AuthorityKernelError:
         return _problem(403)
+    except admission.AdmissionRecordingConsentRequired:
+        return _admission_problem(409, "CAPTURE_RECORDING_CONSENT_REQUIRED")
     except admission.AdmissionConsentRequired:
         return _admission_problem(409, "CAPTURE_CONSENT_REQUIRED")
     except admission.AdmissionConsentUnavailable:

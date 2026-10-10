@@ -15,7 +15,9 @@ class ScribeCaptureGapManifest(
     BaseModel, TimestampsMixin, TypeIDMixin("scribe_gap_manifest"), table=True
 ):
     __table_args__ = (
-        sa.UniqueConstraint("binding_id", name="uq_scribe_gap_manifest_binding"),
+        sa.UniqueConstraint(
+            "binding_id", "session_id", name="uq_scribe_gap_manifest_binding"
+        ),
         sa.UniqueConstraint("session_id", name="uq_scribe_gap_manifest_session"),
         sa.UniqueConstraint(
             "initial_transcript_id", name="uq_scribe_gap_initial_transcript"

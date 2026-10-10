@@ -23,7 +23,13 @@ class ScribeCaptureAdmission(
             "configured_capture IS NULL OR jsonb_typeof(configured_capture) = 'object'",
             name="ck_scribe_configured_capture_object",
         ),
-        sa.UniqueConstraint("binding_id", name="uq_scribe_admission_binding"),
+        sa.UniqueConstraint(
+            "binding_id", "recording_key_sha256", name="uq_scribe_admission_recording"
+        ),
+        sa.CheckConstraint(
+            "recording_key_sha256 = 'legacy' OR recording_key_sha256 ~ '^[a-f0-9]{64}$'",
+            name="ck_scribe_admission_recording_key",
+        ),
         sa.UniqueConstraint(
             "scribe_tenant_id", "session_id", name="uq_scribe_admission_session"
         ),
@@ -53,6 +59,7 @@ class ScribeCaptureAdmission(
 
     binding_id: TypeIDType = ScribeCaptureBinding.foreign_key()
     scribe_tenant_id: UUID
+    recording_key_sha256: str = Field(default="legacy", max_length=64)
     request_sha256: str = Field(max_length=64)
     client_key_sha256: str = Field(max_length=64)
     consent_key: UUID = Field(default_factory=uuid4, unique=True)
