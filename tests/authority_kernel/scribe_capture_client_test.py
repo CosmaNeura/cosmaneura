@@ -11,6 +11,7 @@ from azure.core.credentials import AccessToken
 from app.services.scribe_workflow import (
     DisabledScribeWorkflowClient,
     HttpScribeWorkflowClient,
+    ScribeUploadAuthorizationExpired,
     ScribeWorkflowConflictError,
     ScribeWorkflowDisabledError,
     ScribeWorkflowRejectedError,
@@ -69,6 +70,69 @@ def client_for(http_client, credential=None):
         credential=credential or Credential(),
         client=http_client,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "expired",
+        "other_conflict",
+        "extra_field",
+        "wrong_type",
+        "oversized",
+        "other_operation",
+    ],
+)
+async def test_only_exact_bounded_upload_expiry_is_renewable(case):
+    from app.services import scribe_capture_protocol as p
+
+    detail = "Upload authorization expired; use a new Idempotency-Key."
+    body = {
+        "detail": detail
+        if case != "other_conflict"
+        else "Session is closed for upload."
+    }
+    if case == "extra_field":
+        body["private"] = "sentinel"
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if case == "oversized":
+            return httpx.Response(
+                409, content=b"x" * 4097, headers={"content-type": "application/json"}
+            )
+        return httpx.Response(
+            409,
+            json=body,
+            headers={"content-type": "text/plain"} if case == "wrong_type" else {},
+        )
+
+    operation = p.AuthorizeUpload(
+        kind="authorize_upload", object_id=uuid4(), payload={"protocol_version": "1.0"}
+    )
+    if case == "other_operation":
+        operation = p.BindKey(
+            kind="bind_key",
+            payload={"key_version": "synthetic-key", "wrapped_dek": "a" * 512},
+        )
+    async with httpx.AsyncClient(
+        base_url="https://scribe.test.invalid", transport=httpx.MockTransport(handler)
+    ) as http_client:
+        with pytest.raises(
+            ScribeUploadAuthorizationExpired
+            if case == "expired"
+            else ScribeWorkflowConflictError
+        ) as error:
+            await client_for(http_client).capture_operation(
+                uuid4(), uuid4(), operation, idempotency_key="retained-upload-key"
+            )
+    assert len(seen) == 1
+    assert error.value.code == (
+        "upload_authorization_expired" if case == "expired" else "scribe_conflict"
+    )
+    assert "sentinel" not in str(error.value)
 
 
 @pytest.mark.asyncio

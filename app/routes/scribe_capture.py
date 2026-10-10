@@ -346,6 +346,8 @@ async def perform_capture_operation(
             client=client,
             upload_origins=capture_settings.upload_origins,
         )
+    except gateway.CaptureUploadAuthorizationExpired:
+        return _admission_problem(409, "UPLOAD_AUTHORIZATION_EXPIRED")
     except authority.AuthorityKernelDisabledError:
         return _problem(503)
     except authority.AuthorityKernelError:

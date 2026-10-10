@@ -51,6 +51,7 @@ from app.services.scribe_workflow import (
     CaptureSource,
     CaptureTranscript,
     CaptureTranscriptionStatus,
+    ScribeUploadAuthorizationExpired,
     ScribeWorkflowClient,
     ScribeWorkflowConflictError,
     ScribeWorkflowError,
@@ -72,6 +73,10 @@ class CaptureReceiptInvalid(CaptureGatewayError):
 
 
 class CaptureOperationUnavailable(CaptureGatewayError):
+    pass
+
+
+class CaptureUploadAuthorizationExpired(CaptureGatewayError):
     pass
 
 
@@ -940,6 +945,13 @@ async def execute_capture_operation(
                 idempotency_key=key,
                 **extra,
             )
+    except ScribeUploadAuthorizationExpired:
+        if (
+            not isinstance(operation, protocol.AuthorizeUpload)
+            or authorize_admitted_capture(caller, binding_ref, workspace_id) != scope
+        ):
+            raise CaptureReceiptInvalid from None
+        raise CaptureUploadAuthorizationExpired from None
     except (ScribeWorkflowConflictError, ScribeWorkflowRejectedError):
         raise CaptureOperationUnavailable from None
     except (ScribeWorkflowError, TimeoutError):

@@ -74,6 +74,10 @@ class ScribeWorkflowConflictError(ScribeWorkflowError):
     pass
 
 
+class ScribeUploadAuthorizationExpired(ScribeWorkflowConflictError):
+    pass
+
+
 class ConsentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -450,6 +454,7 @@ class HttpScribeWorkflowClient:
         practitioner_id: str | None = None,
         profile_receipt_id: UUID | None = None,
         creator_actor_id: str | None = None,
+        upload_authorization: bool = False,
     ) -> ResponseModel:
         if not isinstance(tenant_id, UUID):
             raise ScribeWorkflowRejectedError("scribe_invalid_scope")
@@ -486,6 +491,24 @@ class HttpScribeWorkflowClient:
                 follow_redirects=False,
             ) as response:
                 if response.status_code == 409:
+                    if (
+                        upload_authorization
+                        and response.headers.get("content-type", "").split(";", 1)[0]
+                        == "application/json"
+                    ):
+                        rejection = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            check_async_capture_deadline()
+                            if len(rejection) + len(chunk) > 4096:
+                                raise ScribeWorkflowConflictError("scribe_conflict")
+                            rejection.extend(chunk)
+                        if (
+                            bytes(rejection)
+                            == b'{"detail":"Upload authorization expired; use a new Idempotency-Key."}'
+                        ):
+                            raise ScribeUploadAuthorizationExpired(
+                                "upload_authorization_expired"
+                            )
                     raise ScribeWorkflowConflictError("scribe_conflict")
                 if (
                     response.status_code in {408, 425, 429}
@@ -983,6 +1006,9 @@ class HttpScribeWorkflowClient:
                 else None
             ),
             creator_actor_id=creator_actor_id if creator_window else None,
+            upload_authorization=isinstance(
+                operation, capture_protocol.AuthorizeUpload
+            ),
         )
 
     async def close(self) -> None:
