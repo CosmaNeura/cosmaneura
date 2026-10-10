@@ -230,8 +230,9 @@ def test_denial_does_not_reflect_exception_or_scope(monkeypatch, error):
 
 
 @pytest.mark.parametrize("selected", [None, uuid4()])
+@pytest.mark.parametrize("expired", [False, True])
 def test_operation_routes_exact_session_without_changing_legacy_default(
-    monkeypatch, selected
+    monkeypatch, selected, expired
 ):
     from app.routes import scribe_capture as receiver
     from app.services import scribe_capture_admission as admission
@@ -241,6 +242,8 @@ def test_operation_routes_exact_session_without_changing_legacy_default(
 
     async def operation(**kwargs):
         calls.append(kwargs)
+        if expired:
+            raise receiver.gateway.CaptureUploadAuthorizationExpired
         raise admission.AdmissionConflict
 
     monkeypatch.setattr(receiver.gateway, "execute_capture_operation", operation)
@@ -262,6 +265,8 @@ def test_operation_routes_exact_session_without_changing_legacy_default(
         headers={**headers(), "Idempotency-Key": "synthetic-operation-key"},
     )
     assert response.status_code == 409
-    assert response.json()["code"] == "CAPTURE_OPERATION_CONFLICT"
+    assert response.json()["code"] == (
+        "UPLOAD_AUTHORIZATION_EXPIRED" if expired else "CAPTURE_OPERATION_CONFLICT"
+    )
     assert calls[0]["caller"].selected_session_id == selected
     assert response.headers["cache-control"] == "no-store"
