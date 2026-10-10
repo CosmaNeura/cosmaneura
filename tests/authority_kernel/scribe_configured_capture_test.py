@@ -433,7 +433,7 @@ def test_fresh_and_incremental_migration_match(configured_engine):
                 connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                == "71d6e1ac9b04"
+                == "35260adbf2ef"
             )
     finally:
         engine.dispose()
