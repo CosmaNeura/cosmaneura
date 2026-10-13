@@ -8,7 +8,14 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -92,6 +99,14 @@ class NativeCaptureRequest(BaseModel):
     attestation: ConsentAttestation | None = None
     configured_capture: ConfiguredCaptureSelection | None = None
     include_native_preparation: Literal[True] | None = None
+    include_preparation_metadata: Literal[True] | None = None
+
+    @field_validator("include_preparation_metadata", mode="before")
+    @classmethod
+    def explicit_preparation_metadata(cls, value):
+        if value is not None and value is not True:
+            raise ValueError("invalid_preparation_metadata_opt_in")
+        return value
 
     @model_validator(mode="after")
     def action_fields(self):
@@ -102,6 +117,16 @@ class NativeCaptureRequest(BaseModel):
             and self.action != "prepared_admission"
         ):
             raise ValueError("unexpected_native_preparation")
+        if (
+            self.include_preparation_metadata is not None
+            and self.action != "prepared_admission"
+        ):
+            raise ValueError("unexpected_preparation_metadata")
+        if (
+            self.include_native_preparation is not None
+            and self.include_preparation_metadata is not None
+        ):
+            raise ValueError("conflicting_admission_preparation")
         if self.action == "prepared_admission":
             if (
                 self.binding_ref is None
@@ -353,6 +378,29 @@ async def execute_native_capture(
                 result["native_recording_preparation"] = metadata.model_dump(
                     mode="json"
                 )
+                result["checked_at"] = datetime.now(UTC).isoformat()
+            elif data.include_preparation_metadata:
+                # Desktop needs the complete existing creator/key/capability
+                # receipt. Consent has committed; retain the read's current
+                # pre/post authority checks and the final encounter fence.
+                from app.services.scribe_preparation_metadata import (
+                    execute_preparation_metadata,
+                )
+
+                metadata = await execute_preparation_metadata(
+                    caller=caller,
+                    binding_ref=data.binding_ref,
+                    workspace_id=data.workspace_id,
+                    scope=None,
+                    client_request_key="admission-preparation-metadata:"
+                    + str(data.request_nonce),
+                    client=client,
+                )
+                if metadata.review.session_id != admitted.session_id:
+                    raise authority.AuthorityRequestDeniedError
+                check_async_capture_deadline()
+                current()
+                result["preparation_metadata"] = metadata.model_dump(mode="json")
                 result["checked_at"] = datetime.now(UTC).isoformat()
             return {
                 "version": "1",
