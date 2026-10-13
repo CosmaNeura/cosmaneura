@@ -221,6 +221,7 @@ async def native_capture(
                 "X-Cosmaneura-Prepared-Native-Read-Version": "1",
                 "X-Cosmaneura-Admission-Native-Preparation-Version": "1",
                 "X-Cosmaneura-Admission-Preparation-Metadata-Version": "1",
+                "X-Cosmaneura-Prepared-Source-Start-Version": "1",
             },
         )
     except authority.AuthorityKernelDisabledError:
