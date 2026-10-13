@@ -23,7 +23,11 @@ from sqlalchemy import event, select
 from sqlmodel import Session
 
 from tests.authority_kernel import scribe_preparation_metadata_test as fixtures
-from tests.authority_kernel.scribe_prepared_window_context_test import prepared
+from tests.authority_kernel.scribe_prepared_window_context_test import (
+    new_mounted_context,
+    prepared,
+    prepared_admission,
+)
 from tests.authority_kernel.scribe_window_scope_fence_test import admitted_arguments
 
 engine, native, workflow, remote_reads = (
@@ -32,6 +36,92 @@ engine, native, workflow, remote_reads = (
     fixtures.workflow,
     fixtures.remote_reads,
 )
+
+
+def test_fresh_consent_returns_same_native_preparation_without_another_request(
+    native, engine, remote_reads
+):
+    mounted = new_mounted_context(native)
+    before = len(native.remote.consents), len(native.remote.sessions)
+    remote_reads[0].clear()
+    answer = prepared_admission(native, mounted, include_native_preparation=True)
+    assert answer.status_code == 200, answer.text
+    assert answer.headers["x-cosmaneura-admission-native-preparation-version"] == "1"
+    result = answer.json()["result"]
+    assert (len(native.remote.consents), len(native.remote.sessions)) == (
+        before[0] + 1,
+        before[1] + 1,
+    )
+    assert remote_reads[0] == ["preparation_metadata"]
+    separate = native.post(
+        "native_recording_preparation",
+        workspace_id=mounted["workspace_id"],
+        binding_ref=mounted["binding_ref"],
+    )
+    assert separate.status_code == 200, separate.text
+    assert (
+        result["native_recording_preparation"] == separate.json()["result"]["receipt"]
+    )
+    assert (
+        result["native_recording_preparation"]["context"]["session_id"]
+        == result["session_id"]
+    )
+    assert mounted["prepared_context"]["context_token"] not in answer.text
+    assert engine.pool.checkedout() == 0
+
+
+@pytest.mark.parametrize("fault", ["revocation", "reply_loss"])
+def test_combined_admission_never_publishes_partial_metadata_or_repeats_consent(
+    native, engine, remote_reads, monkeypatch, fault
+):
+    mounted = new_mounted_context(native)
+    before = len(native.remote.consents), len(native.remote.sessions)
+    calls, original = remote_reads
+    calls.clear()
+
+    async def altered(*args, **kwargs):
+        value = await original(*args, **kwargs)
+        if fault == "reply_loss":
+            raise ScribeWorkflowRetryableError()
+        with Session(engine) as session:
+            identity = session.execute(
+                select(AuthorityActorExternalIdentity).where(
+                    AuthorityActorExternalIdentity.subject
+                    == native.args["verified_clerk_subject"]
+                )
+            ).scalar_one()
+            identity.revoked_at = datetime.now(UTC)
+            session.add(identity)
+            session.commit()
+        return value
+
+    monkeypatch.setattr(native.remote, "capture_operation", altered)
+    answer = prepared_admission(native, mounted, include_native_preparation=True)
+    assert answer.status_code == (503 if fault == "reply_loss" else 403), answer.text
+    assert (
+        "native_recording_preparation" not in answer.text
+        and "session_id" not in answer.text
+    )
+    assert calls == ["preparation_metadata"]
+    assert (len(native.remote.consents), len(native.remote.sessions)) == (
+        before[0] + 1,
+        before[1] + 1,
+    )
+    assert engine.pool.checkedout() == 0
+
+
+@pytest.mark.parametrize(
+    "action", ["mount", "operation", "prepared_native_read", "preparation_context"]
+)
+def test_native_admission_preparation_opt_in_is_closed_to_other_actions(native, action):
+    with pytest.raises(ValidationError):
+        from app.services.scribe_native_capture import NativeCaptureRequest
+
+        from tests.authority_kernel.scribe_native_capture_receiver_test import body
+
+        NativeCaptureRequest.model_validate(
+            body(action=action, include_native_preparation=True)
+        )
 
 
 def preparation_read(native, action):

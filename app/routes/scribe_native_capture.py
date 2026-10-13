@@ -219,6 +219,7 @@ async def native_capture(
                 "Cache-Control": "no-store",
                 "X-Cosmaneura-Native-Capture-Version": "1",
                 "X-Cosmaneura-Prepared-Native-Read-Version": "1",
+                "X-Cosmaneura-Admission-Native-Preparation-Version": "1",
             },
         )
     except authority.AuthorityKernelDisabledError:
