@@ -37,6 +37,7 @@ from .routes.authority_errors import (
 )
 from .routes.cab_authorization import router as cab_authorization_router
 from .routes.chat import chat_api_app
+from .routes.clerk_otp_delivery import router as clerk_otp_router
 from .routes.companion_appointment_setup import (
     install as install_companion_appointment_setup,
 )
@@ -103,6 +104,7 @@ api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
+api_app.include_router(clerk_otp_router, include_in_schema=False)
 api_app.include_router(zoom_auth_app)
 api_app.include_router(recall_callbacks_app)
 
