@@ -79,6 +79,7 @@ class NativeCaptureRequest(BaseModel):
         "prepared_window",
         "prepared_admission",
         "prepared_native_read",
+        "prepared_source",
     ]
     workspace_id: UUID
     request_nonce: UUID
@@ -143,6 +144,19 @@ class NativeCaptureRequest(BaseModel):
             value is not None for value in (self.attestation, self.configured_capture)
         ):
             raise ValueError("unexpected_admission_fields")
+        if self.action == "prepared_source":
+            if (
+                self.binding_ref is None
+                or self.operation is None
+                or self.operation.kind != "source_start_sequence"
+                or self.operation.payload.first_sequence_number != 0
+                or self.operation.payload.lease_generation != 1
+                or self.prepared_context is None
+                or self.opening_nonce is not None
+                or self.preparation is not None
+            ):
+                raise ValueError("invalid_prepared_source")
+            return self
         if self.action == "prepared_native_read":
             if (
                 self.binding_ref is None
@@ -268,7 +282,12 @@ async def execute_native_capture(
             raise authority.AuthorityRequestDeniedError
         return row
 
-    if data.action in {"prepared_window", "prepared_admission", "prepared_native_read"}:
+    if data.action in {
+        "prepared_window",
+        "prepared_admission",
+        "prepared_native_read",
+        "prepared_source",
+    }:
         # The native route still verifies current Clerk identity, both workload
         # policies and encounter/capture enablement. These complete current
         # visit lookups retain its provider-session/view-as checks. Only token
