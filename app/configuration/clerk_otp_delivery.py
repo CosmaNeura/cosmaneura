@@ -44,7 +44,7 @@ def load_settings() -> OtpDeliverySettings | None:
     if (
         python_environment() != "staging"
         or config("AUTHORITY_CLERK_ISSUER", default="", cast=str) != STAGING_ISSUER
-        or config("CLERK_OTP_VERIFIED_CONTRACT", default="", cast=str)
+        or config("CLERK_OTP_CONTRACT_VERSION", default="", cast=str)
         != CONTRACT_VERSION
     ):
         raise ValueError("clerk_otp_delivery_configuration_invalid")

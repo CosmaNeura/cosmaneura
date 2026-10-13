@@ -66,7 +66,7 @@ def prepare_otp(
     signatures: str,
     settings: OtpDeliverySettings,
     now: float,
-) -> PreparedOtp:
+) -> PreparedOtp | None:
     if len(body) > MAX_BODY_BYTES:
         raise RejectedOtp("body_too_large", 413)
     if (
@@ -107,20 +107,32 @@ def prepare_otp(
     email = event.get("data")
     if not isinstance(email, dict) or email.get("object") != "email":
         raise RejectedOtp("unsupported_payload")
-    if email.get("slug") != TEMPLATE_SLUG:
-        raise RejectedOtp("unowned_template", 403)
-    metadata = email.get("data")
-    code = metadata.get("otp_code") if isinstance(metadata, dict) else None
     recipient, email_id = email.get("to_email_address"), email.get("id")
+    slug = email.get("slug")
     if (
-        email.get("delivered_by_clerk") is not False
-        or email.get("suppression_reason") is not None
-        or not isinstance(code, str)
-        or re.fullmatch(r"[0-9]{6}", code) is None
-        or not isinstance(recipient, str)
+        not isinstance(recipient, str)
         or not valid_recipient(recipient)
         or not isinstance(email_id, str)
         or _IDENTIFIER.fullmatch(email_id) is None
+        or not isinstance(slug, str)
+        or _IDENTIFIER.fullmatch(slug) is None
+    ):
+        raise RejectedOtp("unsupported_payload")
+    # email.created is event-wide. This receipt-only ACK prevents retries of
+    # valid events still owned by Clerk; it never claims delivery, reads OTP
+    # metadata, projects sensitive content or enters the delivery ledger.
+    if email.get("delivered_by_clerk") is True:
+        return None
+    if email.get("delivered_by_clerk") is not False:
+        raise RejectedOtp("unsupported_payload")
+    if slug != TEMPLATE_SLUG:
+        raise RejectedOtp("unowned_template", 403)
+    metadata = email.get("data")
+    code = metadata.get("otp_code") if isinstance(metadata, dict) else None
+    if (
+        email.get("suppression_reason") is not None
+        or not isinstance(code, str)
+        or re.fullmatch(r"[0-9]{6}", code) is None
     ):
         raise RejectedOtp("unsupported_payload")
     # Ignore subject/body/links/IP/user metadata. Only six digits become content.

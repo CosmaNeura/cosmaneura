@@ -186,7 +186,6 @@ def test_wrong_envelope_rejected(field, value):
     [
         ("slug", "invitation"),
         ("slug", None),
-        ("delivered_by_clerk", True),
         ("delivered_by_clerk", 0),
         ("suppression_reason", "blocked"),
         ("id", []),
@@ -372,7 +371,7 @@ def test_settings_require_explicit_staging_identity_and_contract(monkeypatch):
     monkeypatch.setenv("CLERK_OTP_DELIVERY_ENABLED", "true")
     monkeypatch.setenv("PYTHON_ENV", "staging")
     monkeypatch.setenv("AUTHORITY_CLERK_ISSUER", config.STAGING_ISSUER)
-    monkeypatch.setenv("CLERK_OTP_VERIFIED_CONTRACT", config.CONTRACT_VERSION)
+    monkeypatch.setenv("CLERK_OTP_CONTRACT_VERSION", config.CONTRACT_VERSION)
     monkeypatch.setenv("CLERK_OTP_INSTANCE_ID", config.STAGING_INSTANCE_ID)
     monkeypatch.setenv("EMAIL_FROM_ADDRESS", "synthetic@cosmaneura.com")
     monkeypatch.setenv(
@@ -385,7 +384,8 @@ def test_settings_require_explicit_staging_identity_and_contract(monkeypatch):
         ("PYTHON_ENV", "production"),
         ("AUTHORITY_CLERK_ISSUER", "https://other.invalid"),
         ("CLERK_OTP_INSTANCE_ID", "ins_other"),
-        ("CLERK_OTP_VERIFIED_CONTRACT", ""),
+        ("CLERK_OTP_CONTRACT_VERSION", ""),
+        ("CLERK_OTP_CONTRACT_VERSION", "verification_code:six-digits:v2"),
         ("EMAIL_FROM_ADDRESS", "synthetic@other.invalid"),
         ("EMAIL_FROM_ADDRESS", "a@cosmaneura.com,b@cosmaneura.com"),
         ("EMAIL_FROM_ADDRESS", "a@cosmaneura.com\r\nBcc: outsider@synthetic.invalid"),
@@ -394,6 +394,11 @@ def test_settings_require_explicit_staging_identity_and_contract(monkeypatch):
             patch.setenv(name, value)
             with pytest.raises(ValueError, match="configuration_invalid"):
                 config.load_settings()
+    with monkeypatch.context() as patch:
+        patch.delenv("CLERK_OTP_CONTRACT_VERSION")
+        patch.setenv("CLERK_OTP_VERIFIED_CONTRACT", config.CONTRACT_VERSION)
+        with pytest.raises(ValueError, match="configuration_invalid"):
+            config.load_settings()
 
 
 @pytest.mark.parametrize(
@@ -723,3 +728,106 @@ def test_malformed_telemetry_url_cannot_leak_or_break_scrubber():
         )
         is None
     )
+
+
+@pytest.mark.parametrize("slug", ["verification_code", "invitation", "password_reset"])
+def test_clerk_owned_email_receipt_replays_without_send_or_ledger(
+    endpoint, monkeypatch, slug
+):
+    client, sent, now, store = endpoint
+    event = copy.deepcopy(EVENT)
+    event["data"]["slug"] = slug
+    event["data"]["delivered_by_clerk"] = True
+    event["data"]["data"] = {"never_read_as_otp": {"arbitrary": "ignored"}}
+    raw = body(event)
+
+    def forbidden_ledger():
+        pytest.fail("Clerk-owned receipt must not create/open a delivery ledger")
+
+    monkeypatch.setattr(route, "ledger", forbidden_ledger)
+    for elapsed, delivery_id in [
+        (0, "msg_owned"),
+        (30, "msg_owned_replay"),
+        (500, "msg_owned_late"),
+    ]:
+        now[0] = NOW + elapsed
+        result = client.post(
+            route.PATH, content=raw, headers=signed(raw, now[0], delivery_id)
+        )
+        assert result.status_code == 200 and result.json() == {
+            "status": "ignored_clerk_owned"
+        }
+        assert "no-store" in result.headers["cache-control"]
+    assert not sent and store.client.command("DBSIZE") == "0"
+    assert prepare(event) is None
+
+
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        ("foreign_instance", 403),
+        ("missing_id", 422),
+        ("missing_slug", 422),
+        ("missing_recipient", 422),
+        ("unsafe_recipient", 422),
+        ("wrong_object", 422),
+        ("wrong_event_type", 422),
+    ],
+)
+def test_clerk_owned_receipt_requires_signed_scoped_wellformed_event(
+    endpoint, mutation, expected
+):
+    client, sent, _, store = endpoint
+    event = copy.deepcopy(EVENT)
+    event["data"]["delivered_by_clerk"] = True
+    if mutation == "foreign_instance":
+        event["instance_id"] = "ins_other"
+    elif mutation.startswith("missing_"):
+        del event["data"][
+            {
+                "missing_id": "id",
+                "missing_slug": "slug",
+                "missing_recipient": "to_email_address",
+            }[mutation]
+        ]
+    elif mutation == "unsafe_recipient":
+        event["data"]["to_email_address"] = (
+            "one@synthetic.invalid,two@synthetic.invalid"
+        )
+    elif mutation == "wrong_object":
+        event["data"]["object"] = "user"
+    else:
+        event["type"] = "user.created"
+    raw = body(event)
+    result = client.post(route.PATH, content=raw, headers=signed(raw))
+    assert result.status_code == expected and not sent
+    assert store.client.command("DBSIZE") == "0"
+
+
+def test_clerk_owned_receipt_cannot_ack_bad_signature(endpoint):
+    client, sent, _, store = endpoint
+    event = copy.deepcopy(EVENT)
+    event["data"]["delivered_by_clerk"] = True
+    raw = body(event)
+    result = client.post(route.PATH, content=raw + b" ", headers=signed(raw))
+    assert result.status_code == 401 and not sent
+    assert store.client.command("DBSIZE") == "0"
+
+
+@pytest.mark.parametrize("ownership", [None, "true", "false", 1, 0])
+def test_unknown_ownership_never_acknowledges_receipt(endpoint, ownership):
+    client, sent, _, store = endpoint
+    event = copy.deepcopy(EVENT)
+    event["data"]["delivered_by_clerk"] = ownership
+    raw = body(event)
+    assert client.post(route.PATH, content=raw, headers=signed(raw)).status_code == 422
+    assert not sent and store.client.command("DBSIZE") == "0"
+
+
+def test_custom_owned_unknown_template_is_not_receipt_ack(endpoint):
+    client, sent, _, store = endpoint
+    event = copy.deepcopy(EVENT)
+    event["data"]["slug"] = "invitation"
+    raw = body(event)
+    assert client.post(route.PATH, content=raw, headers=signed(raw)).status_code == 403
+    assert not sent and store.client.command("DBSIZE") == "0"

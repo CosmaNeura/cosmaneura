@@ -1,4 +1,4 @@
-"""Staging-only custom OTP delivery; successful ACK means SMTP accepted only."""
+"""Staging OTP delivery and receipt-only ACKs for emails still owned by Clerk."""
 
 import asyncio
 from functools import lru_cache
@@ -89,6 +89,8 @@ async def clerk_otp_webhook(request: Request) -> JSONResponse:
     except Exception:
         # Never expose provider payload, parsing failures or request locals.
         return response("invalid_request", 400)
+    if prepared is None:
+        return response("ignored_clerk_owned", 200)
     owner = new_owner()
     try:
         store = ledger()

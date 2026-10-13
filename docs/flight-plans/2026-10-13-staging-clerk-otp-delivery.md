@@ -26,20 +26,33 @@ production, and requires these exact enabled-runtime settings:
 - CLERK_OTP_DELIVERY_ENABLED=true
 - AUTHORITY_CLERK_ISSUER=https://resolved-emu-53.clerk.accounts.dev
 - CLERK_OTP_INSTANCE_ID=ins_2onn3Q7NDfrwC5oVXgzGe6vA1u4
-- CLERK_OTP_VERIFIED_CONTRACT=verification_code:six-digits:v1
+- CLERK_OTP_CONTRACT_VERSION=verification_code:six-digits:v1
 - CLERK_OTP_WEBHOOK_SECRET: a dedicated webhook signing secret, kept server-side.
 - Existing SMTP_URL and one EMAIL_FROM_ADDRESS at the exact cosmaneura.com domain.
 
-The contract marker is an operator attestation after inspecting a fresh signed
-payload from this exact instance. It is not automatically set by this code.
+The contract version explicitly selects the expected strict parser. It is not
+an attestation that live delivery was already proved. A bounded authorized
+pilot must verify the real custom-owned payload and delivery after healthy
+enablement and the template switch, as described below.
 The [official webhook schema](https://github.com/clerk/openapi-specs/blob/3b078e5e0c17ad5261f06cb00e0a0943614dacb0/webhooks/2025-04-15.yml)
 and current event overview support object=event, type=email.created, instance_id,
 and the original event timestamp in milliseconds. The email resource must have
 object=email, an id, slug=verification_code, delivered_by_clerk=false, no
 suppression_reason, one ASCII recipient address, and a typed six-digit ASCII
-data.otp_code inside event.data.data. Unsupported signed shapes return a visible
-non-2xx response without a success receipt. No seconds-to-milliseconds heuristic
-or template fallback is permitted.
+data.otp_code inside event.data.data. Unsupported custom-owned shapes return a
+visible non-2xx response without a success receipt. No seconds-to-milliseconds
+heuristic or custom-template fallback is permitted.
+
+The email.created subscription is event-wide. A valid signed, same-instance
+email with an id, a nonempty slug, one valid recipient and the explicit literal
+delivered_by_clerk=true returns 200 ignored_clerk_owned. This acknowledges event
+receipt only, never delivery. It reads no OTP metadata, sends no message, opens
+no Redis ledger and persists no content. Replays and late original events still
+owned by Clerk receive the same receipt acknowledgement with a fresh valid Svix
+signature; OTP dispatch freshness applies only to custom-owned delivery. Bad
+signatures, foreign instances, malformed email resources or ambiguous ownership
+remain non-2xx. An unknown template with delivered_by_clerk=false also remains
+non-2xx; it is never silently ignored as a custom delivery.
 
 The request is limited to 64 KiB and five seconds of body reading. Svix HMAC
 verification uses the exact raw body and bounded headers, with a five-minute
@@ -85,24 +98,29 @@ inbox delivery. It does not retry a code beyond the original freshness cap.
 Activation requires a separate reviewed rollout decision. The following work
 has not been performed or authorized by the local-test approval:
 
-1. Confirm a fresh signed payload from the exact existing instance has the
-   required slug, timestamp units, ownership flag and nested six-digit shape.
-   Do not copy an actual recipient/code/body into evidence.
-2. Confirm the existing company's SMTP transport supports mandatory verified
+1. Review the exact expected parser version and existing instance binding.
+   Confirm the existing company's SMTP transport supports mandatory verified
    TLS and a verified sender suitable for Apple inbox delivery. Metadata
    presence alone does not establish this.
-3. Prepare the dedicated signing secret through the approved credential flow,
+2. Prepare the dedicated signing secret through the approved credential flow,
    the exact webhook subscription, and the configuration change for this
    dormant route. Review the concrete release/config diff and recovery.
-4. Enable and verify the healthy staging adapter before changing Clerk delivery.
-   Change only the existing verification_code template's Clerk delivery switch
-   and the required email.created subscription. If the switch is global, it
-   routes codes for every staging recipient, including non-Apple users; it is
-   not an Apple-only cohort switch. Other templates remain Clerk-delivered.
-5. With separate exact recipient/send authorization, prove fresh Apple and
-   non-Apple inbox delivery and actual Clerk OTP completion in Scribe. Keep
-   outcome evidence numeric/status-only. API SMTP acceptance is insufficient.
-6. If any proof fails, restore Clerk delivery of this template first, then
+3. Enable and verify the healthy staging adapter and email.created subscription
+   while templates still use Clerk delivery. Signed Clerk-owned events receive
+   receipt-only acknowledgements. This does not prove the custom-owned OTP
+   shape or company SMTP delivery, and no prior proof is falsely attested.
+4. Start a separately authorized, bounded pilot with exact test recipients and
+   sending scope. Change only the existing verification_code template's Clerk
+   delivery switch. If global, it routes codes for every staging recipient,
+   including non-Apple users; it is not an Apple-only cohort switch. Other
+   templates remain Clerk-delivered and are acknowledged without custom sends.
+5. During that pilot, confirm a fresh signed custom-owned payload has the
+   required slug, original millisecond timestamp, literal false ownership and
+   nested six-digit shape. Unsupported shapes fail visibly and halt the pilot.
+   Prove fresh Apple/non-Apple inbox delivery and actual Clerk OTP completion
+   in Scribe. Do not copy a recipient, code or body into evidence; keep outcome
+   evidence numeric/status-only. SMTP acceptance is insufficient.
+6. If any contract/delivery proof fails, restore Clerk delivery first, then
    disable the adapter and remove its subscription/configuration if warranted.
    Apple delivery can remain blocked by the original provider incident after
    rollback; restoring the old path does not claim that incident is resolved.
@@ -117,6 +135,8 @@ The focused suite uses fictional email addresses, synthetic six-digit codes,
 a fake aiosmtplib seam behind a real configured SMTPTransport, and one uniquely
 owned internal-only disposable Redis fixture. Lua runs in real Redis. Tests
 cover raw-body signatures, foreign instance/template, timestamp units and age,
+receipt-only Clerk-owned events/replays with no send or ledger, unknown
+custom-owned templates and malformed ownership,
 duplicate/malformed/oversize payloads, replays and conflicting fingerprints,
 concurrent ownership, bounded definite retries, ambiguous outcomes and stale
 leases, Redis failures before/after dispatch, cancellation/deadlines, required
