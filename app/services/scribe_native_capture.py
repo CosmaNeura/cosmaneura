@@ -71,6 +71,7 @@ class NativeCaptureRequest(BaseModel):
         "preparation_context",
         "prepared_window",
         "prepared_admission",
+        "prepared_native_read",
     ]
     workspace_id: UUID
     request_nonce: UUID
@@ -111,6 +112,17 @@ class NativeCaptureRequest(BaseModel):
             value is not None for value in (self.attestation, self.configured_capture)
         ):
             raise ValueError("unexpected_admission_fields")
+        if self.action == "prepared_native_read":
+            if (
+                self.binding_ref is None
+                or self.operation is None
+                or self.operation.kind != "native_recording_preparation"
+                or self.prepared_context is None
+                or self.opening_nonce is not None
+                or self.preparation is not None
+            ):
+                raise ValueError("invalid_prepared_native_read")
+            return self
         if self.action == "prepared_window":
             if (
                 self.binding_ref is None
@@ -225,12 +237,12 @@ async def execute_native_capture(
             raise authority.AuthorityRequestDeniedError
         return row
 
-    if data.action in {"prepared_window", "prepared_admission"}:
+    if data.action in {"prepared_window", "prepared_admission", "prepared_native_read"}:
         # The native route still verifies current Clerk identity, both workload
         # policies and encounter/capture enablement. These complete current
         # visit lookups retain its provider-session/view-as checks. Only token
         # issuance and new interaction construction are omitted; the ordinary
-        # window dispatcher locks and reauthorizes all token/clinical/consent
+        # dispatcher locks and reauthorizes all token/clinical/consent
         # inputs before mutation and after remote I/O.
         assert data.prepared_context is not None
         assert data.binding_ref is not None

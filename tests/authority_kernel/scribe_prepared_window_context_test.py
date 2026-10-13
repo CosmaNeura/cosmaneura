@@ -49,11 +49,15 @@ def prepared(native):
     return {k: value[k] for k in ("context_token", "interaction_ref", "client_turn_id")}
 
 
-def window(native, context):
+def window(native, context, action="prepared_window"):
     return native.post(
-        "creator_review",
-        action="prepared_window",
-        operation=operation().model_dump(mode="json"),
+        "native_recording_preparation"
+        if action == "prepared_native_read"
+        else "creator_review",
+        action=action,
+        operation={"kind": "native_recording_preparation"}
+        if action == "prepared_native_read"
+        else operation().model_dump(mode="json"),
         prepared_context=context,
     )
 
@@ -86,8 +90,9 @@ def test_real_prepared_window_reuses_context_and_retains_original_keys(
         "foreign_workspace",
     ],
 )
+@pytest.mark.parametrize("action", ["prepared_window", "prepared_native_read"])
 def test_committed_revocation_and_misbound_context_prevent_remote_mutation(
-    native, engine, monkeypatch, fault
+    native, engine, monkeypatch, fault, action
 ):
     context = prepared(native)
     calls = install_remote(native, monkeypatch)
@@ -98,8 +103,10 @@ def test_committed_revocation_and_misbound_context_prevent_remote_mutation(
     elif fault == "foreign_workspace":
         response = native.post(
             "creator_review",
-            action="prepared_window",
-            operation=operation().model_dump(mode="json"),
+            action=action,
+            operation={"kind": "native_recording_preparation"}
+            if action == "prepared_native_read"
+            else operation().model_dump(mode="json"),
             prepared_context=context,
             workspace_id=str(uuid4()),
         )
@@ -157,7 +164,7 @@ def test_committed_revocation_and_misbound_context_prevent_remote_mutation(
             setattr(row, field, value)
             session.add(row)
             session.commit()
-    response = window(native, context)
+    response = window(native, context, action)
     assert (
         response.status_code in (403, 409)
         and not calls
@@ -194,7 +201,9 @@ def test_revocation_during_remote_window_blocks_ready_publication(
 
 
 @pytest.mark.parametrize("denied", ["agent", "capture", "identity", "disabled"])
-@pytest.mark.parametrize("action", ["prepared_window", "prepared_admission"])
+@pytest.mark.parametrize(
+    "action", ["prepared_window", "prepared_admission", "prepared_native_read"]
+)
 def test_prepared_context_retains_native_route_policies_before_dispatch(
     monkeypatch, denied, action
 ):
@@ -255,6 +264,33 @@ def test_prepared_context_retains_native_route_policies_before_dispatch(
 def test_prepared_context_cannot_enable_other_operations(kind):
     values = body(
         action="prepared_window",
+        binding_ref="scribe_capture_binding_" + "0" * 26,
+        operation={"kind": kind},
+        prepared_context={
+            "context_token": "invented-server-context",
+            "interaction_ref": "invented-interaction-012345",
+            "client_turn_id": str(uuid4()),
+        },
+    )
+    with pytest.raises(ValidationError):
+        service.NativeCaptureRequest.model_validate(values)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "creator_review",
+        "source_start_authorize",
+        "bind_key",
+        "issue_lease",
+        "reserve_chunks",
+        "complete",
+        "prepare_recording_window",
+    ],
+)
+def test_prepared_native_read_is_limited_to_native_preparation(kind):
+    values = body(
+        action="prepared_native_read",
         binding_ref="scribe_capture_binding_" + "0" * 26,
         operation={"kind": kind},
         prepared_context={

@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from time import perf_counter
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,7 @@ from sqlalchemy import event, select
 from sqlmodel import Session
 
 from tests.authority_kernel import scribe_preparation_metadata_test as fixtures
+from tests.authority_kernel.scribe_prepared_window_context_test import prepared
 from tests.authority_kernel.scribe_window_scope_fence_test import admitted_arguments
 
 engine, native, workflow, remote_reads = (
@@ -30,6 +32,59 @@ engine, native, workflow, remote_reads = (
     fixtures.workflow,
     fixtures.remote_reads,
 )
+
+
+def preparation_read(native, action):
+    if action == "operation":
+        return native.post("native_recording_preparation")
+    context = prepared(native)
+    return native.post(
+        "native_recording_preparation", action=action, prepared_context=context
+    )
+
+
+def test_prepared_native_read_matches_fresh_read_and_omits_new_exchange(
+    native, engine, remote_reads, record_property
+):
+    context = prepared(native)
+    counts = []
+
+    def count(_connection, _cursor, sql, *_args):
+        counts.append(sql.startswith("SELECT set_config('statement_timeout'"))
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        started = perf_counter()
+        ordinary = native.post("native_recording_preparation")
+        ordinary_ms = (perf_counter() - started) * 1000
+        ordinary_count = len(counts)
+        ordinary_deadlines = sum(counts)
+        counts.clear()
+        started = perf_counter()
+        reused = native.post(
+            "native_recording_preparation",
+            action="prepared_native_read",
+            prepared_context=context,
+        )
+        reused_ms = (perf_counter() - started) * 1000
+        reused_count = len(counts)
+        reused_deadlines = sum(counts)
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    assert ordinary.status_code == reused.status_code == 200
+    assert ordinary.headers["x-cosmaneura-prepared-native-read-version"] == "1"
+    assert ordinary.json()["result"]["receipt"] == reused.json()["result"]["receipt"]
+    assert context["context_token"] not in reused.text
+    assert ordinary_count > reused_count and engine.pool.checkedout() == 0
+    record_property("ordinary_sql_statements", ordinary_count)
+    record_property("prepared_read_sql_statements", reused_count)
+    record_property("removed_sql_statements", ordinary_count - reused_count)
+    record_property("ordinary_actual_sql", ordinary_count - ordinary_deadlines)
+    record_property("prepared_actual_sql", reused_count - reused_deadlines)
+    record_property("ordinary_deadline_settings", ordinary_deadlines)
+    record_property("prepared_deadline_settings", reused_deadlines)
+    record_property("local_ordinary_milliseconds", round(ordinary_ms, 3))
+    record_property("local_prepared_milliseconds", round(reused_ms, 3))
 
 
 def test_native_preparation_matches_context_and_key_with_one_remote_read(
@@ -73,8 +128,9 @@ def test_native_preparation_matches_context_and_key_with_one_remote_read(
 
 
 @pytest.mark.parametrize("fault", ["revoked", "failure", "wrong_session", "malformed"])
+@pytest.mark.parametrize("action", ["operation", "prepared_native_read"])
 def test_uncertain_or_revoked_preparation_publishes_neither_context_nor_key(
-    native, engine, remote_reads, monkeypatch, fault
+    native, engine, remote_reads, monkeypatch, fault, action
 ):
     calls, original = remote_reads
 
@@ -107,15 +163,16 @@ def test_uncertain_or_revoked_preparation_publishes_neither_context_nor_key(
         return result
 
     monkeypatch.setattr(native.remote, "capture_operation", altered)
-    response = native.post("native_recording_preparation")
+    response = preparation_read(native, action)
     assert response.status_code in (403, 409, 503)
     assert "receipt" not in response.json() and len(calls) == 1
     assert engine.pool.checkedout() == 0
 
 
 @pytest.mark.parametrize("status", ["created", "capturing", "uploaded"])
+@pytest.mark.parametrize("action", ["operation", "prepared_native_read"])
 def test_native_preparation_requires_current_recording_state(
-    native, engine, remote_reads, monkeypatch, status
+    native, engine, remote_reads, monkeypatch, status, action
 ):
     _, original = remote_reads
 
@@ -126,7 +183,7 @@ def test_native_preparation_requires_current_recording_state(
         )
 
     monkeypatch.setattr(native.remote, "capture_operation", altered)
-    response = native.post("native_recording_preparation")
+    response = preparation_read(native, action)
     assert response.status_code == (409 if status == "uploaded" else 200)
     if status != "uploaded":
         assert response.json()["result"]["receipt"]["context"]["status"] == status
