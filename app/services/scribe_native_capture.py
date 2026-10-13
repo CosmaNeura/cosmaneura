@@ -91,11 +91,17 @@ class NativeCaptureRequest(BaseModel):
     retain_preparation_context: Literal[True] | None = None
     attestation: ConsentAttestation | None = None
     configured_capture: ConfiguredCaptureSelection | None = None
+    include_native_preparation: Literal[True] | None = None
 
     @model_validator(mode="after")
     def action_fields(self):
         if self.retain_preparation_context is not None and self.action != "mount":
             raise ValueError("unexpected_context_retention")
+        if (
+            self.include_native_preparation is not None
+            and self.action != "prepared_admission"
+        ):
+            raise ValueError("unexpected_native_preparation")
         if self.action == "prepared_admission":
             if (
                 self.binding_ref is None
@@ -325,6 +331,29 @@ async def execute_native_capture(
                 result["configured_capture"] = admitted.configured_capture.model_dump(
                     mode="json"
                 )
+            if data.include_native_preparation:
+                # Consent has committed. Run the unchanged read's fresh pre/post
+                # authority checks before publishing one bounded native reply.
+                from app.services.scribe_preparation_metadata import (
+                    execute_native_recording_preparation,
+                )
+
+                metadata = await execute_native_recording_preparation(
+                    caller=caller,
+                    binding_ref=data.binding_ref,
+                    workspace_id=data.workspace_id,
+                    client_request_key="admission-native-preparation:"
+                    + str(data.request_nonce),
+                    client=client,
+                )
+                if metadata.context.session_id != admitted.session_id:
+                    raise authority.AuthorityRequestDeniedError
+                check_async_capture_deadline()
+                current()
+                result["native_recording_preparation"] = metadata.model_dump(
+                    mode="json"
+                )
+                result["checked_at"] = datetime.now(UTC).isoformat()
             return {
                 "version": "1",
                 "action": data.action,
