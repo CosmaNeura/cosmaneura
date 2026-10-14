@@ -64,7 +64,8 @@ def load_settings() -> OtpDeliverySettings | None:
         if not secret.startswith("whsec_"):
             raise ValueError
         key = base64.b64decode(secret[6:], validate=True)
-        if len(key) < 32:
+        # Svix's standard HMAC signing key is 24 random bytes (192 bits).
+        if len(key) < 24:
             raise ValueError
     except (ValueError, binascii.Error):
         raise ValueError("clerk_otp_delivery_configuration_invalid") from None

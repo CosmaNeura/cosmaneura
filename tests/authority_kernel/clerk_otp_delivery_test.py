@@ -401,6 +401,80 @@ def test_settings_require_explicit_staging_identity_and_contract(monkeypatch):
             config.load_settings()
 
 
+@pytest.mark.parametrize("size", [24, 32])
+def test_settings_accept_standard_svix_and_custom_signing_key_sizes(monkeypatch, size):
+    synthetic_key = b"s" * size
+    for name, value in {
+        "CLERK_OTP_DELIVERY_ENABLED": "true",
+        "PYTHON_ENV": "staging",
+        "AUTHORITY_CLERK_ISSUER": config.STAGING_ISSUER,
+        "CLERK_OTP_CONTRACT_VERSION": config.CONTRACT_VERSION,
+        "CLERK_OTP_INSTANCE_ID": config.STAGING_INSTANCE_ID,
+        "EMAIL_FROM_ADDRESS": "synthetic@cosmaneura.com",
+        "CLERK_OTP_WEBHOOK_SECRET": "whsec_" + base64.b64encode(synthetic_key).decode(),
+    }.items():
+        monkeypatch.setenv(name, value)
+    assert config.load_settings() == config.OtpDeliverySettings(
+        config.STAGING_INSTANCE_ID, synthetic_key
+    )
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "whsec_",
+        "whsec_" + base64.b64encode(b"s" * 23).decode(),
+        "whsec_%%%",
+        "whsec_" + base64.b64encode(b"s" * 24).decode() + "\n",
+        "wrong_" + base64.b64encode(b"s" * 24).decode(),
+        base64.b64encode(b"s" * 24).decode(),
+    ],
+)
+def test_settings_reject_short_or_malformed_vendor_signing_key(monkeypatch, secret):
+    for name, value in {
+        "CLERK_OTP_DELIVERY_ENABLED": "true",
+        "PYTHON_ENV": "staging",
+        "AUTHORITY_CLERK_ISSUER": config.STAGING_ISSUER,
+        "CLERK_OTP_CONTRACT_VERSION": config.CONTRACT_VERSION,
+        "CLERK_OTP_INSTANCE_ID": config.STAGING_INSTANCE_ID,
+        "EMAIL_FROM_ADDRESS": "synthetic@cosmaneura.com",
+        "CLERK_OTP_WEBHOOK_SECRET": secret,
+    }.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match="^clerk_otp_delivery_configuration_invalid$"):
+        config.load_settings()
+
+
+def test_standard_svix_key_preserves_sha256_raw_body_verification(monkeypatch):
+    key = b"s" * 24
+    monkeypatch.setitem(signed.__globals__, "KEY", key)
+    settings = config.OtpDeliverySettings(SETTINGS.instance_id, key)
+    raw = body()
+    headers = signed(raw)
+    arguments = dict(
+        delivery_id=headers["svix-id"],
+        signature_timestamp=headers["svix-timestamp"],
+        signatures=headers["svix-signature"],
+        settings=settings,
+        now=NOW,
+    )
+    assert prepare_otp(raw, **arguments).recipient == EVENT["data"]["to_email_address"]
+    with pytest.raises(RejectedOtp):
+        prepare_otp(raw + b" ", **arguments)
+    with pytest.raises(RejectedOtp):
+        prepare_otp(
+            raw,
+            **(
+                arguments
+                | {
+                    "settings": config.OtpDeliverySettings(
+                        SETTINGS.instance_id, b"t" * 24
+                    )
+                }
+            ),
+        )
+
+
 @pytest.mark.parametrize(
     "failure,expected",
     [
