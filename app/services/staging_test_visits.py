@@ -40,10 +40,13 @@ class StagingTestVisitsResult:
 
 def _snapshot_pair(
     rows: list[Appointment],
+    names: dict[datetime, str],
 ) -> tuple[CreatedTestVisit, CreatedTestVisit]:
+    # These labels describe the creation receipt. Scribe owns the mutable
+    # appointment titles and may replace them with generated chief complaints.
     return (
-        CreatedTestVisit(str(rows[0].id), str(rows[0].appointment_name)),
-        CreatedTestVisit(str(rows[1].id), str(rows[1].appointment_name)),
+        CreatedTestVisit(str(rows[0].id), names[rows[0].appointment_date]),
+        CreatedTestVisit(str(rows[1].id), names[rows[1].appointment_date]),
     )
 
 
@@ -60,17 +63,20 @@ def ensure_staging_test_visits(
     if (
         not isinstance(request_id, UUID)
         or type(visit_date) is not date
-        or not today - timedelta(days=7) <= visit_date <= today
+        or visit_date > today
     ):
         raise StagingSyntheticAppointmentError("invalid test visit request")
 
-    # Reuse the governed fixed-data patient. Its independent provisioning is
-    # idempotent; it does not create Scribe admission, audio or vendor authority.
-    ensure_staging_synthetic_appointment(
-        doctor_id=doctor_id,
-        doctor_email=doctor_email,
-        operator_ref=f"staging-web.{request_id}",
-    )
+    may_create = visit_date >= today - timedelta(days=7)
+    if may_create:
+        # Reuse the governed fixed-data patient. Its independent provisioning is
+        # idempotent; it creates no Scribe admission, audio or vendor authority.
+        # Expired requests may only recover existing data, never provision it.
+        ensure_staging_synthetic_appointment(
+            doctor_id=doctor_id,
+            doctor_email=doctor_email,
+            operator_ref=f"staging-web.{request_id}",
+        )
     marker = f"{TEST_VISIT_SYSTEM}.{request_id}"
     expected = {
         f"Invented CosmaBot acceptance {label} {visit_date:%Y%m%d}": datetime.combine(
@@ -78,6 +84,7 @@ def ensure_staging_test_visits(
         )
         for label, minute in (("one", 0), ("two", 1))
     }
+    receipt_names = {instant: name for name, instant in expected.items()}
     with get_session() as session:
         try:
             # Serialize retries before inspecting or writing either visit.
@@ -131,11 +138,9 @@ def ensure_staging_test_visits(
             if rows:
                 if (
                     len(rows) != 2
-                    or {row.appointment_name for row in rows} != set(expected)
+                    or {row.appointment_date for row in rows} != set(receipt_names)
                     or any(
                         row.patient_id != fixture.patient_id
-                        or row.appointment_name is None
-                        or row.appointment_date != expected[row.appointment_name]
                         or row.appointment_notes_preview != TEST_VISIT_NOTICE
                         or row.external_id is not None
                         for row in rows
@@ -145,9 +150,14 @@ def ensure_staging_test_visits(
                         "test visit receipt changed"
                     )
                 return StagingTestVisitsResult(
-                    _snapshot_pair(sorted(rows, key=lambda row: row.appointment_date)),
+                    _snapshot_pair(
+                        sorted(rows, key=lambda row: row.appointment_date),
+                        receipt_names,
+                    ),
                     False,
                 )
+            if not may_create:
+                raise StagingSyntheticAppointmentError("test visit request expired")
             rows = [
                 Appointment(
                     doctor_id=doctor_id,
@@ -164,6 +174,6 @@ def ensure_staging_test_visits(
             session.commit()
             for row in rows:
                 session.refresh(row)
-            return StagingTestVisitsResult(_snapshot_pair(rows), True)
+            return StagingTestVisitsResult(_snapshot_pair(rows, receipt_names), True)
         finally:
             session.rollback()

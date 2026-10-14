@@ -224,6 +224,89 @@ def test_production_refuses_before_any_database_access(source):
         ns["ensure_staging_test_visits"](**args)
 
 
+def test_recovery_preserves_generated_titles_and_original_receipt(source):
+    ns, sessions, args, _ = source
+    create = ns["ensure_staging_test_visits"]
+    first = create(**args)
+    with sessions() as session:
+        row = session.get(SeedAppointment, first.appointments[0].id)
+        row.appointment_name = "Invented difficulty falling asleep"
+        session.add(row)
+        session.commit()
+    recovered = create(**args)
+    assert not recovered.created
+    assert recovered.appointments == first.appointments
+    with sessions() as session:
+        assert (
+            session.get(SeedAppointment, first.appointments[0].id).appointment_name
+            == "Invented difficulty falling asleep"
+        )
+
+
+def test_old_committed_request_recovers_without_creating_or_provisioning(source):
+    ns, sessions, args, _ = source
+    create = ns["ensure_staging_test_visits"]
+    first = create(**args)
+
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(days=8)
+
+    ns["datetime"] = LaterClock
+    ns["ensure_staging_synthetic_appointment"] = lambda **_: pytest.fail(
+        "expired request attempted provisioning"
+    )
+    recovered = create(**args)
+    assert not recovered.created and recovered.appointments == first.appointments
+    with pytest.raises(ns["StagingSyntheticAppointmentError"]):
+        create(**(args | {"request_id": uuid4()}))
+    with sessions() as session:
+        assert len(session.exec(select(SeedAppointment)).all()) == 3
+
+
+def test_old_unseen_request_never_provisions_patient_or_visits(source):
+    ns, sessions, args, _ = source
+    args["visit_date"] -= timedelta(days=8)
+    with pytest.raises(ns["StagingSyntheticAppointmentError"]):
+        ns["ensure_staging_test_visits"](**args)
+    with sessions() as session:
+        assert not session.exec(select(SeedPatient)).all()
+        assert not session.exec(select(SeedAppointment)).all()
+
+
+def test_same_retained_uuid_is_scoped_to_each_signed_in_doctor(source):
+    ns, sessions, args, _ = source
+    create = ns["ensure_staging_test_visits"]
+    first = create(**args)
+    other = dict(doctor_id=str(uuid4()), doctor_email="other-invented@example.test")
+    with sessions() as session:
+        session.add(
+            SeedDoctor(
+                id=other["doctor_id"],
+                email=other["doctor_email"],
+                last_active_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    second = create(**(args | other))
+    assert second.created
+    assert not {row.id for row in first.appointments}.intersection(
+        row.id for row in second.appointments
+    )
+    assert create(**args).appointments == first.appointments
+    assert create(**(args | other)).appointments == second.appointments
+    with sessions() as session:
+        for result, doctor_id in (
+            (first, args["doctor_id"]),
+            (second, other["doctor_id"]),
+        ):
+            assert all(
+                session.get(SeedAppointment, row.id).doctor_id == doctor_id
+                for row in result.appointments
+            )
+
+
 def test_postgres_concurrent_retry_creates_one_pair(source):
     ns, sessions, args, engine = source
     if engine.dialect.name != "postgresql":

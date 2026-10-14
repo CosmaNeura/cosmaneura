@@ -26,14 +26,19 @@ doctor, support-view binding and practice-access dependencies. It rejects
 non-staging execution and active read-only support view. The caller supplies
 only `request_id` and `visit_date`; doctor identity comes from authenticated
 request state. Patient name, DOB, warning text and provenance are fixed. The
-date must be within the prior seven UTC days through today.
+date must be within the prior seven UTC days through today for new creation.
+An older retained date may recover its existing exact pair, without provisioning
+new fixtures or visits.
 
 The existing fixture service first ensures its independently idempotent,
 fixed-data patient/2099 appointment. The pair transaction then locks the Doctor
 and fixture, verifies the fixture's exact patient identity, and creates both
 appointments atomically. The request UUID is scoped to that Doctor in
 `created_by_system`. An incomplete or changed pair refuses recovery rather
-than repairing or replacing rows. Responses contain plain immutable receipts,
+than repairing or replacing rows. Recovery verifies patient, marker, the two
+timestamp slots and fixed warning/provenance fields; normal Scribe title changes
+are permitted. Receipt labels stay fixed and recovery never resets generated
+titles. Responses contain plain immutable receipts,
 so releasing SQL locks cannot expire returned ORM objects.
 
 The action creates no recording admission, audio file, transcript, note, EHR
@@ -54,7 +59,9 @@ SQL model doubles and no Core/vendor startup. A disposable PostgreSQL cluster
 verifies real row-lock concurrency; this does not qualify deployed Core schema,
 Clerk, practice access or Scribe. Frontend checks verify staging visibility,
 retained retry, duplicate-click prevention, receipt validation and request
-storage. Full frontend typechecking is also required.
+storage. Regression checks cover generated-title recovery, expired committed
+requests, expired unseen requests and the same retained UUID under two doctors.
+Full frontend typechecking is also required.
 
 Every code-changing PR needs independent agent review after its final
 substantive push, per `AGENTS.md`. The current user's cross-task agreement
