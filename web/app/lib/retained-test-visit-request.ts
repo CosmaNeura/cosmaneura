@@ -22,7 +22,7 @@ export function retainedTestVisitRequest(): TestVisitRequest {
   return request
 }
 
-/** A fresh pair is available only after the current pair has been confirmed. */
+/** Reset only after a confirmed pair or confirmed expired request with none. */
 export function newTestVisitRequest() {
   sessionStorage.removeItem(key)
 }

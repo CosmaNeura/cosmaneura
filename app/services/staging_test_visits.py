@@ -26,6 +26,10 @@ TEST_VISIT_SYSTEM = "staging-recording-test-v1"
 TEST_VISIT_NOTICE = "Invented acceptance test only. Contains no real patient data."
 
 
+class StagingTestVisitRequestExpired(StagingSyntheticAppointmentError):
+    """Expired request with no saved pair under the authenticated doctor lock."""
+
+
 @dataclass(frozen=True)
 class CreatedTestVisit:
     id: str
@@ -101,6 +105,22 @@ def ensure_staging_test_visits(
                 or doctor.last_active_at is None
             ):
                 raise StagingSyntheticAppointmentError("staging account unavailable")
+            rows = list(
+                session.exec(
+                    select(Appointment)
+                    .where(
+                        Appointment.doctor_id == doctor_id,
+                        Appointment.created_by_system == marker,
+                    )
+                    .with_for_update()
+                    .execution_options(populate_existing=True)
+                ).all()
+            )
+            # Recheck the creation deadline under the same lock as absence and
+            # insertion. An in-flight request cannot create after a later retry
+            # confirms expiration and absence, even across a UTC date rollover.
+            if not rows and visit_date < datetime.now(UTC).date() - timedelta(days=7):
+                raise StagingTestVisitRequestExpired("test visit request expired")
             fixture = session.exec(
                 select(SyntheticPreviewAppointmentFixture)
                 .where(SyntheticPreviewAppointmentFixture.doctor_id == doctor_id)
@@ -124,17 +144,6 @@ def ensure_staging_test_visits(
                 patient=patient,
                 appointment=original,
             )
-            rows = list(
-                session.exec(
-                    select(Appointment)
-                    .where(
-                        Appointment.doctor_id == doctor_id,
-                        Appointment.created_by_system == marker,
-                    )
-                    .with_for_update()
-                    .execution_options(populate_existing=True)
-                ).all()
-            )
             if rows:
                 if (
                     len(rows) != 2
@@ -156,8 +165,6 @@ def ensure_staging_test_visits(
                     ),
                     False,
                 )
-            if not may_create:
-                raise StagingSyntheticAppointmentError("test visit request expired")
             rows = [
                 Appointment(
                     doctor_id=doctor_id,

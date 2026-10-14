@@ -17,6 +17,7 @@ import {
 import {
   type TestVisitReceipt,
   type TestVisitRequest,
+  TestVisitRequestExpired,
   createTestVisits,
 } from "~/lib/staging-test-visits"
 
@@ -24,6 +25,7 @@ export function CreateTestVisitsButton() {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  const [expired, setExpired] = useState(false)
   const [result, setResult] = useState<TestVisitReceipt | null>(null)
   const retained = useRef<TestVisitRequest | null>(null)
   const revalidator = useRevalidator()
@@ -32,15 +34,25 @@ export function CreateTestVisitsButton() {
     if (busy || result) return
     setBusy(true)
     setFailed(false)
+    setExpired(false)
     try {
       retained.current ??= retainedTestVisitRequest()
       setResult(await createTestVisits(retained.current))
       void revalidator.revalidate()
-    } catch {
-      setFailed(true)
+    } catch (error) {
+      if (error instanceof TestVisitRequestExpired) setExpired(true)
+      else setFailed(true)
     } finally {
       setBusy(false)
     }
+  }
+
+  function startFresh() {
+    newTestVisitRequest()
+    retained.current = null
+    setResult(null)
+    setFailed(false)
+    setExpired(false)
   }
 
   return (
@@ -83,18 +95,18 @@ export function CreateTestVisitsButton() {
                 </li>
               ))}
             </ul>
-            <Button
-              className="mt-4"
-              variant="outline"
-              onClick={() => {
-                newTestVisitRequest()
-                retained.current = null
-                setResult(null)
-              }}
-            >
+            <Button className="mt-4" variant="outline" onClick={startFresh}>
               Start another test pair
             </Button>
           </div>
+        ) : expired ? (
+          <>
+            <p role="alert">
+              This request expired. The service confirmed it has no saved test
+              visits. You can start a fresh pair.
+            </p>
+            <Button onClick={startFresh}>Start fresh test pair</Button>
+          </>
         ) : (
           <>
             {failed && (

@@ -1,6 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest"
 
-import { createTestVisits } from "./staging-test-visits"
+import {
+  TestVisitRequestExpired,
+  createTestVisits,
+} from "./staging-test-visits"
 
 const post = vi.hoisted(() => vi.fn())
 vi.mock("~/configuration/client", () => ({ client: { post } }))
@@ -44,3 +47,43 @@ it.each([
   post.mockResolvedValue({ data })
   await expect(createTestVisits(request)).rejects.toThrow()
 })
+
+const expired = {
+  detail: {
+    code: "test_visit_request_expired_without_pair",
+    ...request,
+  },
+}
+
+it("permits a fresh request only on exact service-confirmed expired absence", async () => {
+  post.mockResolvedValue({ response: { status: 410 }, error: expired })
+  await expect(createTestVisits(request)).rejects.toBeInstanceOf(
+    TestVisitRequestExpired,
+  )
+})
+
+it.each([
+  { response: { status: 409 }, error: expired },
+  { response: { status: 410 }, error: { detail: "Unconfirmed request" } },
+  {
+    response: { status: 410 },
+    error: { detail: { ...expired.detail, visit_date: "2026-10-13" } },
+  },
+  {
+    response: { status: 410 },
+    error: {
+      detail: {
+        ...expired.detail,
+        request_id: "87d91f77-0fda-4e94-b06c-671b3d848201",
+      },
+    },
+  },
+])(
+  "keeps uncertain or mismatched failures as retained-request errors",
+  async (failure) => {
+    post.mockResolvedValue(failure)
+    const error = await createTestVisits(request).catch((error) => error)
+    expect(error).toBeInstanceOf(Error)
+    expect(error).not.toBeInstanceOf(TestVisitRequestExpired)
+  },
+)

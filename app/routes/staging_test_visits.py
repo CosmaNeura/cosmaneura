@@ -11,7 +11,10 @@ from app.services.staging_synthetic_appointment import (
     StagingSyntheticAppointmentConflict,
     StagingSyntheticAppointmentError,
 )
-from app.services.staging_test_visits import ensure_staging_test_visits
+from app.services.staging_test_visits import (
+    StagingTestVisitRequestExpired,
+    ensure_staging_test_visits,
+)
 
 staging_test_visits_api = APIRouter()
 
@@ -54,6 +57,16 @@ def create_staging_test_visits(
             request_id=data.request_id,
             visit_date=data.visit_date,
         )
+    except StagingTestVisitRequestExpired:
+        raise HTTPException(
+            410,
+            {
+                "code": "test_visit_request_expired_without_pair",
+                "request_id": str(data.request_id),
+                "visit_date": data.visit_date.isoformat(),
+            },
+            headers={"Cache-Control": "no-store"},
+        ) from None
     except StagingSyntheticAppointmentConflict:
         raise HTTPException(
             409, "The retained test visits could not be confirmed."

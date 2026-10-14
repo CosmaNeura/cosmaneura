@@ -28,7 +28,11 @@ only `request_id` and `visit_date`; doctor identity comes from authenticated
 request state. Patient name, DOB, warning text and provenance are fixed. The
 date must be within the prior seven UTC days through today for new creation.
 An older retained date may recover its existing exact pair, without provisioning
-new fixtures or visits.
+new fixtures or visits. If no rows exist for an expired request under the
+authenticated doctor lock, a no-store 410 binds that confirmed absence to the
+exact UUID/date. Only that validated outcome enables **Start fresh test pair**;
+generic failures and partial or changed saved pairs keep their retained request.
+The creation deadline is rechecked under the lock to cover UTC date rollover.
 
 The existing fixture service first ensures its independently idempotent,
 fixed-data patient/2099 appointment. The pair transaction then locks the Doctor

@@ -259,7 +259,7 @@ def test_old_committed_request_recovers_without_creating_or_provisioning(source)
     )
     recovered = create(**args)
     assert not recovered.created and recovered.appointments == first.appointments
-    with pytest.raises(ns["StagingSyntheticAppointmentError"]):
+    with pytest.raises(ns["StagingTestVisitRequestExpired"]):
         create(**(args | {"request_id": uuid4()}))
     with sessions() as session:
         assert len(session.exec(select(SeedAppointment)).all()) == 3
@@ -268,11 +268,52 @@ def test_old_committed_request_recovers_without_creating_or_provisioning(source)
 def test_old_unseen_request_never_provisions_patient_or_visits(source):
     ns, sessions, args, _ = source
     args["visit_date"] -= timedelta(days=8)
-    with pytest.raises(ns["StagingSyntheticAppointmentError"]):
+    with pytest.raises(ns["StagingTestVisitRequestExpired"]):
         ns["ensure_staging_test_visits"](**args)
     with sessions() as session:
         assert not session.exec(select(SeedPatient)).all()
         assert not session.exec(select(SeedAppointment)).all()
+
+
+def test_expired_partial_pair_cannot_be_reset_as_confirmed_absence(source):
+    ns, sessions, args, _ = source
+    create = ns["ensure_staging_test_visits"]
+    first = create(**args)
+    with sessions() as session:
+        session.delete(session.get(SeedAppointment, first.appointments[1].id))
+        session.commit()
+
+    class LaterClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(days=8)
+
+    ns["datetime"] = LaterClock
+    with pytest.raises(ns["StagingSyntheticAppointmentConflict"]):
+        create(**args)
+    with sessions() as session:
+        assert session.get(SeedAppointment, first.appointments[0].id) is not None
+
+
+def test_creation_deadline_is_rechecked_under_the_doctor_lock(source):
+    ns, sessions, args, _ = source
+
+    class RolloverClock(datetime):
+        calls = 0
+
+        @classmethod
+        def now(cls, tz=None):
+            cls.calls += 1
+            return datetime.now(tz) + timedelta(days=0 if cls.calls == 1 else 1)
+
+    args["visit_date"] -= timedelta(days=7)
+    ns["datetime"] = RolloverClock
+    with pytest.raises(ns["StagingTestVisitRequestExpired"]):
+        ns["ensure_staging_test_visits"](**args)
+    with sessions() as session:
+        # The independently ensured fixed preview may exist; no pair may be
+        # created once the request is expired under the pair transaction lock.
+        assert len(session.exec(select(SeedAppointment)).all()) == 1
 
 
 def test_same_retained_uuid_is_scoped_to_each_signed_in_doctor(source):
@@ -382,6 +423,19 @@ def test_route_scope_and_fixed_request_contract(source):
         )
         assert response.json()["request_id"] == body["request_id"]
         assert len(response.json()["visits"]) == 2
+        expired_body = dict(
+            request_id=str(uuid4()),
+            visit_date=(args["visit_date"] - timedelta(days=8)).isoformat(),
+        )
+        expired = client.post("/staging/test-visits", json=expired_body)
+        assert expired.status_code == 410
+        assert expired.headers["cache-control"] == "no-store"
+        assert expired.json() == {
+            "detail": {
+                "code": "test_visit_request_expired_without_pair",
+                **expired_body,
+            }
+        }
         ns["is_staging"] = lambda: False
         assert client.post("/staging/test-visits", json=body).status_code == 404
 

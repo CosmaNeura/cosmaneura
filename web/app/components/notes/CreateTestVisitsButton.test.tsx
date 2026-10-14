@@ -8,8 +8,12 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   revalidate: vi.fn(),
   staging: true,
+  Expired: class extends Error {},
 }))
-vi.mock("~/lib/staging-test-visits", () => ({ createTestVisits: mocks.create }))
+vi.mock("~/lib/staging-test-visits", () => ({
+  createTestVisits: mocks.create,
+  TestVisitRequestExpired: mocks.Expired,
+}))
 vi.mock("react-router", () => ({
   useRevalidator: () => ({ revalidate: mocks.revalidate }),
   Link: ({
@@ -65,6 +69,9 @@ describe("staging test visits", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create test visits" }))
     fireEvent.click(screen.getByRole("button", { name: "Create two visits" }))
     await screen.findByRole("alert")
+    expect(
+      screen.queryByRole("button", { name: "Start fresh test pair" }),
+    ).not.toBeInTheDocument()
     const request = mocks.create.mock.calls[0][0]
     fireEvent.click(screen.getByRole("button", { name: "Retry same request" }))
     expect(screen.getByRole("button", { name: "Creating…" })).toBeDisabled()
@@ -90,5 +97,30 @@ describe("staging test visits", () => {
       screen.getByRole("link", { name: "Invented acceptance one" }),
     ).toHaveAttribute("href", "/notes/appointment_01m4x83v1zfa4bttxs033hchjw")
     await waitFor(() => expect(mocks.revalidate).toHaveBeenCalledTimes(1))
+  })
+
+  it("starts fresh explicitly after confirmed expired absence", async () => {
+    mocks.create.mockRejectedValueOnce(new mocks.Expired())
+    mocks.create.mockRejectedValueOnce(new Error("Invented lost response"))
+    render(<CreateTestVisitsButton />)
+    fireEvent.click(screen.getByRole("button", { name: "Create test visits" }))
+    fireEvent.click(screen.getByRole("button", { name: "Create two visits" }))
+    await screen.findByText(/The service confirmed it has no saved test visits/)
+    const expired = mocks.create.mock.calls[0][0]
+    const key = sessionStorage.key(0)!
+    expect(JSON.parse(sessionStorage.getItem(key)!)).toEqual(expired)
+    fireEvent.click(
+      screen.getByRole("button", { name: "Start fresh test pair" }),
+    )
+    expect(sessionStorage.getItem(key)).toBeNull()
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole("button", { name: "Create two visits" }))
+    await screen.findByRole("alert")
+    expect(mocks.create.mock.calls[1][0].request_id).not.toEqual(
+      expired.request_id,
+    )
+    expect(
+      screen.queryByRole("button", { name: "Start fresh test pair" }),
+    ).not.toBeInTheDocument()
   })
 })
