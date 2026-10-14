@@ -18,6 +18,35 @@ rate limits and code verification. SMTP acceptance does not prove inbox delivery
 The retired enhancedEmailDeliverability field is not a fix. The current Clerk
 Backend API schema marks it ineffective; no deployment decision relies on it.
 
+## Signing-key protocol compatibility correction
+
+This small Tier 2 follow-up is based on merged PR754, commit
+95996d20f853d6067c4fdfa906b5e3298c0edacb. It changes only the decoded HMAC-key
+minimum from 32 to 24 bytes, adds boundary/raw-body tests, and cites the protocol.
+It is local implementation/test work; the original exact-754 rollout approval
+and release tree do not authorize this follow-up's merge or release.
+
+The [official Svix EndpointIn contract](https://api.svix.com/api/v1/openapi.json)
+accepts a whsec_ base64 endpoint key with a minimum 32 encoded characters,
+representing 24 decoded bytes. Svix's [published generator and schema](https://github.com/svix/svix-webhooks/blob/ae6b40db923f8182756e03b982000035412cb47a/server/svix-server/src/core/types/mod.rs#L733)
+explicitly use KEY_SIZE=24 and recommend size 24. This establishes the standard
+HMAC protocol key size; it does not prove any newly created hosted Clerk key's
+actual length or that the hosted server uses this open-source build.
+
+A standard random 24-byte key supplies 192 bits of key entropy. HMAC-SHA256,
+constant-time signature comparison, exact raw-body authentication, all freshness
+and instance/ownership checks, replay fencing, no-content logging and SMTP TLS
+remain unchanged. Keys under 24 bytes, malformed base64 and wrong/missing whsec_
+prefixes remain rejected. Custom 32-byte keys continue to work.
+
+Independent exact-head review is required before any merge. Root must make a
+separate concrete rollout decision for the corrected source/artifact and update
+the prepared operator's matching key-size gate only with that decision. Restore
+the exact reviewed prior source/artifact if compatibility deployment fails;
+retain the original Clerk-delivery-first rollback order. No migration, identity,
+credential generation, hosted endpoint creation or settings mutation is part of
+this correction. The original PR754 tree/approval packet remains preserved.
+
 ## Exact contract and boundaries
 
 The hidden POST /external/v1/webhooks/clerk-otp is off by default, unavailable in
