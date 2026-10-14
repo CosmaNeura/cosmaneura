@@ -204,6 +204,7 @@ from .session_prep_review import (
     prior_notes_for_session_prep,
     session_prep_review_api,
 )
+from .staging_test_visits import staging_test_visits_api
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -245,6 +246,7 @@ internal_api_app.include_router(session_prep_review_api)
 internal_api_app.include_router(billing_header_api)
 internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
+internal_api_app.include_router(staging_test_visits_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
