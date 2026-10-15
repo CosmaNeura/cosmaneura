@@ -117,9 +117,15 @@ QA runs through GitHub issues labeled `qa-handoff`, one issue per QA bot.
   `QA-199`.
 - `QA-200` and above are reserved for a future bot 2.
 
-The coordinator posts `HANDOFF` pinned to a build/commit verified against the
-staging health/version endpoint. The bot posts `ACK`, runs its cases, and
-posts `RESULT` (`PASS`, `FAIL`, or `BLOCKED`) with uploaded evidence.
+The coordinator posts `HANDOFF` pinned to the full source commit, deployed
+revision or build ID, and immutable artifact digest for each component under
+test; use the image digest for container workloads. Verify that identity using
+release evidence matched to read-only running-workload metadata.
+`GET /healthcheck` checks availability only: it returns `{"status":"ok"}`, not a
+build or commit. A healthy response or the current repository tip does not
+establish the deployed identity. If that identity cannot be verified, report
+`BLOCKED`. The bot posts `ACK`, runs its cases, and posts `RESULT` (`PASS`, `FAIL`,
+or `BLOCKED`) with uploaded evidence.
 
 ### Practice and shared tools
 
