@@ -17,7 +17,7 @@ from app.services.companion_records import (
     RecordUnavailable,
 )
 from app.services.provider_record_authority import ProviderRecordScopeDenied
-from app.services.scribe_encounter_contract import REQUEST_ADAPTER
+from app.services.scribe_encounter_contract import REQUEST_ADAPTER, PrivateNoteText
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
 from app.utils.encryption import DecryptionError, EncryptionError
@@ -42,8 +42,8 @@ class PrivateNoteView(BaseModel):
 class PrivateNoteSave(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     change_key: UUID
-    expected_version: int = Field(ge=0, strict=True)
-    text: str = Field(max_length=2000, pattern=r"^[^\x00]*$", repr=False)
+    expected_version: int = Field(ge=0, le=2_147_483_647, strict=True)
+    text: PrivateNoteText
 
 
 def browser_workflow(request, appointment_id, action, **fields):

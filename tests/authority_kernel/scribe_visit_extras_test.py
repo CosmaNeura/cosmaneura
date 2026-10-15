@@ -137,6 +137,9 @@ def test_name_only_identity_links_without_rewriting_original_patient(engine, wor
     assert (
         source["identity"]["state"] == "provisional" and source["date_of_birth"] is None
     )
+    assert source["patient_ref"] not in {
+        p["patient_ref"] for p in invoke(request("patients"))["patients"]
+    }
     candidates = invoke(
         request(
             "patient_match_candidates",
@@ -168,6 +171,23 @@ def test_name_only_identity_links_without_rewriting_original_patient(engine, wor
     )
     with pytest.raises(scribe_encounters.EncounterConflict):
         invoke(value.model_copy(update={"change_key": uuid4()}))
+    selectable = {p["patient_ref"] for p in invoke(request("patients"))["patients"]}
+    assert (
+        source["patient_ref"] not in selectable
+        and canonical["patient_ref"] in selectable
+    )
+    with pytest.raises(authority.AuthorityRequestDeniedError):
+        invoke(
+            request(patient={"kind": "existing", "patient_ref": source["patient_ref"]})
+        )
+    assert source["patient_ref"] not in {
+        p["patient_ref"]
+        for p in invoke(
+            request(
+                "patient_match_candidates", appointment_ref=canonical["appointment_ref"]
+            )
+        )["patients"]
+    }
     with session_for(engine) as session:
         appointment = session.get(Appointment, source["appointment_ref"])
         assert str(appointment.patient_id) == source["patient_ref"]
@@ -191,6 +211,9 @@ def test_confirm_new_later_dob_is_explicit_and_not_overwritten(engine, workflow)
         result["identity"]["state"] == "confirmed"
         and result["identity"]["date_of_birth"] == "1992-03-04"
     )
+    assert visit["patient_ref"] in {
+        p["patient_ref"] for p in invoke(request("patients"))["patients"]
+    }
     with pytest.raises(scribe_encounters.EncounterConflict):
         invoke(
             request(
@@ -453,7 +476,16 @@ def test_confirmed_matching_connects_reviewed_history_without_private_content(
     assert result.sources[0].content == {"Plan": "Invented reviewed clinical source"}
     assert evidence_patient_ref == source["patient_ref"]
     assert "private" not in json.dumps(result.sources[0].content)
-    original_target = invoke(
-        request(patient={"kind": "existing", "patient_ref": source["patient_ref"]})
-    )["encounter"]
+    # Existing Core appointments keep their original source patient association.
+    with session_for(engine) as session:
+        original_appointment = Appointment(
+            doctor_id=args["doctor_id"],
+            patient_id=TypeID.from_string(source["patient_ref"]),
+            appointment_date=datetime.now(UTC).replace(tzinfo=None),
+            appointment_name="Invented retained original visit",
+        )
+        session.add(original_appointment)
+        session.flush()
+        original_target = {"appointment_ref": str(original_appointment.id)}
+        session.commit()
     assert selected(original_target).sources == ()

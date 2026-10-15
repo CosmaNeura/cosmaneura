@@ -51,6 +51,7 @@ def upgrade():
         sa.Column('doctor_id', TypeIDType('doctor'), nullable=False),
         sa.Column('source_patient_id', TypeIDType('patient'), nullable=False),
         sa.Column('canonical_patient_id', TypeIDType('patient'), nullable=False),
+        sa.Column('provisional_entry', sa.Boolean(), nullable=False),
         sa.Column('state', sa.String(16), nullable=False),
         sa.Column('version', sa.Integer(), nullable=False),
         sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id']),

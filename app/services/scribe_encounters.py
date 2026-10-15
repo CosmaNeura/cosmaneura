@@ -238,6 +238,9 @@ def _create(session, request, doctor_id, link, issuer, subject):
             .where(
                 Patient.id == TypeID.from_string(request.patient.patient_ref),
                 Patient.doctor_id == doctor_id,
+                col(Patient.id).not_in(
+                    scribe_visit_extras.unselectable_source_patients()
+                ),
             )
             .with_for_update()
         ).one_or_none()
@@ -298,6 +301,7 @@ def _create(session, request, doctor_id, link, issuer, subject):
                 provider_link_id=link.id,
                 source_patient_id=patient.id,
                 canonical_patient_id=patient.id,
+                provisional_entry=True,
                 state="provisional",
                 version=0,
             )
@@ -401,7 +405,12 @@ def encounter_workflow(
                 }
                 changed = False
                 if isinstance(request, PatientsRequest):
-                    query = select(Patient).where(Patient.doctor_id == doctor_id)
+                    query = select(Patient).where(
+                        Patient.doctor_id == doctor_id,
+                        col(Patient.id).not_in(
+                            scribe_visit_extras.unselectable_source_patients()
+                        ),
+                    )
                     if request.query:
                         query = query.where(
                             col(Patient.name).icontains(request.query, autoescape=True)

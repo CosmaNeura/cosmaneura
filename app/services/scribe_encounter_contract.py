@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -25,6 +26,21 @@ from app.services.companion_record_contract import (
 
 class Closed(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+def private_text_utf8(value: str) -> str:
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise ValueError("private_note_text_invalid") from None
+    return value
+
+
+PrivateNoteText = Annotated[
+    str,
+    Field(max_length=2000, pattern=r"^[^\x00]*$", repr=False),
+    AfterValidator(private_text_utf8),
+]
 
 
 class ExistingPatient(Closed):
@@ -99,7 +115,7 @@ class PrivateNoteSaveRequest(Request):
     appointment_ref: AppointmentRef
     change_key: UUID
     expected_version: int = Field(ge=0, le=2_147_483_647, strict=True)
-    text: str = Field(max_length=2000, pattern=r"^[^\x00]*$", repr=False)
+    text: PrivateNoteText
 
 
 class PatientMatchCandidatesRequest(Request):

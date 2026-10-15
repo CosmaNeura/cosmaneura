@@ -25,6 +25,8 @@ Ship the Core receiver/migration before the Scribe sender and dashboard editor.
 The provider may record a name-only visit and explicitly match it later or
 confirm that it is a new patient. Known DOB values cannot be overwritten. Names
 and DOB are search criteria; selection and confirmation are clinician actions.
+The immutable provisional-entry marker keeps unconfirmed and matched source
+aliases out of new selections; confirmed new patients remain selectable.
 The association controls dashboard labels and later reviewed-note history. It
 never edits original finalization evidence or supplies private reminder text to
 generation. Private reminders require current doctor, actor, tenant, and provider

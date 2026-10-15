@@ -143,14 +143,18 @@ def save_private_note(session, request, row, link, conflict):
     return private_note_view(note), True
 
 
+def unselectable_source_patients():
+    return select(col(ScribePatientIdentity.source_patient_id)).where(
+        ScribePatientIdentity.provisional_entry == True,  # noqa: E712
+        col(ScribePatientIdentity.state).in_(("provisional", "matched")),
+    )
+
+
 def match_candidates(session, request, row):
     query = select(Patient).where(
         Patient.doctor_id == row.doctor_id, Patient.id != row.patient_id
     )
-    provisional = select(col(ScribePatientIdentity.source_patient_id)).where(
-        ScribePatientIdentity.state == "provisional"
-    )
-    query = query.where(col(Patient.id).not_in(provisional))
+    query = query.where(col(Patient.id).not_in(unselectable_source_patients()))
     if request.query:
         query = query.where(col(Patient.name).icontains(request.query, autoescape=True))
     if request.date_of_birth:
@@ -193,15 +197,12 @@ def save_match(session, request, row, link, conflict):
         raise conflict
     if isinstance(request.selection, ExistingPatient):
         patient_id = TypeID.from_string(request.selection.patient_ref)
-        provisional = session.exec(
-            select(ScribePatientIdentity)
-            .where(
-                ScribePatientIdentity.source_patient_id == patient_id,
-                ScribePatientIdentity.state == "provisional",
-            )
+        unselectable = session.exec(
+            unselectable_source_patients()
+            .where(ScribePatientIdentity.source_patient_id == patient_id)
             .limit(1)
         ).first()
-        if provisional is not None or patient_id == row.patient_id:
+        if unselectable is not None or patient_id == row.patient_id:
             raise conflict
         state = "matched"
     else:

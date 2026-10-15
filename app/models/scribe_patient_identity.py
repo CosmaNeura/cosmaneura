@@ -30,5 +30,7 @@ class ScribePatientIdentity(
     provider_link_id: TypeIDType = ScribeCaptureProviderLink.foreign_key()
     source_patient_id: TypeIDType = Patient.foreign_key()
     canonical_patient_id: TypeIDType = Patient.foreign_key(index=True)
+    # Capture-entry provenance remains fixed after an explicit match.
+    provisional_entry: bool = False
     state: str = Field(max_length=16)
     version: int = 0

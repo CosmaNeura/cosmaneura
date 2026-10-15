@@ -205,10 +205,11 @@ def test_private_note_unicode_body_and_exact_key_are_bounded(monkeypatch):
     "field,value",
     [
         ("text", "x" * 2001),
+        ("text", "\ud800"),
         ("expected_version", True),
         ("clinical_note", "Invented secret"),
     ],
-    ids=["oversize", "boolean_version", "clinical_field"],
+    ids=["oversize", "invalid_unicode", "boolean_version", "clinical_field"],
 )
 def test_private_note_contract_never_accepts_clinical_or_invalid_version_fields(
     field, value
