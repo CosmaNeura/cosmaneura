@@ -81,7 +81,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_azure",
-        "55ff71e2d739e07f7704cfbfb53fd39110ed5602649d4b0a424cff62f92f37f3",
+        "417bb013e2b7c94aba785ff888abd7a286c410fdf3aaa70913fce2140cc524b0",
     ),
     (
         "staging_snapshot_public_ip",
@@ -336,6 +336,7 @@ class NativeImages:
         for index in range(count):
             raw = self.name(index)
             require(raw is not None and 0 < len(raw) <= 4096)
+            assert raw is not None
             path = Path(raw.decode("utf-8"))
             require(path.is_absolute() and path == Path(os.path.abspath(path)))
             require(

@@ -353,6 +353,73 @@ def test_unprovisioned_managed_identity_gets_pending_and_cannot_self_enroll(
     assert BaaAcceptance.count() == before_acceptances
 
 
+@pytest.mark.parametrize("reservation", [None, "organization", "negotiated_shell"])
+def test_test_email_domain_uses_server_reservation_not_test_address_suffix(
+    bare_authenticated_client: TestClient, monkeypatch, reservation: str | None
+):
+    doctor = _authed_doctor()
+    domain = "release-qa.example.test"
+    doctor.email = f"release-qa+clerk_test@{domain}"
+    doctor.save()
+    monkeypatch.setattr(internal, "verified_primary_email", lambda _id: doctor.email)
+    if reservation is not None:
+        practice = Practice(
+            legal_name="Synthetic Reserved Domain",
+            join_code="RESERVED",
+            email_domain=domain,
+            origin_channel="direct",
+            is_solo=False,
+            negotiated_baa_required=reservation == "negotiated_shell",
+            negotiated_baa_on_file=reservation == "organization",
+            negotiated_baa_effective_date=datetime.now(timezone.utc)
+            - timedelta(days=1),
+            negotiated_baa_reference="test://synthetic-domain-baa",
+            billing_exempt=True,
+        ).save()
+        if reservation == "organization":
+            configure_provider_organization(
+                practice,
+                legal_name="Synthetic Reserved Organization",
+                slug="synthetic-reserved-domain",
+                email_domain=domain,
+                operator_ref="test-operator",
+                reason="Synthetic domain-routing regression",
+            )
+
+    before_practices = Practice.count()
+    disposition = bare_authenticated_client.get(
+        api_app.url_path_for("organization_access_opportunity")
+    )
+    assert disposition.status_code == status.HTTP_200_OK
+    assert disposition.json() == (
+        None
+        if reservation is None
+        else {
+            "state": "pending",
+            "organization_name": None,
+            "email_domain": domain,
+        }
+    )
+    created = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Synthetic Independent Practice",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+    if reservation is None:
+        assert created.status_code == status.HTTP_200_OK, created.text
+        assert Practice.count() == before_practices + 1
+        assert created.json()["baa_accepted"] is False
+        assert created.json()["access_authorized"] is False
+    else:
+        assert created.status_code == status.HTTP_409_CONFLICT
+        assert Practice.count() == before_practices
+        assert PracticeMember.get(doctor_id=doctor.id) is None
+
+
 def test_unsafe_managed_coverage_uses_one_support_state_and_cannot_claim(
     bare_authenticated_client: TestClient,
     monkeypatch,

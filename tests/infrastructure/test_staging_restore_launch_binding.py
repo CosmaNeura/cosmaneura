@@ -663,18 +663,25 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     assert ".sigstore.json" not in signature_uri
     signature_envelope_bytes = receipt_auth_helpers._envelope(policy, receipt_bytes)
     signature_verification = receipt_auth.authenticate_broker_launch_receipt_signature(policy, receipt_bytes=receipt_bytes, signature_envelope_bytes=signature_envelope_bytes)
-    adapter_arguments: dict[str, Any] = {"policy": policy, "action": "provision", "receipt_uri": receipt_uri, "signature_envelope_uri": signature_uri, "receipt_retrieval_statuses": (404, 404, 200), "signature_envelope_retrieval_statuses": (404, 200), "retrieval_elapsed_seconds": 4, "receipt_bytes": receipt_bytes, "signature_envelope_bytes": signature_envelope_bytes, "signature_verification": signature_verification, "observed_at": datetime(2026, 9, 4, 12, 4, tzinfo=UTC)}
+    def authenticate_adapter(
+        *,
+        receipt: bytes = receipt_bytes,
+        signature_envelope: bytes = signature_envelope_bytes,
+        verification: receipt_auth.VerifiedBrokerLaunchReceiptSignature = signature_verification,
+        signature_retrieval_statuses: tuple[int, ...] = (404, 200),
+    ) -> launch.AuthenticatedBrokerLaunchReceipt:
+        return launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(policy=policy, action="provision", receipt_uri=receipt_uri, signature_envelope_uri=signature_uri, receipt_retrieval_statuses=(404, 404, 200), signature_envelope_retrieval_statuses=signature_retrieval_statuses, retrieval_elapsed_seconds=4, receipt_bytes=receipt, signature_envelope_bytes=signature_envelope, signature_verification=verification, observed_at=datetime(2026, 9, 4, 12, 4, tzinfo=UTC))
     monkeypatch.delenv(launch.EXECUTION_NAME_ENV, raising=False)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**adapter_arguments)
+        authenticate_adapter()
     monkeypatch.setenv(launch.EXECUTION_NAME_ENV, "execution-1")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"signature_envelope_retrieval_statuses": (404,)}))
+        authenticate_adapter(signature_retrieval_statuses=(404,))
     monkeypatch.setenv(launch.EXECUTION_NAME_ENV, "invalid/name")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**adapter_arguments)
+        authenticate_adapter()
     monkeypatch.setenv(launch.EXECUTION_NAME_ENV, "execution-1")
-    authenticated = launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**adapter_arguments)
+    authenticated = authenticate_adapter()
     job_record = launch.validate_launch_record(policy, record.record_bytes, record_sha256=authenticated.launch_record_sha256, record_uri=authenticated.launch_record_uri)
     provision_ref = runtime.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt(policy, authenticated, source_job_kind="provision")
     cleanup_ref = runtime.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt(policy, authenticated, source_job_kind="cleanup")
@@ -694,14 +701,14 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     def authenticate(raw: bytes) -> launch.AuthenticatedBrokerLaunchReceipt:
         raw_signature = receipt_auth_helpers._envelope(policy, raw)
         raw_verification = receipt_auth.authenticate_broker_launch_receipt_signature(policy, receipt_bytes=raw, signature_envelope_bytes=raw_signature)
-        return launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"receipt_bytes": raw, "signature_envelope_bytes": raw_signature, "signature_verification": raw_verification}))
+        return authenticate_adapter(receipt=raw, signature_envelope=raw_signature, verification=raw_verification)
     changed_receipt = runtime._canonical(runtime._parse_policy(receipt_bytes) | {"schema_version": 2})
     changed_signature = receipt_auth_helpers._envelope(policy, changed_receipt)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"receipt_bytes": changed_receipt, "signature_envelope_bytes": changed_signature}))
+        authenticate_adapter(receipt=changed_receipt, signature_envelope=changed_signature)
     unsealed = object.__new__(receipt_auth.VerifiedBrokerLaunchReceiptSignature)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"signature_verification": unsealed}))
+        authenticate_adapter(verification=unsealed)
     for field, value, code in (("provision_job_projection_sha256", f"sha256:{'0' * 64}", "binding"), ("start_client_request_id", "00000000-0000-4000-8000-000000000000", "binding"), ("schema_version", True, "authentication")):
         changed = runtime._parse_policy(receipt_bytes)
         changed[field] = value

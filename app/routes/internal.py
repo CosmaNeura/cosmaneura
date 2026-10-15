@@ -3631,7 +3631,7 @@ def lab_panel_create(
             collected = datetime.fromisoformat(data.collected_on).date()
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="collected_on must be an ISO date",
             )
 
@@ -3713,7 +3713,7 @@ def lab_panel_upload_complete(
             collected = datetime.fromisoformat(data.collected_on).date()
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="collected_on must be an ISO date",
             )
 

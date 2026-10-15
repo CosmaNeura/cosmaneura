@@ -3,6 +3,7 @@
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 from typeid import TypeID
@@ -12,6 +13,7 @@ import app.services.session_prep_operations as operations
 from app.configuration.session_prep import SessionPrepProviderSettings
 
 from activemodel.session_manager import get_session
+from activemodel.types import TypeIDType
 from app.models.authority import AuthorityAuditEvent
 from app.models.session_prep_runtime import SessionPrepBuild, SessionPrepReadReceipt
 from sqlalchemy import text
@@ -33,7 +35,7 @@ def test_expiry_is_bounded_preserves_live_receipts_and_retains_audit(
     old_time = datetime.now(UTC) - timedelta(days=2)
     with get_session() as session:
         for i in range(4):
-            identifier = TypeID("prep_read")
+            identifier = cast(TypeIDType, TypeID("prep_read"))
             payload = {
                 **recent.response_payload,
                 "tool_call_ref": str(identifier),
@@ -145,9 +147,14 @@ def test_maintenance_failure_emits_no_exception_or_record_detail(monkeypatch):
 
 
 @pytest.mark.parametrize("drift", ["disabled", "wrong_issuer"])
-def test_worker_configuration_failure_remains_visible_in_health(scope, drift):
+def test_worker_configuration_failure_remains_visible_in_health(
+    scope, drift, monkeypatch
+):
     from app.services.session_prep_worker import run_one_build
 
+    # Worker completion and health's alert window must use the same clock;
+    # collection-time NOW can be hours old by this point in the full suite.
+    monkeypatch.setattr(operations, "datetime", runtime_tests._AuthorityClock)
     settings = replace(
         runtime_tests.AUTHORITY_SETTINGS,
         **(
