@@ -15,6 +15,7 @@ from app.services.scribe_workflow import (
 from app.models.authority import AuthorityActorExternalIdentity
 from sqlmodel import Session, select
 
+from tests.authority_kernel import scribe_admission_preparation_metadata_test as legacy
 from tests.authority_kernel import scribe_preparation_metadata_test as f
 from tests.authority_kernel.companion_provider_provisioning_test import (
     engine as _owned_engine,
@@ -26,6 +27,21 @@ from tests.authority_kernel.scribe_prepared_window_context_test import (
 
 native, workflow, remote_reads = f.native, f.workflow, f.remote_reads
 engine = _owned_engine
+
+# Run the existing legacy authority/revocation tests with this new disposable
+# companion database too, rather than relying on the old fixed-address lab.
+test_legacy_receipt = (
+    legacy.test_combined_desktop_admission_returns_the_unchanged_full_receipt
+)
+test_legacy_default = (
+    legacy.test_default_admission_does_not_read_or_publish_any_preparation
+)
+test_legacy_uncertainty = (
+    legacy.test_uncertain_combined_metadata_never_publishes_partial_admission
+)
+test_legacy_cancel = (
+    legacy.test_cancellation_after_metadata_read_cannot_publish_combined_reply
+)
 
 
 @pytest.fixture
