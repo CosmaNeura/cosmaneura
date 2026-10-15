@@ -189,6 +189,11 @@ class DeadlineScribeClient:
     def __init__(self, client):
         self.client = client
 
+    async def create_prepared_configured_session(self, *args, **kwargs):
+        return await capture_call(
+            lambda: self.client.create_prepared_configured_session(*args, **kwargs)
+        )
+
     async def create_configured_session(self, *args, **kwargs):
         return await capture_call(
             lambda: self.client.create_configured_session(*args, **kwargs)

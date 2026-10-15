@@ -21,6 +21,7 @@ from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_capture_scope, scribe_encounters
+from app.services import scribe_capture_protocol as protocol
 from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import (
@@ -34,7 +35,10 @@ from app.services.scribe_capture_deadline import (
 )
 from app.services.scribe_capture_gateway import execute_capture_operation
 from app.services.scribe_capture_protocol import CaptureOperation, ReadOperation
-from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
+from app.services.scribe_configured_capture_contract import (
+    ConfiguredCaptureSelection,
+    ConfiguredSessionCreate,
+)
 from app.services.scribe_encounter_contract import LookupRequest
 from app.services.scribe_workflow import ScribeWorkflowClient
 from app.utils.native_request_timing import phase
@@ -349,6 +353,29 @@ async def execute_native_capture(
             capture_settings=capture_settings,
         )
         if data.action == "prepared_admission":
+            combined_metadata: protocol.PreparationMetadata | None = None
+            prepared_session = None
+            if (
+                data.include_preparation_metadata or data.include_native_preparation
+            ) and capture_settings.combined_session_preparation_enabled:
+
+                async def prepare_session(
+                    tenant: UUID,
+                    payload: ConfiguredSessionCreate,
+                    creator: str,
+                    request_key: str,
+                ):
+                    nonlocal combined_metadata
+                    result = await client.create_prepared_configured_session(
+                        tenant,
+                        payload,
+                        creator_actor_id=creator,
+                        idempotency_key=request_key,
+                    )
+                    combined_metadata = result.preparation_metadata
+                    return result.admission
+
+                prepared_session = prepare_session
             with phase("operation"):
                 admitted = await admit_capture(
                     caller=caller,
@@ -358,6 +385,7 @@ async def execute_native_capture(
                     attestation=data.attestation,
                     configured_capture=data.configured_capture,
                     client=client,
+                    prepared_session=prepared_session,
                 )
             check_async_capture_deadline()
             current()
@@ -380,16 +408,31 @@ async def execute_native_capture(
                 # authority checks before publishing one bounded native reply.
                 from app.services.scribe_preparation_metadata import (
                     execute_native_recording_preparation,
+                    native_preparation_from_metadata,
+                    validate_admitted_preparation,
                 )
 
-                metadata = await execute_native_recording_preparation(
-                    caller=caller,
-                    binding_ref=data.binding_ref,
-                    workspace_id=data.workspace_id,
-                    client_request_key="admission-native-preparation:"
-                    + str(data.request_nonce),
-                    client=client,
-                )
+                if prepared_session is not None:
+                    scope, combined = validate_admitted_preparation(
+                        caller,
+                        data.binding_ref,
+                        data.workspace_id,
+                        admitted.session_id,
+                        combined_metadata,
+                    )
+                    metadata = native_preparation_from_metadata(
+                        scope, combined, data.workspace_id
+                    )
+                else:
+                    with phase("preparation_metadata"):
+                        metadata = await execute_native_recording_preparation(
+                            caller=caller,
+                            binding_ref=data.binding_ref,
+                            workspace_id=data.workspace_id,
+                            client_request_key="admission-native-preparation:"
+                            + str(data.request_nonce),
+                            client=client,
+                        )
                 if metadata.context.session_id != admitted.session_id:
                     raise authority.AuthorityRequestDeniedError
                 check_async_capture_deadline()
@@ -404,17 +447,30 @@ async def execute_native_capture(
                 # pre/post authority checks and the final encounter fence.
                 from app.services.scribe_preparation_metadata import (
                     execute_preparation_metadata,
+                    validate_admitted_preparation,
                 )
 
-                metadata = await execute_preparation_metadata(
-                    caller=caller,
-                    binding_ref=data.binding_ref,
-                    workspace_id=data.workspace_id,
-                    scope=None,
-                    client_request_key="admission-preparation-metadata:"
-                    + str(data.request_nonce),
-                    client=client,
-                )
+                if prepared_session is not None:
+                    # Same ordinary scope and complete receipt validation after
+                    # admission's durable accept/finish and fresh authority fences.
+                    _, metadata = validate_admitted_preparation(
+                        caller,
+                        data.binding_ref,
+                        data.workspace_id,
+                        admitted.session_id,
+                        combined_metadata,
+                    )
+                else:
+                    with phase("preparation_metadata"):
+                        metadata = await execute_preparation_metadata(
+                            caller=caller,
+                            binding_ref=data.binding_ref,
+                            workspace_id=data.workspace_id,
+                            scope=None,
+                            client_request_key="admission-preparation-metadata:"
+                            + str(data.request_nonce),
+                            client=client,
+                        )
                 if metadata.review.session_id != admitted.session_id:
                     raise authority.AuthorityRequestDeniedError
                 check_async_capture_deadline()

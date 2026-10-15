@@ -190,6 +190,8 @@ async def native_capture(
         data, key = await _body(request)
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _failure(422)
+    if ledger := current_ledger():
+        ledger.describe_request(data.action)
     client = None
     try:
         check_async_capture_deadline()

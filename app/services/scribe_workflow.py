@@ -78,6 +78,19 @@ class ScribeUploadAuthorizationExpired(ScribeWorkflowConflictError):
     pass
 
 
+class PreparedConfiguredSessionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    schema_version: Literal["1.0"]
+    admission: ConfiguredSessionReceipt
+    preparation_metadata: capture_protocol.PreparationMetadata
+
+    @model_validator(mode="after")
+    def same_session(self):
+        if self.preparation_metadata.review.session_id != self.admission.id:
+            raise ValueError("scribe_response_scope_mismatch")
+        return self
+
+
 class ConsentCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -206,6 +219,15 @@ class AsyncTokenCredential(Protocol):
 
 
 class ScribeWorkflowClient(Protocol):
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt: ...
+
     async def create_configured_session(
         self,
         tenant_id: UUID,
@@ -262,6 +284,16 @@ class ScribeWorkflowClient(Protocol):
 
 
 class DisabledScribeWorkflowClient:
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt:
+        raise ScribeWorkflowDisabledError("scribe_workflow_disabled")
+
     async def create_configured_session(
         self,
         tenant_id: UUID,
@@ -332,6 +364,35 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 
 
 class HttpScribeWorkflowClient:
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id):
+            raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+        if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
+            raise ScribeWorkflowRejectedError("scribe_invalid_admission_key")
+        # Fixed receiver-first path. No retry/fallback after possibly committed I/O.
+        result = await self._post(
+            "/v1/captured-sessions/prepared",
+            tenant_id,
+            payload,
+            idempotency_key,
+            PreparedConfiguredSessionReceipt,
+            creator_actor_id=creator_actor_id,
+        )
+        receipt = result.admission
+        if receipt.creator_actor_id != creator_actor_id or any(
+            getattr(receipt, field) != getattr(payload, field)
+            for field in ConfiguredSessionCreate.model_fields
+        ):
+            raise ScribeWorkflowRejectedError("scribe_response_scope_mismatch")
+        return result
+
     """Call Scribe with a short-lived app token from the platform managed identity."""
 
     def __init__(

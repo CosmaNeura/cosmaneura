@@ -38,8 +38,6 @@ async def execute_native_recording_preparation(
     client_request_key: str,
     client: ScribeWorkflowClient,
 ) -> protocol.NativeRecordingPreparation:
-    from app.services.scribe_capture_gateway import CaptureOperationUnavailable
-
     scope, result = await _read_preparation_metadata(
         caller=caller,
         binding_ref=binding_ref,
@@ -48,6 +46,16 @@ async def execute_native_recording_preparation(
         client_request_key=client_request_key,
         client=client,
     )
+    return native_preparation_from_metadata(scope, result, workspace_id)
+
+
+def native_preparation_from_metadata(
+    scope: AdmittedCaptureScope,
+    result: protocol.PreparationMetadata,
+    workspace_id: UUID,
+) -> protocol.NativeRecordingPreparation:
+    from app.services.scribe_capture_gateway import CaptureOperationUnavailable
+
     if result.review.status != "created" and result.review.status != "capturing":
         raise CaptureOperationUnavailable
     # The same freshly reauthorized admission supplies the native namespace.
@@ -60,6 +68,34 @@ async def execute_native_recording_preparation(
             status=result.review.status,
         ),
         encryption_key=result.encryption_key,
+    )
+
+
+def validate_admitted_preparation(
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    session_id: UUID,
+    result: protocol.PreparationMetadata | None,
+) -> tuple[AdmittedCaptureScope, protocol.PreparationMetadata]:
+    from app.services.scribe_capture_gateway import (
+        CaptureReceiptInvalid,
+        authorize_admitted_capture,
+        validate_receipt,
+    )
+
+    check_async_capture_deadline()
+    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    if result is None or scope.session_id != session_id:
+        raise CaptureReceiptInvalid
+    checked = validate_receipt(
+        protocol.ReadOperation(kind="preparation_metadata"),
+        result,
+        scope,
+        upload_origins=(),
+    )
+    return scope, protocol.PreparationMetadata.model_validate(
+        checked.model_dump(mode="json")
     )
 
 
