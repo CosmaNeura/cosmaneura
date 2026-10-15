@@ -133,3 +133,11 @@ highest tier and should be split when concerns can deploy independently.
 - Every PR records its tier, tests, exact recovery, independent agent-review
   evidence, and only the conditional controls that apply.
 - Documentation-only changes must not build or deploy production artifacts.
+
+## Two-bot QA loop
+
+Read `COORDINATION.md` before editing; claim files and release your own claims at handoff.
+The browser QA protocol and offline ledger live in `qa/two-bot/README.md`.
+Both queues start paused. Synthetic environments require verified isolation before use;
+existing staging is not automatically eligible. Existing deployment, PHI, consent and
+Actions restrictions remain in force. A QA finding never authorizes deployment.

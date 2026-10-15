@@ -1,0 +1,9 @@
+{
+  "qa:reported": "Filed; awaiting reproduction",
+  "qa:reproduced": "Confirmed; fix in progress",
+  "qa:fixed": "Deployed to approved test copies; awaiting bot retest",
+  "qa:verified": "Independent browser retest passed; close issue",
+  "qa:not-a-defect": "Expected behavior, with explanation",
+  "qa:needs-owner": "Named owner decision or private credential needed",
+  "qa:blocked": "External prerequisite or reproduction blocked"
+}

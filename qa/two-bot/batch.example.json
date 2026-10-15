@@ -1,0 +1,102 @@
+{
+  "id": "PILOT-B1",
+  "bot": "bot-1",
+  "state": "queued",
+  "commit": "REPLACE_WITH_40_CHARACTER_DEPLOYED_SHA",
+  "cases": [
+    {
+      "id": "C01",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": true,
+      "kind": "case"
+    },
+    {
+      "id": "C02",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": true,
+      "kind": "case"
+    },
+    {
+      "id": "C03",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C04",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C05",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C06",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": true,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C07",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": false,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C08",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": false,
+      "edge": false,
+      "kind": "case"
+    },
+    {
+      "id": "C09",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": false,
+      "edge": false,
+      "kind": "cleanup"
+    },
+    {
+      "id": "C10",
+      "steps": "REPLACE: exact synthetic browser action and owned fixture name",
+      "expected": "REPLACE: exact observable state/message/count",
+      "source": "REPLACE: source path and behavior reviewed",
+      "action": false,
+      "edge": false,
+      "kind": "inventory"
+    }
+  ],
+  "release_pins": {
+    "frontend": "REPLACE_WITH_UI_SHA",
+    "backend": "REPLACE_WITH_API_SHA"
+  }
+}

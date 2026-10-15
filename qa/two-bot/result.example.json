@@ -1,0 +1,95 @@
+{
+  "batch": "PILOT-B1",
+  "bot": "bot-1",
+  "start_commit": "REPLACE_WITH_DEPLOYED_SHA",
+  "end_commit": "REPLACE_WITH_DEPLOYED_SHA",
+  "method": "browser",
+  "comment_url": "https://github.com/CosmaNeura/cosmaneura/issues/1#issuecomment-1",
+  "reviewer": "REPLACE: coordinator identity who reviewed evidence",
+  "counts": {
+    "PASS": 10,
+    "FAIL": 0,
+    "BLOCKED": 0
+  },
+  "cases": [
+    {
+      "id": "C01",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C02",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C03",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C04",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C05",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C06",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C07",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C08",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C09",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    },
+    {
+      "id": "C10",
+      "status": "PASS",
+      "observed": "REPLACE: sanitized browser observation",
+      "record_ids": [],
+      "evidence": "REPLACE: approved sanitized browser evidence reference"
+    }
+  ],
+  "remaining_fixtures": [],
+  "start_pins": {
+    "frontend": "REPLACE_WITH_UI_SHA",
+    "backend": "REPLACE_WITH_API_SHA"
+  },
+  "end_pins": {
+    "frontend": "REPLACE_WITH_UI_SHA",
+    "backend": "REPLACE_WITH_API_SHA"
+  }
+}
