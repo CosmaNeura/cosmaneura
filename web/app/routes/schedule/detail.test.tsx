@@ -81,6 +81,7 @@ function renderMeeting(
       {
         path: "/",
         loader,
+        hydrateFallbackElement: <div>Loading meeting</div>,
         element: (
           <MeetingDetail
             meeting={currentMeeting}

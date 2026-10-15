@@ -53,7 +53,7 @@ export function EmptyNotes({
 }) {
   return (
     <div className="mb-4">
-      <div className="mb-2 text-xl font-semibold">Notes</div>
+      <h2 className="mb-2 text-xl font-semibold">Notes</h2>
       <div className="text-muted-foreground text-sm italic">
         {captureRequired
           ? "This visit was started in Scribe. Reopen it in Scribe to resume the recording and prepare its note. A recording uploaded separately cannot generate a note for this visit. Use a new visit for a separate upload."

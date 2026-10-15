@@ -98,11 +98,7 @@ function getModePlugins(mode: string) {
   }
 
   // TODO most of these plugins do not work properly! https://github.com/remix-run/react-router/issues/12736#event-15990602218
-  return [
-    Inspect(),
-    Terminal({ console: "terminal" }),
-    // reactRouterDevTools()
-  ]
+  return [Inspect(), Terminal({ console: "terminal" })]
 }
 
 // test configuration is done via vitest.config.ts, this is only for the build system

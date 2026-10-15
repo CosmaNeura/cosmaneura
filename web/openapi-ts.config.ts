@@ -25,7 +25,7 @@ export default defineConfig({
   experimentalParser: true,
   plugins: [
     "@hey-api/client-fetch",
-    ...defaultPlugins,
+    ...defaultPlugins.filter((plugin) => plugin !== "@hey-api/typescript"),
     // https://github.com/hey-api/openapi-ts/issues/1571
     {
       identifierCase: "preserve",
