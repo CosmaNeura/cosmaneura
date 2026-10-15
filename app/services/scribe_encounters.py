@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from typeid import TypeID
 
-from app.services import authority, provider_record_authority
+from app.services import authority, provider_record_authority, scribe_visit_extras
 from app.services.companion_appointment_setup import _current_provider
 from app.services.companion_encounter_contract import digest
 from app.services.companion_encounters import _locked_provider
@@ -27,7 +27,11 @@ from app.services.scribe_encounter_contract import (
     ExistingPatient,
     LookupRequest,
     NewPatient,
+    PatientMatchCandidatesRequest,
+    PatientMatchSaveRequest,
     PatientsRequest,
+    PrivateNoteReadRequest,
+    PrivateNoteSaveRequest,
 )
 from app.services.scribe_encounter_status import saved_encounter_statuses
 
@@ -43,6 +47,7 @@ from app.models.patient import Patient
 from app.models.provider_record_authority import ProviderPracticeAuthority
 from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.scribe_encounter_creation import ScribeEncounterCreation
+from app.models.scribe_patient_identity import ScribePatientIdentity
 from sqlalchemy import event
 from sqlmodel import col, select
 
@@ -153,6 +158,7 @@ def _visit(
         else None,
         "title": appointment.appointment_name or "Visit",
         "appointment_at": appointment.appointment_date.replace(tzinfo=UTC).isoformat(),
+        "identity": scribe_visit_extras.identity_view(session, row, link, patient),
         **({"status": status} if status else {}),
     }
 
@@ -178,7 +184,12 @@ def _visit_input_rows(session, row):
 
 
 def _create(session, request, doctor_id, link, issuer, subject):
-    request_digest = digest(request.model_dump(mode="json", exclude={"request_nonce"}))
+    body = request.model_dump(mode="json", exclude={"request_nonce"})
+    # Keep pre-redesign retry digests byte-for-byte compatible. Opting into
+    # provisional entry is additive and remains bound into its own digest.
+    if isinstance(request.patient, NewPatient) and not request.patient.provisional:
+        body["patient"].pop("provisional", None)
+    request_digest = digest(body)
     # _current_provider holds the Doctor lock before this lookup. Concurrent
     # submissions serialize, including two requests with the same creation key.
     row = session.exec(
@@ -277,6 +288,20 @@ def _create(session, request, doctor_id, link, issuer, subject):
         request_sha256=request_digest,
     )
     session.add(row)
+    if isinstance(request.patient, NewPatient) and request.patient.provisional:
+        session.add(
+            ScribePatientIdentity(
+                appointment_id=appointment.id,
+                doctor_id=doctor_id,
+                actor_id=link.actor_id,
+                tenant_id=link.tenant_id,
+                provider_link_id=link.id,
+                source_patient_id=patient.id,
+                canonical_patient_id=patient.id,
+                state="provisional",
+                version=0,
+            )
+        )
     session.add(
         AuthorityAuditEvent(
             event_source="platform_authoritative",
@@ -451,6 +476,59 @@ def encounter_workflow(
                         saved_statuses=None if include_lookup_status else {},
                         expected_capture_binding_ref=expected_capture_binding_ref,
                     )
+                elif isinstance(
+                    request,
+                    (
+                        PrivateNoteReadRequest,
+                        PrivateNoteSaveRequest,
+                        PatientMatchCandidatesRequest,
+                        PatientMatchSaveRequest,
+                    ),
+                ):
+                    row = session.exec(
+                        select(ScribeEncounterCreation).where(
+                            ScribeEncounterCreation.appointment_id
+                            == TypeID.from_string(request.appointment_ref),
+                            ScribeEncounterCreation.doctor_id == doctor_id,
+                            ScribeEncounterCreation.provider_link_id == link.id,
+                        )
+                    ).one_or_none()
+                    if row is None:
+                        raise authority.AuthorityRequestDeniedError
+                    _visit(
+                        session, row, doctor_id=doctor_id, link=link, subject=subject
+                    )
+                    if isinstance(request, PrivateNoteReadRequest):
+                        result["private_note"] = scribe_visit_extras.private_note_view(
+                            scribe_visit_extras.private_note(session, row, link)
+                        )
+                    elif isinstance(request, PrivateNoteSaveRequest):
+                        result["private_note"], changed = (
+                            scribe_visit_extras.save_private_note(
+                                session, request, row, link, EncounterConflict
+                            )
+                        )
+                        result["change_key"] = str(request.change_key)
+                    elif isinstance(request, PatientMatchCandidatesRequest):
+                        result.update(
+                            scribe_visit_extras.match_candidates(session, request, row)
+                        )
+                        result["identity"] = scribe_visit_extras.identity_view(
+                            session, row, link
+                        )
+                    else:
+                        changed = scribe_visit_extras.save_match(
+                            session, request, row, link, EncounterConflict
+                        )
+                        result["encounter"] = _visit(
+                            session,
+                            row,
+                            doctor_id=doctor_id,
+                            link=link,
+                            subject=subject,
+                        )
+                        result["identity"] = result["encounter"]["identity"]
+                        result["change_key"] = str(request.change_key)
                 elif isinstance(request, AddBirthDateRequest):
                     row = session.exec(
                         select(ScribeEncounterCreation).where(

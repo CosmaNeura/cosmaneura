@@ -216,6 +216,14 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
 async def safe_request_validation_handler(
     request: Request, exc: RequestValidationError
 ):
+    if request.url.path.startswith("/internal/v1/notes/") and request.url.path.endswith(
+        "/private-note"
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Invalid private note request."},
+            headers={"Cache-Control": "no-store"},
+        )
     if request.url.path.startswith("/embed/v1/context-tokens/"):
         return token_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
