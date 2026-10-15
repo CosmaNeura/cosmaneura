@@ -43,6 +43,16 @@ def test_explicit_staging_gate(monkeypatch):
     assert timing.enabled()
 
 
+def test_request_description_accepts_only_closed_actions(observations):
+    with timing.request_timing() as ledger:
+        ledger.describe_request("prepared_admission")
+        ledger.describe_request("https://synthetic-private.invalid/patient")
+    assert observations[0]["request_kind"] == "prepared_admission"
+    assert "private" not in repr(observations)
+    ledger.describe_request("prepared_source")
+    assert observations[0]["request_kind"] == "prepared_admission"
+
+
 def test_disabled_keeps_results_exceptions_and_no_collection(monkeypatch):
     monkeypatch.setattr(timing, "enabled", lambda: False)
     monkeypatch.setattr(timing, "_emit", lambda _: pytest.fail("disabled emission"))
@@ -70,6 +80,7 @@ def test_phase_failure_nested_and_safe_numeric_schema(observations):
     assert row["phase_failures"]["workload_agent"] == 0
     assert set(row) == {
         "event",
+        "request_kind",
         "total_ms",
         "phase_ms",
         "phase_count",

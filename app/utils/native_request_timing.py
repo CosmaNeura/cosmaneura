@@ -29,6 +29,9 @@ Phase = Literal[
     "policy_binding",
     "operation",
     "downstream",
+    "consent_admission",
+    "session_admission",
+    "preparation_metadata",
 ]
 PHASES = (
     "workload_agent",
@@ -41,9 +44,23 @@ PHASES = (
     "policy_binding",
     "operation",
     "downstream",
+    "consent_admission",
+    "session_admission",
+    "preparation_metadata",
 )
 MAX_MS = 600_000.0
 MAX_COUNT = 10_000
+REQUEST_KINDS = frozenset(
+    {
+        "mount",
+        "operation",
+        "preparation_context",
+        "prepared_window",
+        "prepared_admission",
+        "prepared_native_read",
+        "prepared_source",
+    }
+)
 _SQL_ATTRIBUTE = "_cosmaneura_native_timing"
 _emit_lock = Lock()
 
@@ -72,6 +89,15 @@ class Ledger:
         self.sql_count = 0
         self.sql_ms = 0.0
         self.sql_failures = 0
+        self.request_kind = "unparsed"
+
+    def describe_request(self, kind: str) -> None:
+        # Only a closed validated action, never URL/body/identifiers or headers.
+        if kind not in REQUEST_KINDS:
+            return
+        with self.lock:
+            if not self.closed:
+                self.request_kind = kind
 
     def record(self, name: Phase, started: float, failed: bool) -> None:
         value = _elapsed(started)
@@ -97,6 +123,7 @@ class Ledger:
             self.closed = True
             return {
                 "event": "native_core_request_timing",
+                "request_kind": self.request_kind,
                 "total_ms": round(value, 2),
                 "phase_ms": {p: round(self.milliseconds[p], 2) for p in PHASES},
                 "phase_count": dict(self.counts),

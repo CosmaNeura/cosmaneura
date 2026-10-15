@@ -21,6 +21,8 @@ class ScribeCaptureSettings:
     prep_enabled: bool = False
     # Founder-owned, local synthetic cohort only; review by 2026-10-20.
     long_visits_enabled: bool = False
+    # Receiver-first; enable only after the prepared admission endpoint is qualified.
+    combined_session_preparation_enabled: bool = False
 
     def __post_init__(self) -> None:
         for origin in self.upload_origins:
@@ -41,6 +43,9 @@ class ScribeCaptureSettings:
 
 
 SCRIBE_CAPTURE_SETTINGS = ScribeCaptureSettings(
+    combined_session_preparation_enabled=config(
+        "SCRIBE_COMBINED_SESSION_PREPARATION_ENABLED", default=False, cast=bool
+    ),
     enabled=config("SCRIBE_CAPTURE_ENABLED", default=False, cast=bool),
     notes_enabled=config("SCRIBE_CAPTURE_NOTES_ENABLED", default=False, cast=bool),
     prep_enabled=config("SCRIBE_ENCOUNTER_PREP_ENABLED", default=False, cast=bool),

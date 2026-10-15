@@ -1,0 +1,21 @@
+// Existing Container Apps console sink only; export numeric fields, never Log_s.
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "cosmaneura-staging-app"
+| extend observation = parse_json(Log_s)
+| where observation.event == "native_core_request_timing"
+| where tostring(observation.request_kind) in ("prepared_admission", "prepared_window", "prepared_source")
+| extend request_kind = tostring(observation.request_kind),
+    total_ms = todouble(observation.total_ms),
+    sql_ms = todouble(observation.sql_cursor_ms),
+    consent_ms = todouble(observation.phase_ms.consent_admission),
+    session_ms = todouble(observation.phase_ms.session_admission),
+    metadata_ms = todouble(observation.phase_ms.preparation_metadata),
+    downstream_ms = todouble(observation.phase_ms.downstream),
+    auth_ms = todouble(observation.phase_ms.clerk_auth),
+    lookup_ms = todouble(observation.phase_ms.policy_lookup)
+| summarize samples=count(), total_p50_ms=percentile(total_ms, 50),
+    total_p95_ms=percentile(total_ms, 95), sql_p95_ms=percentile(sql_ms, 95),
+    consent_p95_ms=percentile(consent_ms, 95), session_p95_ms=percentile(session_ms, 95),
+    metadata_p95_ms=percentile(metadata_ms, 95), downstream_p95_ms=percentile(downstream_ms, 95),
+    auth_p95_ms=percentile(auth_ms, 95), lookup_p95_ms=percentile(lookup_ms, 95)
+    by request_kind, RevisionName_s, bin(TimeGenerated, 5m)
