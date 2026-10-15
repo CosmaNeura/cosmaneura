@@ -94,9 +94,15 @@ def validate_admitted_preparation(
         scope,
         upload_origins=(),
     )
-    return scope, protocol.PreparationMetadata.model_validate(
+    metadata = protocol.PreparationMetadata.model_validate(
         checked.model_dump(mode="json")
     )
+    # Validation/serialization can cross expiry or a committed revocation.
+    # Match the ordinary metadata path's final current-admission/context fence.
+    check_async_capture_deadline()
+    if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
+        raise CaptureReceiptInvalid
+    return scope, metadata
 
 
 async def _read_preparation_metadata(

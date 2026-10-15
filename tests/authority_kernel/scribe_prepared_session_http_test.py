@@ -29,7 +29,7 @@ class Credential:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "fault", [None, "creator", "session", "extra", "missing", "lost", "denied"]
+    "fault", [None, "large", "creator", "session", "extra", "missing", "lost", "denied"]
 )
 async def test_combined_http_contract_and_no_fallback(fault):
     payload = ConfiguredSessionCreate(
@@ -60,6 +60,63 @@ async def test_combined_http_contract_and_no_fallback(fault):
         encryption_key=pair("encryption_key", scope())[1],
         capabilities=pair("capabilities", scope())[1],
     )
+    if fault == "large":
+        # A valid retained review can be larger than a small mutation receipt.
+        # It must fit the same metadata allowance as the existing separate read.
+        segments = [
+            dict(
+                source_segment_id=str(uuid4()),
+                source_segment_version=1,
+                source_locale="en-US",
+                speaker_id=str(uuid4()),
+                speaker_role="patient",
+                start_ms=index * 1000,
+                end_ms=(index + 1) * 1000,
+            )
+            for index in range(5)
+        ]
+        content = "Fictional test content. " * 150
+        working_id = str(uuid4())
+        review = CreatorReviewView.model_validate(
+            dict(
+                schema_version="1.0",
+                session_id=str(payload.id),
+                status="transcript_ready",
+                source=dict(
+                    schema_version="1.0",
+                    source_transcript_version=1,
+                    language_mode="en-US",
+                    transcription_adapter_id="synthetic",
+                    transcription_model_profile_id="synthetic",
+                    normalization_profile_id="synthetic",
+                    duration_ms=5000,
+                    segments=[dict(**row, content=content) for row in segments],
+                ),
+                working=dict(
+                    schema_version="1.0",
+                    working_transcript_id=working_id,
+                    working_transcript_version=1,
+                    source_transcript_version=1,
+                    segments=[
+                        dict(**row, resolution="english_source", content=content)
+                        for row in segments
+                    ],
+                    blockers=[],
+                    note_ready=True,
+                ),
+                review_queue=dict(
+                    schema_version="1.0",
+                    session_id=str(payload.id),
+                    source_transcript_version=1,
+                    working_transcript_id=working_id,
+                    working_transcript_version=1,
+                    status="complete",
+                    items=[],
+                ),
+            )
+        )
+        metadata = metadata.model_copy(update={"review": review})
+        assert len(metadata.model_dump_json().encode()) > 16_384
     answer = dict(
         schema_version="1.0",
         admission=receipt.model_dump(mode="json"),
@@ -103,7 +160,7 @@ async def test_combined_http_contract_and_no_fallback(fault):
                 idempotency_key="original-session-key",
             )
 
-        if fault:
+        if fault and fault != "large":
             with pytest.raises(ScribeWorkflowError):
                 await invoke()
         else:

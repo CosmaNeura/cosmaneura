@@ -383,6 +383,9 @@ class HttpScribeWorkflowClient:
             payload,
             idempotency_key,
             PreparedConfiguredSessionReceipt,
+            # Preserve the ordinary metadata allowance plus its bounded
+            # configured-admission envelope. Other mutation caps stay unchanged.
+            max_bytes=MAX_CREATOR_REVIEW_BYTES + 32_768,
             creator_actor_id=creator_actor_id,
         )
         receipt = result.admission

@@ -1,6 +1,7 @@
 """Real Core route/authority transactions; fictional downstream responses."""
 
-from datetime import UTC, datetime
+import hashlib
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -12,7 +13,7 @@ from app.services.scribe_workflow import (
     ScribeWorkflowRetryableError,
 )
 
-from app.models.authority import AuthorityActorExternalIdentity
+from app.models.authority import AuthorityActorExternalIdentity, MountContextToken
 from sqlmodel import Session, select
 
 from tests.authority_kernel import scribe_admission_preparation_metadata_test as legacy
@@ -145,6 +146,46 @@ def test_no_metadata_opt_in_preserves_original_session_path(native, combined):
     mounted = new_mounted_context(native)
     response = prepared_admission(native, mounted)
     assert response.status_code == 200 and combined[0] == []
+
+
+@pytest.mark.parametrize("fault", ["expired", "revoked"])
+def test_context_invalidated_during_validation_cannot_publish_combined_metadata(
+    native, engine, combined, monkeypatch, fault
+):
+    from app.services import scribe_capture_gateway as gateway
+
+    mounted = new_mounted_context(native)
+    token_hash = hashlib.sha256(
+        mounted["prepared_context"]["context_token"].encode()
+    ).hexdigest()
+    original = gateway.validate_receipt
+    validations = []
+
+    def invalidate(*args, **kwargs):
+        checked = original(*args, **kwargs)
+        if args[0].kind == "preparation_metadata":
+            assert engine.pool.checkedout() == 0
+            with Session(engine) as session:
+                token = session.exec(
+                    select(MountContextToken).where(
+                        MountContextToken.token_hash == token_hash
+                    )
+                ).one()
+                if fault == "expired":
+                    token.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+                else:
+                    token.revoked_at = datetime.now(UTC)
+                session.add(token)
+                session.commit()
+            validations.append(True)
+        return checked
+
+    monkeypatch.setattr(gateway, "validate_receipt", invalidate)
+    response = prepared_admission(native, mounted, include_preparation_metadata=True)
+    assert response.status_code in (403, 409)
+    assert "preparation_metadata" not in response.json()
+    assert len(validations) == len(combined[0]) == 1
+    assert engine.pool.checkedout() == 0
 
 
 def test_phone_native_context_uses_combined_metadata_too(
