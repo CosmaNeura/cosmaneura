@@ -26,9 +26,12 @@ from app.services.scribe_encounter_contract import (
     REQUEST_ADAPTER,
     AddBirthDateRequest,
     CreateRequest,
+    PatientMatchSaveRequest,
+    PrivateNoteSaveRequest,
 )
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
+from app.utils.encryption import DecryptionError, EncryptionError
 
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -55,13 +58,13 @@ async def read_body(request: Request):
     if length is not None and (
         not length.isascii()
         or not length.isdigit()
-        or len(length) > 4
-        or int(length) > 4096
+        or len(length) > 5
+        or int(length) > 16384
     ):
         raise ValueError("invalid_length")
     data = bytearray()
     async for chunk in request.stream():
-        if len(data) + len(chunk) > 4096:
+        if len(data) + len(chunk) > 16384:
             raise ValueError("request_too_large")
         data.extend(chunk)
     if length is not None and len(data) != int(length):
@@ -72,13 +75,15 @@ async def read_body(request: Request):
         parse_constant=lambda _: (_ for _ in ()).throw(ValueError("invalid_number")),
     )
     result = REQUEST_ADAPTER.validate_python(value)
+    if len(data) > 4096 and not isinstance(result, PrivateNoteSaveRequest):
+        raise ValueError("request_too_large")
     if isinstance(result, CreateRequest) and headers.getlist("idempotency-key") != [
         str(result.creation_key)
     ]:
         raise ValueError("creation_key_required")
-    if isinstance(result, AddBirthDateRequest) and headers.getlist(
-        "idempotency-key"
-    ) != [str(result.change_key)]:
+    if isinstance(
+        result, (AddBirthDateRequest, PrivateNoteSaveRequest, PatientMatchSaveRequest)
+    ) and headers.getlist("idempotency-key") != [str(result.change_key)]:
         raise ValueError("change_key_required")
     return result
 
@@ -144,7 +149,7 @@ async def scribe_encounter_workflow(
         return problem(403)
     except ValueError:
         return problem(422)
-    except (companion_records.RecordUnavailable, SQLAlchemyError, TypeError):
+    except (companion_records.RecordUnavailable, SQLAlchemyError, TypeError, EncryptionError, DecryptionError):
         return problem(503)
 
 

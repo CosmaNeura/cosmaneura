@@ -14,6 +14,7 @@ import { NoteDetailRecovery } from "@/components/notes/NoteDetailRecovery"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { LabResultsPanel } from "~/components/LabResultsPanel"
 import { MedicationPanel } from "~/components/MedicationPanel"
+import { PrivateVisitNote } from "~/components/PrivateVisitNote"
 import { SessionPrepPriorNotes } from "~/components/SessionPrepPriorNotes"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
@@ -290,6 +291,13 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           }}
         />
 
+        {loaderData.patient_identity_state === "provisional" && (
+          <p className="text-muted-foreground mb-4 text-sm">
+            Patient details can be matched later in Scribe. Your recording and
+            note stay with this visit.
+          </p>
+        )}
+
         {loaderData.session_prep_prior_notes && !loaderData.focusedNoteId && (
           <SessionPrepPriorNotes
             overview={loaderData.session_prep_prior_notes}
@@ -328,6 +336,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
         {referenceToolkitEnabled && (
           <MedicationPanel patientId={loaderData.patient.id} />
+        )}
+        {loaderData.private_note_available && (
+          <PrivateVisitNote key={appointmentId} appointmentId={appointmentId} />
         )}
         {referenceLabsEnabled && (
           <LabResultsPanel patientId={loaderData.patient.id} />
