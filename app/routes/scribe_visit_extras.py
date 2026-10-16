@@ -1,7 +1,7 @@
 """Dashboard bridge to the same current-author Scribe encounter decisions."""
 
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response
@@ -44,6 +44,11 @@ class PrivateNoteSave(BaseModel):
     change_key: UUID
     expected_version: int = Field(ge=0, le=2_147_483_647, strict=True)
     text: PrivateNoteText
+
+
+class PrivateNoteValidationError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    detail: Literal["Invalid private note request."]
 
 
 def browser_workflow(request, appointment_id, action, **fields):
@@ -114,7 +119,10 @@ def browser_workflow(request, appointment_id, action, **fields):
         raise HTTPException(503, "Visit temporarily unavailable") from None
 
 
-@router.get("/notes/{appointment_id}/private-note")
+@router.get(
+    "/notes/{appointment_id}/private-note",
+    responses={422: {"model": PrivateNoteValidationError}},
+)
 def scribe_private_note_read(
     request: Request, response: Response, appointment_id: Annotated[TypeIDType, Path()]
 ) -> PrivateNoteView:
@@ -123,7 +131,10 @@ def scribe_private_note_read(
     return PrivateNoteView.model_validate(result["private_note"])
 
 
-@router.put("/notes/{appointment_id}/private-note")
+@router.put(
+    "/notes/{appointment_id}/private-note",
+    responses={422: {"model": PrivateNoteValidationError}},
+)
 def scribe_private_note_save(
     request: Request,
     response: Response,
