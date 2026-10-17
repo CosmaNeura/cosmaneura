@@ -50,6 +50,7 @@ from app.services.scribe_creator_review_contract import (
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
+from app.services.scribe_http_pool import current_scribe_transport
 
 
 class ScribeWorkflowError(Exception):
@@ -406,6 +407,7 @@ class HttpScribeWorkflowClient:
         timeout_seconds: float,
         credential: AsyncTokenCredential,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         parsed = urlsplit(base_url)
         if (
@@ -424,6 +426,8 @@ class HttpScribeWorkflowClient:
             httpx.URL(base_url)
         ).rstrip("/"):
             raise ValueError("Scribe client origin does not match configuration")
+        if client is not None and transport is not None:
+            raise ValueError("Scribe client and transport are mutually exclusive")
         self._scope = scope
         self._credential = credential
         self._owns_client = client is None
@@ -432,6 +436,7 @@ class HttpScribeWorkflowClient:
             timeout=timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            transport=transport,
         )
 
     async def create_configured_session(
@@ -1090,6 +1095,7 @@ def build_scribe_workflow_client(
     if not settings.is_complete():
         raise ValueError("Scribe workflow settings are incomplete")
 
+    transport = current_scribe_transport(settings.base_url)
     if credential_factory is None:
         credential: AsyncTokenCredential = DefaultAzureCredential(
             managed_identity_client_id=settings.managed_identity_client_id
@@ -1102,4 +1108,5 @@ def build_scribe_workflow_client(
         scope=settings.scope,
         timeout_seconds=settings.timeout_seconds,
         credential=credential,
+        transport=transport,
     )
