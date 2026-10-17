@@ -1,7 +1,8 @@
 """ASGI-loop HTTP connections, with private capture-worker request ownership.
 
-Only TCP/TLS resources are shared. Credentials, cookies, request headers,
-authorization and SQL remain request-local. No live response stream crosses
+This pool shares only TCP/TLS resources. Cookies, request headers, patient
+authorization and SQL remain request-local. Service-identity SDK ownership,
+when enabled, belongs to its separate configuration adapter. No live response stream crosses
 event loops; a cancelled worker joins its exact network operation's cleanup.
 """
 

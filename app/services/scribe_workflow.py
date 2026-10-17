@@ -10,7 +10,6 @@ from uuid import UUID
 import httpx
 from azure.core.credentials import AccessToken
 from azure.core.exceptions import AzureError
-from azure.identity.aio import DefaultAzureCredential
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -21,10 +20,12 @@ from pydantic import (
     model_validator,
 )
 
+from app.configuration.scribe_service_identity import current_scribe_service_identity
 from app.configuration.scribe_workflow import (
     SCRIBE_WORKFLOW_SETTINGS,
     ScribeWorkflowSettings,
 )
+from app.configuration.service_auth import create_scribe_workload_credential
 from app.services import scribe_capture_protocol as capture_protocol
 from app.services.scribe_capture_deadline import check_async_capture_deadline
 from app.services.scribe_capture_recovery_contract import (
@@ -1123,9 +1124,9 @@ def build_scribe_workflow_client(
 
     transport = current_scribe_transport(settings.base_url)
     if credential_factory is None:
-        credential: AsyncTokenCredential = DefaultAzureCredential(
-            managed_identity_client_id=settings.managed_identity_client_id
-        )
+        credential: AsyncTokenCredential = current_scribe_service_identity(
+            settings
+        ) or create_scribe_workload_credential(settings.managed_identity_client_id)
     else:
         credential = credential_factory(settings.managed_identity_client_id)
 
