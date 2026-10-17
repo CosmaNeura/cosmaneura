@@ -55,6 +55,7 @@ from app.services.scribe_http_pool import (
     ResponseCollection,
     current_scribe_transport,
 )
+from app.utils.native_request_timing import async_phase, phase
 
 
 class ScribeWorkflowError(Exception):
@@ -534,43 +535,47 @@ class HttpScribeWorkflowClient:
             raise ScribeWorkflowRejectedError("scribe_invalid_scope")
         try:
             check_async_capture_deadline()
-            access_token = await self._credential.get_token(self._scope)
+            with phase("workflow_token"):
+                access_token = await self._credential.get_token(self._scope)
             check_async_capture_deadline()
-            async with self._client.stream(
-                "POST",
-                path,
-                headers={
-                    "Authorization": f"Bearer {access_token.token}",
-                    "X-Tenant-ID": str(tenant_id),
-                    "Idempotency-Key": idempotency_key,
-                    **(
-                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
-                        if creator_actor_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Practitioner": practitioner_id}
-                        if practitioner_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
-                        if profile_receipt_id
-                        else {}
-                    ),
-                    "Accept": "application/json",
-                    "Cache-Control": "no-store",
-                },
-                json=payload.model_dump(mode="json"),
-                follow_redirects=False,
-                extensions={
-                    COLLECTION_EXTENSION: ResponseCollection(
-                        (200, 201), max_bytes, upload_authorization
-                    )
-                }
-                if self._uses_response_collection
-                else None,
-            ) as response:
+            async with (
+                async_phase("workflow_http"),
+                self._client.stream(
+                    "POST",
+                    path,
+                    headers={
+                        "Authorization": f"Bearer {access_token.token}",
+                        "X-Tenant-ID": str(tenant_id),
+                        "Idempotency-Key": idempotency_key,
+                        **(
+                            {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                            if creator_actor_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Practitioner": practitioner_id}
+                            if practitioner_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                            if profile_receipt_id
+                            else {}
+                        ),
+                        "Accept": "application/json",
+                        "Cache-Control": "no-store",
+                    },
+                    json=payload.model_dump(mode="json"),
+                    follow_redirects=False,
+                    extensions={
+                        COLLECTION_EXTENSION: ResponseCollection(
+                            (200, 201), max_bytes, upload_authorization
+                        )
+                    }
+                    if self._uses_response_collection
+                    else None,
+                ) as response,
+            ):
                 if response.status_code == 409:
                     if (
                         upload_authorization
@@ -694,37 +699,43 @@ class HttpScribeWorkflowClient:
     ) -> ResponseModel:
         try:
             check_async_capture_deadline()
-            access_token = await self._credential.get_token(self._scope)
+            with phase("workflow_token"):
+                access_token = await self._credential.get_token(self._scope)
             check_async_capture_deadline()
-            async with self._client.stream(
-                "GET",
-                path,
-                headers={
-                    "Authorization": f"Bearer {access_token.token}",
-                    "X-Tenant-ID": str(tenant_id),
-                    "Accept": "application/json",
-                    "Cache-Control": "no-store",
-                    **(
-                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
-                        if creator_actor_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Practitioner": practitioner_id}
-                        if practitioner_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
-                        if profile_receipt_id
-                        else {}
-                    ),
-                },
-                follow_redirects=False,
-                extensions={COLLECTION_EXTENSION: ResponseCollection((200,), max_bytes)}
-                if self._uses_response_collection
-                else None,
-            ) as response:
+            async with (
+                async_phase("workflow_http"),
+                self._client.stream(
+                    "GET",
+                    path,
+                    headers={
+                        "Authorization": f"Bearer {access_token.token}",
+                        "X-Tenant-ID": str(tenant_id),
+                        "Accept": "application/json",
+                        "Cache-Control": "no-store",
+                        **(
+                            {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                            if creator_actor_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Practitioner": practitioner_id}
+                            if practitioner_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                            if profile_receipt_id
+                            else {}
+                        ),
+                    },
+                    follow_redirects=False,
+                    extensions={
+                        COLLECTION_EXTENSION: ResponseCollection((200,), max_bytes)
+                    }
+                    if self._uses_response_collection
+                    else None,
+                ) as response,
+            ):
                 if response.status_code == 409:
                     raise ScribeWorkflowConflictError("scribe_conflict")
                 if (
