@@ -28,6 +28,7 @@ from app.routes.zoom_auth import zoom_auth_app
 from app.models.doctor import Doctor
 
 from .configuration.public_onboarding import public_onboarding_configured
+from .configuration.scribe_workflow import SCRIBE_WORKFLOW_SETTINGS
 from .environments import is_production
 from .routes.agent import agent_api_app
 from .routes.authority_errors import (
@@ -54,6 +55,7 @@ from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .services.scribe_http_pool import install_scribe_connections
 
 fast_api_args = {}
 
@@ -134,6 +136,12 @@ install_companion_encounters(api_app)
 install_companion_appointment_setup(api_app)
 install_scribe_encounters(api_app)
 install_capture_boundaries(api_app)
+install_scribe_connections(
+    api_app,
+    SCRIBE_WORKFLOW_SETTINGS.base_url
+    if SCRIBE_WORKFLOW_SETTINGS.enabled and SCRIBE_WORKFLOW_SETTINGS.is_complete()
+    else None,
+)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 
