@@ -37,6 +37,23 @@ class _Operation:
     task: asyncio.Task[None] | None = None
 
 
+class _BufferedBody(httpx.AsyncByteStream):
+    """Immutable bytes only; no socket, callback or loop-owned stream state."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    async def __aiter__(self):
+        # Preserve normal network-sized input to HTTPX's content decoder.
+        # Feeding an entire compressed envelope at once could inflate all of
+        # it before the existing worker's decoded response bound is checked.
+        for offset in range(0, len(self._body), 65_536):
+            yield self._body[offset : offset + 65_536]
+
+    async def aclose(self) -> None:
+        self._body = b""
+
+
 class ScribeHttpPool:
     def __init__(
         self, origin: str, *, transport: httpx.AsyncBaseTransport | None = None
@@ -153,7 +170,7 @@ class ScribeHttpPool:
             answer = httpx.Response(
                 response.status_code,
                 headers=response.headers.raw,
-                stream=httpx.ByteStream(bytes(body)),
+                stream=_BufferedBody(bytes(body)),
                 extensions={
                     name: response.extensions[name]
                     for name in ("http_version", "reason_phrase")

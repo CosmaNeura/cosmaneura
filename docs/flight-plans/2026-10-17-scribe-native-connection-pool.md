@@ -35,6 +35,9 @@ The bridge collects and closes the complete raw response before passing bytes
 back to the worker. Its 32 MiB plus 8192-byte outer buffer ceiling matches the
 existing capture boundary; all smaller decoded operation/model bounds remain.
 Socket extensions and live async streams never cross event loops.
+The returned memory-only body yields at most 64 KiB of raw bytes per chunk,
+so content decoding cannot inflate the entire compressed envelope in one
+chunk before the existing worker checks its decoded byte limit.
 
 Cancellation, expiry, disconnect and shutdown cancel the exact pending network
 operation. The private worker keeps its existing admission slot until that

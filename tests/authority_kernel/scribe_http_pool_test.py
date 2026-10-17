@@ -2,6 +2,8 @@
 
 import asyncio
 import gzip
+import random
+import string
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -377,6 +379,78 @@ async def test_complete_body_is_validated_on_worker_with_original_response_bound
 
     await asyncio.to_thread(in_worker, pool, request)
     assert not pool._operations
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_compressed_buffer_does_not_decode_whole_envelope_before_existing_bound(
+    monkeypatch,
+):
+    randomizer = random.Random(0)
+    content = (
+        '{"ok":true,"padding":"'
+        + "".join(randomizer.choices(string.ascii_letters + string.digits, k=262_144))
+        + '"}'
+    ).encode()
+    compressed = gzip.compress(content)
+    assert len(compressed) > 2 * 65_536
+    raw_chunks = []
+    original = pool_module._BufferedBody.__aiter__
+
+    async def observed(body):
+        async for chunk in original(body):
+            raw_chunks.append(len(chunk))
+            yield chunk
+
+    monkeypatch.setattr(pool_module._BufferedBody, "__aiter__", observed)
+
+    async def handler(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "content-encoding": "gzip"},
+            stream=Stream(compressed),
+        )
+
+    pool = pool_module.ScribeHttpPool(ORIGIN, transport=Transport(handler))
+
+    class Receipt(BaseModel):
+        ok: bool
+        padding: str
+
+    class Credential:
+        async def get_token(self, scope):
+            return AccessToken("synthetic-fresh", int(time.time()) + 60)
+
+        async def close(self):
+            pass
+
+    async def request(budget):
+        client = HttpScribeWorkflowClient(
+            base_url=ORIGIN,
+            scope="synthetic-scope",
+            timeout_seconds=5,
+            credential=Credential(),
+            transport=pool_module.current_scribe_transport(ORIGIN),
+        )
+        try:
+            with pytest.raises(
+                ScribeWorkflowRetryableError, match="scribe_response_too_large"
+            ):
+                await client._post(
+                    "/v1/fixed",
+                    uuid4(),
+                    Receipt(ok=True, padding=""),
+                    "synthetic-key",
+                    Receipt,
+                    max_bytes=16_384,
+                )
+        finally:
+            await client.close()
+
+    await asyncio.to_thread(in_worker, pool, request)
+    # The actual HTTPX decoder and workflow bound stop after the first normal
+    # raw chunk, before the remaining compressed envelope is decompressed.
+    assert raw_chunks == [65_536]
     await pool.close()
 
 
