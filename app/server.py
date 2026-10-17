@@ -28,6 +28,7 @@ from app.routes.zoom_auth import zoom_auth_app
 from app.models.doctor import Doctor
 
 from .configuration.public_onboarding import public_onboarding_configured
+from .configuration.scribe_service_identity import install_scribe_service_identity
 from .configuration.scribe_workflow import SCRIBE_WORKFLOW_SETTINGS
 from .environments import is_production
 from .routes.agent import agent_api_app
@@ -142,6 +143,7 @@ install_scribe_connections(
     if SCRIBE_WORKFLOW_SETTINGS.enabled and SCRIBE_WORKFLOW_SETTINGS.is_complete()
     else None,
 )
+install_scribe_service_identity(api_app, SCRIBE_WORKFLOW_SETTINGS)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 
