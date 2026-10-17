@@ -50,7 +50,11 @@ from app.services.scribe_creator_review_contract import (
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
-from app.services.scribe_http_pool import current_scribe_transport
+from app.services.scribe_http_pool import (
+    COLLECTION_EXTENSION,
+    ResponseCollection,
+    current_scribe_transport,
+)
 
 
 class ScribeWorkflowError(Exception):
@@ -431,6 +435,7 @@ class HttpScribeWorkflowClient:
         self._scope = scope
         self._credential = credential
         self._owns_client = client is None
+        self._uses_response_collection = transport is not None
         self._client = client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=timeout_seconds,
@@ -558,6 +563,13 @@ class HttpScribeWorkflowClient:
                 },
                 json=payload.model_dump(mode="json"),
                 follow_redirects=False,
+                extensions={
+                    COLLECTION_EXTENSION: ResponseCollection(
+                        (200, 201), max_bytes, upload_authorization
+                    )
+                }
+                if self._uses_response_collection
+                else None,
             ) as response:
                 if response.status_code == 409:
                     if (
@@ -709,6 +721,9 @@ class HttpScribeWorkflowClient:
                     ),
                 },
                 follow_redirects=False,
+                extensions={COLLECTION_EXTENSION: ResponseCollection((200,), max_bytes)}
+                if self._uses_response_collection
+                else None,
             ) as response:
                 if response.status_code == 409:
                     raise ScribeWorkflowConflictError("scribe_conflict")

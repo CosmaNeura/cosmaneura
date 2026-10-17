@@ -31,9 +31,20 @@ jar, credential, default authorization header, claim or response cache.
 
 Requests remain fixed to the configured HTTPS origin with trust_env and
 redirects disabled, no transport retry, and unchanged per-request timeouts.
-The bridge collects and closes the complete raw response before passing bytes
-back to the worker. Its 32 MiB plus 8192-byte outer buffer ceiling matches the
-existing capture boundary; all smaller decoded operation/model bounds remain.
+The two existing JSON helpers attach an immutable collection plan containing
+only success status codes, their decoded byte limit, and the upload-expiry
+boolean. No callbacks or identity/SQL context are passed. The plan is removed
+before raw HTTP dispatch. Header-first rejection closes the response without
+reading its irrelevant body, preserving existing recovery/error codes. Only
+the existing upload expiry 409 path collects its bounded body with the original
+exact media type comparison and 4096-byte decoded ceiling.
+
+The bridge collects a valid-sized raw response and closes it before passing
+bytes back to the worker. The parent stops collecting after the existing
+decoded limit; an oversized raw prefix is returned only so the original worker
+limit rejects it before parsing a model. Its 32 MiB plus 8192-byte outer buffer
+ceiling matches the existing capture boundary. All original worker header,
+decoded-byte, expiry-literal and model validation stays authoritative.
 Socket extensions and live async streams never cross event loops.
 The returned memory-only body yields at most 64 KiB of raw bytes per chunk,
 so content decoding cannot inflate the entire compressed envelope in one

@@ -19,6 +19,44 @@ from typing import Protocol
 import httpx
 
 MAX_BODY_BYTES = 32 * 1024 * 1024 + 8192
+COLLECTION_EXTENSION = "cosmaneura_scribe_response_collection"
+
+
+@dataclass(frozen=True)
+class ResponseCollection:
+    success_statuses: tuple[int, ...]
+    max_bytes: int
+    upload_expiry: bool = False
+
+    def __post_init__(self):
+        if (
+            type(self.success_statuses) is not tuple
+            or any(type(status) is not int for status in self.success_statuses)
+            or self.success_statuses not in ((200,), (200, 201))
+            or not isinstance(self.max_bytes, int)
+            or isinstance(self.max_bytes, bool)
+            or not 0 < self.max_bytes <= MAX_BODY_BYTES
+            or not isinstance(self.upload_expiry, bool)
+            or (self.upload_expiry and self.success_statuses != (200, 201))
+        ):
+            raise ValueError("scribe_response_collection_invalid")
+
+    def body_limit(self, response: httpx.Response) -> int | None:
+        media_type = response.headers.get("content-type", "").split(";", 1)[0]
+        if response.status_code == 409:
+            # The existing upload-expiry path uses this exact comparison;
+            # successful JSON responses use normalized media types instead.
+            return (
+                4096
+                if self.upload_expiry and media_type == "application/json"
+                else None
+            )
+        return (
+            self.max_bytes
+            if response.status_code in self.success_statuses
+            and media_type.strip().lower() == "application/json"
+            else None
+        )
 
 
 class CaptureBudget(Protocol):
@@ -31,6 +69,7 @@ class CaptureBudget(Protocol):
 class _Operation:
     request: httpx.Request
     budget: CaptureBudget
+    collection: ResponseCollection | None = None
     result: Future[httpx.Response] = field(default_factory=Future)
     joined: Future[None] = field(default_factory=Future)
     cancelled: Event = field(default_factory=Event)
@@ -52,6 +91,32 @@ class _BufferedBody(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         self._body = b""
+
+
+class _CollectingBody(httpx.AsyncByteStream):
+    """Parent-only decoder input; actual network closure belongs to _send."""
+
+    def __init__(
+        self, stream: httpx.AsyncByteStream, operation: _Operation, body: bytearray
+    ):
+        self._stream, self._operation, self._body = stream, operation, body
+
+    async def __aiter__(self):
+        async for raw in self._stream:
+            for offset in range(0, len(raw), 65_536):
+                self._operation.budget.check()
+                if self._operation.cancelled.is_set():
+                    raise asyncio.CancelledError
+                chunk = raw[offset : offset + 65_536]
+                if len(self._body) + len(chunk) > MAX_BODY_BYTES:
+                    raise httpx.TransportError("scribe_response_too_large")
+                self._body.extend(chunk)
+                yield chunk
+
+    async def aclose(self) -> None:
+        # HTTPX's decoded view closes at EOF. It must not mark the actual
+        # network response closed before its shielded cleanup is joined.
+        pass
 
 
 class ScribeHttpPool:
@@ -153,16 +218,31 @@ class ScribeHttpPool:
             body = bytearray()
             if not isinstance(response.stream, httpx.AsyncByteStream):
                 raise httpx.TransportError("scribe_response_stream_invalid")
-            # Response.aiter_raw() closes at EOF before returning. Own that
-            # close explicitly so cancellation cannot interrupt it and mark a
-            # still-settling stream closed before our finally block joins it.
-            async for chunk in response.stream:
-                operation.budget.check()
-                if operation.cancelled.is_set():
-                    raise asyncio.CancelledError
-                if len(body) + len(chunk) > MAX_BODY_BYTES:
-                    raise httpx.TransportError("scribe_response_too_large")
-                body.extend(chunk)
+            collecting = _CollectingBody(response.stream, operation, body)
+            if operation.collection is None:
+                async for _ in collecting:
+                    pass
+            else:
+                limit = operation.collection.body_limit(response)
+                if limit is not None:
+                    # Reuse HTTPX's public decoder with a non-closing view.
+                    # The original worker still classifies headers, limits,
+                    # expiry literals and models. An over-limit prefix is
+                    # handed back solely so that original limit rejects it.
+                    decoded = httpx.Response(
+                        response.status_code,
+                        headers=response.headers.raw,
+                        stream=collecting,
+                    )
+                    length = 0
+                    async for chunk in decoded.aiter_bytes():
+                        operation.budget.check()
+                        if operation.cancelled.is_set():
+                            raise asyncio.CancelledError
+                        length += len(chunk)
+                        if length > limit:
+                            break
+                    await decoded.aclose()
             operation.budget.check()
             if operation.cancelled.is_set():
                 raise asyncio.CancelledError
@@ -194,7 +274,10 @@ class ScribeHttpPool:
             self._operations.discard(operation)
             if error is not None or operation.cancelled.is_set():
                 operation.result.set_exception(
-                    httpx.TransportError("scribe_request_unconfirmed")
+                    httpx.TimeoutException("scribe_request_timeout")
+                    if isinstance(error, httpx.TimeoutException)
+                    and not operation.cancelled.is_set()
+                    else httpx.TransportError("scribe_request_unconfirmed")
                 )
             else:
                 assert answer is not None
@@ -254,6 +337,9 @@ class _Borrowed(httpx.AsyncBaseTransport):
         if len(body) > MAX_BODY_BYTES:
             raise httpx.TransportError("scribe_request_too_large")
         self._budget.check()
+        collection = request.extensions.get(COLLECTION_EXTENSION)
+        if collection is not None and not isinstance(collection, ResponseCollection):
+            raise httpx.TransportError("scribe_response_collection_invalid")
         operation = _Operation(
             httpx.Request(
                 request.method,
@@ -263,6 +349,7 @@ class _Borrowed(httpx.AsyncBaseTransport):
                 extensions={"timeout": dict(request.extensions.get("timeout", {}))},
             ),
             self._budget,
+            collection,
         )
         result = asyncio.wrap_future(operation.result)
         self._pool._submit(operation)

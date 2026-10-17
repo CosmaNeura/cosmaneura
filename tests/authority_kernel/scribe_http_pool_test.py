@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app.services import scribe_http_pool as pool_module
 from app.services.scribe_workflow import (
     HttpScribeWorkflowClient,
+    ScribeWorkflowError,
     ScribeWorkflowRetryableError,
 )
 
@@ -454,8 +455,200 @@ async def test_compressed_buffer_does_not_decode_whole_envelope_before_existing_
     await pool.close()
 
 
+@pytest.mark.asyncio
+async def test_pooled_timeout_keeps_existing_workflow_classification_without_exception_text():
+    async def handler(request):
+        raise httpx.ReadTimeout("synthetic transport detail must not escape")
+
+    pool = pool_module.ScribeHttpPool(ORIGIN, transport=Transport(handler))
+
+    class Receipt(BaseModel):
+        ok: bool
+
+    class Credential:
+        async def get_token(self, scope):
+            return AccessToken("synthetic-fresh", int(time.time()) + 60)
+
+        async def close(self):
+            pass
+
+    async def request(budget):
+        client = HttpScribeWorkflowClient(
+            base_url=ORIGIN,
+            scope="synthetic-scope",
+            timeout_seconds=5,
+            credential=Credential(),
+            transport=pool_module.current_scribe_transport(ORIGIN),
+        )
+        try:
+            with pytest.raises(ScribeWorkflowRetryableError) as caught:
+                await client._post(
+                    "/v1/fixed", uuid4(), Receipt(ok=True), "synthetic-key", Receipt
+                )
+            assert str(caught.value) == "scribe_request_timeout"
+            assert "synthetic transport detail" not in str(caught.value)
+        finally:
+            await client.close()
+
+    await asyncio.to_thread(in_worker, pool, request)
+    assert not pool._operations
+    await pool.close()
+
+
 def test_unbound_non_capture_work_keeps_original_client_path():
     assert pool_module.current_scribe_transport(ORIGIN) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,status,media_type,upload,payload,read_error,close_error",
+    [
+        ("POST", 409, "application/json", False, b"", True, False),
+        ("GET", 409, "application/json", False, b"", True, False),
+        ("POST", 403, "application/json", False, b"", True, False),
+        ("POST", 307, "application/json", False, b"", True, False),
+        ("POST", 408, "application/json", False, b"", True, False),
+        ("GET", 429, "application/json", False, b"", True, False),
+        ("POST", 500, "application/json", False, b"", True, False),
+        ("GET", 201, "application/json", False, b"", True, False),
+        ("POST", 200, "text/plain", False, b"", True, False),
+        ("GET", 200, "text/plain", False, b"", True, False),
+        ("POST", 409, "Application/JSON", True, b"", True, False),
+        ("POST", 409, " application/json", True, b"", True, False),
+        (
+            "POST",
+            409,
+            "application/json",
+            True,
+            b'{"detail":"Upload authorization expired; use a new Idempotency-Key."}',
+            False,
+            False,
+        ),
+        ("POST", 409, "application/json", True, b"x" * 5000, False, False),
+        ("POST", 409, "application/json", True, b"", True, False),
+        ("POST", 200, "application/json", False, b"", True, False),
+        ("POST", 403, "application/json", False, b"", True, True),
+        ("POST", 200, "application/json", False, b'{"ok":true}', False, True),
+        ("POST", 200, "application/json", False, b'{"ok":true}', False, False),
+    ],
+)
+@pytest.mark.parametrize("encoded", [False, True])
+async def test_pooled_and_original_header_body_close_errors_match(
+    method, status, media_type, upload, payload, read_error, close_error, encoded
+):
+    class Receipt(BaseModel):
+        ok: bool
+
+    class Credential:
+        async def get_token(self, scope):
+            return AccessToken("synthetic-fresh", int(time.time()) + 60)
+
+        async def close(self):
+            pass
+
+    class ContractStream(Stream):
+        reads = 0
+
+        async def __aiter__(self):
+            self.reads += 1
+            if read_error:
+                raise httpx.ReadTimeout("synthetic-private read details")
+            yield gzip.compress(payload) if encoded else payload
+
+        async def aclose(self):
+            self.closed = True
+            if close_error:
+                raise httpx.ReadTimeout("synthetic-private close details")
+
+    streams = []
+
+    async def handler(request):
+        assert pool_module.COLLECTION_EXTENSION not in request.extensions
+        stream = ContractStream()
+        streams.append(stream)
+        return httpx.Response(
+            status,
+            headers={
+                "content-type": media_type,
+                **({"content-encoding": "gzip"} if encoded else {}),
+            },
+            stream=stream,
+        )
+
+    async def call(client):
+        try:
+            if method == "POST":
+                result = await client._post(
+                    "/v1/fixed",
+                    uuid4(),
+                    Receipt(ok=True),
+                    "synthetic-key",
+                    Receipt,
+                    upload_authorization=upload,
+                )
+            else:
+                result = await client._get_resource(
+                    uuid4(), "/v1/fixed", Receipt, max_bytes=16_384
+                )
+            return ("accepted", result.model_dump())
+        except ScribeWorkflowError as error:
+            return type(error).__name__, str(error)
+
+    transport = Transport(handler)
+    async with httpx.AsyncClient(base_url=ORIGIN, transport=transport) as original:
+        client = HttpScribeWorkflowClient(
+            base_url=ORIGIN,
+            scope="synthetic-scope",
+            timeout_seconds=5,
+            credential=Credential(),
+            client=original,
+        )
+        try:
+            before = await call(client)
+        finally:
+            await client.close()
+    assert streams[0].closed
+    pool = pool_module.ScribeHttpPool(ORIGIN, transport=Transport(handler))
+
+    async def request(budget):
+        client = HttpScribeWorkflowClient(
+            base_url=ORIGIN,
+            scope="synthetic-scope",
+            timeout_seconds=5,
+            credential=Credential(),
+            transport=pool_module.current_scribe_transport(ORIGIN),
+        )
+        try:
+            return await call(client)
+        finally:
+            await client.close()
+
+    after = await asyncio.to_thread(in_worker, pool, request)
+    assert after == before
+    assert streams[1].closed and streams[1].reads == streams[0].reads
+    assert "synthetic-private" not in str(after)
+    assert not pool._operations
+    await pool.close()
+
+
+@pytest.mark.parametrize(
+    "statuses,limit,upload",
+    [
+        ((200.0,), 16_384, False),
+        ([200], 16_384, False),
+        ((True,), 16_384, False),
+        ((200,), True, False),
+        ((200,), 0, False),
+        ((200,), 16_384, 1),
+        ((200,), 16_384, True),
+        ((200, 202), 16_384, False),
+    ],
+)
+def test_response_collection_is_immutable_closed_numeric_metadata(
+    statuses, limit, upload
+):
+    with pytest.raises(ValueError, match="scribe_response_collection_invalid"):
+        pool_module.ResponseCollection(statuses, limit, upload)
 
 
 @pytest.mark.asyncio
@@ -493,12 +686,15 @@ async def test_actual_httpcore_connection_is_reused_without_a_socket():
 
 
 @pytest.mark.asyncio
-async def test_cancellation_at_end_of_body_still_joins_stream_close():
+@pytest.mark.parametrize("planned", [False, True])
+async def test_cancellation_at_end_of_body_still_joins_stream_close(planned):
     release = asyncio.Event()
     stream = Stream(close_gate=release)
 
     async def handler(request):
-        return httpx.Response(200, stream=stream)
+        return httpx.Response(
+            200, headers={"content-type": "application/json"}, stream=stream
+        )
 
     parent = asyncio.get_running_loop()
     worker_control = parent.create_future()
@@ -514,7 +710,16 @@ async def test_cancellation_at_end_of_body_still_joins_stream_close():
             async with httpx.AsyncClient(
                 transport=pool_module.current_scribe_transport(ORIGIN)
             ) as client:
-                await client.get(ORIGIN + "/v1/fixed")
+                await client.get(
+                    ORIGIN + "/v1/fixed",
+                    extensions={
+                        pool_module.COLLECTION_EXTENSION: pool_module.ResponseCollection(
+                            (200,), 16_384
+                        )
+                    }
+                    if planned
+                    else None,
+                )
         except asyncio.CancelledError:
             return "cancelled"
         finally:
