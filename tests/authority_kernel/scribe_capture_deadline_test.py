@@ -647,7 +647,9 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
     monkeypatch,
 ):
     target = app(monkeypatch, seconds=2)
-    entered, disconnect, release, cancelled, closed = (Event() for _ in range(5))
+    entered, disconnect, release, cancelled, closed, continued = (
+        Event() for _ in range(6)
+    )
     sent = []
     first = True
 
@@ -659,6 +661,7 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
         entered.set()
         await resistant_wait(release, cancelled)
         check_capture_deadline()
+        continued.set()
         pytest.fail("remote continuation after peer disconnect")
 
     monkeypatch.setattr(notes, "capture_note", work)
@@ -703,10 +706,12 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
         await asyncio.wait_for(request, timeout=0.5)
         assert time.monotonic() - started < 0.5 and sent == []
         assert not closed.is_set()
+        await until(cancelled)
+        assert not closed.is_set() and sent == [] and not continued.is_set()
     finally:
         release.set()
     await until(closed)
-    assert cancelled.is_set()
+    assert cancelled.is_set() and not continued.is_set() and sent == []
 
 
 def test_connection_commit_is_rechecked_after_flush_or_other_prior_work():
