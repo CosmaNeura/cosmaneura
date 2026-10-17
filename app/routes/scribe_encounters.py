@@ -13,6 +13,9 @@ from app.configuration.scribe_encounters import (
     SCRIBE_ENCOUNTER_SETTINGS,
     ScribeEncounterSettings,
 )
+from app.configuration.scribe_service_identity import (
+    request_scribe_service_identity_warm,
+)
 from app.routes.companion_records import RecordBoundary, _closed_pairs, problem
 from app.routes.dependencies.view_as import view_as_browser_session_present
 from app.routes.embed_context import (
@@ -25,8 +28,10 @@ from app.services.provider_record_authority import ProviderRecordScopeDenied
 from app.services.scribe_encounter_contract import (
     REQUEST_ADAPTER,
     AddBirthDateRequest,
+    CatalogRequest,
     CreateRequest,
     PatientMatchSaveRequest,
+    PatientsRequest,
     PrivateNoteSaveRequest,
 )
 from app.services.superadmin_capability import SuperadminCapabilityError
@@ -126,6 +131,9 @@ async def scribe_encounter_workflow(
         ).encode()
         if len(body) > 1_048_576:
             raise companion_records.RecordUnavailable
+        if isinstance(data, (CatalogRequest, PatientsRequest)):
+            companion_records.check_deadline(deadline)
+            request_scribe_service_identity_warm(request.app)
         return Response(
             body,
             media_type="application/json",
@@ -149,7 +157,13 @@ async def scribe_encounter_workflow(
         return problem(403)
     except ValueError:
         return problem(422)
-    except (companion_records.RecordUnavailable, SQLAlchemyError, TypeError, EncryptionError, DecryptionError):
+    except (
+        companion_records.RecordUnavailable,
+        SQLAlchemyError,
+        TypeError,
+        EncryptionError,
+        DecryptionError,
+    ):
         return problem(503)
 
 

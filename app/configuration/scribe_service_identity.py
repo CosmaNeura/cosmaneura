@@ -44,6 +44,17 @@ class _Operation:
     task: asyncio.Task[None] | None = None
 
 
+@dataclass(eq=False)
+class _WarmOperation:
+    joined: Future[None] = field(default_factory=Future)
+    cancelled: bool = False
+    task: asyncio.Task[None] | None = None
+    timer: asyncio.TimerHandle | None = None
+
+
+WARM_ACQUISITION_SECONDS = 2.0
+
+
 def _unavailable() -> AzureError:
     return AzureError("scribe_identity_unavailable")
 
@@ -81,12 +92,65 @@ class ScribeServiceIdentityOwner:
         self._credential = credential_factory(self._client_id)
         self._serial = asyncio.Lock()
         self._operations: set[_Operation] = set()
+        self._warm: _WarmOperation | None = None
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
 
     @property
     def closed(self) -> bool:
         return self._closed
+
+    def request_warm(self) -> None:
+        """Optional service-only work; never expose a token or accept context."""
+        if (
+            asyncio.get_running_loop() is not self.loop
+            or self._closed
+            or self._operations
+            or self._warm is not None
+        ):
+            return
+        operation = _WarmOperation()
+        self._warm = operation  # Register ownership before task/timer creation.
+        operation.task = self.loop.create_task(
+            self._warm_service(operation), context=Context()
+        )
+        operation.timer = self.loop.call_later(
+            WARM_ACQUISITION_SECONDS, self._cancel_warm, operation, context=Context()
+        )
+        operation.task.add_done_callback(
+            lambda task: self._finished_warm(operation, task), context=Context()
+        )
+
+    def _cancel_warm(self, operation: _WarmOperation) -> None:
+        operation.cancelled = True
+        if (
+            operation.task is not None
+            and not operation.task.done()
+            and not operation.task.cancelling()
+        ):
+            operation.task.cancel()
+
+    def _finished_warm(
+        self, operation: _WarmOperation, task: asyncio.Task[None]
+    ) -> None:
+        if operation.timer is not None:
+            operation.timer.cancel()
+        if not task.cancelled():
+            task.exception()
+        if self._warm is operation:
+            self._warm = None
+        # Also joins cancellation before the coroutine's first instruction.
+        operation.joined.set_result(None)
+
+    async def _warm_service(self, operation: _WarmOperation) -> None:
+        try:
+            async with self._serial:
+                if not self._closed and not operation.cancelled:
+                    # Only the SDK owns a cache. No result survives this await.
+                    await self._credential.get_token(self._scope)
+        except BaseException:
+            # Background failure cannot change a route or log SDK values.
+            pass
 
     def borrow(
         self, settings: ScribeWorkflowSettings, budget: CaptureBudget
@@ -117,6 +181,8 @@ class ScribeServiceIdentityOwner:
             operation.joined.set_result(None)
             return
         self._operations.add(operation)
+        if self._warm is not None:
+            self._cancel_warm(self._warm)
         operation.task = self.loop.create_task(
             self._acquire(operation), context=Context()
         )
@@ -151,6 +217,10 @@ class ScribeServiceIdentityOwner:
     async def _acquire(self, operation: _Operation) -> None:
         answer = None
         try:
+            warm = self._warm
+            if warm is not None:
+                self._cancel_warm(warm)
+                await _join(warm.joined)
             # Serialize SDK refresh calls without adding our own token cache.
             async with self._serial:
                 operation.budget.check()
@@ -190,11 +260,16 @@ class ScribeServiceIdentityOwner:
             raise asyncio.CancelledError
 
     async def _close(self) -> None:
+        warm = self._warm
+        if warm is not None:
+            self._cancel_warm(warm)
         operations = tuple(self._operations)
         for operation in operations:
             self._cancel(operation)
         for operation in operations:
             await _join(operation.joined)
+        if warm is not None:
+            await _join(warm.joined)
         try:
             await self._credential.close()
         except BaseException:
@@ -272,6 +347,12 @@ def current_scribe_service_identity(
 ) -> ServiceCredential | None:
     current = _capture_identity.get()
     return None if current is None else current[0].borrow(settings, current[1])
+
+
+def request_scribe_service_identity_warm(application) -> None:
+    owner = getattr(application.state, "scribe_service_identity", None)
+    if isinstance(owner, ScribeServiceIdentityOwner):
+        owner.request_warm()
 
 
 def install_scribe_service_identity(
