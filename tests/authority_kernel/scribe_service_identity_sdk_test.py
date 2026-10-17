@@ -27,7 +27,7 @@ from azure.identity.aio._internal import managed_identity_client as async_client
 from app.configuration.scribe_service_identity import ScribeServiceIdentityOwner
 from app.configuration.scribe_workflow import ScribeWorkflowSettings
 
-from tests.authority_kernel.scribe_service_identity_test import Budget
+from tests.authority_kernel.scribe_service_identity_test import Budget, until
 
 SETTINGS = ScribeWorkflowSettings(
     enabled=True,
@@ -98,7 +98,10 @@ class Transport(AsyncHttpTransport):
 
 
 @pytest.mark.asyncio
-async def test_official_sdk_cache_then_refresh_across_private_worker_loops(monkeypatch):
+@pytest.mark.parametrize("warm_before_request", [False, True])
+async def test_official_sdk_cache_then_refresh_across_private_worker_loops(
+    monkeypatch, warm_before_request
+):
     now = [2_000_000_000]
     clock = SimpleNamespace(time=lambda: now[0])
     # Replace module clock references, not global time or SDK cache structures.
@@ -145,6 +148,11 @@ async def test_official_sdk_cache_then_refresh_across_private_worker_loops(monke
         return asyncio.run(request())
 
     try:
+        if warm_before_request:
+            private.set("synthetic-catalog-result-and-provider-context")
+            assert owner.request_warm() is None
+            await until(lambda: owner._warm is None)
+            assert transport.requests == 1 and len(credentials) == 1
         first = await asyncio.to_thread(worker)
         assert first.token == "synthetic-sdk-token-1" and transport.requests == 1
         second = await asyncio.to_thread(worker)
