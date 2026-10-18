@@ -140,7 +140,11 @@ install_capture_boundaries(api_app)
 install_scribe_connections(
     api_app,
     SCRIBE_WORKFLOW_SETTINGS.base_url
-    if SCRIBE_WORKFLOW_SETTINGS.enabled and SCRIBE_WORKFLOW_SETTINGS.is_complete()
+    if (
+        SCRIBE_WORKFLOW_SETTINGS.enabled
+        and SCRIBE_WORKFLOW_SETTINGS.is_complete()
+        and SCRIBE_WORKFLOW_SETTINGS.http_pool_enabled
+    )
     else None,
 )
 install_scribe_service_identity(api_app, SCRIBE_WORKFLOW_SETTINGS)

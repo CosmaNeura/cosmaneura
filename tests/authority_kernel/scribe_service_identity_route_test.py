@@ -1,10 +1,12 @@
 """Actual capture/factory boundaries with a synthetic lifespan SDK and HTTP."""
 
+import ast
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import replace
+from pathlib import Path
 from threading import BoundedSemaphore, get_ident
 from typing import Any
 from uuid import uuid4
@@ -64,7 +66,35 @@ async def until(predicate):
         await asyncio.sleep(0.001)
 
 
-def application(monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1):
+def install_from_server(app, settings):
+    # Exercise the actual production registration expressions without importing
+    # app.server's external service/bootstrap graph.
+    source = Path(connections.__file__).parents[1] / "server.py"
+    tree = ast.parse(source.read_text())
+    names = {"install_scribe_connections", "install_scribe_service_identity"}
+    calls: list[ast.stmt] = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in names
+    ]
+    assert len(calls) == 2
+    exec(
+        compile(ast.Module(body=calls, type_ignores=[]), str(source), "exec"),
+        {
+            "api_app": app,
+            "SCRIBE_WORKFLOW_SETTINGS": settings,
+            "install_scribe_connections": connections.install_scribe_connections,
+            "install_scribe_service_identity": identity.install_scribe_service_identity,
+        },
+    )
+
+
+def application(
+    monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1, pool_enabled=True
+):
     monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", seconds)
     original_pool = connections.ScribeHttpPool
     original_owner = identity.ScribeServiceIdentityOwner
@@ -78,6 +108,17 @@ def application(monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1
         "ScribeServiceIdentityOwner",
         lambda settings: original_owner(settings, credential_factory=lambda _: sdk),
     )
+    original_client = httpx.AsyncClient
+
+    def client(*args, **kwargs):
+        if kwargs.get("base_url") == ORIGIN and kwargs.get("transport") is None:
+            # Replace only the worker-owned client's network with local HTTP.
+            assert kwargs["trust_env"] is False
+            assert kwargs["follow_redirects"] is False
+            kwargs["transport"] = httpx.MockTransport(downstream)
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
     # Any missing borrower would attempt this legacy factory and fail the test.
     monkeypatch.setattr(
         workflow,
@@ -89,6 +130,7 @@ def application(monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1
     contexts = ContextVar[str | None]("synthetic_patient_scope", default=None)
     parent_thread = get_ident()
     private_loops = []
+    settings = replace(SETTINGS, http_pool_enabled=pool_enabled)
 
     @router.post(PATH)
     async def operation(request: Request):
@@ -97,8 +139,9 @@ def application(monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1
         contexts.set("synthetic-patient-claims-and-sql")
         private_loops.append(asyncio.get_running_loop())
         await request.body()
-        client = workflow.build_scribe_workflow_client(SETTINGS)
+        client = workflow.build_scribe_workflow_client(settings)
         assert isinstance(client, workflow.HttpScribeWorkflowClient)
+        assert client._uses_response_collection is pool_enabled
         tenant = uuid4()
         result = Receipt(ok=False)
         try:
@@ -115,22 +158,26 @@ def application(monkeypatch, sdk, downstream, *, outer=False, seconds: float = 1
     app.include_router(router)
     if outer:
         app.add_middleware(boundary.CaptureBoundary, paths=frozenset({PATH}))
-    connections.install_scribe_connections(app, ORIGIN)
-    identity.install_scribe_service_identity(app, SETTINGS)
+    install_from_server(app, settings)
     return app, contexts, private_loops
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outer", [False, True])
+@pytest.mark.parametrize("pool_enabled", [False, True])
 async def test_actual_routes_borrow_sdk_but_keep_each_workflow_request_fresh(
-    monkeypatch, outer
+    monkeypatch, outer, pool_enabled
 ):
     requests = []
     parent_loop = asyncio.get_running_loop()
 
     async def downstream(request: httpx.Request) -> httpx.Response:
-        assert asyncio.get_running_loop() is parent_loop
-        assert contexts.get() is None
+        if pool_enabled:
+            assert asyncio.get_running_loop() is parent_loop
+            assert contexts.get() is None
+        else:
+            assert asyncio.get_running_loop() in loops
+            assert contexts.get() == "synthetic-patient-claims-and-sql"
         requests.append(request)
         return httpx.Response(
             201, headers={"content-type": "application/json"}, content=b'{"ok":true}'
@@ -141,11 +188,14 @@ async def test_actual_routes_borrow_sdk_but_keep_each_workflow_request_fresh(
         return AccessToken("synthetic-service-identity", int(time.time()) + 60)
 
     sdk = Credential(token)
-    app, contexts, loops = application(monkeypatch, sdk, downstream, outer=outer)
+    app, contexts, loops = application(
+        monkeypatch, sdk, downstream, outer=outer, pool_enabled=pool_enabled
+    )
     contexts.set("parent-private-context")
     async with app.router.lifespan_context(app):
         assert sdk.calls == 0
         owner = app.state.scribe_service_identity
+        assert (app.state.scribe_http_pool is not None) is pool_enabled
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
@@ -168,8 +218,9 @@ async def test_actual_routes_borrow_sdk_but_keep_each_workflow_request_fresh(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outer", [False, True])
+@pytest.mark.parametrize("pool_enabled", [False, True])
 async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
-    monkeypatch, outer
+    monkeypatch, outer, pool_enabled
 ):
     entered, cleanup, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
@@ -191,7 +242,14 @@ async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
 
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(boundary, "_workers", slots)
-    app, _, _ = application(monkeypatch, sdk, downstream, outer=outer, seconds=0.05)
+    app, _, _ = application(
+        monkeypatch,
+        sdk,
+        downstream,
+        outer=outer,
+        seconds=0.05,
+        pool_enabled=pool_enabled,
+    )
     async with app.router.lifespan_context(app):
         owner = app.state.scribe_service_identity
         async with httpx.AsyncClient(
@@ -345,8 +403,9 @@ async def test_legacy_absent_owner_and_explicit_factory_keep_request_ownership(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outer", [False, True])
+@pytest.mark.parametrize("pool_enabled", [False, True])
 async def test_closing_lifespan_rejects_late_routes_until_fresh_lifespan(
-    monkeypatch, outer
+    monkeypatch, outer, pool_enabled
 ):
     entered, cleanup = asyncio.Event(), asyncio.Event()
     release_cleanup = asyncio.Event()
@@ -379,7 +438,14 @@ async def test_closing_lifespan_rejects_late_routes_until_fresh_lifespan(
             201, headers={"content-type": "application/json"}, content=b'{"ok":true}'
         )
 
-    app, _, loops = application(monkeypatch, sdk, downstream, outer=outer, seconds=5)
+    app, _, loops = application(
+        monkeypatch,
+        sdk,
+        downstream,
+        outer=outer,
+        seconds=5,
+        pool_enabled=pool_enabled,
+    )
 
     def create(settings):
         credential = sdk if not created else Credential()

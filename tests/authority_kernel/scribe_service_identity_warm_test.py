@@ -236,7 +236,10 @@ async def test_missing_or_closed_application_owner_never_creates_fallback(monkey
 
 
 @pytest.mark.asyncio
-async def test_actual_capture_deadline_joins_warm_cleanup_without_http(monkeypatch):
+@pytest.mark.parametrize("pool_enabled", [False, True])
+async def test_actual_capture_deadline_joins_warm_cleanup_without_http(
+    monkeypatch, pool_enabled
+):
     from threading import BoundedSemaphore
 
     import httpx
@@ -269,6 +272,7 @@ async def test_actual_capture_deadline_joins_warm_cleanup_without_http(monkeypat
         lambda r: sent.append(r) or pytest.fail("expired request reached HTTP"),
         outer=True,
         seconds=0.04,
+        pool_enabled=pool_enabled,
     )
     async with app.router.lifespan_context(app):
         owner = app.state.scribe_service_identity

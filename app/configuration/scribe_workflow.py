@@ -32,6 +32,7 @@ class ScribeWorkflowSettings:
     managed_identity_client_id: str
     timeout_seconds: float
     identity_reuse_enabled: bool = False
+    http_pool_enabled: bool = False
 
     def __post_init__(self) -> None:
         if not 1 <= self.timeout_seconds <= SCRIBE_SERVICE_TIMEOUT_SECONDS_LIMIT:
@@ -64,5 +65,8 @@ SCRIBE_WORKFLOW_SETTINGS = ScribeWorkflowSettings(
     ),
     identity_reuse_enabled=config(
         "SCRIBE_WORKFLOW_IDENTITY_REUSE_ENABLED", default=False, cast=bool
+    ),
+    http_pool_enabled=config(
+        "SCRIBE_WORKFLOW_HTTP_POOL_ENABLED", default=False, cast=bool
     ),
 )
