@@ -239,6 +239,11 @@ async def native_capture(
             headers={
                 "Cache-Control": "no-store",
                 "X-Cosmaneura-Native-Capture-Version": "1",
+                **(
+                    {"X-Cosmaneura-Compound-Admission-Version": "1"}
+                    if data.action == "mount"
+                    else {}
+                ),
                 "X-Cosmaneura-Prepared-Native-Read-Version": "1",
                 "X-Cosmaneura-Admission-Native-Preparation-Version": "1",
                 "X-Cosmaneura-Admission-Preparation-Metadata-Version": "1",
