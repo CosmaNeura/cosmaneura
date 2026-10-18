@@ -22,6 +22,20 @@ workspace/binding/origin. Bound state, generation invalidation and failure
 quarantine prevent an uncertain new mutation from becoming hidden legacy retry.
 The unchanged old path is selected only before new dispatch when unsupported.
 
+Availability correction: a long-lived platform receiver may encounter more than
+64 completed scopes. Capability metadata now uses bounded LRU eviction only
+for nonfailed scopes with zero active calls. A synchronous acquire occurs only
+when a compound request will actually dispatch; the caller releases in finally
+after its exact owning transport has settled. Unconfirmed close retains active
+protection. One integer count per exact scope spans remount generations; UUIDs
+are metadata invalidation guards only, not retained active-storage keys. Counts
+are independent of credential
+TTL: a validated remount can replace protocol metadata but cannot erase an old
+call's ownership. An older failure cannot tombstone a newer generation. Failed
+tombstones and active scopes never evict; if all 64 scopes are protected, a new
+scope still refuses. Unsupported remount can remove metadata, but held ownership
+continues to count toward capacity until confirmed release.
+
 Rejected: device-visible Core context; contextless generic CaptureCaller;
 patient/consent claims cached from app opening; a transaction held over remote
 I/O; extending 15/25/30-second or native 5-second/under-1-second limits; fallback

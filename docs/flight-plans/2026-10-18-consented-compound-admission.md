@@ -43,13 +43,23 @@ recovery/actor/tenant/verified session fingerprint (or token fingerprint),
 receiver revision/workspace/binding. It may survive a long setup read, but never
 makes a claim or expired context reusable. A fresh request authenticates again.
 
-The process-local cache is bounded to 64 scope entries. Fresh mount replaces its
-own generation. A dispatched failure tombstones that generation and cannot be
-evicted into a legacy miss. At 64 live or failed scopes a new supported scope
-refuses before advertisement/dispatch; there is no capability eviction. A
-fresh same-scope remount replaces that generation, and disposal/restart clears
-the process-local map. This conservative capacity limit is explicit. Older failure cannot poison a newer
-mount generation. Disposal/restart clears process-local state. Current session/
+The process-local cache is bounded to 64 scopes across capability metadata and
+active calls. A long-lived platform receiver can serve more than 64 completed
+scopes: only nonfailed confirmed-idle entries with zero active calls may be
+LRU-evicted. Acquisition is synchronous and occurs only for actual compound
+dispatch when no retained context is used; reading support does not acquire.
+Release occurs in finally after exact owning transport cleanup settles, and
+failed or unconfirmed close keeps active protection. No idle inference uses
+opaque-context TTL. Two held calls retain protection after only one completes.
+
+A validated same-scope mount replaces its generation without erasing its single
+integer active count; no active-generation UUID collection accumulates under
+repeated unconfirmed closes. Unsupported remount removes metadata but not held
+ownership. A dispatched failure tombstones only its matching current generation.
+Neither active scopes nor failure tombstones can be evicted into a legacy miss.
+If all 64 scopes are protected, a new supported scope still refuses. Older
+failure cannot poison a newer mount generation; exact final release works even
+after that replacement. Disposal/restart clears process-local state. Current session/
 account/revision/binding changes make old scope unreachable; old opaque context
 still expires/destructively takes under its original rules.
 
@@ -90,8 +100,13 @@ configuration flag masks a security gate or changes mutation authority.
 
 ## Validation and promotion holds
 
-Actual local evidence: 266 receiver MockTransport tests (223 unchanged plus
-43 new), and 10 AST/mock Core orchestration/shape methods. These do not prove
+Actual successor evidence: 273 receiver MockTransport tests (223 unchanged plus
+50 compound cases), including 130 completed scopes, concurrent held calls,
+130 same-scope remounts with unconfirmed close and bounded count storage,
+remount ownership, failed tombstones and resistant/unconfirmed cleanup. The
+two Core runtime files and all 15 authored Core PG case bodies remain exactly
+the frozen predecessor's bytes; its 10 AST/mock orchestration/shape checks are
+retained evidence, not rerun here. These do not prove
 SQL, durable journal behavior or deployed authentication. The 15 authored Core
 PG cases are unexecuted and require a separately reviewed, owned real-PG runner.
 Host lint/static types are recorded separately, not represented as PG success.
