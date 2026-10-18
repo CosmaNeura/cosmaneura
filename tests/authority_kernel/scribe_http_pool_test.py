@@ -642,6 +642,7 @@ async def test_pooled_and_original_header_body_close_errors_match(
         ((200,), 16_384, 1),
         ((200,), 16_384, True),
         ((200, 202), 16_384, False),
+        ((200,), pool_module.MAX_RESPONSE_BYTES + 1, False),
     ],
 )
 def test_response_collection_is_immutable_closed_numeric_metadata(
@@ -817,7 +818,7 @@ async def test_pool_requires_same_closed_https_configuration(origin):
 async def test_raw_response_cap_joins_cleanup_and_never_returns_partial_bytes(
     monkeypatch,
 ):
-    monkeypatch.setattr(pool_module, "MAX_BODY_BYTES", 8)
+    monkeypatch.setattr(pool_module, "MAX_RESPONSE_BYTES", 8)
     stream = Stream(payload=b"123456789")
 
     async def handler(request):
@@ -834,6 +835,91 @@ async def test_raw_response_cap_joins_cleanup_and_never_returns_partial_bytes(
 
     await asyncio.to_thread(in_worker, pool, request)
     assert stream.closed and not pool._operations
+    await pool.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,extra_bytes", [("GET", 16_384), ("POST", 32_768)])
+async def test_existing_metadata_and_prepared_response_allowances_reach_transport(
+    method, extra_bytes
+):
+    from app.services.scribe_creator_review_contract import MAX_CREATOR_REVIEW_BYTES
+
+    stream = Stream()
+
+    async def handler(request):
+        return httpx.Response(
+            200, headers={"content-type": "application/json"}, stream=stream
+        )
+
+    transport = Transport(handler)
+    pool = pool_module.ScribeHttpPool(ORIGIN, transport=transport)
+
+    class Receipt(BaseModel):
+        ok: bool
+
+    class Credential:
+        async def get_token(self, *scopes: str, **kwargs) -> AccessToken:
+            return AccessToken("synthetic-fresh", int(time.time()) + 60)
+
+        async def close(self):
+            pass
+
+    async def request(budget):
+        client = HttpScribeWorkflowClient(
+            base_url=ORIGIN,
+            scope="synthetic-scope",
+            timeout_seconds=5,
+            credential=Credential(),
+            transport=pool_module.current_scribe_transport(ORIGIN),
+        )
+        try:
+            limit = MAX_CREATOR_REVIEW_BYTES + extra_bytes
+            if method == "GET":
+                result = await client._get_resource(
+                    uuid4(), "/v1/fixed", Receipt, max_bytes=limit
+                )
+            else:
+                result = await client._post(
+                    "/v1/fixed",
+                    uuid4(),
+                    Receipt(ok=True),
+                    "synthetic-key",
+                    Receipt,
+                    max_bytes=limit,
+                )
+            assert result == Receipt(ok=True)
+        finally:
+            await client.close()
+
+    await asyncio.to_thread(in_worker, pool, request)
+    assert len(transport.requests) == 1 and stream.closed and not pool._operations
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_request_bound_stays_independent_of_larger_response_bound(monkeypatch):
+    monkeypatch.setattr(pool_module, "MAX_BODY_BYTES", 8)
+    monkeypatch.setattr(pool_module, "MAX_RESPONSE_BYTES", 16)
+    stream = Stream(payload=b"123456789012")
+
+    async def handler(request):
+        return httpx.Response(200, stream=stream)
+
+    transport = Transport(handler)
+    pool = pool_module.ScribeHttpPool(ORIGIN, transport=transport)
+
+    async def request(budget):
+        async with httpx.AsyncClient(
+            transport=pool_module.current_scribe_transport(ORIGIN)
+        ) as client:
+            result = await client.get(ORIGIN + "/v1/fixed")
+            assert result.content == b"123456789012"
+            with pytest.raises(httpx.TransportError, match="scribe_request_too_large"):
+                await client.post(ORIGIN + "/v1/fixed", content=b"123456789")
+
+    await asyncio.to_thread(in_worker, pool, request)
+    assert len(transport.requests) == 1 and stream.closed and not pool._operations
     await pool.close()
 
 
