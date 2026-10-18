@@ -20,6 +20,9 @@ from typing import Protocol
 import httpx
 
 MAX_BODY_BYTES = 32 * 1024 * 1024 + 8192
+# Existing prepared-session responses include the creator-review envelope.
+# Keep the request bound independent of these per-operation response allowances.
+MAX_RESPONSE_BYTES = 32 * 1024 * 1024 + 32_768
 COLLECTION_EXTENSION = "cosmaneura_scribe_response_collection"
 
 
@@ -36,7 +39,7 @@ class ResponseCollection:
             or self.success_statuses not in ((200,), (200, 201))
             or not isinstance(self.max_bytes, int)
             or isinstance(self.max_bytes, bool)
-            or not 0 < self.max_bytes <= MAX_BODY_BYTES
+            or not 0 < self.max_bytes <= MAX_RESPONSE_BYTES
             or not isinstance(self.upload_expiry, bool)
             or (self.upload_expiry and self.success_statuses != (200, 201))
         ):
@@ -109,7 +112,7 @@ class _CollectingBody(httpx.AsyncByteStream):
                 if self._operation.cancelled.is_set():
                     raise asyncio.CancelledError
                 chunk = raw[offset : offset + 65_536]
-                if len(self._body) + len(chunk) > MAX_BODY_BYTES:
+                if len(self._body) + len(chunk) > MAX_RESPONSE_BYTES:
                     raise httpx.TransportError("scribe_response_too_large")
                 self._body.extend(chunk)
                 yield chunk
