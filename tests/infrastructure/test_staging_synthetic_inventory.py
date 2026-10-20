@@ -921,7 +921,8 @@ def test_policy_catalog_matches_migration_replay(
     parsed = urllib.parse.urlsplit(base_url)
     assert parsed.scheme == "postgresql"
     assert parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-    assert parsed.port in {None, 5432} and parsed.path == "/test"
+    # Disposable local databases may use another port to avoid host services.
+    assert parsed.path == "/test"
     assert not parsed.query and not parsed.fragment
     database_name = f"inventory_{secrets.token_hex(8)}"
     database_url = urllib.parse.urlunsplit(parsed._replace(path=f"/{database_name}"))

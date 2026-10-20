@@ -682,6 +682,43 @@ def test_preserved_deployment_updates_images_without_secret_writes_or_deletions(
     _no_secret_output(result, configuration)
 
 
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "unhealthy",
+        "unprovisioned",
+        "stopped",
+        "multiple",
+        "partial-traffic",
+        "wrong-route",
+    ),
+)
+def test_unready_workload_or_wrong_traffic_blocks_mutation(
+    tmp_path, configuration, contracts, failure
+):
+    fixture, _ = _azure_fixture(configuration, contracts)
+    app = fixture[API]
+    if failure == "unhealthy":
+        fixture[WORKER]["revision"]["health"] = "Unhealthy"
+    elif failure == "unprovisioned":
+        fixture[SCHEDULER]["revision"]["provisioning"] = "Provisioning"
+    elif failure == "stopped":
+        app["revision"]["running"] = "Stopped"
+    elif failure == "multiple":
+        app["workload"]["activeRevisionsMode"] = "Multiple"
+    elif failure == "partial-traffic":
+        app["workload"]["traffic"][0]["weight"] = 50
+    else:
+        app["workload"]["traffic"] = [
+            {"revisionName": "synthetic-old-revision", "weight": 100}
+        ]
+    result, calls = _shell_harness(tmp_path, configuration, contracts, fixture=fixture)
+    assert result.returncode != 0
+    assert "not uniformly ready" in result.stdout + result.stderr
+    assert _mutations(calls) == []
+    _no_secret_output(result, configuration)
+
+
 def test_preservation_cleanup_is_read_only_even_with_disabled_capabilities(
     tmp_path, configuration, contracts
 ):
