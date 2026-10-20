@@ -184,6 +184,7 @@ def mutate(native, engine, context, fault):
             row = session.get(
                 ScribeCaptureProviderLink, native.provisioned.provider_link_ref
             )
+            assert row is not None
             row.revoked_at = datetime.now(UTC)
         elif fault == "binding":
             row = session.exec(
@@ -263,7 +264,7 @@ def test_remote_changes_or_uncertainty_withhold_next_decision_and_result(
         if fault in {"revoked", "provider_link", "old", "consent"}:
             mutate(native, engine, source_case.context, fault)
         elif fault == "reply_loss":
-            raise ScribeWorkflowRetryableError()
+            raise ScribeWorkflowRetryableError("synthetic_retryable")
         elif fault == "malformed":
             return (
                 result.model_copy(update={"receipt": {}})

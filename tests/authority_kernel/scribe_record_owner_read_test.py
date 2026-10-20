@@ -1,6 +1,7 @@
 """Current exact-bound record owner reads under existing synthetic provider locks."""
 
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,7 @@ from typeid import TypeID
 from app.services import doctor_access_row_ownership as owned
 from app.services import provider_record_authority as records
 
+from activemodel.types import TypeIDType
 from app.models.authority import AuthorityPerson, AuthorityPersonOrigin
 from app.models.doctor import Doctor
 from sqlalchemy import event
@@ -131,14 +133,16 @@ def test_exact_scope_absence_and_doctor_refresh_match_original(
                         records, "capture_owns_subject_rows", lambda *_: False
                     )
                 if missing:
-                    binding.id = TypeID("person_binding")
+                    binding.id = cast(TypeIDType, TypeID("person_binding"))
                     with session.no_autoflush:
                         assert validate(session, binding, native) is None
                 else:
                     doctor = locked[1]
                     set_committed_value(doctor, "email", "stale@synthetic.invalid")
                     with session.no_autoflush:
-                        assert validate(session, binding, native).id == scope.id
+                        current_scope = validate(session, binding, native)
+                        assert current_scope is not None
+                        assert current_scope.id == scope.id
                     assert doctor.email != "stale@synthetic.invalid"
 
 
@@ -147,6 +151,7 @@ def test_committed_doctor_change_after_existing_locks_is_denied(native, engine, 
     assert native.post().status_code == 200
     with session_for(engine) as writer:
         doctor = writer.get(Doctor, native.args["doctor_id"])
+        assert doctor is not None
         if change == "disabled":
             doctor.deleted_at = datetime.now(UTC)
         else:
@@ -201,11 +206,15 @@ def test_joined_scope_and_doctor_reads_do_not_skip_record_lineage(
                 return original(*args)
 
             monkeypatch.setattr(records, "_record_lineage_rows", lineage)
-            assert validate(session, binding, native).id == scope.id
+            current_scope = validate(session, binding, native)
+            assert current_scope is not None
+            assert current_scope.id == scope.id
             assert calls == [True]
             set_committed_value(scope, "patient_id", TypeID("patient"))
             # The new query refreshes the stored exact scope as well as Doctor;
             # persisted scope remains current and the later lineage still runs.
             with session.no_autoflush:
-                assert validate(session, binding, native).id == scope.id
+                current_scope = validate(session, binding, native)
+                assert current_scope is not None
+                assert current_scope.id == scope.id
             assert calls == [True, True]

@@ -3,12 +3,14 @@
 import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 
 from app.services import scribe_capture_gateway as gateway
 from app.services import scribe_native_capture as native_service
 from app.services.authority import AuthorityKernelError
+from app.services.scribe_capture_admission import CaptureCaller
 from app.services.scribe_capture_deadline import CaptureBudget, capture_budget
 from app.services.scribe_creator_review_contract import CreatorReviewView
 
@@ -254,7 +256,7 @@ async def test_expected_scope_is_compared_with_current_authorization_before_remo
     component, _ = pair(kind, selected)
     with pytest.raises(gateway.CaptureReceiptInvalid):
         await gateway.execute_capture_operation(
-            caller=None,
+            caller=cast(CaptureCaller, None),
             binding_ref="synthetic",
             workspace_id=uuid4(),
             operation=component,

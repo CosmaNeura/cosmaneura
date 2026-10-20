@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -131,7 +132,7 @@ def test_uncertain_combined_metadata_never_publishes_partial_admission(
         result = await original(*args, **kwargs)
         assert engine.pool.checkedout() == 0
         if fault == "reply_loss":
-            raise ScribeWorkflowRetryableError()
+            raise ScribeWorkflowRetryableError("synthetic_retryable")
         elif fault == "revocation":
             with Session(engine) as session:
                 identity = session.execute(
@@ -148,6 +149,7 @@ def test_uncertain_combined_metadata_never_publishes_partial_admission(
                 link = session.get(
                     ScribeCaptureProviderLink, native.provisioned.provider_link_ref
                 )
+                assert link is not None
                 link.revoked_at = datetime.now(UTC)
                 session.add(link)
                 session.commit()
@@ -155,7 +157,7 @@ def test_uncertain_combined_metadata_never_publishes_partial_admission(
             with Session(engine) as session:
                 context = session.execute(
                     select(MountContextToken).where(
-                        MountContextToken.token_hash
+                        cast(Any, MountContextToken.token_hash)
                         == hashlib.sha256(
                             mounted["prepared_context"]["context_token"].encode()
                         ).hexdigest()

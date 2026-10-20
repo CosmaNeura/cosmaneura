@@ -212,14 +212,17 @@ def test_same_transaction_change_at_final_boundary_is_rechecked(
                 assert link is not None
                 if change == "actor":
                     row = session.get(AuthorityActor, link.actor_id)
+                    assert row is not None
                     row.status = "revoked"
                 elif change == "identity":
                     row = session.get(
                         AuthorityActorExternalIdentity, link.source_identity_id
                     )
+                    assert row is not None
                     row.revoked_at = datetime.now(UTC)
                 elif change == "tenant":
                     row = session.get(AuthorityTenant, link.tenant_id)
+                    assert row is not None
                     row.status = "revoked"
                 elif change == "member":
                     lock_practice_seats(session, link.practice_id)
@@ -232,6 +235,7 @@ def test_same_transaction_change_at_final_boundary_is_rechecked(
                     row.access_ends_at = datetime.now(UTC) - timedelta(days=1)
                 else:
                     row = session.get(Practice, link.practice_id)
+                    assert row is not None
                     row.legal_name = "A" * 201
                 session.add(row)
                 session.flush()

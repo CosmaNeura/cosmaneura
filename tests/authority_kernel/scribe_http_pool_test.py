@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app.services import scribe_http_pool as pool_module
+from app.services.scribe_capture_deadline import CaptureBudget
 from app.services.scribe_workflow import (
     HttpScribeWorkflowClient,
     ScribeWorkflowError,
@@ -31,10 +32,10 @@ class Expired(Exception):
     pass
 
 
-class Budget:
+class Budget(CaptureBudget):
     def __init__(self):
-        self.owner_thread = get_ident()
-        self.cancelled = Event()
+        super().__init__(30)
+        self.owner_thread: int | None = get_ident()
 
     def check(self):
         if self.cancelled.is_set():
@@ -85,7 +86,7 @@ class Transport(httpx.AsyncBaseTransport):
 async def test_distinct_worker_loops_share_only_transport_and_close_separately():
     parent_loop, parent_thread = asyncio.get_running_loop(), get_ident()
     streams = []
-    private_context = ContextVar("synthetic_private_sql", default=None)
+    private_context = ContextVar[str | None]("synthetic_private_sql", default=None)
 
     async def handler(request):
         assert asyncio.get_running_loop() is parent_loop
@@ -157,7 +158,7 @@ async def test_actual_workflow_gets_fresh_token_for_every_call():
         def __init__(self):
             self.calls, self.closed = 0, False
 
-        async def get_token(self, scope):
+        async def get_token(self, *scopes: str, **kwargs):
             self.calls += 1
             return AccessToken(
                 "synthetic-fresh-" + str(self.calls), int(time.time()) + 60
@@ -253,6 +254,7 @@ async def test_cancel_before_network_task_begins_has_definitive_join():
         httpx.Request("GET", ORIGIN + "/v1/fixed"), Budget()
     )
     pool._start(operation)
+    assert operation.task is not None
     operation.task.cancel()
     await asyncio.wait_for(asyncio.wrap_future(operation.joined), 1)
     with pytest.raises(httpx.TransportError):
@@ -305,6 +307,7 @@ async def test_budget_expiry_discards_response_and_joins_close():
     stream = Stream()
 
     async def handler(request):
+        assert budget is not None
         budget.cancelled.set()
         return httpx.Response(200, stream=stream)
 
@@ -349,7 +352,7 @@ async def test_complete_body_is_validated_on_worker_with_original_response_bound
         ok: bool
 
     class Credential:
-        async def get_token(self, scope):
+        async def get_token(self, *scopes: str, **kwargs):
             return AccessToken("synthetic-fresh", int(time.time()) + 60)
 
         async def close(self):
@@ -419,7 +422,7 @@ async def test_compressed_buffer_does_not_decode_whole_envelope_before_existing_
         padding: str
 
     class Credential:
-        async def get_token(self, scope):
+        async def get_token(self, *scopes: str, **kwargs):
             return AccessToken("synthetic-fresh", int(time.time()) + 60)
 
         async def close(self):
@@ -466,7 +469,7 @@ async def test_pooled_timeout_keeps_existing_workflow_classification_without_exc
         ok: bool
 
     class Credential:
-        async def get_token(self, scope):
+        async def get_token(self, *scopes: str, **kwargs):
             return AccessToken("synthetic-fresh", int(time.time()) + 60)
 
         async def close(self):
@@ -540,7 +543,7 @@ async def test_pooled_and_original_header_body_close_errors_match(
         ok: bool
 
     class Credential:
-        async def get_token(self, scope):
+        async def get_token(self, *scopes: str, **kwargs):
             return AccessToken("synthetic-fresh", int(time.time()) + 60)
 
         async def close(self):
@@ -672,6 +675,7 @@ async def test_actual_httpcore_connection_is_reused_without_a_socket():
     pool = pool_module.ScribeHttpPool(ORIGIN)
     # httpcore's existing fake network backend exercises its real HTTP/1.1
     # keepalive lifecycle. It creates no socket, TLS handshake or external I/O.
+    assert isinstance(pool._transport, httpx.AsyncHTTPTransport)
     pool._transport._pool._network_backend = backend
 
     async def request(budget):

@@ -3,12 +3,14 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from starlette.requests import Request
+from starlette.types import ExceptionHandler
 from typeid import TypeID
 
 from app.routes.internal import internal_api_app
@@ -61,7 +63,9 @@ def test_private_author_and_patient_identity_models_match_live_contract(contract
 def test_private_note_validation_wire_response_matches_sanitized_contract(method):
     app = FastAPI()
     app.include_router(router, prefix="/internal/v1")
-    app.add_exception_handler(RequestValidationError, safe_request_validation_handler)
+    app.add_exception_handler(
+        RequestValidationError, cast(ExceptionHandler, safe_request_validation_handler)
+    )
     client = TestClient(app)
     if method == "get":
         # TypeID's shared converter can raise its own exception before FastAPI
@@ -82,7 +86,7 @@ def test_private_note_validation_wire_response_matches_sanitized_contract(method
                 ),
             )
         )
-        payload = json.loads(response.body)
+        payload = json.loads(bytes(response.body))
     else:
         response = client.put(
             f"/internal/v1/notes/{TypeID(prefix='appointment')}/private-note",

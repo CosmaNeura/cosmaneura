@@ -45,6 +45,7 @@ def test_explicit_staging_gate(monkeypatch):
 
 def test_request_description_accepts_only_closed_actions(observations):
     with timing.request_timing() as ledger:
+        assert ledger is not None
         ledger.describe_request("prepared_admission")
         ledger.describe_request("https://synthetic-private.invalid/patient")
     assert observations[0]["request_kind"] == "prepared_admission"
@@ -377,6 +378,8 @@ def test_response_snapshot_rejects_nonclosed_metadata(monkeypatch, bad):
     monkeypatch.setattr(timing, "enabled", lambda: True)
     ledger = timing.Ledger()
     row = ledger.snapshot()
+    assert isinstance(row["phase_ms"], dict)
+    assert isinstance(row["phase_count"], dict)
     if bad == "extra":
         row["private_context"] = "synthetic-private"
     elif bad == "private_kind":
@@ -398,7 +401,9 @@ def test_response_snapshot_is_bounded_and_does_not_close_ledger(monkeypatch):
     monkeypatch.setattr(timing, "MAX_HEADER_BYTES", 1)
     assert timing.response_header(ledger) is None and not ledger.closed
     ledger.record("workflow_http", timing.perf_counter(), False)
-    assert ledger.close()["phase_count"]["workflow_http"] == 1
+    closed = ledger.close()
+    assert isinstance(closed["phase_count"], dict)
+    assert closed["phase_count"]["workflow_http"] == 1
 
 
 @pytest.mark.asyncio
@@ -514,7 +519,9 @@ def test_timeout_freezes_once_and_closed_worker_updates_cannot_emit(
     from tests.authority_kernel import scribe_native_capture_receiver_test as fixture
 
     client, _ = fixture.client(monkeypatch)
-    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 0.08)
+    # Allow worker scheduling before exercising the deliberate 20-second stall.
+    # The original 80ms could expire before the operation/ledger ever started.
+    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 1.0)
     saved = []
 
     async def stall(**_):
