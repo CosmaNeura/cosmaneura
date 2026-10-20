@@ -37,6 +37,7 @@ from tests.services.scribe_workflow_test import StaticCredential
 
 def extension():
     selected, start, _, now = prepared_start()
+    assert selected.creator_actor_id is not None
     owner = start.payload.model_copy(update={"source": "ios_microphone"})
     payload = NativeExtensionPayload(
         owner=owner,

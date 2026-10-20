@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime, timezone
+from typing import Any, TypedDict
 
 import pytest
 
@@ -23,6 +24,19 @@ from app.models.practice_access_audit import (
 )
 
 
+class BootstrapInputs(TypedDict):
+    entries: list[RosterApprovalInput]
+    roster_sha256: str
+    owner_doctor_id: Any
+    owner_email_confirmation: str
+    verified_primary_email: str | None
+    legal_name: str
+    email_domain: str
+    bootstrap_ref: str
+    operator_ref: str
+    reason: str
+
+
 def _doctor(email: str, *, onboarded: bool = True) -> Doctor:
     return Doctor(
         clerk_id=f"user_bootstrap_{secrets.token_hex(8)}",
@@ -34,14 +48,14 @@ def _doctor(email: str, *, onboarded: bool = True) -> Doctor:
     ).save()
 
 
-def _inputs(domain: str):
+def _inputs(domain: str) -> tuple[Doctor, Doctor, BootstrapInputs]:
     owner = _doctor(f"owner@{domain}")
     workforce = _doctor(f"workforce@{domain}")
     entries = [
         RosterApprovalInput(email=owner.email or ""),
         RosterApprovalInput(email=workforce.email or ""),
     ]
-    values = {
+    values: BootstrapInputs = {
         "entries": entries,
         "roster_sha256": "a" * 64,
         "owner_doctor_id": owner.id,
@@ -147,20 +161,15 @@ def test_bootstrap_requires_exact_verified_rostered_owner():
     domain = f"owner-{secrets.token_hex(4)}.example.com"
     _, _, values = _inputs(domain)
 
+    wrong_verified_email = values.copy()
+    wrong_verified_email["verified_primary_email"] = f"other@{domain}"
     with pytest.raises(ProviderPracticeBootstrapError, match="Clerk primary"):
-        plan_provider_practice_bootstrap(
-            **(values | {"verified_primary_email": f"other@{domain}"})
-        )
+        plan_provider_practice_bootstrap(**wrong_verified_email)
+    missing_owner = values.copy()
+    missing_owner["owner_email_confirmation"] = f"missing@{domain}"
+    missing_owner["verified_primary_email"] = f"missing@{domain}"
     with pytest.raises(ProviderPracticeBootstrapError, match="exact roster"):
-        plan_provider_practice_bootstrap(
-            **(
-                values
-                | {
-                    "owner_email_confirmation": f"missing@{domain}",
-                    "verified_primary_email": f"missing@{domain}",
-                }
-            )
-        )
+        plan_provider_practice_bootstrap(**missing_owner)
     assert Practice.where(Practice.email_domain == domain).count() == 0
 
 
@@ -189,16 +198,17 @@ def test_bootstrap_ref_cannot_be_reused_for_a_changed_plan():
     )
 
     with pytest.raises(ProviderPracticeBootstrapError, match="different plan"):
-        plan_provider_practice_bootstrap(
-            **(values | {"reason": "A changed bootstrap reason"})
-        )
+        changed_values = values.copy()
+        changed_values["reason"] = "A changed bootstrap reason"
+        plan_provider_practice_bootstrap(**changed_values)
 
 
 def test_stale_concurrent_plan_fails_cleanly_after_reference_lock(monkeypatch):
     domain = f"stale-{secrets.token_hex(4)}.example.com"
     _, _, values = _inputs(domain)
     original_plan = plan_provider_practice_bootstrap(**values)
-    changed_values = values | {"reason": "A concurrently changed bootstrap reason"}
+    changed_values = values.copy()
+    changed_values["reason"] = "A concurrently changed bootstrap reason"
     stale_changed_plan = plan_provider_practice_bootstrap(**changed_values)
 
     bootstrap_provider_practice(
