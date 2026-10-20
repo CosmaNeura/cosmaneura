@@ -111,24 +111,24 @@ def _headers(token, turn, operation="read"):
     }
 
 
-def _body(turn):
+def _body(turn, version="1.0.0"):
     return {
         "tool_name": OPERATION,
-        "tool_version": "1.0.0",
+        "tool_version": version,
         "subject_ref": None,
         "arguments": {
             "source_turn_ref": turn[2],
             "purpose": "provider_question",
-            "detail": "prep_summary",
+            "detail": "prep_summary" if version == "1.0.0" else "reviewed_sources",
         },
     }
 
 
-def _read(client, token, turn):
+def _read(client, token, turn, version="1.0.0"):
     return client.post(
         "/service/v1/agent/tools/invoke",
         headers=_headers(token, turn),
-        json=_body(turn),
+        json=_body(turn, version),
     )
 
 
@@ -273,13 +273,14 @@ def test_no_reviewed_sources_returns_no_content_and_never_starts_generation(scop
 
 
 @pytest.mark.parametrize("already_final", [False, True])
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
 def test_source_edit_while_model_is_running_rejects_final_and_final_replay(
-    scope, already_final
+    scope, already_final, version
 ):
     _, _, note, token, _ = scope
     assert _work() == "ready"
     client, turn = _client(), _chat(token)
-    ready = _read(client, token, turn).json()
+    ready = _read(client, token, turn, version).json()
     if already_final:
         assert _final(client, token, turn, ready["tool_call_ref"]).status_code == 201
     # Independent committed source edit after the read, before final acceptance.
@@ -292,11 +293,14 @@ def test_source_edit_while_model_is_running_rejects_final_and_final_replay(
     assert _read(client, token, turn).status_code == 403
 
 
-def test_cohort_revocation_after_read_denies_final_acceptance(scope, monkeypatch):
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
+def test_cohort_revocation_after_read_denies_final_acceptance(
+    scope, monkeypatch, version
+):
     _, _, _, token, _ = scope
     assert _work() == "ready"
     client, turn = _client(), _chat(token)
-    ref = _read(client, token, turn).json()["tool_call_ref"]
+    ref = _read(client, token, turn, version).json()["tool_call_ref"]
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
@@ -371,14 +375,17 @@ def test_changed_idempotency_key_cannot_create_another_context_read(scope):
 
 
 @pytest.mark.parametrize("state", ["ready", "pending", "unavailable"])
-def test_versioned_response_fixtures_match_closed_runtime_and_schema_fields(state):
-    directory = ROOT / "contracts/schemas/provider-question-context-v1"
+@pytest.mark.parametrize("version", ["v1", "v1.1"])
+def test_versioned_response_fixtures_match_closed_runtime_and_schema_fields(
+    state, version
+):
+    directory = ROOT / f"contracts/schemas/provider-question-context-{version}"
     response_schema = json.loads((directory / "response.schema.json").read_text())
     result_schema = json.loads((directory / "result.schema.json").read_text())
     body = json.loads(
         (
             ROOT
-            / f"contracts/fixtures/provider-question-context-v1/response-{state}.json"
+            / f"contracts/fixtures/provider-question-context-{version}/response-{state}.json"
         ).read_text()
     )
     assert set(body) == set(response_schema["required"])
@@ -386,6 +393,380 @@ def test_versioned_response_fixtures_match_closed_runtime_and_schema_fields(stat
     assert response_schema["additionalProperties"] is False
     assert result_schema["additionalProperties"] is False
     assert ProviderQuestionResponse.model_validate(body).result.state == state
+
+
+@pytest.mark.parametrize(
+    "variant", ["ready", "brief-pending", "brief-unavailable", "unavailable"]
+)
+def test_source_only_contract_fixtures_preserve_source_and_brief_states(variant):
+    directory = ROOT / "contracts/schemas/provider-question-context-v1.2"
+    schema = json.loads((directory / "result.schema.json").read_text())
+    body = json.loads(
+        (
+            ROOT
+            / f"contracts/fixtures/provider-question-context-v1.2/response-{variant}.json"
+        ).read_text()
+    )
+    assert set(body["result"]) == set(schema["required"])
+    result = ProviderQuestionResponse.model_validate(body).result
+    assert result.schema_version == "1.2.0"
+    assert result.state == ("unavailable" if variant == "unavailable" else "ready")
+
+
+@pytest.mark.parametrize("version", ["1.1.0", "1.2.0"])
+def test_opt_in_reviewed_sources_return_prior_measurements_and_correction_verbatim(
+    scope,
+    version,
+):
+    doctor, target, baseline, token, record = scope
+    patient = Patient.get(id=target.patient_id)
+    baseline.note = {"Objective": "Office blood pressure: 148/92 mmHg"}
+    baseline.save()
+    visit = Appointment.get(id=baseline.appointment_id)
+    visit.appointment_date = (NOW - timedelta(days=20)).replace(tzinfo=None)
+    visit.save()
+    followup = _note(
+        doctor,
+        patient,
+        days_ago=13,
+        content={
+            "Objective": "Home blood pressure: 128–136/78–84 mmHg",
+            "Medication": "Taking losartan 25 mg; planned dose 50 mg, not yet confirmed.",
+            "Plan": "CBC ordered. Potassium and creatinine orders not documented.",
+        },
+    )
+    correction = _note(
+        doctor,
+        patient,
+        days_ago=12,
+        content={"Addendum": "Remain on losartan 25 mg. Prior CBC order cancelled."},
+    )
+    with get_session() as session:
+        for note in (baseline, followup, correction):
+            finalize_note_for_session_prep(
+                session=session,
+                doctor_id=doctor.id,
+                note_id=note.id,
+                expected_content_sha256=note_content_sha256(note.note),
+                observed_at=NOW - timedelta(hours=1),
+            )
+        session.commit()
+    read_prep(token, record, _action(token))
+    assert _work() == "ready"
+    client, turn = _client(), _chat(token)
+    response = _read(client, token, turn, version)
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["schema_version"] == version
+    assert len(result["reviewed_sources"]) == 3
+    by_ref = {source["source_ref"]: source for source in result["reviewed_sources"]}
+    assert by_ref[str(baseline.id)]["sections"] == baseline.note
+    assert by_ref[str(followup.id)]["sections"] == followup.note
+    assert by_ref[str(correction.id)]["sections"] == correction.note
+    assert by_ref[str(baseline.id)]["source_at"].startswith(
+        (NOW - timedelta(days=20)).date().isoformat()
+    )
+    assert {
+        (source["source_ref"], source["source_version"], source["source_at"])
+        for source in result["reviewed_sources"]
+    } == {
+        (p["source_ref"], p["source_version"], p["source_at"])
+        for p in result["provenance"]
+    }
+    assert _read(client, token, turn, version).json() == response.json()
+    assert (
+        _final(client, token, turn, response.json()["tool_call_ref"]).status_code == 201
+    )
+    # The old receiver contract continues to return a summary only.
+    legacy = _read(client, token, _chat(token)).json()["result"]
+    assert legacy["schema_version"] == "1.0.0"
+    assert "reviewed_sources" not in legacy
+
+
+@pytest.mark.parametrize("version", ["1.1.0", "1.2.0"])
+def test_reviewed_source_extension_excludes_drafts_and_foreign_notes(scope, version):
+    from tests.factories import PatientFactory
+
+    doctor, target, baseline, token, _ = scope
+    patient = Patient.get(id=target.patient_id)
+    _note(doctor, patient, content={"Plan": "DRAFT-PRIVATE-SENTINEL"})
+    unmatched_patient = PatientFactory.build(
+        doctor_id=doctor.id, name=patient.name
+    ).save()
+    unmatched = _note(
+        doctor,
+        unmatched_patient,
+        content={"Plan": "UNMATCHED-SAME-NAME-PRIVATE-SENTINEL"},
+    )
+    from tests.services.session_prep_note_sources_test import _scope
+
+    foreign_doctor, foreign_patient, _ = _scope()
+    foreign = _note(
+        foreign_doctor, foreign_patient, content={"Plan": "FOREIGN-PRIVATE-SENTINEL"}
+    )
+    with get_session() as session:
+        finalize_note_for_session_prep(
+            session=session,
+            doctor_id=doctor.id,
+            note_id=unmatched.id,
+            expected_content_sha256=note_content_sha256(unmatched.note),
+            observed_at=NOW - timedelta(hours=1),
+        )
+        finalize_note_for_session_prep(
+            session=session,
+            doctor_id=foreign_doctor.id,
+            note_id=foreign.id,
+            expected_content_sha256=note_content_sha256(foreign.note),
+            observed_at=NOW - timedelta(hours=1),
+        )
+        session.commit()
+    assert _work() == "ready"
+    response = _read(_client(), token, _chat(token), version)
+    assert response.status_code == 200, response.text
+    assert [s["source_ref"] for s in response.json()["result"]["reviewed_sources"]] == [
+        str(baseline.id)
+    ]
+    assert "PRIVATE-SENTINEL" not in response.text
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
+def test_request_version_cannot_change_existing_receipt(scope, version):
+    _, _, _, token, _ = scope
+    assert _work() == "ready"
+    client, turn = _client(), _chat(token)
+    original = _read(client, token, turn, version)
+    assert original.status_code == 200
+    receipt = _context_receipt()
+    other = "1.0.0" if version == "1.1.0" else "1.1.0"
+    rejected = _read(client, token, turn, other)
+    assert rejected.status_code in {403, 409}
+    assert _context_receipt().request_digest == receipt.request_digest
+    assert _read(client, token, turn, version).json() == original.json()
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
+def test_each_version_rejects_other_detail_without_creating_a_receipt(scope, version):
+    _, _, _, token, _ = scope
+    client, turn = _client(), _chat(token)
+    body = _body(turn, version)
+    body["arguments"]["detail"] = (
+        "prep_summary" if version != "1.0.0" else "reviewed_sources"
+    )
+    response = client.post(
+        "/service/v1/agent/tools/invoke",
+        headers=_headers(token, turn),
+        json=body,
+    )
+    assert response.status_code == 422
+    assert (
+        AuthorityIdempotencyRecord.where(
+            AuthorityIdempotencyRecord.operation == OPERATION
+        ).count()
+        == 0
+    )
+
+
+@pytest.mark.parametrize("state", ["pending", "unavailable"])
+def test_non_ready_v11_context_never_carries_reviewed_evidence(scope, state):
+    _, _, note, token, _ = scope
+    if state == "unavailable":
+        note.note = {"Plan": "Unreviewed fictional correction."}
+        note.save()
+    response = _read(_client(), token, _chat(token), "1.1.0")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["state"] == state
+    assert result["reviewed_sources"] == []
+    assert result["prepared_brief"] is None
+
+
+@pytest.mark.parametrize("association_change", [None, "retarget", "busy"])
+@pytest.mark.parametrize("version", ["1.1.0", "1.2.0"])
+@pytest.mark.committed_database
+def test_explicit_scribe_patient_match_can_finalize_selected_prior_source(
+    scope, monkeypatch, association_change, version
+):
+    import app.services.session_prep_note_sources as source_service
+    from app.configuration.scribe_encounters import ScribeEncounterSettings
+
+    from app.models.authority import AuthorityActorExternalIdentity
+    from app.models.provider_record_authority import ProviderPracticeAuthority
+    from app.models.scribe_capture_binding import ScribeCaptureProviderLink
+    from app.models.scribe_patient_identity import ScribePatientIdentity
+
+    from tests.factories import PatientFactory
+
+    doctor, target, _, token, record = scope
+    original = PatientFactory.build(doctor_id=doctor.id).save()
+    matched_note = _note(
+        doctor,
+        original,
+        days_ago=7,
+        content={"Plan": "Synthetic reviewed source explicitly matched by provider."},
+    )
+    with get_session() as session:
+        mapping = session.get(ProviderPracticeAuthority, record.practice_authority_id)
+        identity = session.exec(
+            select(AuthorityActorExternalIdentity).where(
+                AuthorityActorExternalIdentity.issuer
+                == AUTHORITY_SETTINGS.clerk_issuer,
+                AuthorityActorExternalIdentity.subject == doctor.clerk_id,
+            )
+        ).one()
+        assert mapping is not None
+        link = ScribeCaptureProviderLink(
+            actor_id=identity.actor_id,
+            tenant_id=mapping.tenant_id,
+            source_identity_id=identity.id,
+            doctor_id=doctor.id,
+            practice_id=mapping.practice_id,
+            scribe_tenant_id=uuid4(),
+            reviewed_at=NOW - timedelta(hours=2),
+            review_ref=f"synthetic_scribe_match_{uuid4().hex}",
+        )
+        session.add(link)
+        session.flush()
+        session.add(
+            ScribePatientIdentity(
+                appointment_id=matched_note.appointment_id,
+                doctor_id=doctor.id,
+                actor_id=identity.actor_id,
+                tenant_id=mapping.tenant_id,
+                provider_link_id=link.id,
+                source_patient_id=original.id,
+                canonical_patient_id=target.patient_id,
+                provisional_entry=True,
+                state="matched",
+                version=1,
+            )
+        )
+        finalize_note_for_session_prep(
+            session=session,
+            doctor_id=doctor.id,
+            note_id=matched_note.id,
+            expected_content_sha256=note_content_sha256(matched_note.note),
+            observed_at=NOW - timedelta(hours=1),
+        )
+        session.commit()
+    monkeypatch.setattr(
+        source_service, "SCRIBE_ENCOUNTER_SETTINGS", ScribeEncounterSettings(True)
+    )
+    read_prep(token, record, _action(token))
+    assert _work() == "ready"
+    client, turn = _client(), _chat(token)
+    response = _read(client, token, turn, version)
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert str(matched_note.id) in {
+        source["source_ref"] for source in result["reviewed_sources"]
+    }
+    if association_change == "retarget":
+        other = PatientFactory.build(doctor_id=doctor.id).save()
+        with get_session() as session:
+            identity = session.exec(
+                select(ScribePatientIdentity).where(
+                    ScribePatientIdentity.appointment_id == matched_note.appointment_id
+                )
+            ).one()
+            identity.canonical_patient_id = other.id
+            identity.version += 1
+            session.add(identity)
+            session.commit()
+    if association_change == "busy":
+        engine = SessionManager.get_instance().get_engine()
+        with Session(engine) as writer:
+            writer.exec(
+                select(ScribePatientIdentity)
+                .where(
+                    ScribePatientIdentity.appointment_id == matched_note.appointment_id
+                )
+                .with_for_update()
+            ).one()
+            started = time.monotonic()
+            rejected = _final(client, token, turn, response.json()["tool_call_ref"])
+            assert rejected.status_code == 409, rejected.text
+            assert time.monotonic() - started < 2
+            writer.rollback()
+    final = _final(client, token, turn, response.json()["tool_call_ref"])
+    assert final.status_code == (409 if association_change == "retarget" else 201), (
+        final.text
+    )
+
+
+def test_source_only_read_finalizes_while_brief_pending_and_replay_never_upgrades(
+    scope,
+):
+    from tests.services.authority_conversation_read_test import read as read_history
+
+    _, _, note, token, _ = scope
+    client, turn = _client(), _chat(token)
+    response = _read(client, token, turn, "1.2.0")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["state"] == "ready" and result["brief_state"] == "pending"
+    assert result["prepared_brief"] is None and result["generated_at"] is None
+    assert result["reviewed_sources"][0]["sections"] == note.note
+    assert SessionPrepArtifact.count() == 0
+    assert (
+        _final(client, token, turn, response.json()["tool_call_ref"]).status_code == 201
+    )
+    assert _work() == "ready"
+    assert _read(client, token, turn, "1.2.0").json() == response.json()
+    assert (
+        _final(client, token, turn, response.json()["tool_call_ref"]).status_code == 201
+    )
+    history = read_history(client, token, turn)
+    assert history.status_code == 200, history.text
+    assert history.json()["turns"][0]["state"] == "completed"
+    current = _read(client, token, _chat(token), "1.2.0").json()["result"]
+    assert current["state"] == "ready" and current["brief_state"] == "ready"
+    assert current["prepared_brief"] is not None
+
+
+def test_source_only_read_remains_available_after_brief_generation_failure(scope):
+    def failed(_selection):
+        raise RuntimeError("synthetic-private-generation-failure")
+
+    _, _, note, token, _ = scope
+    assert _work(failed) == "failed"
+    assert _work(failed, now=NOW + timedelta(seconds=16)) == "failed"
+    assert _work(failed, now=NOW + timedelta(seconds=47)) == "failed"
+    client, turn = _client(), _chat(token)
+    response = _read(client, token, turn, "1.2.0")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["state"] == "ready" and result["brief_state"] == "unavailable"
+    assert result["prepared_brief"] is None and result["generated_at"] is None
+    assert result["reviewed_sources"][0]["sections"] == note.note
+    assert (
+        _final(client, token, turn, response.json()["tool_call_ref"]).status_code == 201
+    )
+    assert _read(client, token, _chat(token), "1.1.0").json()["result"]["state"] == (
+        "unavailable"
+    )
+    assert "private-generation" not in response.text
+
+
+def test_source_only_no_reviewed_sources_is_content_free_and_cannot_answer(scope):
+    _, _, note, token, _ = scope
+    note.note = {"Plan": "Unreviewed synthetic edit."}
+    note.save()
+    client, turn = _client(), _chat(token)
+    response = _read(client, token, turn, "1.2.0")
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["state"] == "unavailable" and result["brief_state"] == "unavailable"
+    assert result["reason_code"] == "no_eligible_sources"
+    assert result["reviewed_sources"] == [] and result["provenance"] == []
+    assert (
+        _final(client, token, turn, response.json()["tool_call_ref"]).status_code == 409
+    )
+    assert (
+        _final(
+            client, token, turn, response.json()["tool_call_ref"], "unavailable"
+        ).status_code
+        == 201
+    )
 
 
 @pytest.mark.parametrize(
@@ -398,8 +779,9 @@ def test_versioned_response_fixtures_match_closed_runtime_and_schema_fields(stat
     ],
 )
 @pytest.mark.committed_database
+@pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
 def test_postgres_source_publication_and_final_acceptance_serialize(
-    scope, monkeypatch, writer_first, new_note, latent_source
+    scope, monkeypatch, writer_first, new_note, latent_source, version
 ):
     doctor, target, note, token, _ = scope
     selected_note_ref = str(note.id)
@@ -428,7 +810,7 @@ def test_postgres_source_publication_and_final_acceptance_serialize(
         ).save()
     assert _work() == "ready"
     client, turn = _client(), _chat(token)
-    ref = _read(client, token, turn).json()["tool_call_ref"]
+    ref = _read(client, token, turn, version).json()["tool_call_ref"]
     if latent_source:
         artifact = SessionPrepArtifact.first()
         assert artifact is not None

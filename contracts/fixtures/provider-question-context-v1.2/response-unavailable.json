@@ -1,0 +1,17 @@
+{
+  "tool_call_ref": "authority_idem_01j00000000000000000000000",
+  "status": "completed",
+  "result": {
+    "schema_version": "1.2.0",
+    "state": "unavailable",
+    "reason_code": "no_eligible_sources",
+    "source_version_digest": "sha256_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "prepared_brief": null,
+    "provenance": [],
+    "completeness": "none",
+    "current_through": null,
+    "generated_at": null,
+    "reviewed_sources": [],
+    "brief_state": "unavailable"
+  }
+}

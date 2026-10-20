@@ -1,0 +1,16 @@
+{
+  "tool_call_ref": "authority_idem_01j00000000000000000000000",
+  "status": "completed",
+  "result": {
+    "schema_version": "1.1.0",
+    "state": "pending",
+    "reason_code": "generation_pending",
+    "source_version_digest": "sha256_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "prepared_brief": null,
+    "provenance": [],
+    "completeness": "none",
+    "current_through": null,
+    "generated_at": null,
+    "reviewed_sources": []
+  }
+}

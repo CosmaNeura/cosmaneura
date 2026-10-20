@@ -1,0 +1,253 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.cosmaneura.com/provider-question-context/v1.1/result.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "state",
+    "reason_code",
+    "source_version_digest",
+    "prepared_brief",
+    "provenance",
+    "completeness",
+    "current_through",
+    "generated_at",
+    "reviewed_sources"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0"
+    },
+    "state": {
+      "enum": [
+        "ready",
+        "pending",
+        "unavailable"
+      ]
+    },
+    "reason_code": {
+      "enum": [
+        null,
+        "generation_pending",
+        "no_eligible_sources",
+        "context_not_available"
+      ]
+    },
+    "source_version_digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256_[a-f0-9]{64}$"
+    },
+    "prepared_brief": {
+      "anyOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json#/$defs/preparedBrief"
+            },
+            {
+              "properties": {
+                "patient_reported": {
+                  "type": "null"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "provenance": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "allOf": [
+          {
+            "$ref": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json#/$defs/provenanceItem"
+          },
+          {
+            "properties": {
+              "included": {
+                "const": true
+              },
+              "source_class": {
+                "const": "clinician_finalized_note"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "completeness": {
+      "enum": [
+        "complete",
+        "partial",
+        "none"
+      ]
+    },
+    "current_through": {
+      "anyOf": [
+        {
+          "$ref": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "generated_at": {
+      "anyOf": [
+        {
+          "$ref": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json#/$defs/timestamp"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "reviewed_sources": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "$ref": "#/$defs/reviewedSource"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "ready"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "type": "null"
+          },
+          "prepared_brief": {
+            "type": "object"
+          },
+          "provenance": {
+            "minItems": 1
+          },
+          "completeness": {
+            "enum": [
+              "complete",
+              "partial"
+            ]
+          },
+          "current_through": {
+            "type": "string"
+          },
+          "generated_at": {
+            "type": "string"
+          },
+          "reviewed_sources": {
+            "minItems": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "prepared_brief": {
+            "type": "null"
+          },
+          "provenance": {
+            "maxItems": 0
+          },
+          "completeness": {
+            "const": "none"
+          },
+          "current_through": {
+            "type": "null"
+          },
+          "generated_at": {
+            "type": "null"
+          },
+          "reviewed_sources": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "pending"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "const": "generation_pending"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "const": "unavailable"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "reason_code": {
+            "enum": [
+              "no_eligible_sources",
+              "context_not_available"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "reviewedSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_ref",
+        "source_version",
+        "source_at",
+        "sections"
+      ],
+      "properties": {
+        "source_ref": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9._~-]{8,160}$"
+        },
+        "source_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "source_at": {
+          "$ref": "https://contracts.cosmaneura.com/provider-session-prep/v1/result.schema.json#/$defs/timestamp"
+        },
+        "sections": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 18000
+          }
+        }
+      }
+    }
+  }
+}

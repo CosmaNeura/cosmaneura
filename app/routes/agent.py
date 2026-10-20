@@ -715,7 +715,7 @@ async def _invoke_tool(
     tool_key = (data.tool_name, data.tool_version)
     if (companion_brief and tool_key != _SESSION_PREP_TOOL_KEY) or tool_key not in {
         _SESSION_PREP_TOOL_KEY,
-        provider_question.TOOL_KEY,
+        *provider_question.TOOL_KEYS,
         history.TOOL_KEY,
     }:
         return agent_problem_response(
@@ -734,7 +734,7 @@ async def _invoke_tool(
             else provider_question.ProviderQuestionInvocation.model_validate(
                 data.model_dump(mode="json", exclude_unset=True)
             )
-            if tool_key == provider_question.TOOL_KEY
+            if tool_key in provider_question.TOOL_KEYS
             else SessionPrepContextReadInvocation.model_validate(
                 data.model_dump(mode="json", exclude_unset=True)
             )
