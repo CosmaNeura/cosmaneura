@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
@@ -68,9 +68,13 @@ class ReconciliationRefused(ValueError):
     """Value-free refusal. The caller must roll back the whole transaction."""
 
 
+def _refuse() -> NoReturn:
+    raise ReconciliationRefused("staging_scribe_prep_reconciliation_refused")
+
+
 def _require(condition: object) -> None:
     if not condition:
-        raise ReconciliationRefused("staging_scribe_prep_reconciliation_refused")
+        _refuse()
 
 
 def _digest(value: Any) -> str:
@@ -312,7 +316,8 @@ def reconcile(
     request_digest = _digest({"additional_doctor": str(additional.id), "scope": scope})
     if audit is not None:
         _require(audit.practice_id == practice.id and audit.reason == request_digest)
-        _require(mapping is not None and record is not None)
+        if mapping is None or record is None:
+            _refuse()
         _require(mapping.practice_id == practice.id and mapping.tenant_id == tenant.id)
         _require(
             record.binding_id == person_binding.id

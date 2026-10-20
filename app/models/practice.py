@@ -231,16 +231,14 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     stripe_paid_seat_high_water: int | None = None
-    """Highest seat count Stripe held in the period below; re-adding up to it is free.
-
-    A seat removal gives no credit, so a swap within one period must not be
-    charged again. Only written after Stripe confirms the quantity.
-    """
+    "Highest seat count Stripe held in the recorded billing period."
+    # A seat removal gives no credit, so re-adding up to this count within the
+    # period is free. Only written after Stripe confirms the quantity.
     stripe_paid_seat_period_start: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Stripe subscription item current_period_start the high-water belongs to."
+    "Stripe item current_period_start the high-water belongs to."
 
     negotiated_baa_on_file: bool = False
     "Enterprise fallback: a countersigned CN-BAA-CUST is on file instead of clickwrap."

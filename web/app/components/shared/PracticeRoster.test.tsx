@@ -10,7 +10,14 @@ import type { BillingSeatSummary, PracticeStatus } from "~/lib/practice-api"
 
 import { localAccessEnd } from "./PracticeMemberAccess"
 import { PracticeRoster, loadPracticeRoster } from "./PracticeRoster"
-import { fireEvent, render, screen, within } from "@testing-library/react"
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 
 const client = vi.hoisted(() => ({
   practiceRoster: vi.fn(),
@@ -292,7 +299,7 @@ describe("PracticeRoster", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByText("riley@gmail.com")).not.toBeInTheDocument(),
     )
     expect(client.revokePracticeInvitation).toHaveBeenCalledWith({
@@ -346,7 +353,7 @@ describe("PracticeRoster", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "An accepted invitation cannot be revoked.",
     )
-    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(practiceRoster).toHaveBeenCalledTimes(1))
   })
 
   it("drops the copyable link once its invitation is revoked", async () => {
@@ -378,7 +385,7 @@ describe("PracticeRoster", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Revoke invitation/ }))
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.queryByText("https://app.cosmaneura.com/invite#t=secret-token"),
       ).not.toBeInTheDocument(),
@@ -409,20 +416,20 @@ describe("PracticeRoster", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "That did not work. Try again.",
     )
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /^Resend invitation/ }),
       ).toBeEnabled(),
     )
     resend()
     await screen.findByText("Send this link to riley@gmail.com.")
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: /^Resend invitation/ }),
       ).toBeEnabled(),
     )
     resend()
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(client.resendPracticeInvitation).toHaveBeenCalledTimes(3),
     )
 
@@ -613,11 +620,11 @@ describe("revoking and restoring members", () => {
       within(dialog).getByRole("button", { name: "Revoke access" }),
     )
 
-    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    await waitFor(() => expect(practiceRoster).toHaveBeenCalled())
     expect(client.revokePracticeMember).toHaveBeenCalledWith({
       path: { member_id: "practice_member_alex" },
     })
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     )
   })
@@ -638,7 +645,7 @@ describe("revoking and restoring members", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true")
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
 
-    await vi.waitFor(() => expect(trigger).toHaveFocus())
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
   it("moves focus to Restore once a revoke succeeds, and back after a restore", async () => {
@@ -667,13 +674,13 @@ describe("revoking and restoring members", () => {
     const restore = await screen.findByRole("button", {
       name: "Restore Alex Active",
     })
-    await vi.waitFor(() => expect(restore).toHaveFocus())
+    await waitFor(() => expect(restore).toHaveFocus())
 
     fireEvent.click(restore)
     const revoke = await screen.findByRole("button", {
       name: "Revoke Alex Active",
     })
-    await vi.waitFor(() => expect(revoke).toHaveFocus())
+    await waitFor(() => expect(revoke).toHaveFocus())
   })
 
   it("tells apart clinicians who never recorded a name", () => {
@@ -772,7 +779,7 @@ describe("revoking and restoring members", () => {
     )
     await within(dialog).findByRole("alert")
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     )
 
@@ -794,7 +801,7 @@ describe("revoking and restoring members", () => {
     const dialog = await screen.findByRole("dialog")
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     )
     expect(client.revokePracticeMember).not.toHaveBeenCalled()
@@ -846,7 +853,7 @@ describe("revoking and restoring members", () => {
       within(row).getByRole("button", { name: "Restore Alex Active" }),
     )
 
-    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    await waitFor(() => expect(practiceRoster).toHaveBeenCalled())
     expect(client.restorePracticeMember).toHaveBeenCalledWith({
       path: { member_id: "practice_member_alex" },
     })
@@ -874,7 +881,7 @@ describe("revoking and restoring members", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
 
-    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    await waitFor(() => expect(practiceRoster).toHaveBeenCalled())
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "To add more clinicians, contact us at info@cosmaneura.com.",
     )
@@ -913,12 +920,12 @@ describe("revoking and restoring members", () => {
     fireEvent.click(screen.getByRole("button", { name: "Restore Alex Active" }))
 
     const row = screen.getAllByRole("listitem")[1]
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(within(row).getByRole("alert")).toHaveTextContent(
         "This clinician's access can't be restored.",
       ),
     )
-    await vi.waitFor(() => expect(row).toHaveTextContent(/Revoked · joined/))
+    await waitFor(() => expect(row).toHaveTextContent(/Revoked · joined/))
     expect(within(row).queryByRole("button")).not.toBeInTheDocument()
     expect(within(row).getByRole("alert")).toBeInTheDocument()
   })
@@ -980,7 +987,7 @@ describe("revoking and restoring members", () => {
       within(dialog).getByRole("button", { name: "Revoke access" }),
     )
 
-    await vi.waitFor(() => expect(practiceRoster).toHaveBeenCalled())
+    await waitFor(() => expect(practiceRoster).toHaveBeenCalled())
     expect(within(dialog).getByRole("alert")).toHaveTextContent(
       "This clinician's access has already ended.",
     )
@@ -1008,7 +1015,7 @@ describe("revoking and restoring members", () => {
       }),
     )
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(
         screen.getByRole("button", { name: "Restore Alex Active" }),
       ).toBeInTheDocument(),
@@ -1067,15 +1074,13 @@ describe("a cut-off passing while the roster is open", () => {
     })
     render(<PracticeRoster practice={practice()} roster={ending()} />)
 
-    await vi.advanceTimersByTimeAsync(59_000)
+    await act(() => vi.advanceTimersByTimeAsync(59_000))
     expect(practiceRoster).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(2_000)
+    await act(() => vi.advanceTimersByTimeAsync(2_000))
 
     expect(practiceRoster).toHaveBeenCalledTimes(1)
-    await vi.waitFor(() =>
-      expect(screen.getAllByRole("listitem")[1]).toHaveTextContent(
-        /Access revoked · joined/,
-      ),
+    expect(screen.getAllByRole("listitem")[1]).toHaveTextContent(
+      /Access revoked · joined/,
     )
     expect(screen.getByText("1 seat in use")).toBeInTheDocument()
   })
@@ -1088,11 +1093,11 @@ describe("a cut-off passing while the roster is open", () => {
     })
     render(<PracticeRoster practice={practice()} roster={ending()} />)
 
-    await vi.advanceTimersByTimeAsync(29_000)
+    await act(() => vi.advanceTimersByTimeAsync(29_000))
     expect(practiceRoster).not.toHaveBeenCalled()
-    await vi.advanceTimersByTimeAsync(2_000)
+    await act(() => vi.advanceTimersByTimeAsync(2_000))
     expect(practiceRoster).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(29_000)
+    await act(() => vi.advanceTimersByTimeAsync(29_000))
     expect(practiceRoster).toHaveBeenCalledTimes(1)
   })
 })
@@ -1202,7 +1207,7 @@ describe("InviteClinicianForm", () => {
       target: { value: "two@gmail.com" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Send invitation" }))
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(client.createPracticeInvitation).toHaveBeenCalledTimes(2),
     )
 
@@ -1263,7 +1268,7 @@ describe("InviteClinicianForm", () => {
     submitAgain("same@gmail.com")
     await screen.findByText("The invitation could not be sent.")
     submitAgain("other@gmail.com")
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(client.createPracticeInvitation).toHaveBeenCalledTimes(4),
     )
 
@@ -1297,7 +1302,7 @@ describe("InviteClinicianForm", () => {
 
     submitAgain("new@gmail.com")
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(status).toHaveTextContent("Send this link to new@gmail.com."),
     )
     expect(screen.getByRole("status")).toBe(status)

@@ -10,7 +10,7 @@ import {
 
 import InvitePage, { clientLoader } from "./invite"
 import { clientLoader as onboardingLoader } from "./onboarding"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const client = vi.hoisted(() => ({
   inspectPracticeInvitation: vi.fn(),
@@ -167,7 +167,7 @@ describe("invite link", () => {
     clerk.getClient.mockResolvedValue(undefined)
     openInvite()
 
-    await vi.waitFor(() =>
+    await waitFor(() =>
       expect(screen.queryByText("Loading")).not.toBeInTheDocument(),
     )
     expect(screen.queryByRole("heading")).not.toBeInTheDocument()

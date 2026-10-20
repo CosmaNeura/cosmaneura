@@ -3,7 +3,6 @@ Summarize a patient visit into a clinical note with the specified schema.
 """
 
 import json
-import math
 import textwrap
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -742,11 +741,7 @@ def augment_clinical_note(
             break
 
     if plan_key:
-        t = terminology_terms(Doctor.get(id=transcript.doctor_id))
-        original[plan_key] += "\n\n" + dedent(f"""
-        Greater than {math.floor((transcript.duration or 0) / 60)} minutes was spent in {t.patient} care, including review of prior records, consultation with other providers, and documentation.
-        """)
-
+        # Recording duration does not establish total care time or services performed.
         original[plan_key] += "\n\n" + "This note was generated with AI assistance."
 
     # TODO need to add post-summarization text to the relevant sections, see:

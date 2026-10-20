@@ -136,7 +136,7 @@ def test_therapist_augmented_note_wording():
 
     note = augment_clinical_note({"Plan": "Rest."}, transcript)
 
-    assert "spent in client care" in note["Plan"]
+    assert note["Plan"] == "Rest.\n\nThis note was generated with AI assistance."
 
 
 def test_therapist_intake_summary_prompt():

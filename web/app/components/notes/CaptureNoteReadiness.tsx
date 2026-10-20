@@ -79,7 +79,7 @@ export function CaptureNoteReadiness() {
   const pending = revalidator.state !== "idle"
   return (
     <div className="mb-4">
-      <div className="mb-2 text-xl font-semibold">Notes</div>
+      <h2 className="mb-2 text-xl font-semibold">Notes</h2>
       <p className="text-muted-foreground text-sm">
         Your transcript is ready. If you haven’t started the note, select
         Prepare draft note in Scribe.

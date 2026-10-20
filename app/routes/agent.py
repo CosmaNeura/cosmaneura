@@ -455,7 +455,7 @@ async def _validated_tool_body(
         not in {"", "identity"}
     ):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The tool invocation is invalid.",
@@ -465,7 +465,7 @@ async def _validated_tool_body(
     declared_lengths = request.headers.getlist("content-length")
     if len(declared_lengths) > 1:
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The tool invocation is invalid.",
@@ -478,7 +478,7 @@ async def _validated_tool_body(
             declared_length = -1
         if not 0 <= declared_length <= _MAX_TOOL_INVOCATION_BODY_BYTES:
             return agent_problem_response(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="VALIDATION_FAILED",
                 title="Validation failed",
                 detail="The tool invocation is invalid.",
@@ -489,7 +489,7 @@ async def _validated_tool_body(
     async for chunk in request.stream():
         if len(chunk) > _MAX_TOOL_INVOCATION_BODY_BYTES - len(body):
             return agent_problem_response(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 code="VALIDATION_FAILED",
                 title="Validation failed",
                 detail="The tool invocation is invalid.",
@@ -501,7 +501,7 @@ async def _validated_tool_body(
         return ToolInvocationEnvelope.model_validate(raw)
     except (TypeError, ValueError, UnicodeDecodeError, RecursionError):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The tool invocation is invalid.",
@@ -519,7 +519,7 @@ async def _validated_audit_body(
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
     if content_type.lower() != "application/json":
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The observational audit event is invalid.",
@@ -529,7 +529,7 @@ async def _validated_audit_body(
         return AuditWriteRequest.model_validate(await request.json())
     except (TypeError, ValueError):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The observational audit event is invalid.",
@@ -547,7 +547,7 @@ async def _validated_usage_body(
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
     if content_type.lower() != "application/json":
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The model usage event is invalid.",
@@ -557,7 +557,7 @@ async def _validated_usage_body(
         return ModelUsageRequest.model_validate(await request.json())
     except (TypeError, ValueError):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The model usage event is invalid.",
@@ -702,7 +702,7 @@ async def _invoke_tool(
         or len(request.headers.getlist("x-trace-id")) > 1
     ):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The tool invocation is invalid.",
@@ -746,7 +746,7 @@ async def _invoke_tool(
             raise ValueError("companion_requires_brief")
     except (ValidationError, ValueError, RecursionError):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The tool invocation is invalid.",
@@ -1214,7 +1214,7 @@ async def write_conversation_turn(
     content_type = request.headers.get("content-type", "").partition(";")[0].strip()
     if content_type.lower() != "application/json":
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The conversation phase is invalid.",
@@ -1224,7 +1224,7 @@ async def write_conversation_turn(
         raw_data = await request.json()
     except (UnicodeDecodeError, ValueError):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The conversation phase is invalid.",
@@ -1242,7 +1242,7 @@ async def write_conversation_turn(
         data = CONVERSATION_TURN_WRITE_ADAPTER.validate_python(raw_data)
     except ValidationError:
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The conversation phase is invalid.",
@@ -1350,7 +1350,7 @@ async def write_conversation_turn(
         )
     except app.services.authority_conversation.ConversationInvariantError:
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The conversation phase is invalid.",
@@ -1502,7 +1502,7 @@ async def write_audit_event(
         app.services.authority_audit.AuditReferenceInvalidError,
     ):
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The observational audit event is invalid.",
@@ -1655,7 +1655,7 @@ async def report_model_usage_event(
         )
     except app.services.authority_usage.ModelUsagePayloadInvalidError:
         return agent_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="VALIDATION_FAILED",
             title="Validation failed",
             detail="The model usage event is invalid.",

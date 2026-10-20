@@ -406,7 +406,7 @@ export function IconNavigation() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <ViewAsAccountControl />
+        <ViewAsAccountControl compact />
       </SidebarFooter>
     </Sidebar>
   )
