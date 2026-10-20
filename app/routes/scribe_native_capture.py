@@ -8,7 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -50,11 +50,13 @@ from app.services.scribe_workflow import ScribeWorkflowClient
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
 from app.utils.native_request_timing import (
+    RESPONSE_HEADER,
     Ledger,
     bind_ledger,
     current_ledger,
     phase,
     request_timing,
+    response_header,
 )
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -75,7 +77,24 @@ class NativeTimingRoute(CaptureDeadlineRoute):
         if scope["type"] == "http" and scope["method"] == "POST":
             with request_timing() as ledger:
                 private_scope = {**scope, _TIMING_SCOPE: ledger} if ledger else scope
-                await super().handle(private_scope, receive, send)
+
+                async def observed_send(message: Message) -> None:
+                    if message["type"] == "http.response.start":
+                        try:
+                            headers = message.get("headers", [])
+                            if not any(
+                                name.lower() == RESPONSE_HEADER for name, _ in headers
+                            ):
+                                if value := response_header(ledger):
+                                    message = {
+                                        **message,
+                                        "headers": [*headers, (RESPONSE_HEADER, value)],
+                                    }
+                        except Exception:
+                            pass  # Optional observation cannot change the original response.
+                    await send(message)
+
+                await super().handle(private_scope, receive, observed_send)
         else:
             await super().handle(scope, receive, send)
 
@@ -220,6 +239,11 @@ async def native_capture(
             headers={
                 "Cache-Control": "no-store",
                 "X-Cosmaneura-Native-Capture-Version": "1",
+                **(
+                    {"X-Cosmaneura-Compound-Admission-Version": "1"}
+                    if data.action == "mount"
+                    else {}
+                ),
                 "X-Cosmaneura-Prepared-Native-Read-Version": "1",
                 "X-Cosmaneura-Admission-Native-Preparation-Version": "1",
                 "X-Cosmaneura-Admission-Preparation-Metadata-Version": "1",

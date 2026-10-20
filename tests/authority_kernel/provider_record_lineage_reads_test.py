@@ -1,9 +1,12 @@
 """Current lineage validation on invocation-owned synthetic PostgreSQL."""
 
+from typing import cast
+
 import pytest
 
 from app.services import provider_record_authority as records
 
+from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.authority import (
     AuthorityPerson,
@@ -130,17 +133,21 @@ def test_changed_lineage_rows_are_rejected_at_original_boundary(
                 practice = original_practice(current_session, doctor)
                 if change == "person":
                     row = session.get(AuthorityPerson, binding.person_id)
+                    assert row is not None
                     row.status = "revoked"
                 elif change == "appointment":
                     row = session.get(Appointment, scope.appointment_id)
+                    assert row is not None
                     row.patient_id = other_patient.id
                 elif change == "patient":
                     row = session.get(Patient, scope.patient_id)
+                    assert row is not None
                     row.doctor_id = other_doctor.id
                 else:
                     row = session.get(
                         ProviderPracticeAuthority, scope.practice_authority_id
                     )
+                    assert row is not None
                     row.tenant_id = other_tenant.id
                 session.add(row)
                 session.flush()
@@ -228,12 +235,12 @@ def test_missing_exact_lineage_cannot_fall_back_to_another_record(
         # Unsaved fixture-only keys under no-autoflush model an absent exact
         # row, without deleting retained fictional records or changing guards.
         if missing == "scope":
-            binding.id = TypeID("person_binding")
+            binding.id = cast(TypeIDType, TypeID("person_binding"))
             with session.no_autoflush:
                 assert validate(session, binding, native) is None
             return
         if missing == "person":
-            binding.person_id = TypeID("authority_person")
+            binding.person_id = cast(TypeIDType, TypeID("authority_person"))
         else:
             field, prefix = {
                 "mapping": ("practice_authority_id", "provider_practice_authority"),

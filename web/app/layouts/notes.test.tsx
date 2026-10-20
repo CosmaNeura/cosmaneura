@@ -132,6 +132,30 @@ describe("loadNotesLayoutData", () => {
     expect((await loadNotesLayoutData()).noteStatuses).toEqual({})
   })
 
+  it("shows a confirmed canonical name while retaining the original visit and cached source", async () => {
+    const payload = {
+      appointments: [
+        {
+          id: "appt_invented",
+          patient_id: "patient_source",
+          patient_name: "Invented name-only entry",
+        },
+      ],
+      patient_names: { appt_invented: "Invented confirmed patient" },
+    }
+    noteList.mockResolvedValue({ data: payload, response: { status: 200 } })
+    const loaded = await loadNotesLayoutData()
+    expect(loaded.appointments[0]).toMatchObject({
+      id: "appt_invented",
+      patient_id: "patient_source",
+      patient_name: "Invented confirmed patient",
+    })
+    expect(queryClient.getQueryData(["noteList"])).toEqual(payload)
+    expect(payload.appointments[0].patient_name).toBe(
+      "Invented name-only entry",
+    )
+  })
+
   it("shares an in-flight request between concurrent route loads", async () => {
     const payload = { appointments: [{ id: "appt_shared" }] }
     let resolve!: (value: unknown) => void

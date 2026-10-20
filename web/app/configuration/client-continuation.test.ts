@@ -6,9 +6,17 @@ const state = vi.hoisted(() => ({
   getToken: vi.fn(),
   getClient: vi.fn(),
   setConfig: vi.fn(),
+  configurations: [] as Array<{ auth: () => Promise<unknown> }>,
 }))
 vi.mock("./clerk", () => ({ getClient: state.getClient }))
-vi.mock("client/client.gen", () => ({ client: { setConfig: state.setConfig } }))
+vi.mock("client/client.gen", () => ({
+  client: {
+    setConfig: (config: { auth: () => Promise<unknown> }) => {
+      state.configurations.push(config)
+      state.setConfig(config)
+    },
+  },
+}))
 vi.mock("~/utils/environment", () => ({
   isDevelopment: () => false,
   requireEnv: () => "/",
@@ -28,7 +36,9 @@ beforeEach(() => {
 it("requests fresh ordinary same-session evidence only for explicit continuation", async () => {
   await billingContinuationAuth()
   expect(state.getToken).toHaveBeenLastCalledWith({ skipCache: true })
-  const configured = state.setConfig.mock.calls[0][0]
+  // Vitest clears mock call history before each test, including import-time calls.
+  const configured = state.configurations[0]
+  expect(configured).toBeDefined()
   await configured.auth()
   expect(state.getToken).toHaveBeenLastCalledWith()
 })

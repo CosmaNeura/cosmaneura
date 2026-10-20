@@ -3,9 +3,11 @@
 import time
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import psycopg
 import pytest
+from psycopg.abc import Query
 
 from app.services import companion_records as records
 from app.services import scribe_capture_deadline as capture
@@ -13,6 +15,7 @@ from app.utils import statement_timeout_scope as settings
 
 from app.models.doctor import Doctor
 from sqlalchemy import event, func, literal_column, text, update
+from sqlalchemy import select as core_select
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, select
 
@@ -40,7 +43,7 @@ def setting_calls(connection, monkeypatch):
                 "set_config('lock_timeout', %s, true)"
             ):
                 calls.append(tuple(map(int, args[0])))
-            return super().execute(query, *args, **kwargs)
+            return super().execute(cast(Query, query), *args, **kwargs)
 
     raw = connection.connection.driver_connection
     with monkeypatch.context() as patch:
@@ -49,7 +52,9 @@ def setting_calls(connection, monkeypatch):
 
 
 def safe_query():
-    return select(Doctor.id).where(Doctor.clerk_id == "user_invented_timeout_absent")
+    return select(cast(Any, Doctor.id)).where(
+        cast(Any, Doctor.clerk_id) == "user_invented_timeout_absent"
+    )
 
 
 @pytest.mark.parametrize("cancelled", ["capture", "record"])
@@ -211,11 +216,13 @@ def test_uncertain_statements_invalidate_prior_settings(engine, monkeypatch, sta
             else:
                 query = (
                     update(Doctor)
-                    .where(Doctor.clerk_id == "user_invented_timeout_absent")
+                    .where(cast(Any, Doctor.clerk_id) == "user_invented_timeout_absent")
                     .values(last_active_at=datetime.now(UTC))
                 )
                 if statement == "mutating_cte":
-                    query = select(query.returning(Doctor.id).cte("changed_doctors"))
+                    query = core_select(
+                        query.returning(cast(Any, Doctor.id)).cte("changed_doctors")
+                    )
             connection.execute(query)
             before = len(calls)
             connection.execute(safe_query()).all()
@@ -282,7 +289,7 @@ def test_native_retains_receipts_exact_locks_and_sql_with_fewer_setters(
                     counts["setters"] += 1
                 else:
                     counts["sql"] += 1
-                return super().execute(query, *args, **kwargs)
+                return super().execute(cast(Query, query), *args, **kwargs)
 
         def attach(connection, *_):
             connection.cursor_factory = Cursor

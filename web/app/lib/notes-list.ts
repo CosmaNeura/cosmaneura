@@ -37,7 +37,10 @@ export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
       },
     })
     return {
-      appointments: result.appointments,
+      appointments: result.appointments.map((visit) => ({
+        ...visit,
+        patient_name: result.patient_names?.[visit.id] ?? visit.patient_name,
+      })),
       noteStatuses: result.note_statuses ?? {},
       blocked: null,
     }

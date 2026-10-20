@@ -42,6 +42,7 @@ def remote_reads(native, monkeypatch):
     original = native.remote.capture_operation
     calls = []
     key = pair("encryption_key", scope())[1]
+    assert isinstance(key, protocol.EncryptionKey)
 
     async def read(tenant_id, session_id, operation, **kwargs):
         calls.append(operation.kind)
@@ -154,7 +155,7 @@ def test_remote_failure_returns_no_partial_metadata_or_later_reads(
     async def failed(*args, **kwargs):
         if len(calls) + 1 == phase:
             calls.append(args[2].kind)
-            raise ScribeWorkflowRetryableError()
+            raise ScribeWorkflowRetryableError("synthetic_retryable")
         return await original(*args, **kwargs)
 
     monkeypatch.setattr(native.remote, "capture_operation", failed)

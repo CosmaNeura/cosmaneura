@@ -67,7 +67,7 @@ UUID_RE = re.compile('^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
 BASE_TAGS = {'data-classification': 'non-phi-control-metadata', 'environment': 'staging', 'managed-by': 'opentofu', 'purpose': 'staging-restore-rehearsal-control'}
 AZURE_CLI_ENTRYPOINTS = (Path('/opt/homebrew/bin/az'), Path('/usr/local/bin/az'), Path('/usr/bin/az'))
 PYTHON_ENTRYPOINTS = (Path('/opt/homebrew/bin/python3'), Path('/usr/local/bin/python3'), Path('/usr/bin/python3'))
-EXPECTED_RECOVERY_LAUNCHER_SHA256 = '108cc59e6f5d9bf550e6156ed93ff89c6db3180ce9552cff7cfeddd6d55df02d'
+EXPECTED_RECOVERY_LAUNCHER_SHA256 = '92d1f6a6c8ce3fad565da04be976b3a7fff48f56daa2dbcbbcdfb61a47888f10'
 MAX_RECOVERY_LAUNCHER_BYTES = 64 * 1024
 REMOTE_STATE_COMPARISON_POLICY = 'canonical-json-check-results-permutation-v1'
 

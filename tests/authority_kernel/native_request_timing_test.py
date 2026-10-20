@@ -45,6 +45,7 @@ def test_explicit_staging_gate(monkeypatch):
 
 def test_request_description_accepts_only_closed_actions(observations):
     with timing.request_timing() as ledger:
+        assert ledger is not None
         ledger.describe_request("prepared_admission")
         ledger.describe_request("https://synthetic-private.invalid/patient")
     assert observations[0]["request_kind"] == "prepared_admission"
@@ -195,15 +196,18 @@ def test_logging_and_clock_failures_never_mask_source_error(monkeypatch):
 
 
 @pytest.mark.parametrize("elapsed", [float("nan"), float("inf"), -1, 1_000_000])
-def test_finite_bounded_durations_and_counts(monkeypatch, elapsed):
+@pytest.mark.parametrize(
+    "phase", ["clerk_auth", "workflow_token", "workflow_http", "capture_transaction"]
+)
+def test_finite_bounded_durations_and_counts(monkeypatch, elapsed, phase):
     ledger = timing.Ledger()
     monkeypatch.setattr(timing, "perf_counter", lambda: elapsed)
-    ledger.counts["clerk_auth"] = timing.MAX_COUNT
-    ledger.record("clerk_auth", 0, False)
+    ledger.counts[phase] = timing.MAX_COUNT
+    ledger.record(phase, 0, False)
     row = cast(dict[str, Any], ledger.close())
     assert 0 <= row["total_ms"] <= timing.MAX_MS
-    assert 0 <= row["phase_ms"]["clerk_auth"] <= timing.MAX_MS
-    assert row["phase_count"]["clerk_auth"] == timing.MAX_COUNT
+    assert 0 <= row["phase_ms"][phase] <= timing.MAX_MS
+    assert row["phase_count"][phase] == timing.MAX_COUNT
 
 
 def test_jwks_observer_preserves_constructor_fetch_result_error_and_cache(
@@ -338,6 +342,68 @@ def test_mounted_native_route_observes_thread_dependencies_and_preserves_http(
         assert observations[0]["phase_failures"]["workload_" + denied] == 1
     assert not timing.active()
     assert "private" not in repr(observations)
+    import json
+
+    header = response.headers["x-cosmaneura-native-request-timing"]
+    snapshot = json.loads(header)
+    assert len(header.encode("ascii")) <= timing.MAX_HEADER_BYTES
+    assert snapshot["phase_count"] == observations[0]["phase_count"]
+    assert snapshot["phase_failures"] == observations[0]["phase_failures"]
+    assert "private" not in header
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_response_observation_absent_when_disabled_or_broken(monkeypatch, enabled):
+    from tests.authority_kernel import scribe_native_capture_receiver_test as fixture
+
+    monkeypatch.setattr(timing, "enabled", lambda: enabled)
+    monkeypatch.setattr(timing, "_emit", lambda _: None)
+    if enabled:
+
+        def fail(_):
+            raise ValueError("synthetic-private-observer-error")
+
+        monkeypatch.setattr(timing.Ledger, "snapshot", fail)
+    client, _ = fixture.client(monkeypatch)
+    response = client.post(fixture.PATH, json=fixture.body(), headers=fixture.headers())
+    assert response.status_code == 200
+    assert response.json()["version"] == "1"
+    assert "x-cosmaneura-native-request-timing" not in response.headers
+
+
+@pytest.mark.parametrize(
+    "bad", ["extra", "private_kind", "unknown_phase", "nonfinite", "boolean_count"]
+)
+def test_response_snapshot_rejects_nonclosed_metadata(monkeypatch, bad):
+    monkeypatch.setattr(timing, "enabled", lambda: True)
+    ledger = timing.Ledger()
+    row = ledger.snapshot()
+    assert isinstance(row["phase_ms"], dict)
+    assert isinstance(row["phase_count"], dict)
+    if bad == "extra":
+        row["private_context"] = "synthetic-private"
+    elif bad == "private_kind":
+        row["request_kind"] = "synthetic-private"
+    elif bad == "unknown_phase":
+        row["phase_ms"]["private_context"] = 1
+    elif bad == "nonfinite":
+        row["phase_ms"]["workflow_token"] = float("nan")
+    else:
+        row["phase_count"]["workflow_token"] = True
+    monkeypatch.setattr(ledger, "snapshot", lambda: row)
+    assert timing.response_header(ledger) is None
+
+
+def test_response_snapshot_is_bounded_and_does_not_close_ledger(monkeypatch):
+    monkeypatch.setattr(timing, "enabled", lambda: True)
+    ledger = timing.Ledger()
+    assert timing.response_header(ledger) is not None and not ledger.closed
+    monkeypatch.setattr(timing, "MAX_HEADER_BYTES", 1)
+    assert timing.response_header(ledger) is None and not ledger.closed
+    ledger.record("workflow_http", timing.perf_counter(), False)
+    closed = ledger.close()
+    assert isinstance(closed["phase_count"], dict)
+    assert closed["phase_count"]["workflow_http"] == 1
 
 
 @pytest.mark.asyncio
@@ -453,7 +519,9 @@ def test_timeout_freezes_once_and_closed_worker_updates_cannot_emit(
     from tests.authority_kernel import scribe_native_capture_receiver_test as fixture
 
     client, _ = fixture.client(monkeypatch)
-    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 0.08)
+    # Allow worker scheduling before exercising the deliberate 20-second stall.
+    # The original 80ms could expire before the operation/ledger ever started.
+    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 1.0)
     saved = []
 
     async def stall(**_):
@@ -498,4 +566,5 @@ def test_emission_contains_only_closed_json_without_logging_context(monkeypatch)
     row = json.loads(output)
     assert output.count("\n") == 1
     assert row["event"] == "native_core_request_timing"
-    assert "private" not in output and "token" not in output
+    assert "private" not in output and "token" not in row and "doctor_id" not in row
+    assert set(row["phase_ms"]) == set(timing.PHASES)

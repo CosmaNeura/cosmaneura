@@ -1,12 +1,17 @@
 """One fresh joined access-input read under actual locks and explicit clocks."""
 
 from dataclasses import replace
+from datetime import datetime
+from typing import TypedDict
 
 import pytest
 
 from app.services import doctor_access as access
 from app.services import pilot_access_grandfather as pilot
-from app.services.doctor_access_row_ownership import lock_doctor_access_rows
+from app.services.doctor_access_row_ownership import (
+    DoctorAccessRowOwnership,
+    lock_doctor_access_rows,
+)
 
 from sqlalchemy.exc import MultipleResultsFound
 from sqlalchemy.orm.attributes import set_committed_value
@@ -17,6 +22,13 @@ from tests.authority_kernel.scribe_encounters_test import engine as _engine
 from tests.authority_kernel.scribe_native_status_enrichment_test import query_counts
 
 engine = _engine
+
+
+class AccessOptions(TypedDict, total=False):
+    at: datetime | None
+    require_entitlement: bool
+    _ownership: DoctorAccessRowOwnership | None
+    _practice_id: object
 
 
 @pytest.mark.parametrize(
@@ -59,12 +71,12 @@ def test_explicit_time_decisions_match_current_individual_queries(
     ):
         assert locked is not None
         doctor, proof = locked[1], locked[3]
-        options = dict(
-            at=at,
-            require_entitlement=require_entitlement,
-            _ownership=proof,
-            _practice_id=args["practice_id"],
-        )
+        options: AccessOptions = {
+            "at": at,
+            "require_entitlement": require_entitlement,
+            "_ownership": proof,
+            "_practice_id": args["practice_id"],
+        }
         with monkeypatch.context() as patch:
             patch.setattr(access, "owned_provider_access_rows", lambda *_a, **_kw: None)
             expected = access.resolve_doctor_access(doctor, **options)
@@ -86,7 +98,11 @@ def test_explicit_time_join_removes_one_read_and_default_clock_keeps_two_stages(
     ):
         assert locked is not None
         doctor, proof = locked[1], locked[3]
-        options = dict(at=at, _ownership=proof, _practice_id=args["practice_id"])
+        options: AccessOptions = {
+            "at": at,
+            "_ownership": proof,
+            "_practice_id": args["practice_id"],
+        }
         with monkeypatch.context() as patch:
             patch.setattr(access, "owned_provider_access_rows", lambda *_a, **_kw: None)
             with query_counts(engine) as before:
@@ -146,7 +162,11 @@ def test_join_loaded_identity_and_proof_fallback(engine, change, monkeypatch):
             proof = replace(proof, _issuer=object())
         else:
             session.expire_all()
-        options = dict(at=at, _ownership=proof, _practice_id=args["practice_id"])
+        options: AccessOptions = {
+            "at": at,
+            "_ownership": proof,
+            "_practice_id": args["practice_id"],
+        }
         with monkeypatch.context() as patch:
             patch.setattr(access, "owned_provider_access_rows", lambda *_a, **_kw: None)
             expected = access.resolve_doctor_access(doctor, **options)

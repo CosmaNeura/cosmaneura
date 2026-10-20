@@ -21,21 +21,34 @@ from app.services.scribe_capture_deadline import (
 )
 from app.services.scribe_configured_capture_contract import ConfiguredSessionCreate
 from app.services.scribe_recording_window_contract import PrepareRecordingWindow
-from app.services.scribe_workflow import HttpScribeWorkflowClient, ScribeWorkflowClient
+from app.services.scribe_workflow import (
+    DisabledScribeWorkflowClient,
+    HttpScribeWorkflowClient,
+    ScribeWorkflowClient,
+)
 
 from tests.authority_kernel.scribe_capture_gateway_test import pair
 from tests.authority_kernel.scribe_gateway_receiver_test import scope
 from tests.services.scribe_workflow_test import StaticCredential
 
 
-class RecordingWindowArguments(TypedDict):
+class GatewayArguments(TypedDict):
     caller: CaptureCaller
     binding_ref: str
     workspace_id: UUID
-    scope: AdmittedCaptureScope
     operation: PrepareRecordingWindow
     client_request_key: str
     client: ScribeWorkflowClient
+
+
+class RecordingWindowArguments(GatewayArguments):
+    scope: AdmittedCaptureScope
+
+
+def gateway_arguments(selected, client: ScribeWorkflowClient) -> GatewayArguments:
+    args = arguments(selected, client)
+    args.pop("scope")
+    return args
 
 
 def selected_scope() -> AdmittedCaptureScope:
@@ -80,7 +93,9 @@ def receipts(selected):
     return {"bind_key": binding, "issue_lease": lease, "reserve_chunks": reservations}
 
 
-def arguments(selected: AdmittedCaptureScope) -> RecordingWindowArguments:
+def arguments(
+    selected: AdmittedCaptureScope, client: ScribeWorkflowClient | None = None
+) -> RecordingWindowArguments:
     return {
         "caller": cast(CaptureCaller, None),
         "binding_ref": "synthetic",
@@ -88,7 +103,7 @@ def arguments(selected: AdmittedCaptureScope) -> RecordingWindowArguments:
         "scope": selected,
         "operation": operation(),
         "client_request_key": "original-window-key",
-        "client": cast(ScribeWorkflowClient, None),
+        "client": client if client is not None else cast(ScribeWorkflowClient, None),
     }
 
 
@@ -131,12 +146,12 @@ async def test_lost_combined_reply_replays_original_component_keys(monkeypatch):
     committed, calls = {}, []
     lose = True
 
-    class Remote:
-        async def capture_operation(self, tenant, session, component, **kwargs):
+    class Remote(DisabledScribeWorkflowClient):
+        async def capture_operation(self, tenant_id, session_id, operation, **kwargs):
             nonlocal lose
-            assert (tenant, session) == (selected.tenant_id, selected.session_id)
+            assert (tenant_id, session_id) == (selected.tenant_id, selected.session_id)
             assert kwargs["creator_actor_id"] == selected.creator_actor_id
-            calls.append((component, kwargs))
+            calls.append((operation, kwargs))
             key = kwargs["idempotency_key"]
             committed.setdefault(key, prepared(selected))
             if lose:
@@ -147,7 +162,7 @@ async def test_lost_combined_reply_replays_original_component_keys(monkeypatch):
             return committed[key]
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
-    args = arguments(selected) | {"client": Remote()}
+    args = arguments(selected, Remote())
     with pytest.raises(gateway.CaptureOperationUnconfirmed):
         await window.execute_recording_window(**args)
     returned = await window.execute_recording_window(**args)
@@ -181,14 +196,13 @@ async def test_current_scope_brackets_combined_request(monkeypatch, check, failu
             return replace(selected, creator_actor_id="actor_changed")
         return selected
 
-    class Remote:
-        async def capture_operation(self, _tenant, _session, component, **kwargs):
-            calls.append(component.kind)
+    class Remote(DisabledScribeWorkflowClient):
+        async def capture_operation(self, tenant_id, session_id, operation, **kwargs):
+            calls.append(operation.kind)
             return prepared(selected)
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", authorize)
-    args = arguments(selected) | {"client": Remote()}
-    args.pop("scope")
+    args = gateway_arguments(selected, Remote())
     with pytest.raises(gateway.CaptureGatewayError):
         await gateway.execute_capture_operation(**args)
     assert calls == (
@@ -203,9 +217,9 @@ async def test_current_scope_brackets_combined_request(monkeypatch, check, failu
 async def test_cancelled_budget_cannot_dispatch_or_publish(monkeypatch, stage):
     selected, calls, budget = selected_scope(), [], CaptureBudget(30)
 
-    class Remote:
-        async def capture_operation(self, _tenant, _session, component, **kwargs):
-            calls.append(component.kind)
+    class Remote(DisabledScribeWorkflowClient):
+        async def capture_operation(self, tenant_id, session_id, operation, **kwargs):
+            calls.append(operation.kind)
             if stage == "after_remote":
                 budget.cancel()
             return prepared(selected)
@@ -223,9 +237,7 @@ async def test_cancelled_budget_cannot_dispatch_or_publish(monkeypatch, stage):
     if stage == "before_dispatch":
         budget.cancel()
     with pytest.raises(CaptureDeadlineExceeded), capture_budget(budget):
-        await window.execute_recording_window(
-            **(arguments(selected) | {"client": Remote()})
-        )
+        await window.execute_recording_window(**(arguments(selected, Remote())))
     assert calls == ([] if stage == "before_dispatch" else ["prepare_recording_window"])
 
 
@@ -288,15 +300,13 @@ async def test_each_component_receipt_is_validated(monkeypatch, mutation):
     class Evidence(BaseModel):
         model_config = {"extra": "allow"}
 
-    class Remote:
+    class Remote(DisabledScribeWorkflowClient):
         async def capture_operation(self, *_args, **_kwargs):
             return Evidence.model_validate(data)
 
     monkeypatch.setattr(gateway, "authorize_admitted_capture", lambda *_: selected)
     with pytest.raises(gateway.CaptureReceiptInvalid):
-        await window.execute_recording_window(
-            **(arguments(selected) | {"client": Remote()})
-        )
+        await window.execute_recording_window(**(arguments(selected, Remote())))
 
 
 @pytest.mark.asyncio
@@ -361,7 +371,6 @@ async def test_real_gateway_and_http_transport_use_one_closed_creator_receiver(
             timeout_seconds=3,
             client=transport,
         )
-        args = arguments(selected) | {"client": remote}
-        args.pop("scope")
+        args = gateway_arguments(selected, remote)
         result = await gateway.execute_capture_operation(**args)
     assert isinstance(result, window.PreparedRecordingWindow) and len(calls) == 1

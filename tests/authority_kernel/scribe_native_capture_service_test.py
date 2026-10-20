@@ -481,6 +481,7 @@ async def test_preparation_context_reuses_services_without_capture_mutation(
         "lookup",
     ]
     result = value["result"]
+    assert isinstance(result, dict)
     assert (
         result["context_token"] == "never-return-context-token"
         and result["interaction_ref"] == "never-return-interaction"
@@ -623,29 +624,33 @@ async def test_real_preparation_context_commits_and_closes_all_policy_transactio
             expected_tenant_ref=account["tenant_ref"],
         )
     )
+    mounted_result = mounted["result"]
+    assert isinstance(mounted_result, dict)
     data = service.NativeCaptureRequest(
         action="preparation_context",
         preparation=kind,
         workspace_id=row["workspace_id"],
         request_nonce=uuid4(),
-        binding_ref=mounted["result"]["binding_ref"],
+        binding_ref=mounted_result["binding_ref"],
         expected_actor_ref=account["actor_ref"],
         expected_tenant_ref=account["tenant_ref"],
     )
     prepared = await call(data)
+    prepared_result = prepared["result"]
+    assert isinstance(prepared_result, dict)
     assert (
-        prepared["result"]["preparation"] == kind
+        prepared_result["preparation"] == kind
         and session_manager._session_context.get() is None
         and engine.pool.checkedout() == 0
     )
     # Existing resolve route accepts the context issued by the compound service.
     resolved = authority.resolve_mount_context(
         workload_client_id="11111111-1111-4111-8111-111111111111",
-        mount_context_token=prepared["result"]["context_token"],
-        client_turn_id=UUID(prepared["result"]["client_turn_id"]),
+        mount_context_token=prepared_result["context_token"],
+        client_turn_id=UUID(prepared_result["client_turn_id"]),
         settings=SETTINGS,
     )
-    assert resolved.interaction_ref == prepared["result"]["interaction_ref"]
+    assert resolved.interaction_ref == prepared_result["interaction_ref"]
     with Session(engine) as session:
         binding = session.exec(
             select(ScribeCaptureBinding)

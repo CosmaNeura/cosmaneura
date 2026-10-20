@@ -88,6 +88,7 @@ def load_route(session_factory):
         "selectinload": selectinload,
         "select": select,
         "get_session": session_factory,
+        "SCRIBE_ENCOUNTER_SETTINGS": SimpleNamespace(enabled=False),
     }
     exec(  # noqa: S102 — named local source AST, no application bootstrap.
         compile(
@@ -175,6 +176,7 @@ def test_response_compatibility_defaults_to_empty_statuses(sidebar):
     assert sidebar.response_model(appointments=[]).model_dump() == {
         "appointments": [],
         "note_statuses": {},
+        "patient_names": {},
     }
 
 
@@ -183,7 +185,11 @@ def test_empty_owner_list_has_no_note_query_or_foreign_status(sidebar):
         SidebarAppointment(id="foreign", doctor_id="doctor_b"),
         SidebarNote(id="foreign-note", doctor_id="doctor_b", appointment_id="foreign"),
     )
-    assert sidebar.read() == {"appointments": [], "note_statuses": {}}
+    assert sidebar.read() == {
+        "appointments": [],
+        "note_statuses": {},
+        "patient_names": {},
+    }
     assert not any("from sidebarnote" in sql for sql in sidebar.statements)
 
 

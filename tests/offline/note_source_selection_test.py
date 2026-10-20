@@ -8,18 +8,17 @@ import ast
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import pytest
+from fastapi import HTTPException, Request, Response, status
 from fastapi import Path as ApiPath
-from fastapi import Request
 from pydantic import BaseModel, Field, computed_field
 
 import activemodel.base_model as active_base
 import activemodel.query_wrapper as active_query
 from activemodel import BaseModel as ActiveModel
 from sqlalchemy import JSON, Column, Table, inspect
-from sqlalchemy.exc import NoResultFound
 from sqlmodel import Field as SqlField
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -76,8 +75,12 @@ def load_route(root: Path):
     namespace = {
         "Annotated": Annotated,
         "Any": Any,
+        "Literal": Literal,
         "cast": cast,
         "Request": Request,
+        "Response": Response,
+        "HTTPException": HTTPException,
+        "status": status,
         "Path": ApiPath,
         "TypeIDType": str,
         "BaseModel": BaseModel,
@@ -92,6 +95,11 @@ def load_route(root: Path):
         # This suite isolates transcript selection; integrated route tests
         # exercise the authenticated Session Prep review metadata separately.
         "SessionPrepNoteReview": BaseModel,
+        "BillingHeaderSource": BaseModel,
+        "PriorNoteOverview": BaseModel,
+        "SCRIBE_ENCOUNTER_SETTINGS": SimpleNamespace(enabled=False),
+        "note_billing_sources": lambda *_args: {},
+        "prior_notes_for_session_prep": lambda *_args: None,
         "note_review_statuses": lambda *_args: None,
         "EngagementRole": type(
             "Role", (BaseModel,), {"get": classmethod(lambda cls, **kw: None)}
@@ -148,7 +156,9 @@ def detail():
     request = SimpleNamespace(
         state=SimpleNamespace(doctor=SimpleNamespace(id="doctor_a"))
     )
-    return lambda appointment_id="appointment_a": route(request, appointment_id)
+    return lambda appointment_id="appointment_a": route(
+        request, Response(), appointment_id
+    )
 
 
 def test_current_note_uses_its_source_not_first_retained_transcript(rows, detail):
@@ -286,8 +296,11 @@ def test_appointment_owner_lookup_still_denies_other_provider(rows, detail):
             id="appointment_b", doctor_id="doctor_b", patient_id="patient_b"
         )
     )
-    with pytest.raises(NoResultFound):
+    with pytest.raises(HTTPException) as denied:
         detail("appointment_b")
+    assert denied.value.status_code == 404
+    assert denied.value.detail == "Visit unavailable"
+    assert denied.value.headers == {"Cache-Control": "no-store"}
 
 
 @pytest.mark.parametrize(

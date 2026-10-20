@@ -25,7 +25,10 @@ from app.configuration.scribe_capture import (
 )
 from app.services import authority
 from app.services.doctor_access import doctor_access_in_force
-from app.services.doctor_access_row_ownership import capture_doctor_access_rows
+from app.services.doctor_access_row_ownership import (
+    capture_doctor_access_rows,
+    capture_owns_provider_rows,
+)
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -151,6 +154,46 @@ def _capture_owner_current_identity(session: Session, owner: _CaptureOwner):
         ),
         session.get(MountContextSession, owner.mount_id, populate_existing=True),
     )
+
+
+def _capture_final_provider_rows(session: Session, owner: _CaptureOwner):
+    if capture_owns_provider_rows(
+        session,
+        doctor_id=owner.doctor_id,
+        practice_id=owner.practice_id,
+        subject=owner.subject,
+    ):
+        # Practice -> Doctor locks already belong to this exact transaction.
+        # Refresh all three rows; the member lock is still taken here, after
+        # the original context/link locks. Joining cannot choose another
+        # practice's lock from a changed membership.
+        rows = session.exec(
+            select(Doctor, PracticeMember, Practice)
+            .select_from(Doctor)
+            .join(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .join(Practice, col(Practice.id) == owner.practice_id)
+            .where(Doctor.id == owner.doctor_id)
+            .with_for_update(
+                of=(col(Doctor.id), col(PracticeMember.id), col(Practice.id))
+            )
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if rows is None:
+            raise CaptureScopeDenied
+        return rows
+    # Missing, expired, detached or nontransactional evidence keeps the
+    # original reads and Practice -> Doctor acquisition history.
+    doctor = _locked(session, Doctor, owner.doctor_id)
+    member = session.exec(
+        select(PracticeMember)
+        .where(PracticeMember.doctor_id == doctor.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if member is None or member.practice_id != owner.practice_id:
+        raise CaptureScopeDenied
+    practice = _locked(session, Practice, owner.practice_id)
+    return doctor, member, practice
 
 
 def _lock_capture_owner(
@@ -365,16 +408,9 @@ def _authorized_scope_with_rows(
         or len(link.review_ref) < 16
     ):
         raise CaptureScopeDenied
-    doctor = _locked(session, Doctor, link.doctor_id)
-    practice_member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    doctor, practice_member, _practice = _capture_final_provider_rows(session, owner)
     if practice_member is None or practice_member.practice_id != link.practice_id:
         raise CaptureScopeDenied
-    _locked(session, Practice, link.practice_id)
     appointment = session.exec(
         select(Appointment)
         .where(Appointment.id == appointment_ref)

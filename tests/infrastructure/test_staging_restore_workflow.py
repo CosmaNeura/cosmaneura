@@ -12,7 +12,7 @@ WORKFLOW = (
 CHECKOUT = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 AZURE_LOGIN = "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906"
 ATTEST_PROVENANCE = (
-    "actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be"
+    "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8"
 )
 UPLOAD_ARTIFACT = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
 PROVISION_REFUSAL = (

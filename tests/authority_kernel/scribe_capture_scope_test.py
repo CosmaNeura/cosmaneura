@@ -239,12 +239,13 @@ def capture_engine(monkeypatch):
             "username": "scribe_ux_lab_owner",
             "only_synthetic": True,
         }
+    socket_host = url.query.get("host")
     private_recording_scope = (
         url.database == "scribe_configured_core_test"
         and url.username == "scribe_configured_owner"
         and url.host is None
-        and isinstance(url.query.get("host"), str)
-        and url.query["host"].startswith("/private/tmp/scribe-configured-core.")
+        and isinstance(socket_host, str)
+        and socket_host.startswith("/private/tmp/scribe-configured-core.")
         and url.query.get("port") == "55458"
     )
     if not (
