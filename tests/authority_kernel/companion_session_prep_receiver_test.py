@@ -3,16 +3,18 @@
 import json
 import runpy
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
+from fastapi import HTTPException as FastAPIHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException
+from starlette.requests import Request
 
 import app.configuration.session_prep as prep_configuration
 import app.routes.agent as agent
@@ -87,13 +89,31 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[aglobal_session] = lambda: None
-    app.add_exception_handler(HTTPException, safe_authority_http_exception_handler)
-    app.add_exception_handler(RequestValidationError, safe_request_validation_handler)
+
+    async def handle_http_error(request: Request, exc: Exception):
+        assert isinstance(exc, HTTPException)
+        normalized = FastAPIHTTPException(
+            status_code=exc.status_code, detail=exc.detail, headers=exc.headers
+        )
+        return await safe_authority_http_exception_handler(request, normalized)
+
+    async def handle_validation_error(request: Request, exc: Exception):
+        assert isinstance(exc, RequestValidationError)
+        return await safe_request_validation_handler(request, exc)
+
+    app.add_exception_handler(HTTPException, handle_http_error)
+    app.add_exception_handler(RequestValidationError, handle_validation_error)
     return TestClient(app)
 
 
 def headers():
     return {**_headers(), "Authorization": f"Bearer {COMPANION}"}
+
+
+def request_arguments() -> dict[str, object]:
+    arguments = _request_body()["arguments"]
+    assert isinstance(arguments, dict)
+    return arguments
 
 
 def test_platform_registers_receiver_hidden_from_browser_schema():
@@ -126,6 +146,7 @@ def test_other_workloads_rejected_before_body_parsing(client, caller):
 )
 def test_wrong_tenant_role_or_user_token_is_denied(client, monkeypatch, claim, status):
     old = authenticate_companion_session_prep_request.decoder
+    assert callable(old)
     monkeypatch.setattr(
         authenticate_companion_session_prep_request,
         "decoder",
@@ -138,6 +159,7 @@ def test_wrong_tenant_role_or_user_token_is_denied(client, monkeypatch, claim, s
 
 def test_disabled_policy_cannot_read_even_with_valid_token(client, monkeypatch):
     old = authenticate_companion_session_prep_request.settings
+    assert is_dataclass(old) and not isinstance(old, type)
     monkeypatch.setattr(
         authenticate_companion_session_prep_request,
         "settings",
@@ -158,17 +180,17 @@ def test_disabled_policy_cannot_read_even_with_valid_token(client, monkeypatch):
         (
             {
                 "arguments": {
-                    **_request_body()["arguments"],
+                    **request_arguments(),
                     "detail": "supporting_context",
                 }
             },
             422,
         ),
-        ({"arguments": {**_request_body()["arguments"], "purpose": "other"}}, 422),
+        ({"arguments": {**request_arguments(), "purpose": "other"}}, 422),
         (
             {
                 "arguments": {
-                    **_request_body()["arguments"],
+                    **request_arguments(),
                     "patient_id": "private sentinel",
                 }
             },
@@ -327,7 +349,7 @@ def test_explicit_provider_read_preserves_authority_receipt_and_commit(
     assert (
         read["source_turn_ref"]
         == auth["source_turn_ref"]
-        == _request_body()["arguments"]["source_turn_ref"]
+        == request_arguments()["source_turn_ref"]
     )
 
 

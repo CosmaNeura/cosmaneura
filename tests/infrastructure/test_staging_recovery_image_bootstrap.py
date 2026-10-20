@@ -300,6 +300,9 @@ def test_copy_sequence_accepts_only_semantically_stable_template_projection() ->
         evidence.append(_validate(fixture))
 
     baseline = evidence[0]
+    assert len(evidence) > 1, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for progress, (before, after, fixture) in enumerate(
         zip(evidence[:-1], evidence[1:], fixtures[1:], strict=True), start=3
     ):
@@ -715,7 +718,8 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     for forbidden in ("docker build", "docker push", "az acr import", "az acr repository delete", "az containerapp update", "az containerapp secret", "az containerapp ingress", "revision deactivate", "alembic upgrade"):
         assert forbidden not in source
     deploy = (ROOT / "infra-staging/deploy.sh").read_bytes()
-    # Protected-master baseline after e0691079's staging verifier correction.
-    assert hashlib.sha256(deploy).hexdigest() == "3bf0d32b0876b18213dfddeda3a77f147e0257d563c363b6982f2804adbd9568"
+    # Reviewed protected-master 4e14e064: release/configuration preservation,
+    # invocation-owned migration jobs, and dormant API feature configuration.
+    assert hashlib.sha256(deploy).hexdigest() == "3d7ebb11a9fd45f5ef0ac2b9f15f1807da1401980207d1100c261a7bbd70a1df"
     assert 'STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"' in deploy.decode()
 # fmt: on

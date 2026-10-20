@@ -8,6 +8,14 @@ import {
   useDropzone,
 } from "@/components/ui/dropzone"
 import { VISIT_UPLOAD_MAX_BYTES } from "~/lib/azure-upload"
+import { formatFileSize } from "~/lib/file-size"
+
+// Mirrors _CONTENT_TYPE_BY_EXTENSION[UploadType.VISIT] in app/commands/uploads/sas.py;
+// the server refuses any other extension.
+const ACCEPTED_TYPES = {
+  "audio/*": [".mp3", ".wav", ".m4a"],
+  "video/*": [".mp4", ".mov", ".avi"],
+}
 
 export function AudioVideoDropzone({
   children,
@@ -34,10 +42,7 @@ export function AudioVideoDropzone({
       }
     },
     validation: {
-      accept: {
-        "audio/*": [".mp3", ".wav", ".m4a"],
-        "video/*": [".mp4", ".mov", ".avi"],
-      },
+      accept: ACCEPTED_TYPES,
       // Keep this in sync with the server-side visit-upload ceiling.
       maxSize: VISIT_UPLOAD_MAX_BYTES,
       maxFiles: 1,
@@ -51,7 +56,7 @@ export function AudioVideoDropzone({
         <DropzoneMessage />
       </div>
       <DropZoneArea>
-        <DropzoneTrigger className="my-6 flex gap-8 bg-transparent text-sm">
+        <DropzoneTrigger className="my-6 flex max-w-full min-w-0 gap-8 bg-transparent text-sm">
           {children}
           {!children && !file && (
             <div className="flex items-center gap-4 font-semibold">
@@ -61,17 +66,26 @@ export function AudioVideoDropzone({
               <div className="flex flex-col gap-1">
                 <p>Upload Audio or Video</p>
                 <p className="text-muted-foreground text-xs">
-                  Click here or drag to select an audio or video smaller than
-                  2GB
+                  Click here or drag in an audio or video file smaller than{" "}
+                  {formatFileSize(VISIT_UPLOAD_MAX_BYTES, "down")}
                 </p>
               </div>
             </div>
           )}
           {!children && file && (
-            <div className="flex flex-col gap-1 font-semibold">
-              <p>{file.name}</p>
+            <div className="flex min-w-0 flex-col gap-1 text-left">
+              <p
+                className="truncate font-semibold"
+                data-ph-no-capture=""
+                data-sentry-block=""
+              >
+                {file.name}
+              </p>
               <p className="text-muted-foreground text-xs">
-                Press the upload button below
+                {formatFileSize(file.size)}
+              </p>
+              <p className="text-primary text-xs font-medium underline underline-offset-4">
+                Choose a different file
               </p>
             </div>
           )}

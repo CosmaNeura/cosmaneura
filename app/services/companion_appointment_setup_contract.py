@@ -33,7 +33,9 @@ class AppointmentSetupRequest(ConnectedRequest):
             self.cursor.connection_sha256 != self.connection_sha256
             or self.cursor.window_sha256 != digest(self.window.model_dump(mode="json"))
             or self.cursor.appointment_date.utcoffset() is not None
-            or not self.window.start_date <= self.cursor.appointment_date.date() < self.window.end_date
+            or not self.window.start_date
+            <= self.cursor.appointment_date.date()
+            < self.window.end_date
         ):
             raise ValueError("invalid_appointment_setup_cursor")
         return self
@@ -56,16 +58,26 @@ class AppointmentSetupResponse(Closed):
 
     @model_validator(mode="after")
     def consistent_counts(self):
-        if self.scanned_count != self.eligible_count + self.already_connected_count + self.review_required_count:
+        if (
+            self.scanned_count
+            != self.eligible_count
+            + self.already_connected_count
+            + self.review_required_count
+        ):
             raise ValueError("invalid_appointment_setup_counts")
-        if self.connected_now_count != (self.eligible_count if self.action == "connect" else 0):
+        if self.connected_now_count != (
+            self.eligible_count if self.action == "connect" else 0
+        ):
             raise ValueError("invalid_appointment_setup_outcome")
         if self.next_cursor is not None and (
             self.scanned_count != PAGE_SIZE
             or self.next_cursor.connection_sha256 != self.connection.connection_sha256
-            or self.next_cursor.window_sha256 != digest(self.window.model_dump(mode="json"))
+            or self.next_cursor.window_sha256
+            != digest(self.window.model_dump(mode="json"))
             or self.next_cursor.appointment_date.utcoffset() is not None
-            or not self.window.start_date <= self.next_cursor.appointment_date.date() < self.window.end_date
+            or not self.window.start_date
+            <= self.next_cursor.appointment_date.date()
+            < self.window.end_date
         ):
             raise ValueError("invalid_appointment_setup_page")
         if len(self.model_dump_json().encode()) > MAX_RESPONSE_BYTES:

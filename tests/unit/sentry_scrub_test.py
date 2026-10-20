@@ -194,6 +194,7 @@ def test_scrub_replaces_url_or_unknown_transaction_names() -> None:
         }
 
         scrubbed = sentry.scrub_event(event)
+        assert scrubbed is not None
 
         assert SENTINEL not in json.dumps(scrubbed)
         assert scrubbed["transaction"] == "<redacted transaction>"
@@ -263,6 +264,6 @@ def test_sentry_keeps_request_monitoring_without_recursive_sync_wrapping() -> No
         """
     )
     result = subprocess.run(
-        [sys.executable, '-c', probe], capture_output=True, text=True, timeout=60
+        [sys.executable, "-c", probe], capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, result.stdout + result.stderr

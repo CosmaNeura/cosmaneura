@@ -1020,6 +1020,51 @@ def test_portal_accepts_configuration_without_cancellation(remote: FakeStripe):
     assert any(call[1] == "/billing_portal/sessions" for call in remote.calls)
 
 
+def test_portal_accepts_explicitly_disabled_subscription_pause(remote: FakeStripe):
+    remote.portal_configuration["features"]["subscription_pause"] = {
+        "enabled": False,
+    }
+
+    url = stripe_billing.create_portal_session(
+        _portal_practice(), return_url="https://cosma.localhost/settings"
+    )
+
+    assert url == "https://billing.stripe.com/p/session/test"
+    session_call = next(
+        call for call in remote.calls if call[1] == "/billing_portal/sessions"
+    )
+    assert session_call[2] is not None
+    assert session_call[2]["configuration"] == PORTAL_CONFIGURATION_ID
+
+
+@pytest.mark.parametrize(
+    "feature",
+    [
+        {"enabled": True},
+        {},
+        {"enabled": None},
+        {"enabled": 0},
+        {"enabled": "false"},
+        None,
+        False,
+        [],
+    ],
+)
+def test_portal_refuses_enabled_or_malformed_subscription_pause(
+    remote: FakeStripe, feature: Any
+):
+    remote.portal_configuration["features"]["subscription_pause"] = feature
+
+    with pytest.raises(
+        stripe_billing.StripePortalConfigurationInvalid, match="subscription_pause"
+    ):
+        stripe_billing.create_portal_session(
+            _portal_practice(), return_url="https://cosma.localhost/settings"
+        )
+
+    assert not any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
 @pytest.mark.parametrize("configuration_id", ["", "pc_test_pinned"])
 def test_portal_refuses_unpinned_configuration_before_provider_io(
     remote: FakeStripe,

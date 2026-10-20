@@ -18,6 +18,7 @@ from tests.integration.server import (  # noqa: F401
 _LOCALIAS_READY = True
 _CLERK_READY = True
 _DATABASE_ONLY_FILES = {
+    (Path(__file__).resolve().parent / "manual_qa_seed_postgresql_test.py").resolve(),
     (Path(__file__).resolve().parent / "session_prep_runtime_race_test.py").resolve(),
     (
         Path(__file__).resolve().parent / "provider_record_authority_race_test.py"

@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from starlette.routing import Route
 
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
@@ -25,17 +26,15 @@ TENANT = "authority_tenant_00000000000000000000000002"
 WORKLOAD = "11111111-1111-4111-8111-111111111111"
 
 
-def body(**changes):
-    return (
-        dict(
-            action="mount",
-            workspace_id=str(uuid4()),
-            request_nonce=str(uuid4()),
-            expected_actor_ref=ACTOR,
-            expected_tenant_ref=TENANT,
-        )
-        | changes
+def body(**changes) -> dict[str, object]:
+    values: dict[str, object] = dict(
+        action="mount",
+        workspace_id=str(uuid4()),
+        request_nonce=str(uuid4()),
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
     )
+    return values | changes
 
 
 def headers():
@@ -258,11 +257,11 @@ def test_clerk_authenticator_keeps_primary_header(monkeypatch):
     "operation",
     [
         {"kind": "issue_lease", "payload": {}},
-        {"kind": "encryption_key"},
+        {"kind": "bind_key", "payload": {}},
         {"kind": "complete", "payload": {}},
     ],
 )
-def test_mutation_and_key_operations_are_not_composed(monkeypatch, operation):
+def test_mutation_and_key_binding_operations_are_not_composed(monkeypatch, operation):
     connection, calls = client(monkeypatch)
     result = connection.post(
         PATH,
@@ -275,6 +274,22 @@ def test_mutation_and_key_operations_are_not_composed(monkeypatch, operation):
     )
     assert result.status_code == 422
     assert calls == ["agent", "capture"]
+
+
+def test_existing_public_wrapping_key_read_reaches_same_native_service(monkeypatch):
+    connection, calls = client(monkeypatch)
+    result = connection.post(
+        PATH,
+        json=body(
+            action="operation",
+            binding_ref="scribe_capture_binding_00000000000000000000000003",
+            operation={"kind": "encryption_key"},
+        ),
+        headers=headers(),
+    )
+    assert result.status_code == 200
+    assert calls[:2] == ["agent", "capture"]
+    assert calls[2]["data"].operation.kind == "encryption_key"
 
 
 @pytest.mark.parametrize(
@@ -334,7 +349,42 @@ def test_actual_server_registers_facade_without_request_wide_session():
         if context.path == PATH
     ]
     assert len(routes) == 1
+    assert isinstance(routes[0].route, Route)
     assert routes[0].route.endpoint is route.native_capture
     assert all(
         item.call is not aglobal_session for item in routes[0].dependant.dependencies
     )
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "operation",
+        "opening_nonce",
+        "missing_binding",
+        "missing_preparation",
+        "unknown_preparation",
+        "extra",
+    ],
+)
+def test_server_preparation_context_rejects_mixed_or_unknown_intent(monkeypatch, field):
+    connection, calls = client(monkeypatch)
+    value = body(
+        action="preparation_context",
+        preparation="admission",
+        binding_ref="scribe_capture_binding_00000000000000000000000003",
+    )
+    if field == "operation":
+        value["operation"] = {"kind": "creator_review"}
+    elif field == "opening_nonce":
+        value["opening_nonce"] = str(uuid4())
+    elif field == "missing_binding":
+        value.pop("binding_ref")
+    elif field == "missing_preparation":
+        value.pop("preparation")
+    elif field == "unknown_preparation":
+        value["preparation"] = "source_start"
+    else:
+        value["caller_session_id"] = str(uuid4())
+    response = connection.post(PATH, json=value, headers=headers())
+    assert response.status_code == 422 and all(isinstance(c, str) for c in calls)

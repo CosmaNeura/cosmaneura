@@ -117,7 +117,11 @@ export default function AdminBar({
           <SelectValue placeholder="Select an account to view" />
         </SelectTrigger>
         <SelectContent>
-          {status.actor ? <SelectItem value={status.actor.doctor_id} disabled>{accountLabel(status.actor)} — signed in</SelectItem> : null}
+          {status.actor ? (
+            <SelectItem value={status.actor.doctor_id} disabled>
+              {accountLabel(status.actor)} — signed in
+            </SelectItem>
+          ) : null}
           {targets.map((target) => (
             <SelectItem key={target.doctor_id} value={target.doctor_id}>
               {accountLabel(target)}
@@ -134,7 +138,9 @@ export default function AdminBar({
       >
         View read-only
       </Button>
-      <span className="text-muted-foreground">To work as another account, use the account menu to sign in.</span>
+      <span className="text-muted-foreground">
+        To work as another account, use the account menu to sign in.
+      </span>
       {error ? <span role="alert">{error}</span> : null}
     </div>
   )

@@ -764,6 +764,9 @@ def test_runtime_signature_profile_rejects_identity_and_file_variations() -> Non
             {**_runtime_offline_files(), "runtime-record.json": b""},
         ),
     ]
+    assert requests, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for arguments, files in requests:
         verifier, runtime = _verifier(profile=adapters.RUNTIME_RECORD_SIGNATURE_PROFILE)
         with pytest.raises(adapters.RuntimeAdapterFailure):

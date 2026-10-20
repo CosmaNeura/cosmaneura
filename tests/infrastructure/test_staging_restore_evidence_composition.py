@@ -566,6 +566,9 @@ def test_receipt_digest_mismatches_and_policy_mutations_fail_before_clock() -> N
     )
     object.__setattr__(cases[1]["provider"], "_receipt_sha256", f"sha256:{'f' * 64}")
     object.__setattr__(cases[2]["github"], "_receipt_sha256", f"sha256:{'f' * 64}")
+    assert cases, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for index, case in enumerate(cases):
         clock = CountingClock()
         kwargs: dict[str, Any] = {"clock": clock}

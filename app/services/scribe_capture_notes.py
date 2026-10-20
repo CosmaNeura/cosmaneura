@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
 from uuid import UUID
@@ -25,6 +25,7 @@ from app.services import scribe_capture_gap_source as gaps
 from app.services import scribe_capture_plan_grounding as plans
 from app.services import scribe_capture_reviewed_source as reviewed_sources
 from app.services.scribe_capture_admission import (
+    AdmissionConflict,
     AdmittedCaptureScope,
     CaptureCaller,
     _database,
@@ -102,6 +103,13 @@ class CaptureNoteUnconfirmed(CaptureNoteError):
 
 class CaptureNoteDisabled(CaptureNoteError):
     pass
+
+
+def _authorize_note_scope(caller, binding_ref, workspace_id):
+    try:
+        return authorize_admitted_capture(caller, binding_ref, workspace_id)
+    except AdmissionConflict:
+        raise CaptureNoteConflict from None
 
 
 class DraftReceipt(BaseModel):
@@ -426,7 +434,10 @@ def _source_versions(session: Session, scope: AdmittedCaptureScope):
     versions = list(
         session.exec(
             select(ScribeCaptureSourceVersion)
-            .where(ScribeCaptureSourceVersion.binding_id == binding_id)
+            .where(
+                ScribeCaptureSourceVersion.binding_id == binding_id,
+                ScribeCaptureSourceVersion.session_id == scope.session_id,
+            )
             .order_by(cast(Any, ScribeCaptureSourceVersion.working_version))
         ).all()
     )
@@ -442,7 +453,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         except reviewed_sources.ReviewedSourceConflict:
             raise CaptureNoteConflict from None
     binding_id, versions = _source_versions(session, scope)
-    manifest = gaps.current_manifest(session, binding_id)
+    manifest = gaps.current_manifest(session, binding_id, scope.session_id)
     if manifest is not None and source.qualified is None:
         raise CaptureNoteDisabled
     if manifest is not None:
@@ -602,7 +613,7 @@ def _import_working_source(
         )
     ).one()
     if source.qualified is not None and source.qualified.capture_incomplete:
-        manifest = gaps.current_manifest(session, binding_id)
+        manifest = gaps.current_manifest(session, binding_id, scope.session_id)
         initial = (
             _new_effective_transcript(session, scope, source)
             if number == 1 and manifest is None
@@ -722,14 +733,25 @@ def _inputs(
     transcript, known_transcripts, corrected = _select_source_transcript(
         session, scope, source, transcripts, delivery
     )
-    current = session.exec(
-        select(AIVisitNote)
-        .where(
-            AIVisitNote.appointment_id == request.appointment_id,
-            AIVisitNote.doctor_note_schema_id == schema.id,
-            cast(Any, AIVisitNote.superseded_at).is_(None),
+    note_query = select(AIVisitNote).where(
+        AIVisitNote.appointment_id == request.appointment_id,
+        AIVisitNote.doctor_note_schema_id == schema.id,
+    )
+    if scope.recording_key_sha256 != "legacy":
+        # Each saved source reopens its own retained note version. A newer
+        # recording's visit note is never returned as this source's draft.
+        note_query = (
+            note_query.where(AIVisitNote.ai_transcript_id.in_(known_transcripts))
+            .order_by(
+                cast(Any, AIVisitNote.created_at).desc(),
+                cast(Any, AIVisitNote.id).desc(),
+            )
+            .limit(1)
         )
-        .execution_options(populate_existing=True)
+    else:
+        note_query = note_query.where(cast(Any, AIVisitNote.superseded_at).is_(None))
+    current = session.exec(
+        note_query.execution_options(populate_existing=True)
     ).one_or_none()
     if current is not None and (
         current.ai_transcript_id not in known_transcripts
@@ -958,7 +980,8 @@ async def capture_note_templates(
     client: ScribeWorkflowClient,
 ) -> TemplateReceipt:
     _enabled(caller)
-    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = _authorize_note_scope(caller, binding_ref, workspace_id)
     if scope.session_id != expected_session_id:
         raise CaptureNoteConflict
     await _current_consent(caller, binding_ref, workspace_id, scope, client)
@@ -1037,7 +1060,8 @@ async def capture_note(
         scratch_notes = ScratchNotes.model_validate(scratch_notes.model_dump())
         if scratch_notes.workspace_id != workspace_id:
             raise CaptureNoteConflict
-    scope = authorize_admitted_capture(caller, binding_ref, workspace_id)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = _authorize_note_scope(caller, binding_ref, workspace_id)
     if scope.session_id != expected_session_id:
         raise CaptureNoteConflict
     source = await _read_source(caller, binding_ref, workspace_id, scope, client)
@@ -1070,6 +1094,7 @@ async def capture_note(
                     transcript_data=original.entries,
                     dispatch_pipeline=False,
                     commit_import=False,
+                    recording_scoped=scope.recording_key_sha256 != "legacy",
                 )
         except (
             ingest.TranscriptConflictError,

@@ -93,6 +93,11 @@ def test_invalid_admission_input_is_rejected_before_service(monkeypatch, mutatio
     ("error", "status", "code"),
     [
         (admission.AdmissionConsentRequired, 409, "CAPTURE_CONSENT_REQUIRED"),
+        (
+            admission.AdmissionRecordingConsentRequired,
+            409,
+            "CAPTURE_RECORDING_CONSENT_REQUIRED",
+        ),
         (admission.AdmissionConsentUnavailable, 409, "CAPTURE_CONSENT_UNAVAILABLE"),
         (admission.AdmissionConflict, 409, "CAPTURE_REQUEST_CONFLICT"),
         (admission.AdmissionInProgress, 202, "CAPTURE_IN_PROGRESS"),

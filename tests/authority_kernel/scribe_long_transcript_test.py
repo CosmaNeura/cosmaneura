@@ -177,22 +177,23 @@ def test_total_character_boundary_preserves_segment_and_lineage_guards():
     assert sum(len(s.content) for s in receipt.working_source.segments) == (
         MAX_TRANSCRIPT_TOTAL_CONTENT_CHARS
     )
+    corrections = [
+        dict(
+            source_segment_id=s.source_segment_id,
+            content=s.content,
+            speaker_role=s.speaker_role,
+        )
+        for s in receipt.working_source.segments
+    ]
     correction = dict(
         raw_transcript_id=raw.id,
         raw_transcript_sha256=receipt.raw_transcript_sha256,
         expected_working_version=1,
         expected_working_sha256=receipt.working_sha256,
-        corrections=[
-            dict(
-                source_segment_id=s.source_segment_id,
-                content=s.content,
-                speaker_role=s.speaker_role,
-            )
-            for s in receipt.working_source.segments
-        ],
+        corrections=corrections,
     )
     assert len(TranscriptCorrection.model_validate(correction).corrections) == 5
-    correction["corrections"].append(
+    corrections.append(
         dict(source_segment_id=uuid4(), content="x", speaker_role="patient")
     )
     with pytest.raises(ValidationError):

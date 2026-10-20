@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from unittest.mock import Mock
 
 import pytest
@@ -10,6 +12,7 @@ import app.commands.intake.chat
 import app.jobs.intake.summarize
 import app.routes.chat
 
+from activemodel.session_manager import SessionManager
 from app.models.doctor import Doctor
 from app.models.superadmin_capability import (
     SuperadminCapabilityEnvironment,
@@ -240,6 +243,104 @@ def test_next_question():
     assert len(answered_questions) == 1
     assert answered_questions[0].order == EXAMPLE_INTAKE_QUESTIONS[0].order
     assert answered_questions[0].answer == fake_response
+
+
+def test_bound_retry_never_answers_the_following_question(client: TestClient):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+    endpoint = api_app.url_path_for("get_next_question", intake_id=intake.id)
+    payload = {
+        "answer": "Synthetic first answer",
+        "expected_question": EXAMPLE_INTAKE_QUESTIONS[0].question,
+    }
+    initial = client.post(endpoint, json=payload)
+    retried = client.post(endpoint, json=payload)
+    assert initial.status_code == retried.status_code == 200
+    assert initial.json() == retried.json()
+    assert retried.json()["retry_safe"] is True
+    intake.refresh()
+    assert intake.intake_questions[0].answer == payload["answer"]
+    assert intake.intake_questions[1].answer is None
+
+
+def test_bound_conflicting_answer_cannot_overwrite_or_advance(client: TestClient):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+    endpoint = api_app.url_path_for("get_next_question", intake_id=intake.id)
+    question = EXAMPLE_INTAKE_QUESTIONS[0].question
+    assert (
+        client.post(
+            endpoint, json={"answer": "Synthetic answer", "expected_question": question}
+        ).status_code
+        == 200
+    )
+    response = client.post(
+        endpoint, json={"answer": "Different answer", "expected_question": question}
+    )
+    assert response.status_code == 409
+    intake.refresh()
+    assert intake.intake_questions[0].answer == "Synthetic answer"
+    assert intake.intake_questions[1].answer is None
+
+
+def test_concurrent_bound_replay_refreshes_after_row_lock(
+    client: TestClient, monkeypatch
+):
+    # Concurrent requests need distinct connections, not the rollback fixture's
+    # shared connection. These synthetic rows live only in the disposable DB.
+    monkeypatch.setattr(SessionManager.get_instance(), "session_connection", None)
+    intake = SimpleIncompleteIntakeFactory.build().save()
+    endpoint = api_app.url_path_for("get_next_question", intake_id=intake.id)
+    payload = {
+        "answer": "Synthetic concurrent answer",
+        "expected_question": EXAMPLE_INTAKE_QUESTIONS[0].question,
+    }
+    entered, release, second_loaded = Event(), Event(), Event()
+    original = app.commands.intake.chat.perform
+    original_process = app.routes.chat.process_intake
+
+    def observe_process(intake_id: str):
+        result = original_process(intake_id)
+        if entered.is_set():
+            second_loaded.set()
+        return result
+
+    def held_perform(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(app.commands.intake.chat, "perform", held_perform)
+    api_app.dependency_overrides[original_process] = observe_process
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(client.post, endpoint, json=payload)
+            assert entered.wait(5)
+            second = pool.submit(client.post, endpoint, json=payload)
+            assert second_loaded.wait(5)
+            release.set()
+            responses = [first.result(timeout=10), second.result(timeout=10)]
+    finally:
+        release.set()
+        api_app.dependency_overrides.pop(original_process, None)
+    assert all(response.status_code == 200 for response in responses)
+    assert responses[0].json() == responses[1].json()
+    intake.refresh()
+    assert intake.intake_questions[0].answer == payload["answer"]
+    assert intake.intake_questions[1].answer is None
+
+
+def test_bound_unknown_question_does_not_write(client: TestClient):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+    response = client.post(
+        api_app.url_path_for("get_next_question", intake_id=intake.id),
+        json={
+            "answer": "Synthetic answer",
+            "expected_question": "Unknown synthetic question",
+        },
+    )
+    assert response.status_code == 409
+    intake.refresh()
+    assert all(question.answer is None for question in intake.intake_questions)
 
 
 def test_terminal_question(client: TestClient, sync_celery):

@@ -13,12 +13,14 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute, iter_route_contexts
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.configuration.scribe_service_identity import capture_scribe_service_identity
 from app.routes.authority_errors import agent_problem_response
 from app.services.scribe_capture_deadline import (
     CaptureBudget,
     CaptureDeadlineExceeded,
     capture_budget,
 )
+from app.services.scribe_http_pool import capture_scribe_connections
 
 CAPTURE_REQUEST_SECONDS = 90.0
 ERROR_SEND_SECONDS = 0.25
@@ -144,6 +146,19 @@ class _CaptureBoundary:
             return
         ownership = _Ownership(workers)
         parent_loop = asyncio.get_running_loop()
+        application = scope.get("app")
+        pool = getattr(getattr(application, "state", None), "scribe_http_pool", None)
+        identity = getattr(
+            getattr(application, "state", None), "scribe_service_identity", None
+        )
+        if (identity is not None and identity.closed) or any(
+            owner is not None and owner.loop is not parent_loop
+            for owner in (pool, identity)
+        ):
+            ownership.release()
+            ownership.release()  # No private worker was started.
+            await self._fail(scope, receive, send, 503)
+            return
         outcome: Future[tuple[int, list[Message]]] = Future()
         private_scope = {**scope, "state": dict(scope.get("state", {}))}
         if "fastapi" in scope:
@@ -224,7 +239,11 @@ class _CaptureBoundary:
 
         def run():
             try:
-                with capture_budget(budget):
+                with (
+                    capture_budget(budget),
+                    capture_scribe_connections(pool, budget),
+                    capture_scribe_service_identity(identity, budget),
+                ):
                     result = asyncio.run(serve())
             except (CaptureDeadlineExceeded, asyncio.CancelledError):
                 result = (504, [])

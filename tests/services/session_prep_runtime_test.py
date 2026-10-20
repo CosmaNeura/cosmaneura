@@ -40,6 +40,7 @@ from app.models.session_prep_runtime import (
 )
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
+from sqlmodel import col
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 from tests.routes.utils import provision_practice_in_force
@@ -190,12 +191,13 @@ def test_pending_read_does_not_generate_and_ready_receipt_survives_new_sessions(
     assert SessionPrepArtifact.count() == 1
     assert SessionPrepReadReceipt.count() == 2
     artifact = SessionPrepArtifact.first()
+    assert artifact is not None
     assert ready.response.result.brief_ref == f"brief_{artifact.id}"
     assert ready.response.result.snapshot_ref == f"snapshot_{artifact.id}"
     assert ready.response.tool_call_ref.startswith("prep_read_")
     assert (
         AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type == "session_prep.context.read"
+            col(AuthorityAuditEvent.event_type) == "session_prep.context.read"
         ).count()
         == 2
     )
@@ -266,11 +268,14 @@ def test_unsafe_generation_is_never_persisted(scope, unsafe):
 
     assert _work(bad_brief) == "failed"
     assert SessionPrepArtifact.count() == 0
-    assert SessionPrepBuild.first().failure_code == "invalid_brief"
+    stored_session_prep_build = SessionPrepBuild.first()
+    assert stored_session_prep_build is not None
+    assert stored_session_prep_build.failure_code == "invalid_brief"
 
 
 def test_expired_worker_lease_is_reclaimed_and_failure_backoff_is_bounded(scope):
     build = SessionPrepBuild.first()
+    assert build is not None
     build.state, build.attempts, build.lease_until = (
         "running",
         1,
@@ -286,11 +291,14 @@ def test_model_failures_do_not_leave_running_jobs_or_store_exception_text(scope)
         raise RuntimeError("synthetic-private-error-sentinel")
 
     assert _work(fails) == "failed"
-    assert SessionPrepBuild.first().state == "pending"
+    stored_session_prep_build_2 = SessionPrepBuild.first()
+    assert stored_session_prep_build_2 is not None
+    assert stored_session_prep_build_2.state == "pending"
     assert _work(fails, now=NOW + timedelta(seconds=1)) == "idle"
     assert _work(fails, now=NOW + timedelta(seconds=16)) == "failed"
     assert _work(fails, now=NOW + timedelta(seconds=47)) == "failed"
     failed = SessionPrepBuild.first()
+    assert failed is not None
     assert failed.state == "failed" and failed.attempts == 3
     assert failed.lease_until is None
     assert "private-error" not in failed.model_dump_json()
@@ -307,7 +315,7 @@ def test_ready_artifacts_and_receipts_cannot_be_rewritten(scope):
     ):
         with get_session() as session:
             with pytest.raises(DBAPIError):
-                session.exec(text(statement))
+                session.execute(text(statement))
                 session.flush()
             session.rollback()
 

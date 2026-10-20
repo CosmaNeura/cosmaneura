@@ -16,7 +16,10 @@ class ScribeCaptureSourceVersion(
 ):
     __table_args__ = (
         sa.UniqueConstraint(
-            "binding_id", "working_version", name="uq_scribe_working_version"
+            "binding_id",
+            "session_id",
+            "working_version",
+            name="uq_scribe_working_version",
         ),
         sa.UniqueConstraint("transcript_id", name="uq_scribe_working_core_transcript"),
         sa.CheckConstraint("working_version >= 2", name="ck_scribe_working_version"),

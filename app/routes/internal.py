@@ -38,13 +38,17 @@ import app.services.zoom_capture_authorization as zoom_capture_authorization
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
+from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.redis import get_redis
+from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.configuration.stripe import (
     stripe_billing_configured,
     stripe_portal_configured,
     stripe_webhook_configured,
 )
+from app.routes.scribe_visit_extras import router as scribe_visit_extras_api
 from app.services import lab_ranges as lab_ranges_service
+from app.services.billing_header_contract import BillingHeaderSource
 from app.services.biomarkers import (
     BY_KEY as BIOMARKERS_BY_KEY,
 )
@@ -181,6 +185,7 @@ from app.models.practice import (
 )
 from app.models.public_onboarding import PracticeInvitation
 from app.models.scribe_capture_binding import ScribeCaptureBinding
+from app.models.scribe_patient_identity import ScribePatientIdentity
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
@@ -189,6 +194,8 @@ from sqlmodel import col, select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
+from .billing_header import billing_header_api, note_billing_sources
+from .cab_bff import router as cab_bff_router
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
@@ -239,7 +246,10 @@ internal_api_app = APIRouter(
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
 internal_api_app.include_router(session_prep_review_api)
+internal_api_app.include_router(billing_header_api)
+internal_api_app.include_router(cab_bff_router)
 internal_api_app.include_router(note_template_fields_api)
+internal_api_app.include_router(scribe_visit_extras_api)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -271,6 +281,7 @@ def intake_list(request: Request) -> IntakeList:
 
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
+    patient_names: dict[str, str] = Field(default_factory=dict)
     note_statuses: dict[str, Literal["not-started", "completed"]] = Field(
         default_factory=dict
     )
@@ -325,7 +336,41 @@ def note_list(request: Request) -> NotetakingData:
             if str(appointment_id) in note_statuses:
                 note_statuses[str(appointment_id)] = "completed"
 
-    return NotetakingData(appointments=appointments, note_statuses=note_statuses)
+    patient_names = {}
+    if (
+        SCRIBE_ENCOUNTER_SETTINGS.enabled
+        and getattr(request.state, "view_as", None) is None
+    ):
+        with get_session() as session:
+            matches = session.exec(
+                select(ScribePatientIdentity, Patient)
+                .join(
+                    Patient,
+                    col(Patient.id) == col(ScribePatientIdentity.canonical_patient_id),
+                )
+                .join(
+                    Appointment,
+                    col(Appointment.id) == col(ScribePatientIdentity.appointment_id),
+                )
+                .where(
+                    ScribePatientIdentity.doctor_id == doctor.id,
+                    Appointment.doctor_id == doctor.id,
+                    Patient.doctor_id == doctor.id,
+                    col(ScribePatientIdentity.source_patient_id)
+                    == col(Appointment.patient_id),
+                    col(ScribePatientIdentity.state).in_(["matched", "confirmed"]),
+                )
+            ).all()
+            patient_names = {
+                str(identity.appointment_id): patient.name
+                for identity, patient in matches
+                if str(identity.appointment_id) in note_statuses
+            }
+    return NotetakingData(
+        appointments=appointments,
+        note_statuses=note_statuses,
+        patient_names=patient_names,
+    )
 
 
 # TODO what about doctors who have an insane patient list?
@@ -352,13 +397,17 @@ class NoteDetail(BaseModel, extra="forbid"):
     note_transcripts: list[AIVisitTranscript] = Field(default_factory=list)
     capture_workflow_required: bool = False
     engagement_role: EngagementRole | None = None
+    billing_header_sources: dict[str, BillingHeaderSource] = Field(default_factory=dict)
     session_prep_reviews: dict[str, SessionPrepNoteReview] | None = None
     session_prep_prior_notes: PriorNoteOverview | None = None
+    canonical_patient: Patient | None = None
+    patient_identity_state: Literal["provisional", "matched", "confirmed"] | None = None
+    private_note_available: bool = False
 
     @computed_field
     @property
     def patient(self) -> Patient:
-        return self.appointment.patient
+        return self.canonical_patient or self.appointment.patient
 
 
 @internal_api_app.get("/notes/{appointment_id}")
@@ -438,6 +487,33 @@ def note_detail(
         ).first()
         is not None
     )
+    canonical_patient = None
+    identity_state = None
+    if (
+        SCRIBE_ENCOUNTER_SETTINGS.enabled
+        and getattr(request.state, "view_as", None) is None
+    ):
+        with get_session() as session:
+            identity = session.exec(
+                select(ScribePatientIdentity).where(
+                    ScribePatientIdentity.appointment_id == appointment.id,
+                    ScribePatientIdentity.doctor_id == doctor.id,
+                    ScribePatientIdentity.source_patient_id == appointment.patient_id,
+                )
+            ).one_or_none()
+            # These associations change display only. Original appointment,
+            # source transcript, note and immutable capture scope remain fixed.
+            if identity is not None:
+                canonical_patient = session.exec(
+                    select(Patient).where(
+                        Patient.id == identity.canonical_patient_id,
+                        Patient.doctor_id == doctor.id,
+                    )
+                ).one_or_none()
+                if canonical_patient is not None:
+                    identity_state = cast(
+                        Literal["provisional", "matched", "confirmed"], identity.state
+                    )
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
@@ -446,6 +522,20 @@ def note_detail(
         note_transcripts=note_transcripts,
         capture_workflow_required=capture_workflow_required,
         engagement_role=engagement_role,
+        canonical_patient=canonical_patient,
+        patient_identity_state=identity_state,
+        private_note_available=(
+            SCRIBE_ENCOUNTER_SETTINGS.enabled
+            and AUTHORITY_KERNEL_SETTINGS.enabled
+            and getattr(request.state, "view_as", None) is None
+            and appointment.created_by_system == "scribe_provider_entry"
+            and isinstance(
+                getattr(getattr(request.state, "auth_state", None), "payload", None),
+                dict,
+            )
+            and request.state.auth_state.payload.get("sub") == doctor.clerk_id
+        ),
+        billing_header_sources=note_billing_sources(request, visit_notes),
         session_prep_reviews=(
             note_review_statuses(doctor, visit_notes)
             if getattr(request.state, "view_as", None) is None
@@ -685,8 +775,14 @@ class VisitAudioUploadRequest(BaseModel, extra="forbid"):
     date_of_birth: datetime
 
 
+class VisitAudioUploadResponse(BaseModel):
+    appointment_id: str
+
+
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
+def upload_visit_audio_file(
+    request: Request, data: VisitAudioUploadRequest
+) -> VisitAudioUploadResponse:
     doctor: Doctor = request.state.doctor
 
     try:
@@ -738,7 +834,7 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
             event_code="clinical_upload_receipt_completion_deferred",
             upload_type=UploadType.VISIT.value,
         )
-    return result
+    return VisitAudioUploadResponse(appointment_id=result)
 
 
 class ExampleNoteUploadGrant(BaseModel, extra="forbid"):

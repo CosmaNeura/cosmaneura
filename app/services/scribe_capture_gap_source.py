@@ -53,10 +53,25 @@ def review_projection(source: CaptureSource | None) -> CaptureGapReview | None:
     )
 
 
-def current_manifest(session: Session, binding_id) -> ScribeCaptureGapManifest | None:
+def current_manifest(
+    session: Session, binding_id, session_id: UUID | None = None
+) -> ScribeCaptureGapManifest | None:
+    if session_id is None:
+        from app.models.scribe_capture_admission import ScribeCaptureAdmission
+
+        legacy = session.exec(
+            select(ScribeCaptureAdmission.session_id).where(
+                ScribeCaptureAdmission.binding_id == binding_id,
+                ScribeCaptureAdmission.recording_key_sha256 == "legacy",
+            )
+        ).one_or_none()
+        if legacy is None:
+            return None
+        session_id = legacy
     return session.exec(
         select(ScribeCaptureGapManifest).where(
-            ScribeCaptureGapManifest.binding_id == binding_id
+            ScribeCaptureGapManifest.binding_id == binding_id,
+            ScribeCaptureGapManifest.session_id == session_id,
         )
     ).one_or_none()
 
@@ -84,7 +99,7 @@ def import_manifest(
     initial_transcript_id,
     initial_source_sha256,
 ) -> None:
-    retained = current_manifest(session, binding_id)
+    retained = current_manifest(session, binding_id, source.session_id)
     if retained is not None:
         validate_manifest(retained, source, raw_id)
         return

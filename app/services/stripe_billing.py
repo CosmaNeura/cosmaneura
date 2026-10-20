@@ -2914,6 +2914,7 @@ REVIEWED_PORTAL_FEATURES = frozenset(
         "invoice_history",
         "payment_method_update",
         "subscription_cancel",
+        "subscription_pause",
         "subscription_update",
     }
 )
@@ -2976,6 +2977,14 @@ def _validated_portal_configuration() -> str:
             raise StripePortalConfigurationInvalid(
                 f"Stripe portal configuration {name} is malformed"
             )
+    # Stripe also returns this optional feature for disabled portal configs.
+    # Pausing is not part of Core's reviewed subscription/entitlement lifecycle.
+    if "subscription_pause" in features and (
+        features["subscription_pause"].get("enabled") is not False
+    ):
+        raise StripePortalConfigurationInvalid(
+            "Stripe portal configuration allows subscription_pause"
+        )
     for name in ("subscription_update", "subscription_cancel", "customer_update"):
         if name not in features:
             raise StripePortalConfigurationInvalid(

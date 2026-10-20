@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -24,6 +25,10 @@ from app.configuration.scribe_capture import (
 )
 from app.services import authority
 from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access_row_ownership import (
+    capture_doctor_access_rows,
+    capture_owns_provider_rows,
+)
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -85,24 +90,24 @@ class _CaptureOwner:
     practice_id: TypeIDType
 
 
-def _lock_capture_owner(
+def _capture_owner_discovery_rows(
     session: Session, mount: MountContextSession, settings: AuthorityKernelSettings
-) -> _CaptureOwner:
-    # Called only after the opaque token and its stored session are validated.
-    # Appointment/link input cannot choose the account whose rows are locked.
-    context = authority._context_for_session(
-        session, mount, clerk_issuer=settings.clerk_issuer
-    )
-    # Identical provider-only requirements to authorize_interaction; this early
-    # read selects locks, while that boundary still performs the full decision.
-    if (
-        context.surface != "provider_assistant"
-        or context.auth_tier != "provider"
-        or context.person_id is None
-        or mount.tenant_id is None
-        or mount.actor_id is None
-    ):
-        raise authority.AuthorityRequestDeniedError
+):
+    """Current bearer-owned identity/Doctor/member inputs, never authority."""
+    if isinstance(session, Session):
+        rows = session.exec(
+            select(AuthorityActorExternalIdentity, Doctor, PracticeMember)
+            .select_from(AuthorityActorExternalIdentity)
+            .outerjoin(
+                Doctor,
+                col(Doctor.clerk_id) == col(AuthorityActorExternalIdentity.subject),
+            )
+            .outerjoin(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .where(AuthorityActorExternalIdentity.id == mount.source_identity_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None, None)
+    # Nontransactional adapters keep the original reads and refusal order.
     identity = session.get(
         AuthorityActorExternalIdentity, mount.source_identity_id, populate_existing=True
     )
@@ -118,13 +123,112 @@ def _lock_capture_owner(
         .where(Doctor.clerk_id == identity.subject)
         .execution_options(populate_existing=True)
     ).one_or_none()
-    if doctor is None:
-        raise CaptureScopeDenied
+    member = (
+        session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor.id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if doctor is not None
+        else None
+    )
+    return identity, doctor, member
+
+
+def _capture_owner_current_identity(session: Session, owner: _CaptureOwner):
+    """Refresh exact identity/mount inputs after the original provider locks."""
+    if isinstance(session, Session):
+        rows = session.exec(
+            select(AuthorityActorExternalIdentity, MountContextSession)
+            .select_from(AuthorityActorExternalIdentity)
+            .outerjoin(
+                MountContextSession, col(MountContextSession.id) == owner.mount_id
+            )
+            .where(AuthorityActorExternalIdentity.id == owner.identity_id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        return rows if rows is not None else (None, None)
+    return (
+        session.get(
+            AuthorityActorExternalIdentity, owner.identity_id, populate_existing=True
+        ),
+        session.get(MountContextSession, owner.mount_id, populate_existing=True),
+    )
+
+
+def _capture_final_provider_rows(session: Session, owner: _CaptureOwner):
+    if capture_owns_provider_rows(
+        session,
+        doctor_id=owner.doctor_id,
+        practice_id=owner.practice_id,
+        subject=owner.subject,
+    ):
+        # Practice -> Doctor locks already belong to this exact transaction.
+        # Refresh all three rows; the member lock is still taken here, after
+        # the original context/link locks. Joining cannot choose another
+        # practice's lock from a changed membership.
+        rows = session.exec(
+            select(Doctor, PracticeMember, Practice)
+            .select_from(Doctor)
+            .join(PracticeMember, col(PracticeMember.doctor_id) == col(Doctor.id))
+            .join(Practice, col(Practice.id) == owner.practice_id)
+            .where(Doctor.id == owner.doctor_id)
+            .with_for_update(
+                of=(col(Doctor.id), col(PracticeMember.id), col(Practice.id))
+            )
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if rows is None:
+            raise CaptureScopeDenied
+        return rows
+    # Missing, expired, detached or nontransactional evidence keeps the
+    # original reads and Practice -> Doctor acquisition history.
+    doctor = _locked(session, Doctor, owner.doctor_id)
     member = session.exec(
         select(PracticeMember)
         .where(PracticeMember.doctor_id == doctor.id)
+        .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
+    if member is None or member.practice_id != owner.practice_id:
+        raise CaptureScopeDenied
+    practice = _locked(session, Practice, owner.practice_id)
+    return doctor, member, practice
+
+
+def _lock_capture_owner(
+    session: Session,
+    mount: MountContextSession,
+    settings: AuthorityKernelSettings,
+    ownership: ExitStack,
+) -> _CaptureOwner:
+    # Called only after the opaque token and its stored session are validated.
+    # Appointment/link input cannot choose the account whose rows are locked.
+    # Stored bearer-owned mount fields and fresh identity/roster rows select
+    # the lock owner; they never authorize a capture. The caller's complete
+    # authorize_interaction decision follows after every authority input is
+    # refreshed/locked. Do not recursively perform
+    # that complete record/access decision merely to discover the lock owner.
+    if (
+        mount.session_kind != "authenticated"
+        or mount.surface_ceiling != "provider_assistant"
+        or mount.auth_tier_ceiling != "provider"
+        or mount.person_binding_id is None
+        or mount.source_identity_id is None
+        or mount.tenant_id is None
+        or mount.actor_id is None
+    ):
+        raise authority.AuthorityRequestDeniedError
+    identity, doctor, member = _capture_owner_discovery_rows(session, mount, settings)
+    if (
+        identity is None
+        or identity.actor_id != mount.actor_id
+        or identity.issuer != settings.clerk_issuer
+        or identity.revoked_at is not None
+    ):
+        raise CaptureScopeDenied
+    if doctor is None:
+        raise CaptureScopeDenied
     if member is None:
         raise CaptureScopeDenied
     owner = _CaptureOwner(
@@ -135,21 +239,30 @@ def _lock_capture_owner(
         doctor.id,
         member.practice_id,
     )
-    _locked(session, Practice, owner.practice_id)
-    doctor = _locked(session, Doctor, owner.doctor_id)
+    if isinstance(session, Session):
+        locked = ownership.enter_context(
+            capture_doctor_access_rows(
+                session,
+                practice_id=owner.practice_id,
+                doctor_id=owner.doctor_id,
+                subject=owner.subject,
+            )
+        )
+        if locked is None:
+            raise CaptureScopeDenied
+        _practice, doctor, member, _proof = locked
+    else:
+        # Nontransactional test adapters cannot issue ownership evidence.
+        _locked(session, Practice, owner.practice_id)
+        doctor = _locked(session, Doctor, owner.doctor_id)
+        member = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == doctor.id)
+            .execution_options(populate_existing=True)
+        ).one_or_none()
     # A practice move or identity rebind can win while the first lock waits.
     # Deny instead of taking a different owner's locks in the reverse order.
-    member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    identity = session.get(
-        AuthorityActorExternalIdentity, owner.identity_id, populate_existing=True
-    )
-    current_mount = session.get(
-        MountContextSession, owner.mount_id, populate_existing=True
-    )
+    identity, current_mount = _capture_owner_current_identity(session, owner)
     if (
         doctor.clerk_id != owner.subject
         or doctor.deleted_at is not None
@@ -178,6 +291,30 @@ def _authorized_scope(
     appointment_ref: str,
     settings: AuthorityKernelSettings,
 ) -> dict[str, Any]:
+    with ExitStack() as ownership:
+        return _authorized_scope_with_rows(
+            session,
+            workload_client_id=workload_client_id,
+            mount_context_token=mount_context_token,
+            interaction_ref=interaction_ref,
+            client_turn_id=client_turn_id,
+            appointment_ref=appointment_ref,
+            settings=settings,
+            ownership=ownership,
+        )
+
+
+def _authorized_scope_with_rows(
+    session: Session,
+    *,
+    workload_client_id: str,
+    mount_context_token: str,
+    interaction_ref: str,
+    client_turn_id: UUID,
+    appointment_ref: str,
+    settings: AuthorityKernelSettings,
+    ownership: ExitStack,
+) -> dict[str, Any]:
     arguments = {
         "session": session,
         "workload_client_id": workload_client_id,
@@ -190,50 +327,62 @@ def _authorized_scope(
 
     def lock_owner(mount: MountContextSession) -> None:
         nonlocal owner
-        owner = _lock_capture_owner(session, mount, settings)
+        owner = _lock_capture_owner(session, mount, settings, ownership)
 
-    # Match exchange/offboarding's Practice -> Doctor order before the complete
-    # existing view-as/token/lineage authorization; this hook grants no access.
-    authorized = authority.authorize_interaction(
-        **arguments, _before_view_as=lock_owner
+    locked_rows: dict[str, Any] = {}
+
+    def lock_context(stored_mount: MountContextSession) -> None:
+        if owner is None:
+            raise CaptureScopeDenied
+        mount = _locked(session, MountContextSession, stored_mount.id)
+        if (mount.id, mount.actor_id, mount.source_identity_id) != (
+            owner.mount_id,
+            owner.actor_id,
+            owner.identity_id,
+        ):
+            raise CaptureScopeDenied
+        actor = _locked(session, AuthorityActor, mount.actor_id)
+        identity = _locked(
+            session, AuthorityActorExternalIdentity, mount.source_identity_id
+        )
+        if (
+            identity.actor_id != owner.actor_id
+            or identity.issuer != settings.clerk_issuer
+            or identity.subject != owner.subject
+            or identity.revoked_at is not None
+        ):
+            raise CaptureScopeDenied
+        tenant = _locked(session, AuthorityTenant, mount.tenant_id)
+        person_binding = _locked(
+            session, AuthorityPersonBinding, mount.person_binding_id
+        )
+        _locked(session, AuthorityPerson, person_binding.person_id)
+        membership = session.exec(
+            select(AuthorityTenantMembership)
+            .where(
+                AuthorityTenantMembership.actor_id == actor.id,
+                AuthorityTenantMembership.tenant_id == tenant.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if membership is None:
+            raise CaptureScopeDenied
+        locked_rows.update(
+            actor=actor, identity=identity, tenant=tenant, person_binding=person_binding
+        )
+
+    # Bearer -> Practice -> Doctor -> view-as -> token -> current context rows.
+    # Each capture phase still makes a complete fresh authorization decision;
+    # take its original row locks first instead of repeating that decision.
+    authority.authorize_interaction(
+        **arguments, _before_view_as=lock_owner, _before_context=lock_context
     )
     if owner is None:
         raise CaptureScopeDenied
-    mount = _locked(session, MountContextSession, authorized.mount_session.id)
-    if (mount.id, mount.actor_id, mount.source_identity_id) != (
-        owner.mount_id,
-        owner.actor_id,
-        owner.identity_id,
-    ):
-        raise CaptureScopeDenied
-    actor = _locked(session, AuthorityActor, mount.actor_id)
-    identity = _locked(
-        session, AuthorityActorExternalIdentity, mount.source_identity_id
+    actor, identity, tenant, person_binding = (
+        locked_rows[name] for name in ("actor", "identity", "tenant", "person_binding")
     )
-    if (
-        identity.actor_id != owner.actor_id
-        or identity.issuer != settings.clerk_issuer
-        or identity.subject != owner.subject
-        or identity.revoked_at is not None
-    ):
-        raise CaptureScopeDenied
-    tenant = _locked(session, AuthorityTenant, mount.tenant_id)
-    person_binding = _locked(session, AuthorityPersonBinding, mount.person_binding_id)
-    _locked(session, AuthorityPerson, person_binding.person_id)
-    membership = session.exec(
-        select(AuthorityTenantMembership)
-        .where(
-            AuthorityTenantMembership.actor_id == actor.id,
-            AuthorityTenantMembership.tenant_id == tenant.id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if membership is None:
-        raise CaptureScopeDenied
-    # Re-derive lineage after refreshing/locking every authority input. This
-    # rejects concurrent revocation and stale ORM identity-map values alike.
-    authority.authorize_interaction(**arguments)
     if (
         person_binding.binding_kind != "provider_record"
         or person_binding.binding_ref != appointment_ref
@@ -259,16 +408,9 @@ def _authorized_scope(
         or len(link.review_ref) < 16
     ):
         raise CaptureScopeDenied
-    doctor = _locked(session, Doctor, link.doctor_id)
-    practice_member = session.exec(
-        select(PracticeMember)
-        .where(PracticeMember.doctor_id == doctor.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).one_or_none()
+    doctor, practice_member, _practice = _capture_final_provider_rows(session, owner)
     if practice_member is None or practice_member.practice_id != link.practice_id:
         raise CaptureScopeDenied
-    _locked(session, Practice, link.practice_id)
     appointment = session.exec(
         select(Appointment)
         .where(Appointment.id == appointment_ref)

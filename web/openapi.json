@@ -264,6 +264,274 @@
         }
       }
     },
+    "/internal/v1/notes/revisions/{note_id}/billing-header-source": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Source",
+        "operationId": "billing_header_source",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderSource"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/revisions/{note_id}/billing-header-operations": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Prepare Billing Header Operation",
+        "operationId": "prepare_billing_header_operation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "note_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrepareBillingHeaderOperation"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderOperation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Operation",
+        "operationId": "billing_header_operation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingHeaderOperation"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}/cab": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Cab",
+        "operationId": "billing_header_cab",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabActionResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/billing-header-operations/{operation_id}/generation-continue": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Billing Header Generation Continue",
+        "operationId": "billing_header_generation_continue",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "operation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Operation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CabGenerationContinueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CabGenerationContinueResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/note-schemas/{schema_id}/fields": {
       "get": {
         "tags": [
@@ -362,6 +630,108 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/{appointment_id}/private-note": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scribe Private Note Read",
+        "operationId": "scribe_private_note_read",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteView"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scribe Private Note Save",
+        "operationId": "scribe_private_note_save",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateNoteSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteView"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
           }
         }
       }
@@ -676,7 +1046,9 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/VisitAudioUploadResponse"
+                }
               }
             }
           },
@@ -3319,6 +3691,96 @@
         "type": "object",
         "title": "BillingCheckoutBody"
       },
+      "BillingHeaderOperation": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core.billing-header-operation.v1",
+            "title": "Schemaversion",
+            "default": "core.billing-header-operation.v1"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "state": {
+            "type": "string",
+            "const": "prepared",
+            "title": "State",
+            "default": "prepared"
+          },
+          "sourceRevision": {
+            "type": "integer",
+            "title": "Sourcerevision"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BillingSource"
+          },
+          "completedAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completedat"
+          },
+          "transport": {
+            "$ref": "#/components/schemas/BillingTransportState"
+          },
+          "replayed": {
+            "type": "boolean",
+            "title": "Replayed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "sourceRevision",
+          "source",
+          "completedAt",
+          "replayed"
+        ],
+        "title": "BillingHeaderOperation"
+      },
+      "BillingHeaderSource": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core.billing-header-source.v1",
+            "title": "Schemaversion",
+            "default": "core.billing-header-source.v1"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "review_required"
+            ],
+            "title": "State"
+          },
+          "source": {
+            "$ref": "#/components/schemas/BillingSource"
+          },
+          "visit": {
+            "$ref": "#/components/schemas/BillingVisitSuggestions"
+          },
+          "latestOperation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreparedSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "source"
+        ],
+        "title": "BillingHeaderSource"
+      },
       "BillingPortalBody": {
         "properties": {
           "return_path": {
@@ -3403,6 +3865,271 @@
         ],
         "title": "BillingSessionUrl"
       },
+      "BillingSource": {
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Noteid"
+          },
+          "appointmentId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Appointmentid"
+          },
+          "noteSchemaId": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "title": "Noteschemaid"
+          },
+          "contentSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Contentsha256"
+          },
+          "textSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Textsha256"
+          },
+          "projectionVersion": {
+            "type": "string",
+            "const": "ordered-note-markdown.v1",
+            "title": "Projectionversion",
+            "default": "ordered-note-markdown.v1"
+          },
+          "excludedRecordingTime": {
+            "type": "boolean",
+            "title": "Excludedrecordingtime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "noteId",
+          "appointmentId",
+          "noteSchemaId",
+          "contentSha256",
+          "textSha256",
+          "excludedRecordingTime"
+        ],
+        "title": "BillingSource"
+      },
+      "BillingTransportState": {
+        "properties": {
+          "asyncGeneration": {
+            "type": "boolean",
+            "title": "Asyncgeneration",
+            "default": false
+          },
+          "generationContinuation": {
+            "type": "boolean",
+            "title": "Generationcontinuation",
+            "default": false
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "not_configured",
+              "configured"
+            ],
+            "title": "State",
+            "default": "not_configured"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingTransportState"
+      },
+      "BillingVisitSuggestions": {
+        "properties": {
+          "serviceDate": {
+            "type": "null",
+            "title": "Servicedate"
+          },
+          "patientAge": {
+            "type": "null",
+            "title": "Patientage"
+          },
+          "patientSex": {
+            "type": "null",
+            "title": "Patientsex"
+          },
+          "encounterType": {
+            "type": "null",
+            "title": "Encountertype"
+          },
+          "placeOfService": {
+            "type": "null",
+            "title": "Placeofservice"
+          },
+          "providerSpecialty": {
+            "type": "null",
+            "title": "Providerspecialty"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingVisitSuggestions"
+      },
+      "CabActionRequest": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "read",
+              "generate",
+              "save",
+              "generation-status"
+            ],
+            "title": "Action"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "action",
+          "command"
+        ],
+        "title": "CabActionRequest"
+      },
+      "CabActionResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-result.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "completed-note.accept",
+              "header.read",
+              "header.generate",
+              "header.save",
+              "header.generation-status"
+            ],
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "requestSha256",
+          "result",
+          "source"
+        ],
+        "title": "CabActionResult"
+      },
+      "CabGenerationContinueRequest": {
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "command": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Command"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "purpose",
+          "command"
+        ],
+        "title": "CabGenerationContinueRequest"
+      },
+      "CabGenerationContinueResult": {
+        "properties": {
+          "schemaVersion": {
+            "type": "string",
+            "const": "core-cab-generation-continuation.v1",
+            "title": "Schemaversion"
+          },
+          "purpose": {
+            "type": "string",
+            "const": "header.generation-continue",
+            "title": "Purpose"
+          },
+          "sourceOperationId": {
+            "type": "string",
+            "title": "Sourceoperationid"
+          },
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "requestSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Requestsha256"
+          },
+          "generationExpiresAt": {
+            "type": "string",
+            "title": "Generationexpiresat"
+          },
+          "generationAuthorizedUntil": {
+            "type": "string",
+            "title": "Generationauthorizeduntil"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "purpose",
+          "sourceOperationId",
+          "operationId",
+          "requestSha256",
+          "generationExpiresAt",
+          "generationAuthorizedUntil"
+        ],
+        "title": "CabGenerationContinueResult"
+      },
       "ClaimOrganizationAccessBody": {
         "properties": {
           "access_code": {
@@ -3473,6 +4200,73 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "ConfirmedBillingVisit": {
+        "properties": {
+          "patientAge": {
+            "type": "integer",
+            "maximum": 130.0,
+            "minimum": 0.0,
+            "title": "Patientage"
+          },
+          "patientSex": {
+            "type": "string",
+            "enum": [
+              "M",
+              "F",
+              "other",
+              "unknown"
+            ],
+            "title": "Patientsex"
+          },
+          "encounterType": {
+            "type": "string",
+            "enum": [
+              "office_new",
+              "office_established",
+              "telehealth_new",
+              "telehealth_established"
+            ],
+            "title": "Encountertype"
+          },
+          "placeOfService": {
+            "type": "string",
+            "enum": [
+              "11",
+              "02",
+              "10"
+            ],
+            "title": "Placeofservice"
+          },
+          "providerSpecialty": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Providerspecialty"
+          },
+          "serviceDate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Servicedate"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patientAge",
+          "patientSex",
+          "encounterType",
+          "placeOfService",
+          "providerSpecialty"
+        ],
+        "title": "ConfirmedBillingVisit"
       },
       "CreateLabPanel": {
         "properties": {
@@ -5073,6 +5867,13 @@
               }
             ]
           },
+          "billing_header_sources": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BillingHeaderSource"
+            },
+            "type": "object",
+            "title": "Billing Header Sources"
+          },
           "session_prep_reviews": {
             "anyOf": [
               {
@@ -5096,6 +5897,37 @@
                 "type": "null"
               }
             ]
+          },
+          "canonical_patient": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Patient"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "patient_identity_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "provisional",
+                  "matched",
+                  "confirmed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Identity State"
+          },
+          "private_note_available": {
+            "type": "boolean",
+            "title": "Private Note Available",
+            "default": false
           },
           "patient": {
             "$ref": "#/components/schemas/Patient",
@@ -5173,6 +6005,13 @@
             },
             "type": "array",
             "title": "Appointments"
+          },
+          "patient_names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Patient Names"
           },
           "note_statuses": {
             "additionalProperties": {
@@ -5892,6 +6731,73 @@
         ],
         "title": "PracticeStatus"
       },
+      "PrepareBillingHeaderOperation": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "expectedContentSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedcontentsha256"
+          },
+          "expectedTextSha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expectedtextsha256"
+          },
+          "confirmedComplete": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirmedcomplete"
+          },
+          "visit": {
+            "$ref": "#/components/schemas/ConfirmedBillingVisit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "expectedContentSha256",
+          "expectedTextSha256",
+          "confirmedComplete",
+          "visit"
+        ],
+        "title": "PrepareBillingHeaderOperation"
+      },
+      "PreparedSummary": {
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "title": "Operationid"
+          },
+          "sourceRevision": {
+            "type": "integer",
+            "title": "Sourcerevision"
+          },
+          "state": {
+            "type": "string",
+            "const": "prepared",
+            "title": "State",
+            "default": "prepared"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Createdat"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "operationId",
+          "sourceRevision",
+          "createdAt"
+        ],
+        "title": "PreparedSummary"
+      },
       "PriorNoteOverview": {
         "properties": {
           "notes": {
@@ -5962,6 +6868,81 @@
           "status"
         ],
         "title": "PriorNotePreview"
+      },
+      "PrivateNoteSave": {
+        "properties": {
+          "change_key": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Change Key"
+          },
+          "expected_version": {
+            "type": "integer",
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Expected Version"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^[^\\x00]*$",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "change_key",
+          "expected_version",
+          "text"
+        ],
+        "title": "PrivateNoteSave"
+      },
+      "PrivateNoteValidationError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "Invalid private note request.",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "PrivateNoteValidationError"
+      },
+      "PrivateNoteView": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "version",
+          "updated_at"
+        ],
+        "title": "PrivateNoteView"
       },
       "PronounStyle": {
         "type": "string",
@@ -6889,6 +7870,19 @@
           "date_of_birth"
         ],
         "title": "VisitAudioUploadRequest"
+      },
+      "VisitAudioUploadResponse": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "appointment_id"
+        ],
+        "title": "VisitAudioUploadResponse"
       },
       "VisitPrepSettingsData": {
         "properties": {

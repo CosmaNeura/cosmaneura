@@ -7,6 +7,18 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Event, Lock, get_ident
 
+from app.utils.native_request_timing import phase
+from app.utils.statement_timeout_scope import (
+    acknowledge_record_timeout,
+    capture_timeout_scopes,
+    consume_record_timeout,
+    current_capture_timeout_scope,
+    current_record_timeout_scope,
+    remember_timeout_setting,
+    reusable_timeout_limits,
+    timeout_setting_in_force,
+)
+
 from sqlalchemy import Engine, event
 from sqlalchemy.orm import Session
 
@@ -55,8 +67,15 @@ def capture_budget(budget: CaptureBudget) -> Iterator[None]:
     budget.owner_thread = get_ident()
     token = _budget.set(budget)
     try:
-        budget.check()
-        yield
+
+        def limits():
+            return max(1, int(budget.check() * 1000)), max(
+                1, min(2000, int(budget.check() * 1000))
+            )
+
+        with capture_timeout_scopes(budget, limits):
+            budget.check()
+            yield
     finally:
         _budget.reset(token)
 
@@ -81,7 +100,8 @@ def check_async_capture_deadline() -> None:
 
 async def capture_call[T](operation: Callable[[], Awaitable[T]]) -> T:
     check_async_capture_deadline()
-    result = await operation()
+    with phase("downstream"):
+        result = await operation()
     check_async_capture_deadline()
     return result
 
@@ -97,7 +117,7 @@ def _sql_budget() -> CaptureBudget | None:
 
 @event.listens_for(Engine, "before_cursor_execute")
 def before_capture_statement(
-    connection, cursor, _statement, _parameters, _context, _many
+    connection, cursor, _statement, _parameters, context, _many
 ):
     budget = _sql_budget()
     if budget is None:
@@ -106,11 +126,44 @@ def before_capture_statement(
         raise CaptureDeadlineExceeded("capture_database_unavailable")
     # Raw cursor calls avoid recursion. Only this request's current transaction
     # gets these settings; pool acquisition/pre-ping may settle before this hook.
-    milliseconds = max(1, int(budget.check() * 1000))
-    cursor.execute(f"SET LOCAL statement_timeout = {milliseconds}")
-    milliseconds = max(1, min(2000, int(budget.check() * 1000)))
-    cursor.execute(f"SET LOCAL lock_timeout = {milliseconds}")
+    statement_ms = max(1, int(budget.check() * 1000))
+    lock_ms = max(1, min(2000, int(budget.check() * 1000)))
+    record = current_record_timeout_scope(connection) if context is not None else None
+    setting_scope = record or (
+        current_capture_timeout_scope(connection, budget)
+        if context is not None
+        else None
+    )
+    if record is not None:
+        record_statement_ms, record_lock_ms = record.limits()
+        if consume_record_timeout(context, record, budget, "record"):
+            budget.check()
+            return
+        statement_ms = min(statement_ms, record_statement_ms)
+        lock_ms = min(lock_ms, record_lock_ms)
+    # One parameterized round trip sets both transaction-local values. Every
+    # statement still refreshes the remaining budget and checks cancellation
+    # after the settings return, before its actual SQL can be dispatched.
+    limits = statement_ms, lock_ms
+    if not timeout_setting_in_force(
+        connection, cursor, context, setting_scope, budget, limits
+    ):
+        limits = reusable_timeout_limits(
+            connection, cursor, context, setting_scope, limits
+        )
+        cursor.execute(
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)",
+            tuple(map(str, limits)),
+        )
     budget.check()
+    if record is not None:
+        record.limits()
+        acknowledge_record_timeout(context, record, budget, "capture")
+    if setting_scope is not None:
+        remember_timeout_setting(
+            connection, cursor, context, setting_scope, budget, limits
+        )
 
 
 @event.listens_for(Session, "before_flush")
@@ -135,6 +188,11 @@ class DeadlineScribeClient:
 
     def __init__(self, client):
         self.client = client
+
+    async def create_prepared_configured_session(self, *args, **kwargs):
+        return await capture_call(
+            lambda: self.client.create_prepared_configured_session(*args, **kwargs)
+        )
 
     async def create_configured_session(self, *args, **kwargs):
         return await capture_call(

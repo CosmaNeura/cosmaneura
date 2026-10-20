@@ -129,7 +129,12 @@ def _perform(
     transcript_data: list[TranscriptEntry],
     dispatch_pipeline: bool = True,
     commit_import: bool = True,
+    recording_scoped: bool = False,
 ) -> TranscriptImportResult:
+    if recording_scoped and (commit_import or dispatch_pipeline):
+        raise ValueError(
+            "Recording-scoped import requires authorized deferred capture publication."
+        )
     if not commit_import and dispatch_pipeline:
         raise ValueError("Deferred import cannot dispatch background work.")
     # Serializing deliveries for one encounter prevents two callers from
@@ -155,11 +160,15 @@ def _perform(
     if receipt is not None:
         return _replayed_result(session, receipt, dispatch_pipeline=dispatch_pipeline)
 
-    existing = session.exec(
-        select(AIVisitTranscript).where(
-            AIVisitTranscript.appointment_id == appointment.id
-        )
-    ).first()
+    existing = (
+        None
+        if recording_scoped
+        else session.exec(
+            select(AIVisitTranscript).where(
+                AIVisitTranscript.appointment_id == appointment.id
+            )
+        ).first()
+    )
     created = existing is None
     if existing is not None:
         if existing.duration != duration or _entry_data(

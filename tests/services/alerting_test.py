@@ -53,6 +53,7 @@ def test_the_sentry_event_survives_the_phi_scrubber():
         },
     }
     scrubbed = scrub_event(event)
+    assert scrubbed is not None
     value = scrubbed["exception"]["values"][0]
     assert value["type"] == "ZoomOAuthRevoked", "the alert would be unidentifiable"
     assert "value" not in value, "the scrubber must still strip free text"
@@ -68,7 +69,9 @@ def test_capture_message_would_not_survive_the_scrubber():
         "contexts": {"alert": {"meeting_id": "999"}},
         "fingerprint": ["a", "b"],
     }
-    assert sorted(scrub_event(event)) == ["level"]
+    scrubbed = scrub_event(event)
+    assert scrubbed is not None
+    assert sorted(scrubbed) == ["level"]
 
 
 def test_alert_writes_the_event_code_to_the_log(fake_sentry, capsys):

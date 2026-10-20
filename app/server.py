@@ -28,6 +28,8 @@ from app.routes.zoom_auth import zoom_auth_app
 from app.models.doctor import Doctor
 
 from .configuration.public_onboarding import public_onboarding_configured
+from .configuration.scribe_service_identity import install_scribe_service_identity
+from .configuration.scribe_workflow import SCRIBE_WORKFLOW_SETTINGS
 from .environments import is_production
 from .routes.agent import agent_api_app
 from .routes.authority_errors import (
@@ -35,7 +37,9 @@ from .routes.authority_errors import (
     normalize_trace_id,
     token_problem_response,
 )
+from .routes.cab_authorization import router as cab_authorization_router
 from .routes.chat import chat_api_app
+from .routes.clerk_otp_delivery import router as clerk_otp_router
 from .routes.companion_appointment_setup import (
     install as install_companion_appointment_setup,
 )
@@ -52,6 +56,7 @@ from .routes.scribe_encounters import install as install_scribe_encounters
 from .routes.scribe_native_capture import native_capture_api_app
 from .routes.service import service_api_app
 from .routes.static import mount_public_directory
+from .services.scribe_http_pool import install_scribe_connections
 
 fast_api_args = {}
 
@@ -88,6 +93,7 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(cab_authorization_router, include_in_schema=False)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
 # Agent and context-token contracts are workload/host APIs and intentionally stay
@@ -101,6 +107,7 @@ api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
+api_app.include_router(clerk_otp_router, include_in_schema=False)
 api_app.include_router(zoom_auth_app)
 api_app.include_router(recall_callbacks_app)
 
@@ -130,6 +137,17 @@ install_companion_encounters(api_app)
 install_companion_appointment_setup(api_app)
 install_scribe_encounters(api_app)
 install_capture_boundaries(api_app)
+install_scribe_connections(
+    api_app,
+    SCRIBE_WORKFLOW_SETTINGS.base_url
+    if (
+        SCRIBE_WORKFLOW_SETTINGS.enabled
+        and SCRIBE_WORKFLOW_SETTINGS.is_complete()
+        and SCRIBE_WORKFLOW_SETTINGS.http_pool_enabled
+    )
+    else None,
+)
+install_scribe_service_identity(api_app, SCRIBE_WORKFLOW_SETTINGS)
 
 _MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
 
@@ -212,6 +230,14 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
 async def safe_request_validation_handler(
     request: Request, exc: RequestValidationError
 ):
+    if request.url.path.startswith("/internal/v1/notes/") and request.url.path.endswith(
+        "/private-note"
+    ):
+        return JSONResponse(
+            status_code=422,
+            content={"detail": "Invalid private note request."},
+            headers={"Cache-Control": "no-store"},
+        )
     if request.url.path.startswith("/embed/v1/context-tokens/"):
         return token_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

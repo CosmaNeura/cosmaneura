@@ -865,5 +865,6 @@ def test_error_telemetry_scrubs_mount_context_tokens_case_insensitively() -> Non
     }
 
     scrubbed = scrub_event(event, None)
+    assert scrubbed is not None
 
     assert "headers" not in scrubbed["request"]

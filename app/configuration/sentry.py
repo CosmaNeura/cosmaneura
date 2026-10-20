@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 import sentry_sdk
 import sentry_sdk.integrations
 from decouple import config
@@ -65,6 +67,15 @@ def scrub_event(event, _hint=None):
     content — drop those wholesale rather than trying to pick PHI out of them.
     """
     request = event.get("request")
+    if isinstance(request, dict):
+        url = request.get("url")
+        try:
+            path = urlsplit(url).path if isinstance(url, str) else None
+        except ValueError:
+            return None
+        if path == "/external/v1/webhooks/clerk-otp":
+            # Verification payloads have no place in error or trace telemetry.
+            return None
     if isinstance(request, dict):
         for field in ("data", "cookies", "headers", "query_string", "env", "url"):
             request.pop(field, None)
@@ -164,7 +175,10 @@ def configure_sentry(integrations=None):
 
         request = event.get("request")
         url_string = request.get("url") if isinstance(request, dict) else None
-        parsed_url = urlparse(url_string) if isinstance(url_string, str) else None
+        try:
+            parsed_url = urlparse(url_string) if isinstance(url_string, str) else None
+        except ValueError:
+            return None
 
         if parsed_url is not None and (
             parsed_url.path in IGNORED_PATHS or parsed_url.path.startswith("/assets/")
