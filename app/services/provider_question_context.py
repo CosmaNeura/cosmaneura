@@ -1,4 +1,4 @@
-"""Turn-bound reads of current reviewed-note preparation, never raw chart input."""
+"""Turn-bound preparation and opt-in reviewed-source evidence for provider questions."""
 
 from __future__ import annotations
 
@@ -25,14 +25,21 @@ from app.services.session_prep import (
     _aware,
 )
 from app.services.session_prep_note_sources import (
+    MAX_FINALIZED_NOTES,
     MAX_REVIEW_CANDIDATES,
+    MAX_SOURCE_CHARACTERS,
     SOURCE_WINDOW,
+    ReviewedNoteSelection,
+    _prior_patient_scope,
     _utc,
+    canonical_note_content,
+    load_reviewed_note_sources,
 )
 from app.services.session_prep_runtime import (
     artifact_result,
     current_source_state,
     ready_artifact,
+    source_digest,
     source_manifest,
 )
 
@@ -44,15 +51,24 @@ from app.models.authority_conversation import (
     CanonicalConversationTurn,
     CanonicalConversationUserPhase,
 )
+from app.models.patient import Patient
 from app.models.provider_record_authority import ProviderRecordAuthority
+from app.models.scribe_patient_identity import ScribePatientIdentity
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 from app.models.session_prep_runtime import SessionPrepArtifact, SessionPrepBuild
 from sqlalchemy.exc import DBAPIError
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 OPERATION = "provider-question.context.read"
 TOOL_KEY = (OPERATION, "1.0.0")
+REVIEWED_SOURCES_TOOL_KEY = (OPERATION, "1.1.0")
+REVIEWED_SOURCES_ONLY_TOOL_KEY = (OPERATION, "1.2.0")
+TOOL_KEYS = frozenset(
+    {TOOL_KEY, REVIEWED_SOURCES_TOOL_KEY, REVIEWED_SOURCES_ONLY_TOOL_KEY}
+)
 RETENTION = timedelta(hours=24)
+REVIEWED_SOURCES_MARKER = "reviewed_sources|"
+REVIEWED_SOURCES_ONLY_MARKER = "reviewed_sources_only|"
 
 
 class ProviderContextChanged(SessionPrepScopeDenied):
@@ -66,14 +82,23 @@ class _Closed(BaseModel):
 class ProviderQuestionArguments(_Closed):
     source_turn_ref: OpaqueRef
     purpose: Literal["provider_question"]
-    detail: Literal["prep_summary"]
+    detail: Literal["prep_summary", "reviewed_sources"]
 
 
 class ProviderQuestionInvocation(_Closed):
     tool_name: Literal["provider-question.context.read"]
-    tool_version: Literal["1.0.0"]
+    tool_version: Literal["1.0.0", "1.1.0", "1.2.0"]
     subject_ref: None
     arguments: ProviderQuestionArguments
+
+    @model_validator(mode="after")
+    def detail_matches_version(self) -> ProviderQuestionInvocation:
+        expected = (
+            "prep_summary" if self.tool_version == "1.0.0" else "reviewed_sources"
+        )
+        if self.arguments.detail != expected:
+            raise ValueError("Question context detail does not match its version")
+        return self
 
 
 class ProviderQuestionResult(_Closed):
@@ -123,10 +148,138 @@ class ProviderQuestionResult(_Closed):
         return self
 
 
+class ProviderReviewedSource(_Closed):
+    source_ref: OpaqueRef
+    source_version: int = Field(ge=1, le=2_147_483_647)
+    source_at: datetime
+    sections: dict[str, str] = Field(min_length=1, max_length=64, repr=False)
+
+    _source_date_is_aware = field_validator("source_at")(_aware)
+
+    @field_validator("sections")
+    @classmethod
+    def bounded_reviewed_sections(cls, value: dict[str, str]) -> dict[str, str]:
+        # Match the review adapter's existing per-note bound and canonical
+        # representation; no transcript or arbitrary record serialization.
+        canonical_note_content(value)
+        return value
+
+
+class ProviderQuestionSourcesResult(ProviderQuestionResult):
+    schema_version: Literal["1.1.0"] = "1.1.0"  # type: ignore[assignment]
+    reviewed_sources: list[ProviderReviewedSource] = Field(
+        max_length=MAX_FINALIZED_NOTES, repr=False
+    )
+
+    @model_validator(mode="after")
+    def sources_match_reviewed_provenance(self) -> ProviderQuestionSourcesResult:
+        expected = {
+            p.source_ref: (p.source_version, p.source_at) for p in self.provenance
+        }
+        actual = {
+            s.source_ref: (s.source_version, s.source_at) for s in self.reviewed_sources
+        }
+        if len(actual) != len(self.reviewed_sources) or actual != expected:
+            raise ValueError("Reviewed source evidence does not match provenance")
+        if (
+            sum(
+                len(canonical_note_content(source.sections))
+                for source in self.reviewed_sources
+            )
+            > MAX_FINALIZED_NOTES * MAX_SOURCE_CHARACTERS
+        ):
+            raise ValueError("Reviewed source evidence exceeds its aggregate bound")
+        return self
+
+
+class ProviderQuestionSourcesOnlyResult(_Closed):
+    """Source availability is independent of optional model preparation."""
+
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    state: Literal["ready", "unavailable"]
+    reason_code: Literal["no_eligible_sources"] | None
+    source_version_digest: str = Field(pattern=r"^sha256_[a-f0-9]{64}$")
+    brief_state: Literal["ready", "pending", "unavailable"]
+    prepared_brief: SessionPrepPreparedBrief | None
+    provenance: list[SessionPrepProvenance] = Field(max_length=MAX_FINALIZED_NOTES)
+    completeness: Literal["complete", "partial", "none"]
+    current_through: datetime | None
+    generated_at: datetime | None
+    reviewed_sources: list[ProviderReviewedSource] = Field(
+        max_length=MAX_FINALIZED_NOTES, repr=False
+    )
+
+    _timestamps_are_aware = field_validator("current_through", "generated_at")(_aware)
+
+    @model_validator(mode="after")
+    def consistent(self) -> ProviderQuestionSourcesOnlyResult:
+        if self.state == "unavailable":
+            if (
+                self.reason_code != "no_eligible_sources"
+                or self.brief_state != "unavailable"
+                or self.prepared_brief is not None
+                or self.generated_at is not None
+                or self.current_through is not None
+                or self.provenance
+                or self.reviewed_sources
+                or self.completeness != "none"
+            ):
+                raise ValueError("Unavailable sources cannot carry context")
+            return self
+        if (
+            self.reason_code is not None
+            or not self.provenance
+            or not self.reviewed_sources
+            or self.completeness == "none"
+            or self.current_through is None
+            or any(
+                not p.included or p.source_class != "clinician_finalized_note"
+                for p in self.provenance
+            )
+        ):
+            raise ValueError("Invalid reviewed source context")
+        if self.brief_state == "ready":
+            if self.prepared_brief is None or self.generated_at is None:
+                raise ValueError("Ready brief requires generated preparation")
+            if self.prepared_brief.patient_reported is not None:
+                raise ValueError("Only reviewed clinician sources are available")
+        elif self.prepared_brief is not None or self.generated_at is not None:
+            raise ValueError("Unavailable brief cannot carry generated preparation")
+        expected = {
+            p.source_ref: (p.source_version, p.source_at) for p in self.provenance
+        }
+        actual = {
+            s.source_ref: (s.source_version, s.source_at) for s in self.reviewed_sources
+        }
+        if len(actual) != len(self.reviewed_sources) or actual != expected:
+            raise ValueError("Reviewed source evidence does not match provenance")
+        if (
+            max(source.source_at for source in self.reviewed_sources)
+            != self.current_through
+        ):
+            raise ValueError("Reviewed source cutoff does not match its evidence")
+        if (
+            sum(
+                len(canonical_note_content(source.sections))
+                for source in self.reviewed_sources
+            )
+            > MAX_FINALIZED_NOTES * MAX_SOURCE_CHARACTERS
+        ):
+            raise ValueError("Reviewed source evidence exceeds its aggregate bound")
+        return self
+
+
+ProviderQuestionResultLike = ProviderQuestionResult | ProviderQuestionSourcesOnlyResult
+
+
 class ProviderQuestionResponse(_Closed):
     tool_call_ref: OpaqueRef
     status: Literal["completed"] = "completed"
-    result: ProviderQuestionResult
+    result: (
+        ProviderQuestionResult
+        | ProviderQuestionSourcesResult
+        | ProviderQuestionSourcesOnlyResult
+    )
 
 
 class ProviderQuestionRead(NamedTuple):
@@ -134,7 +287,7 @@ class ProviderQuestionRead(NamedTuple):
     replayed: bool
 
 
-def _binding_digest(source_turn_ref: str, result: ProviderQuestionResult) -> str:
+def _binding_digest(source_turn_ref: str, result: ProviderQuestionResultLike) -> str:
     # The immutable receipt binds the exact v1 request AND the complete returned
     # state/content/provenance. Non-ready receipts cannot be upgraded in place.
     return hashlib.sha256(
@@ -142,12 +295,16 @@ def _binding_digest(source_turn_ref: str, result: ProviderQuestionResult) -> str
             {
                 "request": {
                     "tool_name": OPERATION,
-                    "tool_version": "1.0.0",
+                    "tool_version": result.schema_version,
                     "subject_ref": None,
                     "arguments": {
                         "source_turn_ref": source_turn_ref,
                         "purpose": "provider_question",
-                        "detail": "prep_summary",
+                        "detail": (
+                            "reviewed_sources"
+                            if result.schema_version != "1.0.0"
+                            else "prep_summary"
+                        ),
                     },
                 },
                 "result": result.model_dump(mode="json"),
@@ -225,7 +382,53 @@ def _current_result(
     observed_at: datetime,
     settings: AuthorityKernelSettings,
     marker: str | None = None,
-) -> tuple[ProviderQuestionResult, str]:
+    include_sources: bool | None = None,
+    source_only: bool | None = None,
+) -> tuple[ProviderQuestionResultLike, str]:
+    if source_only is None:
+        source_only = bool(marker and marker.startswith(REVIEWED_SOURCES_ONLY_MARKER))
+    if source_only:
+        if marker is not None and not marker.startswith(REVIEWED_SOURCES_ONLY_MARKER):
+            raise ProviderContextChanged
+        return _current_sources_only_result(
+            session,
+            scope,
+            observed_at,
+            settings,
+            marker.removeprefix(REVIEWED_SOURCES_ONLY_MARKER) if marker else None,
+        )
+    if marker is not None and marker.startswith(REVIEWED_SOURCES_ONLY_MARKER):
+        raise ProviderContextChanged
+    if include_sources is None:
+        include_sources = bool(marker and marker.startswith(REVIEWED_SOURCES_MARKER))
+    if marker is not None:
+        if marker.startswith(REVIEWED_SOURCES_MARKER) != include_sources:
+            raise ProviderContextChanged
+        marker = marker.removeprefix(REVIEWED_SOURCES_MARKER)
+
+    def response(
+        *, selection: ReviewedNoteSelection | None = None, **fields: Any
+    ) -> ProviderQuestionResult:
+        if not include_sources:
+            return ProviderQuestionResult(**fields)
+        return ProviderQuestionSourcesResult(
+            **fields,
+            reviewed_sources=[
+                ProviderReviewedSource(
+                    source_ref=source.source_ref,
+                    source_version=source.source_version,
+                    source_at=source.source_at,
+                    sections=source.content,
+                )
+                for source in selection.sources
+            ]
+            if selection is not None
+            else [],
+        )
+
+    def response_marker(value: str) -> str:
+        return REVIEWED_SOURCES_MARKER + value if include_sources else value
+
     selection, digest = current_source_state(
         session, scope, observed_at=observed_at, settings=settings
     )
@@ -239,7 +442,8 @@ def _current_result(
         stored = artifact_result(artifact)
         if artifact.source_manifest != source_manifest(selection):
             raise SessionPrepInvariantError("Preparation source evidence is invalid")
-        return ProviderQuestionResult(
+        return response(
+            selection=selection,
             state="ready",
             reason_code=None,
             source_version_digest=f"sha256_{digest}",
@@ -248,7 +452,7 @@ def _current_result(
             completeness=stored.completeness,
             current_through=stored.current_through,
             generated_at=stored.brief_generated_at,
-        ), f"ready:{artifact.id}"
+        ), response_marker(f"ready:{artifact.id}")
     reason = "no_eligible_sources" if not selection.sources else "context_not_available"
     if marker is None and selection.sources:
         build = session.exec(
@@ -274,7 +478,7 @@ def _current_result(
         ):
             raise ProviderContextChanged
         reason = parts[0]
-    return ProviderQuestionResult(
+    return response(
         state="pending" if reason == "generation_pending" else "unavailable",
         reason_code=reason,  # type: ignore[arg-type]
         source_version_digest=f"sha256_{digest}",
@@ -283,7 +487,104 @@ def _current_result(
         completeness="none",
         current_through=None,
         generated_at=None,
-    ), f"{reason}:{digest}"
+    ), response_marker(f"{reason}:{digest}")
+
+
+def _current_sources_only_result(
+    session: Session,
+    scope: ProviderRecordAuthority,
+    observed_at: datetime,
+    settings: AuthorityKernelSettings,
+    marker: str | None,
+) -> tuple[ProviderQuestionSourcesOnlyResult, str]:
+    """Reconstruct the exact initial source read without scheduling a model.
+
+    The marker pins the initial brief state as well as source digest, so a
+    pending read cannot silently acquire a later generated brief on replay.
+    """
+    selection, digest = current_source_state(
+        session, scope, observed_at=observed_at, settings=settings
+    )
+    artifact = ready_artifact(session, scope.id, digest)
+    if marker is None:
+        if not selection.sources:
+            marker = f"no_eligible_sources:{digest}"
+        elif artifact is not None:
+            marker = f"ready:{artifact.id}:{digest}"
+        else:
+            build = session.exec(
+                select(SessionPrepBuild).where(
+                    SessionPrepBuild.record_scope_id == scope.id
+                )
+            ).one_or_none()
+            pending = (
+                build is not None
+                and build.desired_digest == digest
+                and build.state in {"pending", "running"}
+            )
+            marker = f"{'brief_pending' if pending else 'brief_unavailable'}:{digest}"
+    parts = marker.split(":")
+    if not parts or parts[-1] != digest:
+        raise ProviderContextChanged
+    prepared, generated_at = None, None
+    if parts[0] == "ready":
+        if (
+            len(parts) != 3
+            or artifact is None
+            or parts[1] != str(artifact.id)
+            or not selection.sources
+        ):
+            raise ProviderContextChanged
+        stored = artifact_result(artifact)
+        if artifact.source_manifest != source_manifest(selection):
+            raise SessionPrepInvariantError("Preparation source evidence is invalid")
+        prepared, generated_at = stored.prepared_brief, stored.brief_generated_at
+        brief_state = "ready"
+    elif len(parts) == 2 and parts[0] in {
+        "brief_pending",
+        "brief_unavailable",
+        "no_eligible_sources",
+    }:
+        if (parts[0] == "no_eligible_sources") != (not selection.sources):
+            raise ProviderContextChanged
+        brief_state = "pending" if parts[0] == "brief_pending" else "unavailable"
+    else:
+        raise ProviderContextChanged
+    return ProviderQuestionSourcesOnlyResult(
+        state="ready" if selection.sources else "unavailable",
+        reason_code=None if selection.sources else "no_eligible_sources",
+        source_version_digest=f"sha256_{digest}",
+        brief_state=brief_state,
+        prepared_brief=prepared,
+        provenance=[
+            SessionPrepProvenance(
+                source_class="clinician_finalized_note",
+                included=True,
+                source_ref=source.source_ref,
+                source_version=source.source_version,
+                source_at=source.source_at,
+                author_class="clinician",
+                reason_code="eligible_finalized_note",
+            )
+            for source in selection.sources
+        ],
+        completeness=("partial" if selection.truncated else "complete")
+        if selection.sources
+        else "none",
+        current_through=max(
+            (source.source_at for source in selection.sources), default=None
+        ),
+        generated_at=generated_at,
+        reviewed_sources=[
+            ProviderReviewedSource(
+                source_ref=source.source_ref,
+                source_version=source.source_version,
+                source_at=source.source_at,
+                sections=source.content,
+            )
+            for source in selection.sources
+        ],
+    ), REVIEWED_SOURCES_ONLY_MARKER + marker
 
 
 def read_provider_question_context(
@@ -335,7 +636,13 @@ def read_provider_question_context(
     ):
         raise SessionPrepScopeDenied
     result, marker = _current_result(
-        session, scope, now, settings, receipt.response_ref if receipt else None
+        session,
+        scope,
+        now,
+        settings,
+        receipt.response_ref if receipt else None,
+        include_sources=invocation.tool_version != "1.0.0",
+        source_only=invocation.tool_version == "1.2.0",
     )
     request_digest = _binding_digest(turn_ref, result)
     if receipt is not None and receipt.request_digest != request_digest:
@@ -411,7 +718,13 @@ def validate_final_context(
         # and leave no aborted transaction before returning the refusal.
         session.rollback()
         raise ProviderContextChanged from None
-    result, _ = _current_result(session, scope, now, settings, receipt.response_ref)
+    result, _ = _current_result(
+        session,
+        scope,
+        now,
+        settings,
+        receipt.response_ref,
+    )
     if receipt.request_digest != _binding_digest(receipt.logical_ref, result):
         raise ProviderContextChanged
     if result.state != "ready" and payload["outcome"] != "unavailable":
@@ -433,7 +746,21 @@ def _lock_final_sources(
     No model/network operation runs in this transaction.
     """
     note_refs: list[str] = []
-    if marker.startswith("ready:"):
+    if marker.startswith(REVIEWED_SOURCES_ONLY_MARKER):
+        selection = load_reviewed_note_sources(
+            session=session,
+            doctor_id=scope.doctor_id,
+            target_appointment_id=scope.appointment_id,
+            observed_at=observed_at,
+        )
+        if marker.split(":")[-1] != source_digest(selection):
+            raise ProviderContextChanged
+        note_refs = [source.source_ref for source in selection.sources]
+    else:
+        marker = marker.removeprefix(REVIEWED_SOURCES_MARKER)
+    if not marker.startswith(REVIEWED_SOURCES_ONLY_MARKER) and marker.startswith(
+        "ready:"
+    ):
         artifact = session.exec(
             select(SessionPrepArtifact).where(
                 SessionPrepArtifact.id == marker.removeprefix("ready:"),
@@ -471,11 +798,28 @@ def _lock_final_sources(
         .execution_options(populate_existing=True)
     ).all()
     if len(appointments) != len(appointment_ids) or any(
-        a.doctor_id != scope.doctor_id or a.patient_id != scope.patient_id
-        for a in appointments
+        a.doctor_id != scope.doctor_id for a in appointments
     ):
         raise ProviderContextChanged
-    if not _reviewed_appointment_ids(session, scope, observed_at) <= appointment_ids:
+    # Capture retains original patient IDs after an explicit provider match.
+    # Fence the association rows as well as the original appointments before
+    # reapplying the exact reviewed-source canonical-patient predicate. NOWAIT
+    # avoids waiting against Scribe's identity -> Patient writer lock order.
+    session.exec(
+        select(ScribePatientIdentity)
+        .where(col(ScribePatientIdentity.appointment_id).in_(appointment_ids))
+        .order_by(col(ScribePatientIdentity.appointment_id))
+        .with_for_update(of=ScribePatientIdentity, nowait=True)
+        .execution_options(populate_existing=True)
+    ).all()
+    target = next((a for a in appointments if a.id == scope.appointment_id), None)
+    if target is None or target.patient_id != scope.patient_id:
+        raise ProviderContextChanged
+    eligible_ids = _reviewed_appointment_ids(session, scope, observed_at)
+    if (
+        not eligible_ids <= appointment_ids
+        or not (appointment_ids - {scope.appointment_id}) <= eligible_ids
+    ):
         raise ProviderContextChanged
     if note_refs:
         locked = session.exec(
@@ -508,14 +852,16 @@ def _reviewed_appointment_ids(
             SessionPrepNoteFinalization,
             cast(Any, SessionPrepNoteFinalization.appointment_id) == Appointment.id,
         )
+        .join(Patient, col(Patient.id) == col(Appointment.patient_id))
         .where(
             Appointment.doctor_id == scope.doctor_id,
-            Appointment.patient_id == scope.patient_id,
+            Patient.doctor_id == scope.doctor_id,
+            _prior_patient_scope(session, scope.doctor_id, target),
             Appointment.id != scope.appointment_id,
             Appointment.appointment_date >= cutoff - SOURCE_WINDOW,
             Appointment.appointment_date < cutoff,
             SessionPrepNoteFinalization.doctor_id == scope.doctor_id,
-            SessionPrepNoteFinalization.patient_id == scope.patient_id,
+            SessionPrepNoteFinalization.patient_id == Appointment.patient_id,
             SessionPrepNoteFinalization.finalized_at <= observed_at,
         )
         .distinct()

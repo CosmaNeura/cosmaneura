@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.cosmaneura.com/provider-question-context/v1.1/request.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tool_name",
+    "tool_version",
+    "subject_ref",
+    "arguments"
+  ],
+  "properties": {
+    "tool_name": {
+      "const": "provider-question.context.read"
+    },
+    "tool_version": {
+      "const": "1.1.0"
+    },
+    "subject_ref": {
+      "type": "null"
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_turn_ref",
+        "purpose",
+        "detail"
+      ],
+      "properties": {
+        "source_turn_ref": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9._~-]{8,160}$"
+        },
+        "purpose": {
+          "const": "provider_question"
+        },
+        "detail": {
+          "const": "reviewed_sources"
+        }
+      }
+    }
+  }
+}
