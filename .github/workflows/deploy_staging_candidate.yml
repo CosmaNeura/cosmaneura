@@ -169,7 +169,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
@@ -289,7 +289,7 @@ jobs:
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
@@ -372,7 +372,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
