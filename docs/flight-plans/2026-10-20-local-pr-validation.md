@@ -18,7 +18,9 @@ assertions retain the already-merged asynchronous-generation and continuation
 fences; the whole-OpenAPI byte pin is refreshed while the public-entitlement
 schema and fixture pins and their security assertions remain unchanged.
 
-The generated Alembic revision 80c8b7559f5f reconciles table/column comments only.
+The generated Alembic revisions 80c8b7559f5f and 0c9bec49feaf reconcile
+table/column comments only. The second revision restores the retained historical
+comments deliberately normalized by #758 after the inherited baseline repair.
 It changes no row, type, constraint, nullability, index, permission or service.
 Rehearse upgrade and downgrade on the invocation-owned loopback PostgreSQL 16.9
 database, compare structural catalog snapshots, run Alembic check and the
