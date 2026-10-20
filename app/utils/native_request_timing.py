@@ -3,14 +3,17 @@
 No request metadata, credentials, SQL text/parameters, provider URLs, or exception
 values enter this ledger. Nested phase totals overlap; they are not additive.
 Cursor timings exclude pool acquisition, pre-ping, raw deadline SETs and commit.
+Workflow HTTP includes response collection/close, separate from workload-token
+acquisition. Capture transaction includes session acquisition, authorization,
+SQL, commit/rollback and context exit; it is not an isolated SQL-wait measure.
 """
 
 import json
 import math
 import os
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from threading import Lock
 from time import perf_counter
@@ -29,6 +32,12 @@ Phase = Literal[
     "policy_binding",
     "operation",
     "downstream",
+    "consent_admission",
+    "session_admission",
+    "preparation_metadata",
+    "workflow_token",
+    "workflow_http",
+    "capture_transaction",
 ]
 PHASES = (
     "workload_agent",
@@ -41,9 +50,28 @@ PHASES = (
     "policy_binding",
     "operation",
     "downstream",
+    "consent_admission",
+    "session_admission",
+    "preparation_metadata",
+    "workflow_token",
+    "workflow_http",
+    "capture_transaction",
 )
 MAX_MS = 600_000.0
 MAX_COUNT = 10_000
+RESPONSE_HEADER = b"x-cosmaneura-native-request-timing"
+MAX_HEADER_BYTES = 4096
+REQUEST_KINDS = frozenset(
+    {
+        "mount",
+        "operation",
+        "preparation_context",
+        "prepared_window",
+        "prepared_admission",
+        "prepared_native_read",
+        "prepared_source",
+    }
+)
 _SQL_ATTRIBUTE = "_cosmaneura_native_timing"
 _emit_lock = Lock()
 
@@ -72,6 +100,15 @@ class Ledger:
         self.sql_count = 0
         self.sql_ms = 0.0
         self.sql_failures = 0
+        self.request_kind = "unparsed"
+
+    def describe_request(self, kind: str) -> None:
+        # Only a closed validated action, never URL/body/identifiers or headers.
+        if kind not in REQUEST_KINDS:
+            return
+        with self.lock:
+            if not self.closed:
+                self.request_kind = kind
 
     def record(self, name: Phase, started: float, failed: bool) -> None:
         value = _elapsed(started)
@@ -91,20 +128,30 @@ class Ledger:
             self.sql_ms = min(MAX_MS, self.sql_ms + value)
             self.sql_failures = min(MAX_COUNT, self.sql_failures + int(failed))
 
+    def _snapshot(self, elapsed: float) -> dict[str, object]:
+        return {
+            "event": "native_core_request_timing",
+            "request_kind": self.request_kind,
+            "total_ms": round(elapsed, 2),
+            "phase_ms": {p: round(self.milliseconds[p], 2) for p in PHASES},
+            "phase_count": dict(self.counts),
+            "phase_failures": dict(self.failures),
+            "sql_cursor_ms": round(self.sql_ms, 2),
+            "sql_cursor_count": self.sql_count,
+            "sql_cursor_failures": self.sql_failures,
+        }
+
+    def snapshot(self) -> dict[str, object]:
+        """Copy completed observations at response start; do not close custody."""
+        value = _elapsed(self.started)
+        with self.lock:
+            return self._snapshot(value)
+
     def close(self) -> dict[str, object]:
         value = _elapsed(self.started)
         with self.lock:
             self.closed = True
-            return {
-                "event": "native_core_request_timing",
-                "total_ms": round(value, 2),
-                "phase_ms": {p: round(self.milliseconds[p], 2) for p in PHASES},
-                "phase_count": dict(self.counts),
-                "phase_failures": dict(self.failures),
-                "sql_cursor_ms": round(self.sql_ms, 2),
-                "sql_cursor_count": self.sql_count,
-                "sql_cursor_failures": self.sql_failures,
-            }
+            return self._snapshot(value)
 
 
 _current: ContextVar[Ledger | None] = ContextVar("native_request_timing", default=None)
@@ -116,6 +163,57 @@ def active() -> bool:
 
 def current_ledger() -> Ledger | None:
     return _current.get()
+
+
+def response_header(ledger: Ledger | None) -> bytes | None:
+    """A staging-only numeric copy, never request/context or exception values."""
+    if not enabled() or not isinstance(ledger, Ledger):
+        return None
+    try:
+        row = ledger.snapshot()
+        if set(row) != {
+            "event",
+            "request_kind",
+            "total_ms",
+            "phase_ms",
+            "phase_count",
+            "phase_failures",
+            "sql_cursor_ms",
+            "sql_cursor_count",
+            "sql_cursor_failures",
+        }:
+            return None
+
+        def numeric(value, *, count=False):
+            return (
+                type(value) in ({int} if count else {int, float})
+                and math.isfinite(value)
+                and 0 <= value <= (MAX_COUNT if count else MAX_MS)
+            )
+
+        if row["event"] != "native_core_request_timing" or row["request_kind"] not in (
+            REQUEST_KINDS | {"unparsed"}
+        ):
+            return None
+        for name in ("phase_ms", "phase_count", "phase_failures"):
+            values = row[name]
+            if type(values) is not dict or set(values) != set(PHASES):
+                return None
+            if not all(
+                numeric(value, count=name != "phase_ms") for value in values.values()
+            ):
+                return None
+        if not all(numeric(row[name]) for name in ("total_ms", "sql_cursor_ms")):
+            return None
+        if not all(
+            numeric(row[name], count=True)
+            for name in ("sql_cursor_count", "sql_cursor_failures")
+        ):
+            return None
+        raw = json.dumps(row, allow_nan=False, separators=(",", ":")).encode("ascii")
+        return raw if len(raw) <= MAX_HEADER_BYTES else None
+    except Exception:
+        return None  # Observation failure must not change the original response.
 
 
 @contextmanager
@@ -189,6 +287,13 @@ def phase(name: Phase) -> Iterator[None]:
                 ledger.record(name, started, failed)
             except Exception:
                 pass
+
+
+@asynccontextmanager
+async def async_phase(name: Phase) -> AsyncIterator[None]:
+    """Observe an existing async context through its owned close, without I/O."""
+    with phase(name):
+        yield
 
 
 @event.listens_for(Engine, "before_cursor_execute")

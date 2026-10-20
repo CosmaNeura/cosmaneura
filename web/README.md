@@ -1,66 +1,40 @@
-# Cosmaneura web application
+# Welcome to React Router!
 
-The React Router application for provider onboarding, scheduling, session prep,
-recording upload, SOAP-note review, practice administration, and billing.
+- 📖 [React Router docs](https://reactrouter.com/dev)
 
-## Local development
+## Development
 
-Use the Node and pnpm versions pinned by the repository. From `web/`:
+Run the dev server:
 
-```sh
-pnpm install --frozen-lockfile
-pnpm dev
+```shellscript
+npm run dev
 ```
 
-Configuration is loaded through the repository's `direnv` setup. Do not place
-credentials, patient data, or production identifiers in client-side `VITE_*`
-variables; every such value is embedded in the browser bundle.
+## Deployment
 
-The generated API client is derived from `../docs/api.json`. Regenerate it with
-`pnpm openapi` after an intentional API-contract change and review the resulting
-diff before committing it.
-
-## Quality gates
-
-Run these before proposing a release:
+First, build your app for production:
 
 ```sh
-# From the repository root:
-just js_lint
-just js_build
-
-# From this directory:
-pnpm test
-pnpm typecheck
-pnpm audit --audit-level high
+npm run build
 ```
 
-The root build recipe supplies the required immutable `VITE_BUILD_COMMIT`,
-regenerates the API client, and compiles the React Router server and browser
-bundles. The deployed artifact consists of `build/server` and `build/client`;
-deployment is performed only by the reviewed manual workflows described in the
-root README.
+Then run the app in production mode:
 
-## UI conventions
+```sh
+npm start
+```
 
-- Reuse the shared layout, typography, controls, feedback, and terminology
-  components under `app/components/shared` instead of introducing route-local
-  visual systems.
-- Keep provider/patient terminology sourced from the central terminology
-  catalog so every workflow uses the clinician's configured relationship terms.
-- Every asynchronous action must expose a pending state, a recoverable error
-  state, and a clear success outcome without relying on color alone.
-- Preserve keyboard operation, visible focus, semantic labels, reduced-motion
-  behavior, and responsive layouts.
-- Never render raw service errors, tokens, transcript payloads, or other PHI in
-  analytics, console logs, URLs, or generic error boundaries.
+Now you'll need to pick a host to deploy it to.
 
-## Architectural boundary
+### DIY
 
-The browser communicates with the Cosmaneura application backend. It does not
-hold Scribe workload credentials or call the private Scribe service directly.
-Recording and session-prep operations are authorized by the backend from the
-current authenticated provider, practice, encounter, and feature configuration.
+If you're familiar with deploying Node applications, the built-in app server is production-ready.
 
-See [customer release readiness](../docs/CUSTOMER_RELEASE_READINESS.md) for the
-current verification ledger and remaining environment-owned release evidence.
+Make sure to deploy the output of `npm run build`
+
+- `build/server`
+- `build/client`
+
+## Styling
+
+This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.

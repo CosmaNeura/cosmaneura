@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from pydantic import (
@@ -21,6 +21,7 @@ from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_capture_scope, scribe_encounters
+from app.services import scribe_capture_protocol as protocol
 from app.services.doctor_access_row_ownership import provider_record_access_row_scope
 from app.services.provider_context_exchange import provider_exchange_blocked
 from app.services.scribe_capture_admission import (
@@ -34,7 +35,10 @@ from app.services.scribe_capture_deadline import (
 )
 from app.services.scribe_capture_gateway import execute_capture_operation
 from app.services.scribe_capture_protocol import CaptureOperation, ReadOperation
-from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
+from app.services.scribe_configured_capture_contract import (
+    ConfiguredCaptureSelection,
+    ConfiguredSessionCreate,
+)
 from app.services.scribe_encounter_contract import LookupRequest
 from app.services.scribe_workflow import ScribeWorkflowClient
 from app.utils.native_request_timing import phase
@@ -78,6 +82,7 @@ class NativeCaptureRequest(BaseModel):
         "preparation_context",
         "prepared_window",
         "prepared_admission",
+        "fresh_admission",
         "prepared_native_read",
         "prepared_source",
     ]
@@ -111,23 +116,39 @@ class NativeCaptureRequest(BaseModel):
 
     @model_validator(mode="after")
     def action_fields(self):
-        if self.retain_preparation_context is not None and self.action != "mount":
+        if self.retain_preparation_context is not None and self.action not in {
+            "mount",
+            "fresh_admission",
+        }:
             raise ValueError("unexpected_context_retention")
-        if (
-            self.include_native_preparation is not None
-            and self.action != "prepared_admission"
-        ):
+        if self.include_native_preparation is not None and self.action not in {
+            "prepared_admission",
+            "fresh_admission",
+        }:
             raise ValueError("unexpected_native_preparation")
-        if (
-            self.include_preparation_metadata is not None
-            and self.action != "prepared_admission"
-        ):
+        if self.include_preparation_metadata is not None and self.action not in {
+            "prepared_admission",
+            "fresh_admission",
+        }:
             raise ValueError("unexpected_preparation_metadata")
         if (
             self.include_native_preparation is not None
             and self.include_preparation_metadata is not None
         ):
             raise ValueError("conflicting_admission_preparation")
+        if self.action == "fresh_admission":
+            if (
+                self.binding_ref is None
+                or self.prepared_context is not None
+                or self.attestation is None
+                or self.configured_capture is None
+                or self.operation is not None
+                or self.opening_nonce is not None
+                or self.preparation is not None
+                or self.retain_preparation_context is not True
+            ):
+                raise ValueError("invalid_fresh_admission")
+            return self
         if self.action == "prepared_admission":
             if (
                 self.binding_ref is None
@@ -230,7 +251,10 @@ async def execute_native_capture(
     await. The existing capture worker owns SQL, cancellation and publication.
     Local Scribe registry checks bracket this request in the native receiver.
     """
-    if data.preparation == "admission" and not capture_settings.enabled:
+    preparation_started = time.monotonic()
+    if (
+        data.preparation == "admission" or data.action == "fresh_admission"
+    ) and not capture_settings.enabled:
         raise authority.AuthorityKernelDisabledError
 
     def lookup(*, include_status=False):
@@ -261,7 +285,7 @@ async def execute_native_capture(
                 expected_capture_binding_ref=(
                     data.binding_ref
                     if data.preparation == "admission"
-                    or data.action == "prepared_admission"
+                    or data.action in {"prepared_admission", "fresh_admission"}
                     else None
                 ),
             )
@@ -282,21 +306,14 @@ async def execute_native_capture(
             raise authority.AuthorityRequestDeniedError
         return row
 
-    if data.action in {
-        "prepared_window",
-        "prepared_admission",
-        "prepared_native_read",
-        "prepared_source",
-    }:
+    async def execute_prepared(context: PreparedWindowContext) -> dict[str, object]:
         # The native route still verifies current Clerk identity, both workload
         # policies and encounter/capture enablement. These complete current
         # visit lookups retain its provider-session/view-as checks. Only token
         # issuance and new interaction construction are omitted; the ordinary
         # dispatcher locks and reauthorizes all token/clinical/consent
         # inputs before mutation and after remote I/O.
-        assert data.prepared_context is not None
         assert data.binding_ref is not None
-        context = data.prepared_context
         token = context.context_token.get_secret_value()
         with global_session() as session:
             stored = session.exec(
@@ -348,7 +365,36 @@ async def execute_native_capture(
             settings=authority_settings,
             capture_settings=capture_settings,
         )
-        if data.action == "prepared_admission":
+        if data.action in {"prepared_admission", "fresh_admission"}:
+            combined_metadata: protocol.PreparationMetadata | None = None
+            prepared_session = None
+            if (
+                data.include_preparation_metadata or data.include_native_preparation
+            ) and capture_settings.combined_session_preparation_enabled:
+
+                async def prepare_session(
+                    tenant: UUID,
+                    payload: ConfiguredSessionCreate,
+                    creator: str,
+                    request_key: str,
+                ):
+                    nonlocal combined_metadata
+                    result = await client.create_prepared_configured_session(
+                        tenant,
+                        payload,
+                        creator_actor_id=creator,
+                        idempotency_key=request_key,
+                    )
+                    combined_metadata = result.preparation_metadata
+                    return result.admission
+
+                prepared_session = prepare_session
+            if data.action == "fresh_admission":
+                # Same fixed preparation-entry budget before any durable claim.
+                # This timer never starts again at context issuance or admission.
+                check_async_capture_deadline()
+                if not 0 <= time.monotonic() - preparation_started < 15:
+                    raise authority.ContextTokenExpiredError
             with phase("operation"):
                 admitted = await admit_capture(
                     caller=caller,
@@ -358,6 +404,7 @@ async def execute_native_capture(
                     attestation=data.attestation,
                     configured_capture=data.configured_capture,
                     client=client,
+                    prepared_session=prepared_session,
                 )
             check_async_capture_deadline()
             current()
@@ -380,16 +427,31 @@ async def execute_native_capture(
                 # authority checks before publishing one bounded native reply.
                 from app.services.scribe_preparation_metadata import (
                     execute_native_recording_preparation,
+                    native_preparation_from_metadata,
+                    validate_admitted_preparation,
                 )
 
-                metadata = await execute_native_recording_preparation(
-                    caller=caller,
-                    binding_ref=data.binding_ref,
-                    workspace_id=data.workspace_id,
-                    client_request_key="admission-native-preparation:"
-                    + str(data.request_nonce),
-                    client=client,
-                )
+                if prepared_session is not None:
+                    scope, combined = validate_admitted_preparation(
+                        caller,
+                        data.binding_ref,
+                        data.workspace_id,
+                        admitted.session_id,
+                        combined_metadata,
+                    )
+                    metadata = native_preparation_from_metadata(
+                        scope, combined, data.workspace_id
+                    )
+                else:
+                    with phase("preparation_metadata"):
+                        metadata = await execute_native_recording_preparation(
+                            caller=caller,
+                            binding_ref=data.binding_ref,
+                            workspace_id=data.workspace_id,
+                            client_request_key="admission-native-preparation:"
+                            + str(data.request_nonce),
+                            client=client,
+                        )
                 if metadata.context.session_id != admitted.session_id:
                     raise authority.AuthorityRequestDeniedError
                 check_async_capture_deadline()
@@ -404,17 +466,30 @@ async def execute_native_capture(
                 # pre/post authority checks and the final encounter fence.
                 from app.services.scribe_preparation_metadata import (
                     execute_preparation_metadata,
+                    validate_admitted_preparation,
                 )
 
-                metadata = await execute_preparation_metadata(
-                    caller=caller,
-                    binding_ref=data.binding_ref,
-                    workspace_id=data.workspace_id,
-                    scope=None,
-                    client_request_key="admission-preparation-metadata:"
-                    + str(data.request_nonce),
-                    client=client,
-                )
+                if prepared_session is not None:
+                    # Same ordinary scope and complete receipt validation after
+                    # admission's durable accept/finish and fresh authority fences.
+                    _, metadata = validate_admitted_preparation(
+                        caller,
+                        data.binding_ref,
+                        data.workspace_id,
+                        admitted.session_id,
+                        combined_metadata,
+                    )
+                else:
+                    with phase("preparation_metadata"):
+                        metadata = await execute_preparation_metadata(
+                            caller=caller,
+                            binding_ref=data.binding_ref,
+                            workspace_id=data.workspace_id,
+                            scope=None,
+                            client_request_key="admission-preparation-metadata:"
+                            + str(data.request_nonce),
+                            client=client,
+                        )
                 if metadata.review.session_id != admitted.session_id:
                     raise authority.AuthorityRequestDeniedError
                 check_async_capture_deadline()
@@ -456,6 +531,15 @@ async def execute_native_capture(
                 "receipt": receipt.model_dump(mode="json"),
             },
         }
+
+    if data.action in {
+        "prepared_window",
+        "prepared_admission",
+        "prepared_native_read",
+        "prepared_source",
+    }:
+        assert data.prepared_context is not None
+        return await execute_prepared(data.prepared_context)
 
     # Retain the exchange route's guard/issuance transaction and lock ordering.
     # Close it before the next lookup or any downstream await.
@@ -508,6 +592,28 @@ async def execute_native_capture(
         settings=authority_settings,
         capture_settings=capture_settings,
     )
+    if data.action == "fresh_admission":
+        # Only the server-to-server receiver sends this action. Keep issuance,
+        # mount resolution and every fresh selection boundary above; share the
+        # exact prepared admission/metadata implementation rather than memoizing
+        # authority or holding SQL locks over consent/session I/O.
+        context = PreparedWindowContext(
+            context_token=SecretStr(issued.context_token),
+            interaction_ref=resolved.interaction_ref,
+            client_turn_id=turn,
+        )
+        answer = await execute_prepared(context)
+        check_async_capture_deadline()
+        if not 0 <= time.monotonic() - preparation_started < 30:
+            raise authority.ContextTokenExpiredError
+        # Private credential is stripped by the receiver before native output.
+        # Its original issue epoch is retained; it does not authorize a next step.
+        cast(dict[str, object], answer["result"])["prepared_context"] = {
+            "context_token": issued.context_token,
+            "interaction_ref": resolved.interaction_ref,
+            "client_turn_id": str(turn),
+        }
+        return answer
     binding = data.binding_ref
     if data.action == "mount":
         with phase("policy_binding"):

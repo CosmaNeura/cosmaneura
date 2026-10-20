@@ -7,7 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "activemodel>=0.2.0",
     # Azure's async managed-identity client requires its optional HTTP transport.
-    "aiohttp==3.14.3",
+    "aiohttp==3.14.4",
     "aiosmtplib>=3.0.2",
     "alembic>=1.14.0",
     "alembic-postgresql-enum>=1.6.1",
@@ -176,7 +176,7 @@ asyncio_default_fixture_loop_scope = "session"
 [dependency-groups]
 debugging-extras = [
     "colorama>=0.4.6",
-    "datamodel-code-generator>=0.64.0,<0.65",
+    "datamodel-code-generator>=0.64.0,<0.82",
     "debugpy>=1.8.13",
     "docrepr>=0.2.0",
     "funcy-pipe>=0.11.1",

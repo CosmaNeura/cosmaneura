@@ -16,6 +16,7 @@ from app.configuration.clerk import verified_provider_session
 from app.services import billing_header_operations as prepared
 from app.services import cab_bridge_authority as authority
 from app.services.cab_bridge_contract import (
+    CabActor,
     CabAuthorizationRequest,
     CabGenerationCompletion,
     digest,
@@ -56,7 +57,7 @@ def intent(case):
     request = CabAuthorizationRequest(
         schemaVersion="core-cab-authorization-request.v1",
         purpose="header.generate",
-        actor={"issuer": actor.issuer, "subject": actor.subject},
+        actor=CabActor(issuer=actor.issuer, subject=actor.subject),
         requestSha256=digest(payload),
         sourceContentSha256=command.expectedContentSha256,
         sourceTextSha256=command.expectedTextSha256,
@@ -104,13 +105,16 @@ def test_explicit_evidence_allows_callback_after_original_60_seconds_without_new
     )
     proof = authority.authorize_action(operation, request)
     assert proof["allowed"] and proof["generationContinuationRequired"] is True
+    assert fresh.expires_at is not None
     assert datetime.fromisoformat(proof["expiresAt"]) <= fresh.expires_at
     with get_session() as session:
         rows = session.exec(
             select(Evidence).where(Evidence.action_id == action_id)
         ).all()
         assert len(rows) == 1
-        assert rows[0].actor == session.get(Action, action_id).actor
+        action = session.get(Action, action_id)
+        assert action is not None
+        assert rows[0].actor == action.actor
         assert "token" not in str(rows[0].model_dump()).lower()
 
 
@@ -200,7 +204,7 @@ def test_terminal_closure_serializes_with_continuation_and_evidence_cannot_be_ch
         ).all()
         if rows:
             with pytest.raises(IntegrityError):
-                session.exec(
+                session.execute(
                     text(
                         "DELETE FROM billing_header_generation_continuation WHERE id=:id"
                     ),
@@ -208,12 +212,14 @@ def test_terminal_closure_serializes_with_continuation_and_evidence_cannot_be_ch
                 )
                 session.commit()
             session.rollback()
+        action = session.get(Action, action_id)
+        assert action is not None
         with pytest.raises(IntegrityError):
-            session.exec(
+            session.execute(
                 text(
                     "UPDATE billing_header_action SET initial_authorized_until=initial_authorized_until+interval '1 second' WHERE id=:id"
                 ),
-                params={"id": session.get(Action, action_id).id.uuid},
+                params={"id": action.id.uuid},
             )
             session.commit()
         session.rollback()
@@ -230,6 +236,7 @@ def test_current_scope_is_checked_before_append(case, monkeypatch, change):
         with get_session() as session:
             if change == "note":
                 note = session.get(AIVisitNote, case.note_id)
+                assert note is not None
                 note.note = {"Assessment": "Changed synthetic note"}
                 session.add(note)
             else:
@@ -394,6 +401,7 @@ def test_database_guard_rejects_direct_mismatch_late_insert_and_evidence_rewrite
     actor, operation, command, action_id, _ = intent(case)
     with get_session() as session:
         action = session.get(Action, action_id)
+        assert action is not None
         for actor_value, digest_value, expiry in (
             (
                 action.actor | {"sessionSha256": "f" * 64},
@@ -438,6 +446,7 @@ def test_database_guard_rejects_direct_mismatch_late_insert_and_evidence_rewrite
         _, stale_id, _ = authority.begin_async_action(stale_actor, operation, original)
     with get_session() as session:
         stale = session.get(Action, stale_id)
+        assert stale is not None
         with pytest.raises(IntegrityError):
             session.add(
                 Evidence(

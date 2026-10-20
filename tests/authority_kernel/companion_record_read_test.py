@@ -331,10 +331,17 @@ def test_worker_global_session_contains_nested_legacy_reads(monkeypatch):
 
     repository, binding, _, kwargs = admitted(monkeypatch)
     monkeypatch.setattr(service, "global_session", session_manager.global_session)
-    monkeypatch.setattr(
-        session_manager.SessionManager.get_instance(), "get_engine", object
-    )
-    monkeypatch.setattr(session_manager, "Session", lambda _engine: repository)
+    manager = session_manager.SessionManager.get_instance()
+    # A worker owns its session rather than the connection bound by conftest.
+    monkeypatch.setattr(manager, "session_connection", None)
+    engine = object()
+    monkeypatch.setattr(manager, "get_engine", lambda: engine)
+
+    def create_session(bind: object):
+        assert bind is engine
+        return repository
+
+    monkeypatch.setattr(session_manager, "Session", create_session)
     observed = []
 
     def authorize(*_args, **_kwargs):

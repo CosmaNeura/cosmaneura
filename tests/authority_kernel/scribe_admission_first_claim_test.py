@@ -32,10 +32,15 @@ from tests.authority_kernel.scribe_configured_capture_test import install_config
 admission_case, capture_engine = _admission_case, _capture_engine
 
 
-def first_claim(fixture, **changes):
-    arguments = call_arguments(fixture) | changes
-    arguments.pop("client")
-    return admission._prepare_and_claim(**arguments)
+def first_claim(fixture):
+    arguments = call_arguments(fixture)
+    return admission._prepare_and_claim(
+        caller=arguments["caller"],
+        binding_ref=arguments["binding_ref"],
+        workspace_id=arguments["workspace_id"],
+        client_request_key=arguments["client_request_key"],
+        attestation=arguments["attestation"],
+    )
 
 
 @pytest.mark.asyncio
@@ -74,6 +79,7 @@ async def test_first_dispatch_has_committed_lease_without_open_transaction(
         persisted = journal(fixture)
         assert persisted.lease_token is not None
         assert persisted.lease_phase == phase
+        assert persisted.lease_expires_at is not None
         assert persisted.lease_expires_at > datetime.now(UTC)
         assert len(authorizations) == (1 if not seen else 2)
         seen.append(phase)
@@ -157,7 +163,9 @@ async def test_configured_lost_response_recovers_same_durable_session(
         await admission.admit_capture(
             **call_arguments(fixture), configured_capture=selection
         )
-    reservation = journal(fixture).configured_capture.copy()
+    configured_capture = journal(fixture).configured_capture
+    assert configured_capture is not None
+    reservation = configured_capture.copy()
     ready = await admission.admit_capture(
         **call_arguments(fixture, resume=True), configured_capture=selection
     )
@@ -188,6 +196,7 @@ async def test_configured_revocation_during_io_prevents_ready(admission_case, ph
             identity = session.get(
                 AuthorityActorExternalIdentity, fixture.case.identity.id
             )
+            assert identity is not None
             identity.revoked_at = datetime.now(UTC)
             session.add(identity)
             session.commit()
@@ -223,7 +232,10 @@ async def test_resume_same_receipt_with_one_less_authority_transaction(
     event.listen(fixture.engine, "commit", commit)
     original = admission._prepare_and_claim
 
-    def previous(caller, binding_ref, workspace_id, *args, **kwargs):
+    def previous(
+        caller, binding_ref, workspace_id, *args, recover_legacy_request=False, **kwargs
+    ):
+        assert recover_legacy_request is False
         reference = admission._prepare(
             caller, binding_ref, workspace_id, *args, **kwargs
         )

@@ -899,14 +899,13 @@ collect_workload_state() {
 verify_workload_state_ready() {
 	local state_json=$1
 	if ! jq -e --arg api "$API_CONTAINER" '
-		. as $states |
-		([.[] | select(.name == $api)][0]) as $app |
-		([$app.traffic[]? | select((.weight // 0) > 0)]) as $routes |
-		all($states[]; .latestRevision == .latestReadyRevision and
+		all(.[]; .latestRevision == .latestReadyRevision and
 		 .activeRevisionsMode == "Single" and .readyRevisionHealth == "Healthy" and
 		 .readyRevisionProvisioning == "Provisioned" and
 		 (.readyRevisionRunning == "Running" or .readyRevisionRunning == "RunningAtMaxScale")) and
-		([$states[] | select(.name == $api)] | length == 1) and
+		([.[] | select(.name == $api)] | length == 1) and
+		([.[] | select(.name == $api)][0]) as $app |
+		([$app.traffic[]? | select((.weight // 0) > 0)]) as $routes |
 		($routes | length) == 1 and $routes[0].weight == 100 and
 		($routes[0].latestRevision == true or $routes[0].revisionName == $app.latestReadyRevision)
 	' <<<"$state_json" >/dev/null; then

@@ -10,14 +10,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
+from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
+
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.scribe_patient_identity import ScribePatientIdentity
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
-from sqlalchemy import func, tuple_
-from sqlmodel import Session, select
+from sqlalchemy import and_, exists, func, or_, tuple_
+from sqlmodel import Session, col, select
 
 MAX_SOURCE_CHARACTERS = 18_000
 MAX_FINALIZED_NOTES = 5
@@ -213,6 +216,44 @@ class PriorNoteOverview:
     selection_limited: bool
 
 
+def _prior_patient_scope(session, doctor_id, target):
+    """Use explicit per-visit identity decisions without rewriting provenance."""
+    if not SCRIBE_ENCOUNTER_SETTINGS.enabled:
+        return Appointment.patient_id == target.patient_id
+    identity = session.exec(
+        select(ScribePatientIdentity).where(
+            ScribePatientIdentity.appointment_id == target.id,
+            ScribePatientIdentity.doctor_id == doctor_id,
+            ScribePatientIdentity.source_patient_id == target.patient_id,
+            col(ScribePatientIdentity.state).in_(["matched", "confirmed"]),
+        )
+    ).one_or_none()
+    canonical = identity.canonical_patient_id if identity else target.patient_id
+    patient = session.exec(
+        select(Patient)
+        .where(
+            Patient.id == canonical,
+            Patient.doctor_id == doctor_id,
+        )
+        .with_for_update(read=True, key_share=True)
+    ).one_or_none()
+    if patient is None:
+        raise NoteSourceDenied("Note scope is unavailable")
+    decision = and_(
+        col(ScribePatientIdentity.appointment_id) == col(Appointment.id),
+        ScribePatientIdentity.doctor_id == doctor_id,
+        col(ScribePatientIdentity.source_patient_id) == col(Appointment.patient_id),
+        col(ScribePatientIdentity.state).in_(["matched", "confirmed"]),
+    )
+    matching = exists().where(
+        decision, ScribePatientIdentity.canonical_patient_id == canonical
+    )
+    different = exists().where(
+        decision, ScribePatientIdentity.canonical_patient_id != canonical
+    )
+    return or_(matching, and_(Appointment.patient_id == canonical, ~different))
+
+
 def prior_note_overview(
     *,
     session: Session,
@@ -241,11 +282,13 @@ def prior_note_overview(
     query = (
         select(AIVisitNote, Appointment)
         .join(Appointment, cast(Any, Appointment.id) == AIVisitNote.appointment_id)
+        .join(Patient, col(Patient.id) == col(Appointment.patient_id))
         .where(
             AIVisitNote.doctor_id == doctor_id,
             cast(Any, AIVisitNote.superseded_at).is_(None),
             Appointment.doctor_id == doctor_id,
-            Appointment.patient_id == target.patient_id,
+            Patient.doctor_id == doctor_id,
+            _prior_patient_scope(session, doctor_id, target),
             Appointment.id != target.id,
             Appointment.appointment_date >= cutoff - SOURCE_WINDOW,
             Appointment.appointment_date < cutoff,
@@ -278,7 +321,6 @@ def prior_note_overview(
         evidence_rows = session.exec(
             select(SessionPrepNoteFinalization).where(
                 SessionPrepNoteFinalization.doctor_id == doctor_id,
-                SessionPrepNoteFinalization.patient_id == target.patient_id,
                 # The unique (note_id, content_sha256) pair bounds this query
                 # to one review per preview, independent of revision history.
                 tuple_(
@@ -293,6 +335,7 @@ def prior_note_overview(
             try:
                 matches = (
                     evidence.appointment_id == visit.id
+                    and evidence.patient_id == visit.patient_id
                     and digests[str(note.id)] == evidence.content_sha256
                     and note_content_sha256(
                         _snapshot_content(evidence.reviewed_content)
@@ -367,14 +410,16 @@ def load_reviewed_note_sources(
             cast(Any, AIVisitNote.id) == SessionPrepNoteFinalization.note_id,
         )
         .join(Appointment, cast(Any, Appointment.id) == AIVisitNote.appointment_id)
+        .join(Patient, col(Patient.id) == col(Appointment.patient_id))
         .where(
             SessionPrepNoteFinalization.doctor_id == doctor_id,
-            SessionPrepNoteFinalization.patient_id == target.patient_id,
+            SessionPrepNoteFinalization.patient_id == Appointment.patient_id,
             SessionPrepNoteFinalization.appointment_id == Appointment.id,
             AIVisitNote.doctor_id == doctor_id,
             cast(Any, AIVisitNote.superseded_at).is_(None),
             Appointment.doctor_id == doctor_id,
-            Appointment.patient_id == target.patient_id,
+            Patient.doctor_id == doctor_id,
+            _prior_patient_scope(session, doctor_id, target),
             Appointment.id != target.id,
             Appointment.appointment_date >= appointment_cutoff - SOURCE_WINDOW,
             Appointment.appointment_date < appointment_cutoff,

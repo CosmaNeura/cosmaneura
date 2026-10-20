@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -60,7 +61,9 @@ def test_authentication_runs_before_body_and_capture_service(monkeypatch):
     def deny():
         raise HTTPException(status_code=401)
 
-    connection.app.dependency_overrides[authenticate_scribe_capture_request] = deny
+    cast(FastAPI, connection.app).dependency_overrides[
+        authenticate_scribe_capture_request
+    ] = deny
     monkeypatch.setattr(
         scope, "resolve_capture_binding", lambda **_: pytest.fail("scope reached")
     )
@@ -248,9 +251,9 @@ def test_operation_routes_exact_session_without_changing_legacy_default(
 
     monkeypatch.setattr(receiver.gateway, "execute_capture_operation", operation)
     connection = client()
-    connection.app.dependency_overrides[receiver.get_admission_client_factory] = (
-        lambda: DisabledScribeWorkflowClient
-    )
+    cast(FastAPI, connection.app).dependency_overrides[
+        receiver.get_admission_client_factory
+    ] = lambda: DisabledScribeWorkflowClient
     payload = {
         "binding_ref": "scribe_capture_binding_01j00000000000000000000000",
         "workspace_id": str(uuid4()),

@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -50,6 +51,7 @@ from app.services.scribe_workflow import (
     ScribeWorkflowError,
     SessionCreate,
 )
+from app.utils.native_request_timing import phase
 
 from activemodel.session_manager import get_session
 from app.models.scribe_capture_admission import ScribeCaptureAdmission
@@ -248,7 +250,7 @@ class _PhaseClaim:
 
 @contextmanager
 def _database():
-    with get_session() as managed:
+    with phase("capture_transaction"), get_session() as managed:
         session = cast(Session, managed)
         try:
             yield session
@@ -830,6 +832,10 @@ async def admit_capture(
     resume_current: bool = False,
     recording_key_sha256: str | None = None,
     recover_legacy_request: bool = False,
+    prepared_session: Callable[
+        [UUID, ConfiguredSessionCreate, str, str], Awaitable[ConfiguredSessionReceipt]
+    ]
+    | None = None,
 ) -> AdmissionSnapshot:
     """Explicitly admit/resume one capture; never start a microphone.
 
@@ -854,19 +860,29 @@ async def admit_capture(
         try:
             async with asyncio.timeout(PHASE_TIMEOUT_SECONDS):
                 if claim.phase == "consent":
-                    receipt = await client.create_consent(
-                        claim.scribe_tenant_id,
-                        cast(ConsentCreate, claim.payload),
-                        idempotency_key=claim.key,
-                    )
+                    with phase("consent_admission"):
+                        receipt = await client.create_consent(
+                            claim.scribe_tenant_id,
+                            cast(ConsentCreate, claim.payload),
+                            idempotency_key=claim.key,
+                        )
                 elif isinstance(claim.payload, ConfiguredSessionCreate):
                     assert claim.creator_actor_id is not None
-                    receipt = await client.create_configured_session(
-                        claim.scribe_tenant_id,
-                        claim.payload,
-                        creator_actor_id=claim.creator_actor_id,
-                        idempotency_key=claim.key,
-                    )
+                    with phase("session_admission"):
+                        if prepared_session is not None:
+                            receipt = await prepared_session(
+                                claim.scribe_tenant_id,
+                                claim.payload,
+                                claim.creator_actor_id,
+                                claim.key,
+                            )
+                        else:
+                            receipt = await client.create_configured_session(
+                                claim.scribe_tenant_id,
+                                claim.payload,
+                                creator_actor_id=claim.creator_actor_id,
+                                idempotency_key=claim.key,
+                            )
                 else:
                     receipt = await client.create_session(
                         claim.scribe_tenant_id,

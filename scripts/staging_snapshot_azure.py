@@ -245,10 +245,7 @@ class SnapshotAzure:
                     )
                 )
                 timestamp = email.utils.parsedate_to_datetime(dates[0])
-                offset = timestamp.utcoffset()
-                require(offset is not None)
-                assert offset is not None
-                require(offset.total_seconds() == 0)
+                require(timestamp.utcoffset().total_seconds() == 0)
                 require(abs((datetime.now(UTC) - timestamp).total_seconds()) <= 60)
                 raw = response.read(MAX_BODY + 1)
                 require(0 < len(raw) <= MAX_BODY)

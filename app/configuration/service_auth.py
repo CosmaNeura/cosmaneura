@@ -1,10 +1,17 @@
 from dataclasses import dataclass, replace
 from uuid import UUID
 
+from azure.identity.aio import DefaultAzureCredential
 from decouple import config
 
 AGENT_API_ACCESS_ROLE = "AgentApi.Access"
 SCRIBE_TRANSCRIPT_WRITE_ROLE = "Scribe.Transcript.Write"
+
+
+def create_scribe_workload_credential(client_id: str) -> DefaultAzureCredential:
+    """Keep official SDK construction behind the workload identity adapter."""
+
+    return DefaultAzureCredential(managed_identity_client_id=client_id)
 
 
 @dataclass(frozen=True)

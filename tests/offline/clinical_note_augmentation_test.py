@@ -3,6 +3,7 @@
 import ast
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ def load_augmentation():
         for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "augment_clinical_note"
     )
-    namespace = {"AIVisitTranscript": SimpleNamespace}
+    namespace: dict[str, Any] = {"AIVisitTranscript": SimpleNamespace}
     exec(
         compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"),
         namespace,
@@ -38,4 +39,6 @@ def test_recording_duration_never_becomes_a_care_time_claim(duration):
 
 def test_note_without_plan_is_preserved():
     note = {"Subjective": "Synthetic source text."}
-    assert load_augmentation()(note, SimpleNamespace(duration=120)) == note
+    expected = note.copy()
+    assert load_augmentation()(note, SimpleNamespace(duration=120)) == expected
+    assert note == expected

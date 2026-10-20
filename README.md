@@ -6,10 +6,6 @@ This is the primary repo for cosmaneura.com.
 
 Architecture source of truth: the `cosmaneura-architecture` repository (`ARCHITECTURE.md`, `adr/`, `contracts/`). Any Google Doc overview is historical/summary only and is not authoritative.
 
-Current verification status and the environment-owned evidence required before
-customer release are tracked in
-[`docs/CUSTOMER_RELEASE_READINESS.md`](docs/CUSTOMER_RELEASE_READINESS.md).
-
 ## Deployment
 
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)

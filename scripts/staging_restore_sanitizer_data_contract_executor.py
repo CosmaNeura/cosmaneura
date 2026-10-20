@@ -440,7 +440,7 @@ def _copy_snapshot_json(value: Any) -> Any:
     kind = type(value)
     if value is None or kind in {bool, int, str}:
         return value
-    if kind is float and math.isfinite(cast(float, value)):
+    if kind is float and math.isfinite(value):
         return value
     if kind is tuple:
         return tuple(_copy_snapshot_json(item) for item in value)
@@ -486,7 +486,7 @@ def _copy_candidate_value(value: Any) -> Any:
         return date(value.year, value.month, value.day)
     if value is None or kind in {bool, int, str}:
         return value
-    if kind is float and math.isfinite(cast(float, value)):
+    if kind is float and math.isfinite(value):
         return value
     _fail("data_contract_executor.candidate_invalid")
 
@@ -494,7 +494,7 @@ def _copy_candidate_value(value: Any) -> Any:
 def _is_frozen(value: Any) -> bool:
     kind = type(value)
     if value is None or kind in {bool, int, float, str, uuid.UUID, date}:
-        return kind is not float or math.isfinite(cast(float, value))
+        return kind is not float or math.isfinite(value)
     if kind is datetime:
         return value.fold == 0 and (value.tzinfo is None or value.tzinfo is UTC)
     if kind is _FrozenMap:

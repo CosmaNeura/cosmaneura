@@ -110,12 +110,14 @@ async def test_only_exact_bounded_upload_expiry_is_renewable(case):
         )
 
     operation = p.AuthorizeUpload(
-        kind="authorize_upload", object_id=uuid4(), payload={"protocol_version": "1.0"}
+        kind="authorize_upload",
+        object_id=uuid4(),
+        payload=p.ProtocolPayload(protocol_version="1.0"),
     )
     if case == "other_operation":
         operation = p.BindKey(
             kind="bind_key",
-            payload={"key_version": "synthetic-key", "wrapped_dek": "a" * 512},
+            payload=p.KeyPayload(key_version="synthetic-key", wrapped_dek="a" * 512),
         )
     async with httpx.AsyncClient(
         base_url="https://scribe.test.invalid", transport=httpx.MockTransport(handler)

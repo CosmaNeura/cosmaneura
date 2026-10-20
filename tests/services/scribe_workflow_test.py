@@ -490,8 +490,14 @@ async def test_builder_applies_scale_to_zero_request_timeout(
     real_async_client = httpx.AsyncClient
 
     def client_factory(
-        *, base_url: str, timeout: float, follow_redirects: bool, trust_env: bool
+        *,
+        base_url: str,
+        timeout: float,
+        follow_redirects: bool,
+        trust_env: bool,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> httpx.AsyncClient:
+        assert transport is None
         captured_options.update(
             base_url=base_url,
             timeout=timeout,

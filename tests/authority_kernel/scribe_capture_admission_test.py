@@ -11,7 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from threading import Event
 from types import SimpleNamespace
-from uuid import uuid4
+from typing import TypedDict
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -23,6 +24,7 @@ from app.services.scribe_workflow import (
     CaptureSession,
     ConsentRecord,
     DisabledScribeWorkflowClient,
+    ScribeWorkflowClient,
     ScribeWorkflowRejectedError,
     ScribeWorkflowRetryableError,
 )
@@ -40,6 +42,15 @@ from tests.authority_kernel.scribe_capture_scope_test import (
 )
 
 capture_engine = _capture_engine
+
+
+class CaptureAdmissionArguments(TypedDict):
+    caller: admission.CaptureCaller
+    binding_ref: str
+    workspace_id: UUID
+    client_request_key: str
+    attestation: admission.ConsentAttestation | None
+    client: ScribeWorkflowClient
 
 
 class FakeScribe(DisabledScribeWorkflowClient):
@@ -131,7 +142,7 @@ def admission_case(capture_engine):
             _session_context.reset(context)
 
 
-def call_arguments(fixture, *, resume=False):
+def call_arguments(fixture, *, resume=False) -> CaptureAdmissionArguments:
     return {
         "caller": fixture.caller,
         "binding_ref": fixture.binding.binding_ref,

@@ -22,13 +22,11 @@ export default defineConfig({
     // converts all openapi snake case attributes to camelCase, but does not translate the api request
     // case: "camelCase",
   },
-  experimentalParser: true,
   plugins: [
     "@hey-api/client-fetch",
     ...defaultPlugins.filter((plugin) => plugin !== "@hey-api/typescript"),
     // https://github.com/hey-api/openapi-ts/issues/1571
     {
-      identifierCase: "preserve",
       name: "@hey-api/typescript",
     },
     "@tanstack/react-query",

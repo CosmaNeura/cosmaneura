@@ -1,6 +1,7 @@
 """Append-only verified expiry evidence for one explicitly consented intent."""
 
 from datetime import datetime
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -27,7 +28,8 @@ class BillingHeaderGenerationContinuation(BaseModel, table=True):
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True, sa_type=sa.Uuid)
     action_id: TypeIDType = Field(
-        sa_type=TypeIDType("billing_action"), foreign_key="billing_header_action.id"
+        sa_type=cast(Any, TypeIDType("billing_action")),
+        foreign_key="billing_header_action.id",
     )
     purpose: str = Field(default="header.generation-continue", max_length=32)
     request_sha256: str = Field(max_length=64)

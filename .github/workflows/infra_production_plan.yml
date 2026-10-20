@@ -271,12 +271,12 @@ jobs:
           ARTIFACT_DIGEST: ${{ steps.upload_attestation.outputs.artifact-digest }}
         run: |
           set -euo pipefail
-          artifact_digest="${ARTIFACT_DIGEST#sha256:}"
-          if [[ ! "$artifact_digest" =~ ^[0-9a-f]{64}$ ]]; then
+          artifact_sha256_hex="${ARTIFACT_DIGEST#sha256:}"
+          if [[ ! "$artifact_sha256_hex" =~ ^[0-9a-f]{64}$ ]]; then
             echo "The artifact service did not return a valid SHA-256 digest." >&2
             exit 1
           fi
-          normalized_artifact_digest="sha256:$artifact_digest"
+          normalized_artifact_digest="sha256:$artifact_sha256_hex"
           echo "artifact_digest=$normalized_artifact_digest" >> "$GITHUB_OUTPUT"
           echo "Artifact service digest: \`$normalized_artifact_digest\`" >> "$GITHUB_STEP_SUMMARY"
 

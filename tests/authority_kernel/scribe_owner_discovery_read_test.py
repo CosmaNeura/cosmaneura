@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -17,7 +18,7 @@ from app.models.doctor import Doctor
 from app.models.practice import PracticeMember
 from sqlalchemy import event
 from sqlalchemy.orm.attributes import set_committed_value
-from sqlmodel import select
+from sqlmodel import Session, select
 
 from tests.authority_kernel.companion_provider_provisioning_test import (
     SETTINGS,
@@ -130,8 +131,10 @@ def test_identity_change_committed_after_discovery_denies_before_io(
     def changed(session, mount, settings):
         result = original(session, mount, settings)
         identity = result[0]
+        assert identity is not None
         with session_for(engine) as writer:
             row = writer.get(AuthorityActorExternalIdentity, identity.id)
+            assert row is not None
             if change == "revoke":
                 row.revoked_at = datetime.now(UTC)
             elif change == "subject":
@@ -196,6 +199,7 @@ def test_join_refreshes_loaded_identity_and_mount_rows(
         )
         identity = session.get(AuthorityActorExternalIdentity, identity_id)
         set_committed_value(identity, "issuer", "https://stale.invalid")
+        mount = None
         if phase == "current":
             mount = session.get(MountContextSession, selected.mount_id)
             set_committed_value(mount, "status", "stale")
@@ -203,6 +207,7 @@ def test_join_refreshes_loaded_identity_and_mount_rows(
             rows = original(session, selected, *args)
             assert identity.issuer == SETTINGS.clerk_issuer
             if phase == "current":
+                assert mount is not None
                 assert mount.status == "active"
             return rows
         except Exception as error:
@@ -260,8 +265,11 @@ def test_nontransactional_adapter_preserves_original_discovery_refusal_order():
 
     with pytest.raises(capture.CaptureScopeDenied):
         capture._capture_owner_discovery_rows(
-            Adapter(),
-            SimpleNamespace(source_identity_id="identity", actor_id="actor"),
+            cast(Session, Adapter()),
+            cast(
+                MountContextSession,
+                SimpleNamespace(source_identity_id="identity", actor_id="actor"),
+            ),
             SETTINGS,
         )
     assert calls == [AuthorityActorExternalIdentity]

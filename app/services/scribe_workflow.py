@@ -10,7 +10,6 @@ from uuid import UUID
 import httpx
 from azure.core.credentials import AccessToken
 from azure.core.exceptions import AzureError
-from azure.identity.aio import DefaultAzureCredential
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -21,10 +20,12 @@ from pydantic import (
     model_validator,
 )
 
+from app.configuration.scribe_service_identity import current_scribe_service_identity
 from app.configuration.scribe_workflow import (
     SCRIBE_WORKFLOW_SETTINGS,
     ScribeWorkflowSettings,
 )
+from app.configuration.service_auth import create_scribe_workload_credential
 from app.services import scribe_capture_protocol as capture_protocol
 from app.services.scribe_capture_deadline import check_async_capture_deadline
 from app.services.scribe_capture_recovery_contract import (
@@ -50,6 +51,12 @@ from app.services.scribe_creator_review_contract import (
     CreatorDecisionReceipt,
     CreatorReviewView,
 )
+from app.services.scribe_http_pool import (
+    COLLECTION_EXTENSION,
+    ResponseCollection,
+    current_scribe_transport,
+)
+from app.utils.native_request_timing import async_phase, phase
 
 
 class ScribeWorkflowError(Exception):
@@ -76,6 +83,19 @@ class ScribeWorkflowConflictError(ScribeWorkflowError):
 
 class ScribeUploadAuthorizationExpired(ScribeWorkflowConflictError):
     pass
+
+
+class PreparedConfiguredSessionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+    schema_version: Literal["1.0"]
+    admission: ConfiguredSessionReceipt
+    preparation_metadata: capture_protocol.PreparationMetadata
+
+    @model_validator(mode="after")
+    def same_session(self):
+        if self.preparation_metadata.review.session_id != self.admission.id:
+            raise ValueError("scribe_response_scope_mismatch")
+        return self
 
 
 class ConsentCreate(BaseModel):
@@ -206,6 +226,15 @@ class AsyncTokenCredential(Protocol):
 
 
 class ScribeWorkflowClient(Protocol):
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt: ...
+
     async def create_configured_session(
         self,
         tenant_id: UUID,
@@ -262,6 +291,16 @@ class ScribeWorkflowClient(Protocol):
 
 
 class DisabledScribeWorkflowClient:
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt:
+        raise ScribeWorkflowDisabledError("scribe_workflow_disabled")
+
     async def create_configured_session(
         self,
         tenant_id: UUID,
@@ -332,6 +371,38 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 
 
 class HttpScribeWorkflowClient:
+    async def create_prepared_configured_session(
+        self,
+        tenant_id: UUID,
+        payload: ConfiguredSessionCreate,
+        *,
+        creator_actor_id: str,
+        idempotency_key: str,
+    ) -> PreparedConfiguredSessionReceipt:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", creator_actor_id):
+            raise ScribeWorkflowRejectedError("scribe_invalid_creator")
+        if not re.fullmatch(r"[!-~]{8,255}", idempotency_key):
+            raise ScribeWorkflowRejectedError("scribe_invalid_admission_key")
+        # Fixed receiver-first path. No retry/fallback after possibly committed I/O.
+        result = await self._post(
+            "/v1/captured-sessions/prepared",
+            tenant_id,
+            payload,
+            idempotency_key,
+            PreparedConfiguredSessionReceipt,
+            # Preserve the ordinary metadata allowance plus its bounded
+            # configured-admission envelope. Other mutation caps stay unchanged.
+            max_bytes=MAX_CREATOR_REVIEW_BYTES + 32_768,
+            creator_actor_id=creator_actor_id,
+        )
+        receipt = result.admission
+        if receipt.creator_actor_id != creator_actor_id or any(
+            getattr(receipt, field) != getattr(payload, field)
+            for field in ConfiguredSessionCreate.model_fields
+        ):
+            raise ScribeWorkflowRejectedError("scribe_response_scope_mismatch")
+        return result
+
     """Call Scribe with a short-lived app token from the platform managed identity."""
 
     def __init__(
@@ -342,6 +413,7 @@ class HttpScribeWorkflowClient:
         timeout_seconds: float,
         credential: AsyncTokenCredential,
         client: httpx.AsyncClient | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         parsed = urlsplit(base_url)
         if (
@@ -360,14 +432,18 @@ class HttpScribeWorkflowClient:
             httpx.URL(base_url)
         ).rstrip("/"):
             raise ValueError("Scribe client origin does not match configuration")
+        if client is not None and transport is not None:
+            raise ValueError("Scribe client and transport are mutually exclusive")
         self._scope = scope
         self._credential = credential
         self._owns_client = client is None
+        self._uses_response_collection = transport is not None
         self._client = client or httpx.AsyncClient(
             base_url=base_url.rstrip("/"),
             timeout=timeout_seconds,
             follow_redirects=False,
             trust_env=False,
+            transport=transport,
         )
 
     async def create_configured_session(
@@ -460,36 +536,47 @@ class HttpScribeWorkflowClient:
             raise ScribeWorkflowRejectedError("scribe_invalid_scope")
         try:
             check_async_capture_deadline()
-            access_token = await self._credential.get_token(self._scope)
+            with phase("workflow_token"):
+                access_token = await self._credential.get_token(self._scope)
             check_async_capture_deadline()
-            async with self._client.stream(
-                "POST",
-                path,
-                headers={
-                    "Authorization": f"Bearer {access_token.token}",
-                    "X-Tenant-ID": str(tenant_id),
-                    "Idempotency-Key": idempotency_key,
-                    **(
-                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
-                        if creator_actor_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Practitioner": practitioner_id}
-                        if practitioner_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
-                        if profile_receipt_id
-                        else {}
-                    ),
-                    "Accept": "application/json",
-                    "Cache-Control": "no-store",
-                },
-                json=payload.model_dump(mode="json"),
-                follow_redirects=False,
-            ) as response:
+            async with (
+                async_phase("workflow_http"),
+                self._client.stream(
+                    "POST",
+                    path,
+                    headers={
+                        "Authorization": f"Bearer {access_token.token}",
+                        "X-Tenant-ID": str(tenant_id),
+                        "Idempotency-Key": idempotency_key,
+                        **(
+                            {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                            if creator_actor_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Practitioner": practitioner_id}
+                            if practitioner_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                            if profile_receipt_id
+                            else {}
+                        ),
+                        "Accept": "application/json",
+                        "Cache-Control": "no-store",
+                    },
+                    json=payload.model_dump(mode="json"),
+                    follow_redirects=False,
+                    extensions={
+                        COLLECTION_EXTENSION: ResponseCollection(
+                            (200, 201), max_bytes, upload_authorization
+                        )
+                    }
+                    if self._uses_response_collection
+                    else None,
+                ) as response,
+            ):
                 if response.status_code == 409:
                     if (
                         upload_authorization
@@ -613,34 +700,43 @@ class HttpScribeWorkflowClient:
     ) -> ResponseModel:
         try:
             check_async_capture_deadline()
-            access_token = await self._credential.get_token(self._scope)
+            with phase("workflow_token"):
+                access_token = await self._credential.get_token(self._scope)
             check_async_capture_deadline()
-            async with self._client.stream(
-                "GET",
-                path,
-                headers={
-                    "Authorization": f"Bearer {access_token.token}",
-                    "X-Tenant-ID": str(tenant_id),
-                    "Accept": "application/json",
-                    "Cache-Control": "no-store",
-                    **(
-                        {"X-Scribe-Creator-Actor-ID": creator_actor_id}
-                        if creator_actor_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Practitioner": practitioner_id}
-                        if practitioner_id
-                        else {}
-                    ),
-                    **(
-                        {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
-                        if profile_receipt_id
-                        else {}
-                    ),
-                },
-                follow_redirects=False,
-            ) as response:
+            async with (
+                async_phase("workflow_http"),
+                self._client.stream(
+                    "GET",
+                    path,
+                    headers={
+                        "Authorization": f"Bearer {access_token.token}",
+                        "X-Tenant-ID": str(tenant_id),
+                        "Accept": "application/json",
+                        "Cache-Control": "no-store",
+                        **(
+                            {"X-Scribe-Creator-Actor-ID": creator_actor_id}
+                            if creator_actor_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Practitioner": practitioner_id}
+                            if practitioner_id
+                            else {}
+                        ),
+                        **(
+                            {"X-Capture-Profile-Receipt": str(profile_receipt_id)}
+                            if profile_receipt_id
+                            else {}
+                        ),
+                    },
+                    follow_redirects=False,
+                    extensions={
+                        COLLECTION_EXTENSION: ResponseCollection((200,), max_bytes)
+                    }
+                    if self._uses_response_collection
+                    else None,
+                ) as response,
+            ):
                 if response.status_code == 409:
                     raise ScribeWorkflowConflictError("scribe_conflict")
                 if (
@@ -1026,10 +1122,11 @@ def build_scribe_workflow_client(
     if not settings.is_complete():
         raise ValueError("Scribe workflow settings are incomplete")
 
+    transport = current_scribe_transport(settings.base_url)
     if credential_factory is None:
-        credential: AsyncTokenCredential = DefaultAzureCredential(
-            managed_identity_client_id=settings.managed_identity_client_id
-        )
+        credential: AsyncTokenCredential = current_scribe_service_identity(
+            settings
+        ) or create_scribe_workload_credential(settings.managed_identity_client_id)
     else:
         credential = credential_factory(settings.managed_identity_client_id)
 
@@ -1038,4 +1135,5 @@ def build_scribe_workflow_client(
         scope=settings.scope,
         timeout_seconds=settings.timeout_seconds,
         credential=credential,
+        transport=transport,
     )
