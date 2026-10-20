@@ -1,40 +1,66 @@
-# Welcome to React Router!
+# Cosmaneura web application
 
-- 📖 [React Router docs](https://reactrouter.com/dev)
+The React Router application for provider onboarding, scheduling, session prep,
+recording upload, SOAP-note review, practice administration, and billing.
 
-## Development
+## Local development
 
-Run the dev server:
-
-```shellscript
-npm run dev
-```
-
-## Deployment
-
-First, build your app for production:
+Use the Node and pnpm versions pinned by the repository. From `web/`:
 
 ```sh
-npm run build
+pnpm install --frozen-lockfile
+pnpm dev
 ```
 
-Then run the app in production mode:
+Configuration is loaded through the repository's `direnv` setup. Do not place
+credentials, patient data, or production identifiers in client-side `VITE_*`
+variables; every such value is embedded in the browser bundle.
+
+The generated API client is derived from `../docs/api.json`. Regenerate it with
+`pnpm openapi` after an intentional API-contract change and review the resulting
+diff before committing it.
+
+## Quality gates
+
+Run these before proposing a release:
 
 ```sh
-npm start
+# From the repository root:
+just js_lint
+just js_build
+
+# From this directory:
+pnpm test
+pnpm typecheck
+pnpm audit --audit-level high
 ```
 
-Now you'll need to pick a host to deploy it to.
+The root build recipe supplies the required immutable `VITE_BUILD_COMMIT`,
+regenerates the API client, and compiles the React Router server and browser
+bundles. The deployed artifact consists of `build/server` and `build/client`;
+deployment is performed only by the reviewed manual workflows described in the
+root README.
 
-### DIY
+## UI conventions
 
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
+- Reuse the shared layout, typography, controls, feedback, and terminology
+  components under `app/components/shared` instead of introducing route-local
+  visual systems.
+- Keep provider/patient terminology sourced from the central terminology
+  catalog so every workflow uses the clinician's configured relationship terms.
+- Every asynchronous action must expose a pending state, a recoverable error
+  state, and a clear success outcome without relying on color alone.
+- Preserve keyboard operation, visible focus, semantic labels, reduced-motion
+  behavior, and responsive layouts.
+- Never render raw service errors, tokens, transcript payloads, or other PHI in
+  analytics, console logs, URLs, or generic error boundaries.
 
-Make sure to deploy the output of `npm run build`
+## Architectural boundary
 
-- `build/server`
-- `build/client`
+The browser communicates with the Cosmaneura application backend. It does not
+hold Scribe workload credentials or call the private Scribe service directly.
+Recording and session-prep operations are authorized by the backend from the
+current authenticated provider, practice, encounter, and feature configuration.
 
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
+See [customer release readiness](../docs/CUSTOMER_RELEASE_READINESS.md) for the
+current verification ledger and remaining environment-owned release evidence.
