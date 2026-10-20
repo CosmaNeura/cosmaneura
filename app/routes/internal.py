@@ -3222,9 +3222,23 @@ class MedicationData(BaseModel, extra="forbid"):
     source: MedicationSource
     dosage: str | None
     confirmed: bool
+    appointment_id: str | None = None
+    source_appointment_date: datetime | None = None
 
 
 def _medication_data(row: PatientMedication) -> MedicationData:
+    # Extraction rows are patient-wide; only expose provenance from an
+    # appointment still owned by this row's doctor and patient. This metadata
+    # describes the source visit, not a confirmed or reviewed medication state.
+    source = (
+        Appointment.get(
+            id=row.appointment_id,
+            doctor_id=row.doctor_id,
+            patient_id=row.patient_id,
+        )
+        if row.appointment_id is not None
+        else None
+    )
     return MedicationData(
         id=str(row.id),
         name=row.name,
@@ -3236,6 +3250,8 @@ def _medication_data(row: PatientMedication) -> MedicationData:
         source=row.source,
         dosage=row.dosage,
         confirmed=row.confirmed,
+        appointment_id=str(source.id) if source is not None else None,
+        source_appointment_date=source.appointment_date if source is not None else None,
     )
 
 

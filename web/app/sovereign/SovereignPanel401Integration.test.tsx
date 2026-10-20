@@ -175,7 +175,7 @@ describe("Sovereign panel terminal authorization integration", () => {
     expect(JSON.parse(chatRequests[0].body).client_turn_id).toBe(
       chatRequests[0].clientTurnId,
     )
-    expect(gate?.textContent).toContain("named beta")
+    expect(gate?.textContent).toContain("Session Prep")
     expect(rail?.hidden).toBe(true)
     expect(send?.disabled).toBe(true)
     expect(thread?.children).toHaveLength(0)
