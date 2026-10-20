@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -802,7 +803,7 @@ class LocalCursorReviewTests(unittest.TestCase):
             },
         ):
             with self.subTest(changes=changes), self.assertRaises(m.BuildSourceRefused):
-                verify(metadata, **changes)
+                verify(metadata, **cast(dict[str, Any], changes))
         with self.assertRaises(m.BuildSourceRefused):
             verify(metadata, prefix="CURSOR")
 
