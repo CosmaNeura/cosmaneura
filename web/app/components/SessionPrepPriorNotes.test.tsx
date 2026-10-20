@@ -46,7 +46,7 @@ describe("prior visits for Session Prep", () => {
     ).toBeInTheDocument()
     expect(screen.getByText("Needs your review")).toBeInTheDocument()
     const links = screen.getAllByRole("link", {
-      name: "Open note in a new tab",
+      name: /Open note .* in a new tab/,
     })
     expect(links[1]).toHaveAttribute(
       "href",
@@ -58,6 +58,25 @@ describe("prior visits for Session Prep", () => {
     expect(
       screen.queryByRole("button", { name: /Mark reviewed/ }),
     ).not.toBeInTheDocument()
+  })
+
+  it("opens preparation directly and distinguishes an update-needed source set", () => {
+    const open = vi.fn()
+    const view = render(
+      <SessionPrepPriorNotes overview={overview} onOpenSessionPrep={open} />,
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Open Session Prep" }))
+    expect(open).toHaveBeenCalledTimes(1)
+    view.rerender(
+      <SessionPrepPriorNotes
+        overview={overview}
+        onOpenSessionPrep={open}
+        preparationState="update_needed"
+      />,
+    )
+    expect(screen.getByText(/Reviewed prior notes changed/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Update Session Prep" }))
+    expect(open).toHaveBeenCalledTimes(2)
   })
 
   it("refreshes only on request and disables duplicate refresh while loading", () => {

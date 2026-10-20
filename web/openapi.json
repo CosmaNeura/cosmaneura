@@ -5691,6 +5691,29 @@
           "confirmed": {
             "type": "boolean",
             "title": "Confirmed"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          },
+          "source_appointment_date": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Appointment Date"
           }
         },
         "additionalProperties": false,

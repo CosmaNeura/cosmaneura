@@ -16,8 +16,12 @@ const labels: Record<PriorNotePreview["status"], string> = {
 
 export function SessionPrepPriorNotes({
   overview,
+  onOpenSessionPrep,
+  preparationState,
 }: {
   overview: PriorNoteOverview
+  onOpenSessionPrep?: () => void
+  preparationState?: string | null
 }) {
   const revalidator = useRevalidator()
   return (
@@ -29,15 +33,37 @@ export function SessionPrepPriorNotes({
         <h2 id="prior-notes-title" className="text-lg font-semibold">
           Prior visits for Session Prep
         </h2>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={revalidator.state !== "idle"}
-          onClick={() => void revalidator.revalidate()}
-        >
-          {revalidator.state === "idle" ? "Refresh prior notes" : "Refreshing…"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {onOpenSessionPrep && (
+            <Button
+              size="sm"
+              onClick={onOpenSessionPrep}
+              disabled={revalidator.state !== "idle"}
+            >
+              {preparationState === "ready" ||
+              preparationState === "update_needed"
+                ? "Update Session Prep"
+                : "Open Session Prep"}
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={revalidator.state !== "idle"}
+            onClick={() => void revalidator.revalidate()}
+          >
+            {revalidator.state === "idle"
+              ? "Refresh prior notes"
+              : "Refreshing…"}
+          </Button>
+        </div>
       </div>
+      {preparationState === "update_needed" && (
+        <p className="mt-2 text-sm font-medium" role="status">
+          Reviewed prior notes changed. Update Session Prep to use the latest
+          selection.
+        </p>
+      )}
       <p className="mt-2 text-sm" role="status">
         {overview.included_count === 0
           ? "No reviewed prior notes are available for this visit yet."
@@ -46,7 +72,7 @@ export function SessionPrepPriorNotes({
       <p className="text-muted-foreground mt-1 text-sm">
         Session Prep uses up to five reviewed notes from prior visits in the
         last 18 months. Open a note, review it, then return here and refresh
-        before requesting preparation.
+        before opening or updating Session Prep.
       </p>
       {overview.notes.length ? (
         <ul className="mt-3 divide-y">
@@ -70,7 +96,11 @@ export function SessionPrepPriorNotes({
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Open note <span className="sr-only">in a new tab</span>
+                Open note{" "}
+                <span className="sr-only">
+                  {note.note_type} ·{" "}
+                  {appointmentDateFormat(note.appointment_date)} in a new tab
+                </span>
               </a>
             </li>
           ))}

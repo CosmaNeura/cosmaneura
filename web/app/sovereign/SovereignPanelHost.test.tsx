@@ -101,6 +101,82 @@ describe("SovereignPanelHost", () => {
     delete window.CosmaNeuraPanel
   })
 
+  it("opens prep directly and invalidates a same-note source revision without remounting or sending display data", async () => {
+    const setRecord = vi.fn(async () => 1)
+    const openSessionPrep = vi.fn()
+    const invalidateSessionPrep = vi.fn()
+    const target = document.createElement("div")
+    document.body.appendChild(target)
+    mountImplementation = () => ({
+      setRecord,
+      openSessionPrep,
+      invalidateSessionPrep,
+      recordPresentationTarget: target,
+      destroy: vi.fn(),
+    })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+    const priorNotes = {
+      notes: [
+        {
+          note_id: "note_synthetic",
+          appointment_id: "visit_prior",
+          appointment_date: "2026-10-01T12:00:00Z",
+          note_type: "SOAP",
+          status: "included" as const,
+        },
+      ],
+      included_count: 1,
+      more_notes: false,
+      selection_limited: false,
+      selected_source_fingerprint: "sha256_" + "a".repeat(64),
+    }
+    const props = {
+      appointmentId: "appointment_source_refresh",
+      patientName: "Synthetic Morgan",
+      appointmentDate: "2026-10-20T12:00:00Z",
+      priorNotes,
+    }
+    const view = render(<SovereignPanelHost {...props} />)
+    await waitFor(() => expect(target).toHaveTextContent("Synthetic Morgan"))
+    expect(target.querySelector("a")).toHaveAttribute(
+      "href",
+      "/notes/visit_prior?reviewNote=note_synthetic#note-note_synthetic",
+    )
+    expect(invalidateSessionPrep).not.toHaveBeenCalled()
+    view.rerender(<SovereignPanelHost {...props} openRequest={1} />)
+    await waitFor(() => expect(openSessionPrep).toHaveBeenCalledTimes(1))
+    view.rerender(
+      <SovereignPanelHost
+        {...props}
+        openRequest={1}
+        priorNotes={{
+          ...priorNotes,
+          selected_source_fingerprint: "sha256_" + "b".repeat(64),
+        }}
+      />,
+    )
+    expect(invalidateSessionPrep).toHaveBeenCalledExactlyOnceWith(
+      "appointment_source_refresh",
+    )
+    expect(mount).toHaveBeenCalledTimes(1)
+    expect(openSessionPrep).toHaveBeenCalledTimes(1)
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("patientName")
+    expect(mount.mock.calls[0][0]).not.toHaveProperty("priorNotes")
+    expect(await mount.mock.calls[0][0].getContext()).toEqual({
+      clientId: "appointment_source_refresh",
+    })
+    view.unmount()
+    target.remove()
+  })
+
   it("accepts only an enabled, origin-only HTTPS authority target", () => {
     expect(
       resolveSovereignProviderConfig({

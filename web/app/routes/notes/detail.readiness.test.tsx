@@ -27,6 +27,7 @@ vi.mock("~/utils/reference-toolkit-feature", () => ({
 }))
 vi.mock("~/sovereign/SovereignPanelHost", () => ({
   SovereignPanelHost: () => null,
+  resolveSovereignProviderConfig: () => null,
 }))
 vi.mock("@/components/notes/UploadRecordingButton", () => ({
   UploadRecordingButton: () => null,

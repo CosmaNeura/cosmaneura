@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   type MetaFunction,
   isRouteErrorResponse,
@@ -36,7 +36,11 @@ import {
   stopTracking,
   useRecentUploads,
 } from "~/lib/recent-uploads"
-import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
+import {
+  type SessionPrepUiState,
+  SovereignPanelHost,
+  resolveSovereignProviderConfig,
+} from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 import {
   isReferenceLabsEnabled,
@@ -231,6 +235,14 @@ function NoteHeader({
 }
 
 export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
+  const [sessionPrepOpenRequest, setSessionPrepOpenRequest] = useState(0)
+  const [sessionPrepState, setSessionPrepState] =
+    useState<SessionPrepUiState | null>(null)
+  const sessionPrepAvailable = resolveSovereignProviderConfig() !== null
+  useEffect(() => {
+    setSessionPrepState(null)
+    setSessionPrepOpenRequest(0)
+  }, [loaderData.appointment.id])
   const { transcript, notes, note_transcripts } = loaderData
   const hasNotes = notes && notes.length > 0
   const appointmentId = loaderData.appointment.id
@@ -301,6 +313,12 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         {loaderData.session_prep_prior_notes && !loaderData.focusedNoteId && (
           <SessionPrepPriorNotes
             overview={loaderData.session_prep_prior_notes}
+            preparationState={sessionPrepState}
+            onOpenSessionPrep={
+              sessionPrepAvailable
+                ? () => setSessionPrepOpenRequest((request) => request + 1)
+                : undefined
+            }
           />
         )}
 
@@ -335,7 +353,10 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         )}
 
         {referenceToolkitEnabled && (
-          <MedicationPanel patientId={loaderData.patient.id} />
+          <MedicationPanel
+            patientId={loaderData.patient.id}
+            appointmentId={loaderData.appointment.id}
+          />
         )}
         {loaderData.private_note_available && (
           <PrivateVisitNote key={appointmentId} appointmentId={appointmentId} />
@@ -348,7 +369,15 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           <VisitTranscriptViewer transcript={sharedTranscript} />
         )}
       </InnerScrollableContent>
-      <SovereignPanelHost appointmentId={loaderData.appointment.id} />
+      <SovereignPanelHost
+        key={loaderData.appointment.id}
+        appointmentId={loaderData.appointment.id}
+        patientName={loaderData.patient.name}
+        appointmentDate={loaderData.appointment.appointment_date}
+        priorNotes={loaderData.session_prep_prior_notes}
+        openRequest={sessionPrepOpenRequest}
+        onSessionPrepStateChange={setSessionPrepState}
+      />
     </SidebarInset>
   )
 }

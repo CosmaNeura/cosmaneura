@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 
 import { getClient } from "~/configuration/clerk"
+import type { PriorNoteOverview } from "~/configuration/client"
+import { appointmentDateFormat } from "~/lib/date"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
@@ -31,6 +34,13 @@ type AuthTokenRequest = {
   forceRefresh: true
 }
 
+export type SessionPrepUiState =
+  | "ready"
+  | "refreshing"
+  | "pending"
+  | "unavailable"
+  | "update_needed"
+
 type PanelMountOptions = {
   sovereignUrl: string
   embedVersion: "1.0"
@@ -42,6 +52,7 @@ type PanelMountOptions = {
     recordId: string,
     options: { signal: AbortSignal },
   ) => Promise<SovereignHistory>
+  onSessionPrepStateChange?: (state: SessionPrepUiState) => void
   shiftContent: boolean
   fabBottom?: string
 }
@@ -49,6 +60,9 @@ type PanelMountOptions = {
 type PanelInstance = {
   setRecord: (recordId: string | null) => Promise<unknown> | unknown
   destroy: () => void
+  openSessionPrep?: () => Promise<unknown> | unknown
+  invalidateSessionPrep?: (recordId: string) => void
+  recordPresentationTarget?: HTMLElement | null
 }
 
 type MountContextCredential = {
@@ -449,11 +463,59 @@ function resetAndDestroy(panel: PanelInstance): void {
 
 export function SovereignPanelHost({
   appointmentId,
+  patientName,
+  appointmentDate,
+  priorNotes,
+  openRequest = 0,
+  onSessionPrepStateChange,
 }: {
   appointmentId: string
+  patientName?: string
+  appointmentDate?: string
+  priorNotes?: PriorNoteOverview | null
+  openRequest?: number
+  onSessionPrepStateChange?: (state: SessionPrepUiState) => void
 }) {
   const config = resolveSovereignProviderConfig()
   const panelRef = useRef<PanelInstance | null>(null)
+  const [panelReady, setPanelReady] = useState(false)
+  const [presentationTarget, setPresentationTarget] =
+    useState<HTMLElement | null>(null)
+  const stateCallback = useRef(onSessionPrepStateChange)
+  stateCallback.current = onSessionPrepStateChange
+  const sourceSnapshot = useRef<{
+    appointmentId: string
+    fingerprint: string
+  } | null>(null)
+  const lastOpenRequest = useRef(0)
+  const includedNotes =
+    priorNotes?.notes.filter((note) => note.status === "included") ?? []
+  // This value only invalidates presentation. It is never passed to authority,
+  // getContext, or a request; Core still selects and authorizes every source.
+  const sourceFingerprint =
+    priorNotes?.selected_source_fingerprint ??
+    JSON.stringify(
+      includedNotes.map((note) => [note.note_id, note.appointment_date]).sort(),
+    )
+
+  useLayoutEffect(() => {
+    if (!panelReady) return
+    const previous = sourceSnapshot.current
+    sourceSnapshot.current = { appointmentId, fingerprint: sourceFingerprint }
+    if (
+      previous?.appointmentId === appointmentId &&
+      previous.fingerprint !== sourceFingerprint
+    )
+      panelRef.current?.invalidateSessionPrep?.(appointmentId)
+  }, [appointmentId, panelReady, sourceFingerprint, priorNotes])
+
+  useLayoutEffect(() => {
+    if (!panelReady || openRequest <= lastOpenRequest.current) return
+    lastOpenRequest.current = openRequest
+    void Promise.resolve(panelRef.current?.openSessionPrep?.()).catch(
+      () => undefined,
+    )
+  }, [panelReady, openRequest])
   const [mountAttempt, setMountAttempt] = useState(0)
   const [recovery, setRecovery] = useState<"unavailable" | "connecting" | null>(
     null,
@@ -461,6 +523,9 @@ export function SovereignPanelHost({
 
   useLayoutEffect(() => {
     if (!config) return
+    setPanelReady(false)
+    setPresentationTarget(null)
+    sourceSnapshot.current = null
     let cancelled = false
     let accessWasGranted = false
     let accessLost = false
@@ -475,6 +540,8 @@ export function SovereignPanelHost({
       finishBootstrap()
       statusController.abort()
       mountTokenProvider.discard()
+      setPanelReady(false)
+      setPresentationTarget(null)
       const previous = mounted
       mounted = null
       if (panelRef.current === previous) panelRef.current = null
@@ -517,6 +584,9 @@ export function SovereignPanelHost({
             return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
+          onSessionPrepStateChange: (state) => {
+            if (!cancelled && !accessLost) stateCallback.current?.(state)
+          },
           loadHistory: async (recordId, { signal }) => {
             const controller = new AbortController()
             const abort = () => controller.abort()
@@ -568,6 +638,8 @@ export function SovereignPanelHost({
               finishBootstrap()
               statusController.abort()
               mountTokenProvider.discard()
+              setPanelReady(false)
+              setPresentationTarget(null)
               setRecovery("unavailable")
             }
           },
@@ -586,6 +658,8 @@ export function SovereignPanelHost({
         if (cancelled || accessLost) return
         finishBootstrap()
         panelRef.current = candidate
+        setPresentationTarget(candidate.recordPresentationTarget ?? null)
+        setPanelReady(true)
         setRecovery(null)
       })
       .catch(() => {
@@ -602,6 +676,46 @@ export function SovereignPanelHost({
   return config ? (
     <>
       <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
+      {presentationTarget &&
+        patientName &&
+        createPortal(
+          <div className="py-3">
+            <p className="font-semibold">{patientName}</p>
+            {appointmentDate && (
+              <p>Visit · {appointmentDateFormat(appointmentDate)}</p>
+            )}
+            {includedNotes.length > 0 && (
+              <details className="mt-2">
+                <summary className="cursor-pointer">
+                  Reviewed sources available · {includedNotes.length}
+                </summary>
+                <ul className="mt-2 space-y-2">
+                  {includedNotes.map((note) => (
+                    <li key={note.note_id}>
+                      <a
+                        href={`/notes/${encodeURIComponent(note.appointment_id)}?reviewNote=${encodeURIComponent(note.note_id)}#note-${encodeURIComponent(note.note_id)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {note.note_type} ·{" "}
+                        {appointmentDateFormat(note.appointment_date)}
+                        <span className="sr-only">
+                          {" "}
+                          · Open reviewed source in a new tab
+                        </span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-xs">
+                  Available reviewed notes; the brief states the source coverage
+                  used in its last update.
+                </p>
+              </details>
+            )}
+          </div>,
+          presentationTarget,
+        )}
       {recovery && (
         <div
           className="bg-background text-foreground fixed right-[18px] z-[100002] flex max-w-[calc(100vw-36px)] items-center gap-3 rounded-lg border p-3 shadow-lg"
