@@ -1,6 +1,7 @@
 """Actual HTTP client: fixed request, closed reply, no uncertain fallback."""
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import httpx
@@ -20,7 +21,7 @@ from tests.authority_kernel.scribe_gateway_receiver_test import scope
 
 
 class Credential:
-    async def get_token(self, *_args):
+    async def get_token(self, *scopes: str, **kwargs):
         return AccessToken("synthetic-only", 4102444800)
 
     async def close(self):
@@ -53,12 +54,16 @@ async def test_combined_http_contract_and_no_fallback(fault):
         normalization_profile_id="azure_phrase_en_es_evidence_v1",
         status="admitted",
     )
+    encryption_key = pair("encryption_key", scope())[1]
+    capabilities = pair("capabilities", scope())[1]
+    assert isinstance(encryption_key, p.EncryptionKey)
+    assert isinstance(capabilities, p.Capabilities)
     metadata = p.PreparationMetadata(
         review=CreatorReviewView(
             schema_version="1.0", session_id=payload.id, status="created"
         ),
-        encryption_key=pair("encryption_key", scope())[1],
-        capabilities=pair("capabilities", scope())[1],
+        encryption_key=encryption_key,
+        capabilities=capabilities,
     )
     if fault == "large":
         # A valid retained review can be larger than a small mutation receipt.
@@ -117,7 +122,7 @@ async def test_combined_http_contract_and_no_fallback(fault):
         )
         metadata = metadata.model_copy(update={"review": review})
         assert len(metadata.model_dump_json().encode()) > 16_384
-    answer = dict(
+    answer: dict[str, Any] = dict(
         schema_version="1.0",
         admission=receipt.model_dump(mode="json"),
         preparation_metadata=metadata.model_dump(mode="json"),

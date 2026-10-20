@@ -250,7 +250,7 @@ class _PhaseClaim:
 
 @contextmanager
 def _database():
-    with get_session() as managed:
+    with phase("capture_transaction"), get_session() as managed:
         session = cast(Session, managed)
         try:
             yield session

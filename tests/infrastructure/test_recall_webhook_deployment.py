@@ -599,7 +599,9 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     assert protected_probe not in candidate_workflow
 
 
-def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None:
+def test_production_apply_is_manual_and_bound_to_exact_plan_and_master(
+    tmp_path: Path,
+) -> None:
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     apply_job = _workflow_job(apply_workflow, "apply")
     trigger = apply_workflow[: apply_workflow.index("permissions:\n")]
@@ -647,11 +649,44 @@ def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None
     assert apply_job.index("Reverify current master and apply") < (
         apply_job.index("tofu apply")
     )
-    assert 'echo "run_id=$PRODUCTION_PLAN_RUN_ID" >> "$GITHUB_OUTPUT"' in apply_job
-    assert (
-        'echo "artifact_digest=$PRODUCTION_PLAN_ARTIFACT_DIGEST" '
-        '>> "$GITHUB_OUTPUT"' in apply_job
+    output_block = re.search(
+        r'(?m)^\s*\{\n(?:\s*echo "[^"\n]*"\n){4}\s*\} >> "\$GITHUB_OUTPUT"',
+        apply_job,
     )
+    assert output_block is not None
+    # Workflow text is untrusted test input. Permit only these literal output
+    # expressions before executing the block; command substitutions/backticks
+    # or different variable expansions must fail without running any shell code.
+    output_expressions = [
+        line.strip() for line in output_block.group(0).strip().splitlines()[1:-1]
+    ]
+    assert set(output_expressions) == {
+        'echo "artifact_name=$artifact_name"',
+        'echo "artifact_digest=$PRODUCTION_PLAN_ARTIFACT_DIGEST"',
+        'echo "run_id=$PRODUCTION_PLAN_RUN_ID"',
+        'echo "run_attempt=${plan_run[7]}"',
+    }
+    output_path = tmp_path / "plan-evidence-output"
+    script = 'plan_run=("" "" "" "" "" "" "" "3")\n' + output_block.group(0)
+    subprocess.run(
+        ["/bin/bash", "-eu", "-c", script],
+        check=True,
+        env={
+            "GITHUB_OUTPUT": str(output_path),
+            "artifact_name": "synthetic-reviewed-plan",
+            "PRODUCTION_PLAN_ARTIFACT_DIGEST": "sha256:" + "a" * 64,
+            "PRODUCTION_PLAN_RUN_ID": "123",
+        },
+        capture_output=True,
+    )
+    assert dict(
+        line.split("=", 1) for line in output_path.read_text().splitlines()
+    ) == {
+        "artifact_name": "synthetic-reviewed-plan",
+        "artifact_digest": "sha256:" + "a" * 64,
+        "run_id": "123",
+        "run_attempt": "3",
+    }
     summary_start = apply_job.index("Summarize apply")
     summary_end = apply_job.index("\n      - name:", summary_start)
     summary_step = apply_job[summary_start:summary_end]
@@ -751,9 +786,9 @@ def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:
     assert "tfplan.bin" not in upload_step
     assert "rm -f infra/tfplan.bin" in plan_workflow
     assert plan_workflow.index("rm -f tfplan.bin plan.txt") < upload_start
-    assert 'artifact_digest="${ARTIFACT_DIGEST#sha256:}"' in digest_step
-    assert '[[ ! "$artifact_digest" =~ ^[0-9a-f]{64}$ ]]' in digest_step
-    assert 'normalized_artifact_digest="sha256:$artifact_digest"' in digest_step
+    assert 'artifact_sha256_hex="${ARTIFACT_DIGEST#sha256:}"' in digest_step
+    assert '[[ ! "$artifact_sha256_hex" =~ ^[0-9a-f]{64}$ ]]' in digest_step
+    assert 'normalized_artifact_digest="sha256:$artifact_sha256_hex"' in digest_step
     assert (
         'echo "artifact_digest=$normalized_artifact_digest" >> "$GITHUB_OUTPUT"'
         in digest_step

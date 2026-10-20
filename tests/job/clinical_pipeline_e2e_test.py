@@ -13,6 +13,7 @@ behaviour, not about the stubs.
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import cast
 
 import pytest
 
@@ -29,6 +30,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.visit_audio_file import VisitAudioFile
+from sqlalchemy import Table, inspect
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
@@ -163,7 +165,10 @@ def _retained_count() -> int:
 def _note_for(appointment) -> AIVisitNote | None:
     # Queried by appointment, the way `summarize_merge_test.py` does it; the
     # transcript link is then asserted in Python.
-    return AIVisitNote.where(AIVisitNote.appointment_id == appointment.id).first()
+    return cast(
+        AIVisitNote | None,
+        AIVisitNote.where(AIVisitNote.appointment_id == appointment.id).first(),
+    )
 
 
 def _transcribe(audio) -> AIVisitTranscript:
@@ -242,7 +247,9 @@ def test_deidentified_copy_has_no_column_that_could_reattach_it_to_the_visit(pip
     # timestamps: a locale or a duration can single out a visit in a small
     # cohort. Adding one should fail here and be argued for, not slip past a
     # blocklist that nobody remembered to extend.
-    assert set(AIVisitTranscriptNonPHI.__table__.columns.keys()) == {"id", "data"}
+    assert set(
+        cast(Table, inspect(AIVisitTranscriptNonPHI).local_table).columns.keys()
+    ) == {"id", "data"}
 
 
 def test_note_outlives_the_phi_it_was_generated_from(
@@ -274,7 +281,9 @@ def test_rerunning_transcription_after_deidentification_does_not_resurrect_phi(
 
     transcribe.perform(pipeline.audio.id)
 
-    assert AIVisitTranscript.get(id=transcript.id).transcript_data == []
+    retained = AIVisitTranscript.get(id=transcript.id)
+    assert retained is not None
+    assert retained.transcript_data == []
     assert after_first - before == 1
     assert _retained_count() == after_first
 
@@ -288,11 +297,15 @@ def test_rerunning_deidentification_is_idempotent(
     before = _retained_count()
 
     anonymize.perform(transcript.id)
-    first_deleted_at = AIVisitTranscript.get(id=transcript.id).deleted_at
+    first_retained = AIVisitTranscript.get(id=transcript.id)
+    assert first_retained is not None
+    first_deleted_at = first_retained.deleted_at
     after_first = _retained_count()
 
     anonymize.perform(transcript.id)
 
-    assert AIVisitTranscript.get(id=transcript.id).deleted_at == first_deleted_at
+    retained = AIVisitTranscript.get(id=transcript.id)
+    assert retained is not None
+    assert retained.deleted_at == first_deleted_at
     assert after_first - before == 1
     assert _retained_count() == after_first

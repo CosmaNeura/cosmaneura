@@ -634,6 +634,108 @@
         }
       }
     },
+    "/internal/v1/notes/{appointment_id}/private-note": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scribe Private Note Read",
+        "operationId": "scribe_private_note_read",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteView"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Scribe Private Note Save",
+        "operationId": "scribe_private_note_save",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateNoteSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteView"
+                }
+              }
+            }
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateNoteValidationError"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -3111,108 +3213,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/internal/v1/notes/{appointment_id}/private-note": {
-      "get": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Scribe Private Note Read",
-        "operationId": "scribe_private_note_read",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Appointment Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrivateNoteView"
-                }
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrivateNoteValidationError"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
-          }
-        }
-      },
-      "put": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Scribe Private Note Save",
-        "operationId": "scribe_private_note_save",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "appointment_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Appointment Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PrivateNoteSave"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrivateNoteView"
-                }
-              }
-            }
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrivateNoteValidationError"
-                }
-              }
-            },
-            "description": "Unprocessable Content"
           }
         }
       }
@@ -6006,6 +6006,13 @@
             "type": "array",
             "title": "Appointments"
           },
+          "patient_names": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Patient Names"
+          },
           "note_statuses": {
             "additionalProperties": {
               "type": "string",
@@ -6861,6 +6868,81 @@
           "status"
         ],
         "title": "PriorNotePreview"
+      },
+      "PrivateNoteSave": {
+        "properties": {
+          "change_key": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Change Key"
+          },
+          "expected_version": {
+            "type": "integer",
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Expected Version"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "^[^\\x00]*$",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "change_key",
+          "expected_version",
+          "text"
+        ],
+        "title": "PrivateNoteSave"
+      },
+      "PrivateNoteValidationError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "const": "Invalid private note request.",
+            "title": "Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "PrivateNoteValidationError"
+      },
+      "PrivateNoteView": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "text",
+          "version",
+          "updated_at"
+        ],
+        "title": "PrivateNoteView"
       },
       "PronounStyle": {
         "type": "string",
@@ -7945,81 +8027,6 @@
           "cancelled"
         ],
         "title": "ZoomMeetingStatus"
-      },
-      "PrivateNoteSave": {
-        "properties": {
-          "change_key": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Change Key"
-          },
-          "expected_version": {
-            "type": "integer",
-            "maximum": 2147483647.0,
-            "minimum": 0.0,
-            "title": "Expected Version"
-          },
-          "text": {
-            "type": "string",
-            "maxLength": 2000,
-            "pattern": "^[^\\x00]*$",
-            "title": "Text"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "change_key",
-          "expected_version",
-          "text"
-        ],
-        "title": "PrivateNoteSave"
-      },
-      "PrivateNoteView": {
-        "properties": {
-          "text": {
-            "type": "string",
-            "title": "Text"
-          },
-          "version": {
-            "type": "integer",
-            "title": "Version"
-          },
-          "updated_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Updated At"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "text",
-          "version",
-          "updated_at"
-        ],
-        "title": "PrivateNoteView"
-      },
-      "PrivateNoteValidationError": {
-        "properties": {
-          "detail": {
-            "type": "string",
-            "const": "Invalid private note request.",
-            "title": "Detail"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "detail"
-        ],
-        "title": "PrivateNoteValidationError"
       }
     },
     "securitySchemes": {

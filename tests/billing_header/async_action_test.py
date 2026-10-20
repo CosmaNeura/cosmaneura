@@ -14,6 +14,7 @@ from app.configuration.clerk import verified_provider_session
 from app.services import billing_header_operations as prepared
 from app.services import cab_bridge_authority as authority
 from app.services.cab_bridge_contract import (
+    CabActor,
     CabAuthorizationRequest,
     CabGenerationCompletion,
     digest,
@@ -47,7 +48,7 @@ def intent(case):
     request = CabAuthorizationRequest(
         schemaVersion="core-cab-authorization-request.v1",
         purpose="header.generate",
-        actor={"issuer": actor.issuer, "subject": actor.subject},
+        actor=CabActor(issuer=actor.issuer, subject=actor.subject),
         requestSha256=digest(payload),
         sourceContentSha256=command.expectedContentSha256,
         sourceTextSha256=command.expectedTextSha256,
@@ -102,6 +103,7 @@ def test_async_original_deadline_and_exact_retry_cannot_renew(case):
         )
     with get_session() as session:
         action = session.get(Action, action_id)
+        assert action is not None
         assert action.request_sha256 == digest(payload)
         assert 0 < (action.expires_at - action.created_at).total_seconds() <= 50
     status_body = {k: v for k, v in body.items() if k != "responseMode"}
@@ -138,9 +140,11 @@ def test_terminal_receipt_closes_once_and_never_reauthorizes(case):
         authority.authorize_action(operation, request)
     assert authority.begin_async_action(actor, operation, body)[2] is True
     with get_session() as session:
-        database_id = session.get(Action, action_id).id.uuid
+        action = session.get(Action, action_id)
+        assert action is not None
+        database_id = action.id.uuid
         with pytest.raises(IntegrityError):
-            session.exec(
+            session.execute(
                 text(
                     "UPDATE billing_header_action SET expires_at=expires_at+interval '1 second' WHERE id=:id"
                 ),
@@ -149,7 +153,7 @@ def test_terminal_receipt_closes_once_and_never_reauthorizes(case):
             session.commit()
         session.rollback()
         with pytest.raises(IntegrityError):
-            session.exec(
+            session.execute(
                 text(
                     "UPDATE billing_header_action SET completion_status='unknown' WHERE id=:id"
                 ),

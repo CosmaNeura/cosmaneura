@@ -118,6 +118,8 @@ def billing_database():
             spec = importlib.util.spec_from_file_location(
                 "billing_test_async_expand", path
             )
+            assert spec is not None
+            assert spec.loader is not None
             migration = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(migration)
             with Operations.context(MigrationContext.configure(connection)):

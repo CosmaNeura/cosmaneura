@@ -502,7 +502,9 @@ class ShellFixtureTests(unittest.TestCase):
         self.interpreter_sha = plan.sha(self.interpreter.read_bytes())
         # A private copy makes the required0500 policy true without chmod of any
         # existing interpreter. The fixture exec still uses its real install prefix.
-        self.python = self.root / "invented-python"
+        # Keep bin/ beside lib/ so relocatable macOS Python can find its dylib.
+        (self.root / "bin").mkdir(mode=0o700)
+        self.python = self.root / "bin" / "invented-python"
         self.python.write_bytes(self.interpreter.read_bytes())
         self.python.chmod(0o500)
         # Give this copied TEST interpreter its installed standard library;

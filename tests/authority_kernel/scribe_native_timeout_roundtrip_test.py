@@ -3,9 +3,11 @@
 import inspect
 from collections import Counter
 from contextlib import contextmanager
+from typing import cast
 
 import psycopg
 import pytest
+from psycopg.abc import Query
 
 from app.services import companion_records as records
 from app.services import scribe_capture_deadline as deadline
@@ -69,7 +71,7 @@ def test_actual_native_uses_one_timeout_call_for_every_owned_statement(
                     del frame
             else:
                 counts["other_calls"] += 1
-            return super().execute(query, *args, **kwargs)
+            return super().execute(cast(Query, query), *args, **kwargs)
 
     def attach(connection, *_args):
         connection.cursor_factory = Cursor

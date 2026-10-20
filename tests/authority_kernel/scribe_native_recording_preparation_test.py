@@ -82,7 +82,7 @@ def test_combined_admission_never_publishes_partial_metadata_or_repeats_consent(
     async def altered(*args, **kwargs):
         value = await original(*args, **kwargs)
         if fault == "reply_loss":
-            raise ScribeWorkflowRetryableError()
+            raise ScribeWorkflowRetryableError("synthetic_retryable")
         with Session(engine) as session:
             identity = session.execute(
                 select(AuthorityActorExternalIdentity).where(

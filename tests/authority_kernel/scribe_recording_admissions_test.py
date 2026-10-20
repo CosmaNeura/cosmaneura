@@ -4,7 +4,8 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from typing import TypedDict
+from uuid import UUID, uuid4
 
 import pytest
 from alembic import command
@@ -16,8 +17,12 @@ from app.configuration import database
 from app.routes.scribe_capture import AdmissionRequest, OperationRequest
 from app.services import scribe_capture_admission as admission
 from app.services import scribe_capture_notes as notes
-from app.services.scribe_configured_capture_contract import ConfiguredSessionReceipt
+from app.services.scribe_configured_capture_contract import (
+    ConfiguredCaptureSelection,
+    ConfiguredSessionReceipt,
+)
 from app.services.scribe_creator_review_contract import CreatorReviewView
+from app.services.scribe_workflow import ScribeWorkflowClient
 
 from activemodel.session_manager import _serialize_pydantic_model, _session_context
 from app.models.ai_visit_note import AIVisitNote
@@ -28,7 +33,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import Session, create_engine, select
 
-from tests.authority_kernel.scribe_capture_admission_test import call_arguments
+from tests.authority_kernel.scribe_capture_admission_test import (
+    CaptureAdmissionArguments,
+    call_arguments,
+)
 from tests.authority_kernel.scribe_capture_notes_test import FakeModel
 from tests.authority_kernel.scribe_configured_capture_test import (
     SELECTION,
@@ -60,6 +68,7 @@ async def test_expand_preserves_old_journal_and_its_retry_identity(monkeypatch):
     from tests.authority_kernel.scribe_capture_scope_test import make_scope_case
 
     url = owned_url("scribe_configured_retained_" + uuid4().hex[:16] + "_test")
+    assert url.database is not None
     admin = create_engine(owned_url("postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as connection:
         connection.execute(text('CREATE DATABASE "' + url.database + '"'))
@@ -176,10 +185,25 @@ def rows(f):
         ).all()
 
 
-def args(f, key):
-    return dict(
-        **call_arguments(f), configured_capture=SELECTION, recording_key_sha256=key
-    )
+class CaptureNoteArguments(TypedDict):
+    caller: admission.CaptureCaller
+    binding_ref: str
+    workspace_id: UUID
+    schema_ref: str
+    client: ScribeWorkflowClient
+
+
+class RecordingAdmissionArguments(CaptureAdmissionArguments):
+    configured_capture: ConfiguredCaptureSelection
+    recording_key_sha256: str
+
+
+def args(f, key) -> RecordingAdmissionArguments:
+    return {
+        **call_arguments(f),
+        "configured_capture": SELECTION,
+        "recording_key_sha256": key,
+    }
 
 
 @pytest.mark.asyncio
@@ -372,13 +396,13 @@ async def test_two_clip_version_one_notes_reopen_their_own_content(admission_cas
         s.add(schema)
         s.commit()
         schema_ref = str(schema.id)
-    common = dict(
-        caller=caller,
-        binding_ref=f.binding.binding_ref,
-        workspace_id=f.binding.workspace_id,
-        schema_ref=schema_ref,
-        client=f.client,
-    )
+    common: CaptureNoteArguments = {
+        "caller": caller,
+        "binding_ref": f.binding.binding_ref,
+        "workspace_id": f.binding.workspace_id,
+        "schema_ref": schema_ref,
+        "client": f.client,
+    }
     model = FakeModel()
     model.output = '{"CC":"First synthetic clip","Plan":""}'
     first = await notes.capture_note(
@@ -388,6 +412,7 @@ async def test_two_clip_version_one_notes_reopen_their_own_content(admission_cas
     second = await notes.capture_note(
         **common, expected_session_id=two.session_id, prepare=True, model=model
     )
+    assert first.fields is not None and second.fields is not None
     assert first.note_ref != second.note_ref
     assert (
         first.fields["CC"] == "First synthetic clip"
@@ -405,6 +430,7 @@ async def test_two_clip_version_one_notes_reopen_their_own_content(admission_cas
         ).all()
         assert len(mappings) == 2 and {r.working_version for r in mappings} == {1}
         old = s.get(AIVisitNote, first.note_ref)
+        assert old is not None
         assert old.note == first.fields and old.superseded_at is not None
 
 

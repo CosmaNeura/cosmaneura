@@ -93,6 +93,7 @@ def test_real_native_exchange_preserves_receipt_and_exact_locks(
 def test_exchange_lock_evidence_expires_on_transition(native, engine, transition):
     with session_for(engine) as session:
         doctor = session.get(Doctor, native.args["doctor_id"])
+        assert doctor is not None
         with owned.provider_record_access_row_scope(session):
             with owned.provider_record_owner_rows(
                 session,
@@ -128,7 +129,9 @@ def test_mismatched_exchange_session_cannot_publish(native, engine):
                     assert doctor is not None
                     assert owned.current_capture_doctor_rows(other, doctor) is None
                 assert owned._CAPTURE_ROWS.get() is None
-            assert owned._RECORD_ROWS.get()[0] is current
+            owned_rows = owned._RECORD_ROWS.get()
+            assert owned_rows is not None
+            assert owned_rows[0] is current
         assert owned._RECORD_ROWS.get() is None
 
 
@@ -140,11 +143,13 @@ def test_nested_exchange_failure_restores_outer_evidence(native, engine):
         )
         with owned.provider_record_access_row_scope(session):
             with owned.provider_record_owner_rows(session, **args) as doctor:
+                assert doctor is not None
                 outer = owned.current_capture_doctor_rows(session, doctor)
                 assert outer is not None
             with pytest.raises(RuntimeError, match="invented nested exchange"):
                 with owned.provider_record_access_row_scope(session):
                     with owned.provider_record_owner_rows(session, **args) as inner:
+                        assert inner is not None
                         assert (
                             owned.current_capture_doctor_rows(session, inner)
                             is not outer
@@ -179,6 +184,7 @@ def test_next_native_exchange_denies_committed_revocation(native, engine, change
         assert link is not None
         if change == "identity":
             row = writer.get(AuthorityActorExternalIdentity, link.source_identity_id)
+            assert row is not None
             row.revoked_at = datetime.now(UTC)
         elif change == "link":
             row = link
@@ -192,6 +198,7 @@ def test_next_native_exchange_denies_committed_revocation(native, engine, change
             row.access_ends_at = datetime.now(UTC) - timedelta(days=1)
         else:
             row = writer.get(Doctor, link.doctor_id)
+            assert row is not None
             row.deleted_at = datetime.now(UTC)
         writer.add(row)
         writer.commit()
@@ -207,6 +214,7 @@ def invoke_mount(native):
         link = session.get(
             ScribeCaptureProviderLink, native.provisioned.provider_link_ref
         )
+        assert link is not None
         actor_ref, tenant_ref = str(link.actor_id), str(link.tenant_id)
 
     async def call():

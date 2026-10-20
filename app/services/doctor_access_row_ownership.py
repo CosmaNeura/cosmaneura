@@ -231,6 +231,20 @@ def capture_owns_subject_rows(session: Session, subject: str) -> bool:
     )
 
 
+def capture_owns_provider_rows(
+    session: Session, *, doctor_id: Any, practice_id: Any, subject: str
+) -> bool:
+    """Exact live capture locks, for refreshing rows without a new lock order."""
+    proof = _CAPTURE_ROWS.get()
+    return (
+        proof is not None
+        and _session_context.get() is session
+        and proof._doctor_id == doctor_id
+        and proof._practice_id == practice_id
+        and proof.matches_subject(session, subject)
+    )
+
+
 def lookup_owns_provider_rows(
     session: Session, doctor: Doctor, ownership: DoctorAccessRowOwnership
 ) -> bool:

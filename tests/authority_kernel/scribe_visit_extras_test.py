@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -13,6 +14,7 @@ from typeid import TypeID
 
 from app.services import authority, scribe_encounters
 
+from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.patient import Patient
 from app.models.scribe_private_note import ScribePrivateNoteReceipt
@@ -119,13 +121,17 @@ def test_private_note_retries_versions_ciphertext_and_clinical_exclusion(
         receipts = session.exec(
             select(ScribePrivateNoteReceipt).where(
                 ScribePrivateNoteReceipt.appointment_id
-                == TypeID.from_string(visit["appointment_ref"])
+                == cast(TypeIDType, TypeID.from_string(visit["appointment_ref"]))
             )
         ).all()
         assert len(receipts) == 2 and all(len(r.request_digest) == 64 for r in receipts)
         raw_text = session.execute(
             text("SELECT text FROM scribe_private_note WHERE appointment_id = :visit"),
-            {"visit": TypeID.from_string(visit["appointment_ref"]).uuid},
+            {
+                "visit": cast(
+                    TypeIDType, TypeID.from_string(visit["appointment_ref"])
+                ).uuid
+            },
         ).scalar_one()
         assert raw_text != "" and "Invented" not in raw_text
 
@@ -190,8 +196,11 @@ def test_name_only_identity_links_without_rewriting_original_patient(engine, wor
     }
     with session_for(engine) as session:
         appointment = session.get(Appointment, source["appointment_ref"])
+        assert appointment is not None
         assert str(appointment.patient_id) == source["patient_ref"]
-        assert session.get(Patient, source["patient_ref"]).date_of_birth is None
+        patient = session.get(Patient, source["patient_ref"])
+        assert patient is not None
+        assert patient.date_of_birth is None
 
 
 def test_confirm_new_later_dob_is_explicit_and_not_overwritten(engine, workflow):
@@ -345,6 +354,8 @@ def test_expand_rung_rehearsal_in_isolated_synthetic_schema(engine):
         / "migrations/versions/dd086d74a921_add_scribe_visit_identity_and_private_notes.py"
     )
     spec = importlib.util.spec_from_file_location("visit_extras_expand", migration)
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     schema = "scribe_expand_" + uuid4().hex
@@ -416,8 +427,10 @@ def test_confirmed_matching_connects_reviewed_history_without_private_content(
         )
         transcript = AIVisitTranscript(
             doctor_id=args["doctor_id"],
-            appointment_id=TypeID.from_string(source["appointment_ref"]),
-            patient_id=TypeID.from_string(source["patient_ref"]),
+            appointment_id=cast(
+                TypeIDType, TypeID.from_string(source["appointment_ref"])
+            ),
+            patient_id=cast(TypeIDType, TypeID.from_string(source["patient_ref"])),
             duration=1,
             transcript_data=[],
         )
@@ -457,7 +470,9 @@ def test_confirmed_matching_connects_reviewed_history_without_private_content(
             return sources.load_reviewed_note_sources(
                 session=session,
                 doctor_id=args["doctor_id"],
-                target_appointment_id=TypeID.from_string(visit["appointment_ref"]),
+                target_appointment_id=cast(
+                    TypeIDType, TypeID.from_string(visit["appointment_ref"])
+                ),
                 observed_at=datetime.now(UTC),
             )
 
@@ -479,8 +494,9 @@ def test_confirmed_matching_connects_reviewed_history_without_private_content(
     # Existing Core appointments keep their original source patient association.
     with session_for(engine) as session:
         original_appointment = Appointment(
+            external_id=None,
             doctor_id=args["doctor_id"],
-            patient_id=TypeID.from_string(source["patient_ref"]),
+            patient_id=cast(TypeIDType, TypeID.from_string(source["patient_ref"])),
             appointment_date=datetime.now(UTC).replace(tzinfo=None),
             appointment_name="Invented retained original visit",
         )

@@ -106,7 +106,9 @@ async def test_actual_iphone55_shape_unspoken_plan_cannot_be_saved(
     assert tuple(result.fields) == tuple(FIELDS) and len(result.fields) == 27
     assert plans.prospective_fields(FIELDS) == PROSPECTIVE
     assert result.fields is not None
-    assert all(result.fields[heading] == plans.NOT_MENTIONED for heading in PROSPECTIVE)
+    assert all(
+        result.fields[heading] == plans.REVIEW_REQUIRED for heading in PROSPECTIVE
+    )
     assert result.fields is not None
     assert result.fields["S - SUBJECTIVE"] == FIELDS["S - SUBJECTIVE"]
     assert result.fields is not None
@@ -172,6 +174,26 @@ async def test_explicit_negated_conditional_and_translated_plans_keep_complete_s
 
 
 @pytest.mark.asyncio
+async def test_empty_selection_does_not_claim_explicit_care_was_unmentioned(
+    admission_case,
+    monkeypatch,
+):
+    advice = "Rest, drink water, and seek care for severe or worsening symptoms."
+    args, model = await physical_case(
+        admission_case, monkeypatch, [advice], role="unknown"
+    )
+    result = await notes.capture_note(**args)
+    assert result.fields is not None
+    assert result.fields["P - PLAN"] == (
+        "Review the transcript before completing this section."
+    )
+    assert advice in model.calls[0]
+    assert advice not in result.fields["P - PLAN"]
+    assert "Not mentioned" not in result.fields["P - PLAN"]
+    assert len(model.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_configured_spanish_uses_only_admitted_reviewed_english(
     admission_case,
 ):
@@ -190,7 +212,7 @@ async def test_configured_spanish_uses_only_admitted_reviewed_english(
     assert "No tengo fiebre" not in model.calls[0]
     assert "I do not have a fever." in model.calls[0]
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
+    assert result.fields["P - PLAN"] == plans.REVIEW_REQUIRED
     assert len(model.calls) == 1
 
 
@@ -211,7 +233,7 @@ async def test_history_complaints_and_questions_do_not_authorize_generated_advic
     )
     result = await notes.capture_note(**args)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
+    assert result.fields["P - PLAN"] == plans.REVIEW_REQUIRED
 
 
 @pytest.mark.asyncio
@@ -399,7 +421,7 @@ async def test_long_capture_prompt_contains_each_complete_utterance_once(
     args, model = await physical_case(admission_case, monkeypatch, contents)
     result = await notes.capture_note(**args)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == plans.NOT_MENTIONED
+    assert result.fields["P - PLAN"] == plans.REVIEW_REQUIRED
     prompt = model.calls[0]
     assert all(prompt.count(text) == 1 for text in contents)
     assert "Unknown: [source 1800] " in prompt
