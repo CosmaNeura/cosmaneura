@@ -2,6 +2,7 @@ import { webcrypto } from "node:crypto"
 import { RouterProvider, createMemoryRouter } from "react-router"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import type { CabRequest } from "~/lib/cab-provider-header"
 import {
   expected,
   header,
@@ -13,7 +14,7 @@ import {
 import { CabBillingHeaderPanel } from "./CabBillingHeaderPanel"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
-function mount(request: ReturnType<typeof vi.fn>, asyncEnabled = false) {
+function mount(request: CabRequest, asyncEnabled = false) {
   const locked = vi.fn()
   const router = createMemoryRouter([
     {
