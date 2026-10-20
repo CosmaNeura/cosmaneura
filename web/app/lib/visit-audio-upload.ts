@@ -3,8 +3,10 @@ import {
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import {
+  type UploadProgressHandler,
   VISIT_UPLOAD_MAX_BYTES,
   uploadToExactAzureUrl,
+  uploadToExactAzureUrlWithProgress,
 } from "~/lib/azure-upload"
 
 export { VISIT_UPLOAD_MAX_BYTES } from "~/lib/azure-upload"
@@ -14,6 +16,7 @@ export type VisitAudioUploadInput = {
   dateOfBirth: string
   file: File
   patientName: string
+  onUploadProgress?: UploadProgressHandler
 }
 
 export type VisitAudioUploadFailureStage =
@@ -23,7 +26,7 @@ export type VisitAudioUploadFailureStage =
   | "registration"
 
 export type VisitAudioUploadResult =
-  | { ok: true }
+  | { ok: true; appointmentId?: string }
   | { ok: false; stage: VisitAudioUploadFailureStage }
 
 type UploadGrant = {
@@ -42,11 +45,12 @@ type VisitAudioUploadDependencies = {
     date_of_birth: string
     patient_name: string
     registration_token: string
-  }) => Promise<{ error?: unknown }>
+  }) => Promise<{ data?: { appointment_id: string } | null; error?: unknown }>
   uploadBlob: (
     file: File,
     uploadUrl: string,
     contentType: string,
+    onProgress?: UploadProgressHandler,
   ) => Promise<{ error: boolean }>
 }
 
@@ -58,10 +62,18 @@ const defaultDependencies: VisitAudioUploadDependencies = {
     return { data, error }
   },
   registerUpload: async (body) => {
-    const { error } = await uploadVisitAudioFile({ body })
-    return { error }
+    const { data, error } = await uploadVisitAudioFile({ body })
+    return { data, error }
   },
-  uploadBlob: uploadToExactAzureUrl,
+  uploadBlob: (file, uploadUrl, contentType, onProgress) =>
+    onProgress
+      ? uploadToExactAzureUrlWithProgress(
+          file,
+          uploadUrl,
+          contentType,
+          onProgress,
+        )
+      : uploadToExactAzureUrl(file, uploadUrl, contentType),
 }
 
 /** Complete all three phases without ever treating a partial upload as success. */
@@ -92,6 +104,7 @@ export async function submitVisitAudioUpload(
       input.file,
       grant.upload_url,
       grant.content_type,
+      input.onUploadProgress,
     )
     if (uploaded.error) return { ok: false, stage: "azure" }
   } catch {
@@ -106,9 +119,15 @@ export async function submitVisitAudioUpload(
       registration_token: grant.registration_token,
     })
     if (registered.error) return { ok: false, stage: "registration" }
+    // An older receiver returns no ID. Keep its successful upload but never
+    // infer the visit from a list that may be stale or contain unrelated work.
+    return {
+      ok: true,
+      ...(registered.data?.appointment_id
+        ? { appointmentId: registered.data.appointment_id }
+        : {}),
+    }
   } catch {
     return { ok: false, stage: "registration" }
   }
-
-  return { ok: true }
 }

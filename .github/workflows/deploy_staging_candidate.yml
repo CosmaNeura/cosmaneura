@@ -154,8 +154,10 @@ jobs:
           APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           APT_PACKAGES: "zsh"
         run: |
-          sudo apt-get $APT_OPTS update -qq
-          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+          read -r -a apt_options <<< "$APT_OPTS"
+          read -r -a package_names <<< "$APT_PACKAGES"
+          sudo apt-get "${apt_options[@]}" update -qq
+          sudo apt-get "${apt_options[@]}" install -y --no-install-recommends "${package_names[@]}"
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -167,7 +169,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
@@ -269,8 +271,10 @@ jobs:
           APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           APT_PACKAGES: ${{ matrix.apt-packages }}
         run: |
-          sudo apt-get $APT_OPTS update -qq
-          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+          read -r -a apt_options <<< "$APT_OPTS"
+          read -r -a package_names <<< "$APT_PACKAGES"
+          sudo apt-get "${apt_options[@]}" update -qq
+          sudo apt-get "${apt_options[@]}" install -y --no-install-recommends "${package_names[@]}"
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -285,7 +289,7 @@ jobs:
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
@@ -353,8 +357,10 @@ jobs:
           APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
           APT_PACKAGES: "zsh libnss3-tools poppler-utils ffmpeg"
         run: |
-          sudo apt-get $APT_OPTS update -qq
-          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+          read -r -a apt_options <<< "$APT_OPTS"
+          read -r -a package_names <<< "$APT_PACKAGES"
+          sudo apt-get "${apt_options[@]}" update -qq
+          sudo apt-get "${apt_options[@]}" install -y --no-install-recommends "${package_names[@]}"
       - name: Check out exact candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -366,7 +372,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install exact candidate toolchain without shared caches
-        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v4
+        uses: jdx/mise-action@9149ea85001c7435d5a66bb127d6a1b6227cb0a5 # v5.0.0
         with:
           version: 2025.3.6
           cache: "false"
@@ -1175,9 +1181,11 @@ jobs:
           if [[ $curl_status -eq 0 && "$http_status" == "200" ]]; then
             smoke_result=passed
           fi
-          echo "healthcheck_url=$HEALTHCHECK_URL" >> "$GITHUB_OUTPUT"
-          echo "http_status=$http_status" >> "$GITHUB_OUTPUT"
-          echo "result=$smoke_result" >> "$GITHUB_OUTPUT"
+          {
+            echo "healthcheck_url=$HEALTHCHECK_URL"
+            echo "http_status=$http_status"
+            echo "result=$smoke_result"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Assemble non-secret staging release evidence
         id: evidence
@@ -1245,24 +1253,24 @@ jobs:
             (.publicConfig | type == "object") and
             (.secretRefs | type == "object"))
             then sort_by(.name) else error("invalid workload evidence") end'
-          workloads_before=$(json_or_null "$WORKLOADS_BEFORE" "$workload_filter")
-          workloads_after=$(json_or_null "$WORKLOADS_AFTER" "$workload_filter")
-          configuration_evidence=$(json_or_null "$CONFIGURATION_EVIDENCE" \
+          workloads_before_json=$(json_or_null "$WORKLOADS_BEFORE" "$workload_filter")
+          workloads_after_json=$(json_or_null "$WORKLOADS_AFTER" "$workload_filter")
+          configuration_evidence_json=$(json_or_null "$CONFIGURATION_EVIDENCE" \
             'if type == "object" then . else error("invalid configuration evidence") end')
           configuration_blockers=-1
           observed_identity_fingerprints_sha256=""
           observed_sentry_staging_enabled=""
           observed_zoom_watchdog_enabled=""
-          if [[ "$configuration_evidence" != "null" ]]; then
-            if ! configuration_blockers=$(printf '%s' "$configuration_evidence" |
+          if [[ "$configuration_evidence_json" != "null" ]]; then
+            if ! configuration_blockers=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.deployment_blockers | arrays | length'); then
               configuration_blockers=-1
             fi
-            observed_identity_fingerprints_sha256=$(printf '%s' "$configuration_evidence" |
+            observed_identity_fingerprints_sha256=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.identity_fingerprint_set_sha256 // empty' || true)
-            observed_sentry_staging_enabled=$(printf '%s' "$configuration_evidence" |
+            observed_sentry_staging_enabled=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.flags.SENTRY_STAGING_ENABLED // empty' || true)
-            observed_zoom_watchdog_enabled=$(printf '%s' "$configuration_evidence" |
+            observed_zoom_watchdog_enabled=$(printf '%s' "$configuration_evidence_json" |
               jq -er '.flags.ZOOM_WATCHDOG_ENABLED // empty' || true)
           fi
           azure_identity_evidence=null
@@ -1291,8 +1299,8 @@ jobs:
                 "$observed_identity_fingerprints_sha256" == "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" && \
                 "$observed_sentry_staging_enabled" == "false" && \
                 "$observed_zoom_watchdog_enabled" == "false" && \
-                "$workloads_before" != "null" && \
-                "$workloads_after" != "null" && \
+                "$workloads_before_json" != "null" && \
+                "$workloads_after_json" != "null" && \
                 "$configuration_blockers" == "0" ]]; then
             release_contract_result=passed
           fi
@@ -1317,9 +1325,9 @@ jobs:
             --arg schema_before "$OBSERVED_SCHEMA_BEFORE" \
             --arg schema_after "$OBSERVED_SCHEMA_AFTER" \
             --arg recovery_digest "$OBSERVED_RECOVERY_DIGEST" \
-            --argjson workloads_before "$workloads_before" \
-            --argjson workloads_after "$workloads_after" \
-            --argjson configuration_evidence "$configuration_evidence" \
+            --argjson workloads_before "$workloads_before_json" \
+            --argjson workloads_after "$workloads_after_json" \
+            --argjson configuration_evidence "$configuration_evidence_json" \
             --argjson azure_identity_evidence "$azure_identity_evidence" \
             --arg enable_provider_v7 "$ENABLE_PROVIDER_V7" \
             --arg enable_sovereign_record_grants "$ENABLE_SOVEREIGN_RECORD_GRANTS" \

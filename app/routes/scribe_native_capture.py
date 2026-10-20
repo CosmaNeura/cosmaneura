@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
+from starlette.types import Message, Receive, Scope, Send
 
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
@@ -17,6 +18,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
     authenticate_scribe_capture_request,
+    request_signing_keys,
 )
 from app.routes.dependencies.view_as import view_as_browser_session_present
 from app.routes.embed_context import (
@@ -47,11 +49,58 @@ from app.services.scribe_native_capture import (
 from app.services.scribe_workflow import ScribeWorkflowClient
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
+from app.utils.native_request_timing import (
+    RESPONSE_HEADER,
+    Ledger,
+    bind_ledger,
+    current_ledger,
+    phase,
+    request_timing,
+    response_header,
+)
 
 from sqlalchemy.exc import SQLAlchemyError
 
+_TIMING_SCOPE = "cosmaneura.native_timing"
+
+
+class NativeTimingRoute(CaptureDeadlineRoute):
+    async def _dispatch(self, scope: Scope, receive: Receive, send: Send) -> None:
+        ledger = scope.get(_TIMING_SCOPE)
+        if isinstance(ledger, Ledger) and current_ledger() is not ledger:
+            with bind_ledger(ledger):
+                await super()._dispatch(scope, receive, send)
+        else:
+            await super()._dispatch(scope, receive, send)
+
+    async def handle(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "POST":
+            with request_timing() as ledger:
+                private_scope = {**scope, _TIMING_SCOPE: ledger} if ledger else scope
+
+                async def observed_send(message: Message) -> None:
+                    if message["type"] == "http.response.start":
+                        try:
+                            headers = message.get("headers", [])
+                            if not any(
+                                name.lower() == RESPONSE_HEADER for name, _ in headers
+                            ):
+                                if value := response_header(ledger):
+                                    message = {
+                                        **message,
+                                        "headers": [*headers, (RESPONSE_HEADER, value)],
+                                    }
+                        except Exception:
+                            pass  # Optional observation cannot change the original response.
+                    await send(message)
+
+                await super().handle(private_scope, receive, observed_send)
+        else:
+            await super().handle(scope, receive, send)
+
+
 native_capture_api_app = APIRouter(
-    prefix="/service/v1/agent", route_class=CaptureDeadlineRoute
+    prefix="/service/v1/agent", route_class=NativeTimingRoute
 )
 PATH = "/scribe/native-capture"
 MAX_BODY = 4_194_304
@@ -70,8 +119,11 @@ def authenticate_native_workload(request: Request) -> EntraServicePrincipal:
     credentials = HTTPAuthorizationCredentials(
         scheme="Bearer", credentials=values[0][7:]
     )
-    agent = authenticate_agent_api_request(credentials)
-    capture = authenticate_scribe_capture_request(credentials)
+    with request_signing_keys():
+        with phase("workload_agent"):
+            agent = authenticate_agent_api_request(credentials)
+        with phase("workload_capture"):
+            capture = authenticate_scribe_capture_request(credentials)
     if agent.client_id != capture.client_id:
         raise HTTPException(403, "Native capture unavailable")
     return capture
@@ -157,6 +209,8 @@ async def native_capture(
         data, key = await _body(request)
     except (TypeError, ValueError, UnicodeError, RecursionError):
         return _failure(422)
+    if ledger := current_ledger():
+        ledger.describe_request(data.action)
     client = None
     try:
         check_async_capture_deadline()
@@ -185,6 +239,15 @@ async def native_capture(
             headers={
                 "Cache-Control": "no-store",
                 "X-Cosmaneura-Native-Capture-Version": "1",
+                **(
+                    {"X-Cosmaneura-Compound-Admission-Version": "1"}
+                    if data.action == "mount"
+                    else {}
+                ),
+                "X-Cosmaneura-Prepared-Native-Read-Version": "1",
+                "X-Cosmaneura-Admission-Native-Preparation-Version": "1",
+                "X-Cosmaneura-Admission-Preparation-Metadata-Version": "1",
+                "X-Cosmaneura-Prepared-Source-Start-Version": "1",
             },
         )
     except authority.AuthorityKernelDisabledError:

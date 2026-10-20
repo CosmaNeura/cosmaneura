@@ -13,7 +13,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-NOT_MENTIONED = "Not mentioned in transcript"
+REVIEW_REQUIRED = "Review the transcript before completing this section."
 CONTRACT_START = "\n<prospective_plan_contract>\n"
 CONTRACT_END = "\n</prospective_plan_contract>\n"
 _PROSPECTIVE = re.compile(
@@ -152,7 +152,10 @@ class PlanGrounding:
                         f"{self.sources[index - 1].attribution}:\n{self.sources[index - 1].text}"
                         for index in sorted(indexes)
                     )
-                    or NOT_MENTIONED
+                    # An empty model selection does not prove that the source
+                    # contains no plan. Make the omission visible for review
+                    # without inventing advice or asserting source absence.
+                    or REVIEW_REQUIRED
                 )
             return json.dumps(result["fields"], ensure_ascii=False), resolved
         except (ValueError, TypeError, RecursionError):

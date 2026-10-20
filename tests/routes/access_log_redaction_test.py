@@ -124,7 +124,9 @@ def test_nested_router_access_log_keeps_effective_template_and_leaf_name() -> No
             "/internal/v1/patients/synthetic-private-id/medications?private=query"
         )
     assert response.status_code == 200
-    assert captured.records[0]["path"] == "/internal/v1/patients/{patient_id}/medications"
+    assert (
+        captured.records[0]["path"] == "/internal/v1/patients/{patient_id}/medications"
+    )
     assert captured.records[0]["route"] == "patient_medications"
     assert "synthetic-private-id" not in json.dumps(captured.records)
     assert "private=query" not in json.dumps(captured.records)

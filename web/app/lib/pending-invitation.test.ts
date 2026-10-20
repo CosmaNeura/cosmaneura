@@ -19,9 +19,15 @@ afterEach(() => {
 
 describe("pending invitation without session storage", () => {
   it("keeps the token for this page load when storage refuses writes", () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("full", "QuotaExceededError")
+    // Happy DOM binds Storage methods through a proxy; mock the getter so a
+    // bound failing method cannot survive restoration into the next test.
+    const fullStorage = Object.create(window.sessionStorage) as Storage
+    Object.defineProperty(fullStorage, "setItem", {
+      value: () => {
+        throw new DOMException("full", "QuotaExceededError")
+      },
     })
+    vi.spyOn(window, "sessionStorage", "get").mockReturnValue(fullStorage)
     window.history.replaceState(null, "", "/invite#t=quota-token")
 
     expect(capturePendingInvitation()).toBe("quota-token")

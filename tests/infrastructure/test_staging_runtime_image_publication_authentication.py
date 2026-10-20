@@ -454,6 +454,9 @@ def test_bundle_root_subject_and_timestamp_are_strict() -> None:
     cases[4]["output"][0]["verificationResult"]["verifiedTimestamps"][0][
         "timestamp"
     ] = "2026-09-04T12:05:01Z"
+    assert cases, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for index, case in enumerate(cases):
         with pytest.raises(authentication.RuntimeImagePublicationFailure):
             _authenticate(case)

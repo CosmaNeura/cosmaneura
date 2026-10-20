@@ -8,6 +8,7 @@ import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Barrier, Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -217,7 +218,44 @@ def capture_engine(monkeypatch):
         55930,
         "scribe_ux_lab_owner",
     )
-    if not (original_scope or resolution_scope or operational_beta_scope or ux_scope):
+    desktop_scope = (url.database, url.host, url.port, url.username) == (
+        "core_ux_01_test",
+        "127.0.0.1",
+        55937,
+        "scribe_ux_lab_owner",
+    )
+    if desktop_scope:
+        import json
+
+        assert json.loads(
+            Path(
+                "/private/tmp/scribe-ux-latency-lab-20261007/ownership.json"
+            ).read_text()
+        ) == {
+            "created_for": "scribe-desktop-ux-20261007",
+            "host": "127.0.0.1",
+            "port": 55937,
+            "database": "core_ux_01_test",
+            "username": "scribe_ux_lab_owner",
+            "only_synthetic": True,
+        }
+    socket_host = url.query.get("host")
+    private_recording_scope = (
+        url.database == "scribe_configured_core_test"
+        and url.username == "scribe_configured_owner"
+        and url.host is None
+        and isinstance(socket_host, str)
+        and socket_host.startswith("/private/tmp/scribe-configured-core.")
+        and url.query.get("port") == "55458"
+    )
+    if not (
+        private_recording_scope
+        or original_scope
+        or resolution_scope
+        or operational_beta_scope
+        or ux_scope
+        or desktop_scope
+    ):
         pytest.fail("Refusing a database outside the disposable W8 scope")
     # Match Core's configured engine when exercising nested transcript entries.
     from activemodel.session_manager import _serialize_pydantic_model

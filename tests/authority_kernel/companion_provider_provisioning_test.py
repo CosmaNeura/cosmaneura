@@ -57,16 +57,26 @@ def engine():
     if not raw:
         pytest.skip("Explicit disposable companion PostgreSQL required")
     url = make_url(raw)
-    assert (url.host, url.database, url.username) == (
-        "127.0.0.1", "cosmabot_companion_test", "cosmabot_companion_test",
-    ) and url.port is not None and 1024 < url.port < 65536
+    assert (
+        (url.host, url.database, url.username)
+        == (
+            "127.0.0.1",
+            "cosmabot_companion_test",
+            "cosmabot_companion_test",
+        )
+        and url.port is not None
+        and 1024 < url.port < 65536
+    )
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)
     result = create_engine(url)
     with result.connect() as connection:
-        assert connection.execute(text("SELECT current_database(), current_user")).one() == (
-            "cosmabot_companion_test", "cosmabot_companion_test",
+        assert connection.execute(
+            text("SELECT current_database(), current_user")
+        ).one() == (
+            "cosmabot_companion_test",
+            "cosmabot_companion_test",
         )
     SQLModel.metadata.create_all(result)
     yield result
@@ -196,6 +206,7 @@ def test_plan_writes_nothing_apply_and_lost_reply_retry_reuse_one_link(
         ).one()
         assert mapping.tenant_id == args["tenant_id"]
         doctor = session.get(Doctor, args["doctor_id"])
+        assert doctor is not None
         result = _provider(
             session,
             issuer=SETTINGS.clerk_issuer,
@@ -210,7 +221,7 @@ def test_plan_writes_nothing_apply_and_lost_reply_retry_reuse_one_link(
 def test_existing_core_practice_mapping_is_reused_and_cannot_be_retargeted(engine):
     args = case(engine)
     with session_for(engine) as session:
-        session.add(AuthorityTenant(id=args["tenant_id"]))
+        session.add(AuthorityTenant.model_validate({"id": args["tenant_id"]}))
         session.flush()
         mapping = ProviderPracticeAuthority(
             practice_id=args["practice_id"], tenant_id=args["tenant_id"]
@@ -224,10 +235,11 @@ def test_existing_core_practice_mapping_is_reused_and_cannot_be_retargeted(engin
     apply(engine, args, reviewed.plan_sha256)
     assert count(engine, ProviderPracticeAuthority) == before
     with session_for(engine) as session:
-        assert (
-            session.get(ProviderPracticeAuthority, mapping_id).tenant_id
-            == args["tenant_id"]
+        stored_provider_practice_authority = session.get(
+            ProviderPracticeAuthority, mapping_id
         )
+        assert stored_provider_practice_authority is not None
+        assert stored_provider_practice_authority.tenant_id == args["tenant_id"]
     with pytest.raises(
         CompanionProvisioningError,
         match="existing_core_practice_correspondence_required",
@@ -259,6 +271,7 @@ def test_changed_confirmation_and_processing_revocation_are_denied(engine):
         apply(engine, args, "f" * 64)
     with session_for(engine) as session:
         doctor = session.get(Doctor, args["doctor_id"])
+        assert doctor is not None
         doctor.deleted_at = datetime.now(UTC)
         session.add(doctor)
         session.commit()
@@ -280,6 +293,7 @@ def test_revoked_link_and_identity_cannot_be_reactivated(engine):
                 ).one()
             else:
                 doctor = session.get(Doctor, args["doctor_id"])
+                assert doctor is not None
                 row = session.exec(
                     select(AuthorityActorExternalIdentity).where(
                         AuthorityActorExternalIdentity.subject == doctor.clerk_id
@@ -413,9 +427,10 @@ def test_existing_authority_tenant_without_links_cannot_cross_practices(engine):
     with session_for(engine) as session:
         doctor = session.get(Doctor, original["doctor_id"])
         actor = AuthorityActor(actor_kind="human")
-        tenant = AuthorityTenant(id=original["tenant_id"])
+        tenant = AuthorityTenant.model_validate({"id": original["tenant_id"]})
         session.add_all([actor, tenant])
         session.flush()
+        assert doctor is not None
         session.add_all(
             [
                 AuthorityActorExternalIdentity(
@@ -446,9 +461,11 @@ def test_cached_doctor_cannot_hide_identity_change_after_verification(engine):
     before = count(engine, ScribeCaptureProviderLink)
     with session_for(engine) as cached_session:
         cached = cached_session.get(Doctor, args["doctor_id"])
+        assert cached is not None
         assert cached.clerk_id == args["verified_clerk_subject"]
         with Session(engine) as updater:
             doctor = updater.get(Doctor, args["doctor_id"])
+            assert doctor is not None
             doctor.clerk_id = "user_w78_rebound_" + uuid4().hex
             updater.add(doctor)
             updater.commit()

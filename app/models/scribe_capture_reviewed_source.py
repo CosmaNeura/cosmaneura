@@ -16,7 +16,10 @@ class ScribeCaptureReviewedSource(
 ):
     __table_args__ = (
         sa.UniqueConstraint(
-            "binding_id", "working_version", name="uq_scribe_review_working_version"
+            "binding_id",
+            "session_id",
+            "working_version",
+            name="uq_scribe_review_working_version",
         ),
         sa.UniqueConstraint("transcript_id", name="uq_scribe_review_core_transcript"),
         sa.CheckConstraint(

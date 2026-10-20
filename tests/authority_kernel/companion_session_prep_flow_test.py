@@ -24,7 +24,11 @@ from app.routes.dependencies.entra_service import (
 )
 from app.services.authority_conversation import write_conversation_turn
 from app.services.provider_record_authority import validate_provider_record_scope
-from app.services.session_prep import SessionPrepPreparedBrief
+from app.services.session_prep import (
+    SessionPrepBriefText,
+    SessionPrepPreparedBrief,
+    SessionPrepRecap,
+)
 from app.services.session_prep_note_sources import (
     finalize_note_for_session_prep,
     note_content_sha256,
@@ -280,12 +284,11 @@ def read(f, a, key="companion-prep-read-0001", context=None):
 
 def build():
     def generate(selection):
-        cited = {
-            "text": "Discuss the synthetic goals.",
-            "source_refs": [selection.sources[0].source_ref],
-        }
+        text = "Discuss the synthetic goals."
+        source_refs = [selection.sources[0].source_ref]
+        cited = SessionPrepBriefText(text=text, source_refs=source_refs)
         return SessionPrepPreparedBrief(
-            recap=cited,
+            recap=SessionPrepRecap(text=text, source_refs=source_refs),
             trajectory_and_material_changes=[],
             talking_points=[cited],
             open_threads=[],
@@ -321,6 +324,7 @@ def test_pending_ready_retry_correction_and_new_review(flow):
     )
     with get_session() as s:
         note = s.get(AIVisitNote, f.note_id)
+        assert note is not None
         note.note = {"Plan": "Corrected synthetic goals."}
         s.add(note)
         s.commit()
@@ -330,6 +334,7 @@ def test_pending_ready_retry_correction_and_new_review(flow):
     )
     with get_session() as s:
         note = s.get(AIVisitNote, f.note_id)
+        assert note is not None
         finalize_note_for_session_prep(
             session=s,
             doctor_id=f.doctor_id,
@@ -372,6 +377,7 @@ def test_current_human_permissions_are_rechecked_on_retry(flow, monkeypatch, rev
                 row.revoked_at = datetime.now(UTC)
             else:
                 row = s.get(PracticeMember, f.member_id)
+                assert row is not None
                 assert lock_practice_seats(s, row.practice_id) is not None
                 row.seat_state = "inactive"
             s.add(row)

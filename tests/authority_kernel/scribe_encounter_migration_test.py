@@ -47,6 +47,8 @@ def test_additive_receipt_migration_matches_model_and_retains_on_rollback():
         spec = importlib.util.spec_from_file_location(
             "scribe_encounter_migration", path
         )
+        assert spec is not None
+        assert spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         with engine.begin() as connection:

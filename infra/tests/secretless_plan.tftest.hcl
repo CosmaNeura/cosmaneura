@@ -216,6 +216,18 @@ run "secretless_static_plan" {
     condition     = length(module.public_phi_observability) == 0
     error_message = "public-PHI observability must remain disabled by default"
   }
+  assert {
+    condition = alltrue([for name, fallback in local.core_cab_public_defaults :
+    one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == fallback])
+    error_message = "Core CAB must remain disabled/empty in the API by default"
+  }
+  assert {
+    condition = !contains([for entry in azurerm_container_app.app.secret : entry.name], "billing-source-policy-json") && alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      alltrue([for entry in workload.template[0].container[0].env : !startswith(entry.name, "CORE_CAB_") && entry.name != "BILLING_SOURCE_POLICY_JSON"])
+    ])
+    error_message = "No dormant source policy or non-API CAB capability may be exposed"
+  }
 }
 
 run "public_phi_observability_static_plan" {
@@ -291,5 +303,104 @@ run "managed_identity_activation_static_plan" {
       if setting.name == "AZURE_DEID_AUTH_MODE" && setting.value == "managed_identity"
     ]) == 1
     error_message = "managed-identity activation must select the explicit worker auth mode"
+  }
+}
+
+run "core_cab_api_only_configured_projection" {
+  command = plan
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+  }
+  override_data {
+    target = data.external.secrets
+    values = {
+      result = {
+        CORE_CAB_AUTHORIZE_ENABLED                 = "true"
+        CORE_CAB_AUTHORIZE_TENANT_ID               = "11111111-1111-1111-1111-111111111111"
+        CORE_CAB_AUTHORIZE_AUDIENCE                = "22222222-2222-2222-2222-222222222222"
+        CORE_CAB_AUTHORIZE_CALLER_ID               = "33333333-3333-3333-3333-333333333333"
+        CORE_CAB_BRIDGE_ENABLED                    = "true"
+        CORE_CAB_ASYNC_ENABLED                     = "true"
+        CORE_CAB_CONTINUATION_ENABLED              = "true"
+        CORE_CAB_ORIGIN                            = "https://cab.example.invalid"
+        CORE_CAB_AUDIENCE                          = "44444444-4444-4444-4444-444444444444"
+        CORE_CAB_MANAGED_IDENTITY_CLIENT_ID        = "55555555-5555-5555-5555-555555555555"
+        BILLING_SOURCE_POLICY_JSON                 = "{\"schemaVersion\":\"core.billing-source-policy.v1\",\"enabled\":false,\"clerkIssuer\":\"\",\"admissions\":[]}"
+        ALLOWED_HOST_LIST                          = "example.invalid"
+        API_BASE_URL                               = "https://api.example.invalid"
+        ASSEMBLY_API_KEY                           = "not-a-secret"
+        AZURE_DEID_CLIENT_ID                       = "00000000-0000-0000-0000-000000000000"
+        AZURE_DEID_CLIENT_SECRET                   = "not-a-secret"
+        AZURE_DEID_ENDPOINT                        = "https://example.invalid"
+        AZURE_DEID_TENANT_ID                       = "00000000-0000-0000-0000-000000000000"
+        AZURE_OPENAI_API_KEY                       = "not-a-secret"
+        AZURE_OPENAI_ENDPOINT                      = "https://example.invalid"
+        AZURE_UPLOADS_ACCOUNT_KEY                  = "not-a-secret"
+        AZURE_UPLOADS_ACCOUNT_NAME                 = "placeholder"
+        AZURE_UPLOADS_ACCOUNT_URL                  = "https://example.invalid"
+        AZURE_UPLOADS_CONTAINER_NAME               = "uploads"
+        AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME = "example-notes"
+        AUTHORITY_CLERK_ISSUER                     = "https://clerk.example.invalid"
+        CLERK_PRIVATE_KEY                          = "not-a-secret"
+        DATABASE_URL                               = "postgresql://placeholder.invalid/app"
+        DATABASE_URL_SECRET_NAME                   = "database-url"
+        DATABASE_URL_V2                            = ""
+        DATABASE_URL_V2_ENABLED                    = "false"
+        DURABLE_WEBHOOK_INBOX_ENABLED              = "false"
+        EMAIL_FROM_ADDRESS                         = "noreply@example.invalid"
+        ENCRYPTION_KEY                             = "not-a-secret"
+        ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
+        INTAKE_CHAT_DOMAIN                         = "example.invalid"
+        LOG_LEVEL                                  = "info"
+        PORT                                       = "80"
+        POSTGRES_PASSWORD                          = "not-a-secret"
+        POSTGRES_USERNAME                          = "placeholder"
+        RECALL_API_BASE                            = "https://example.invalid"
+        RECALL_API_KEY                             = "not-a-secret"
+        # Deliberately fake, non-production key with the required Recall/Svix
+        # whsec_ + base64 syntax so the static plan exercises the shape guard.
+        RECALL_WEBHOOK_SECRET              = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
+        REDIS_URL                          = "redis://placeholder.invalid/1"
+        SCRIBE_API_AUDIENCE                = "00000000-0000-0000-0000-000000000000"
+        SCRIBE_CALLER_CLIENT_ID            = ""
+        SCRIBE_HANDOFF_ENABLED             = "false"
+        SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
+        SENTRY_DSN                         = ""
+        SESSION_SECRET_KEY                 = "not-a-secret"
+        SMTP_URL                           = "smtp://placeholder.invalid:1025"
+        SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+        # Production must always declare live/test mode explicitly, even while
+        # both default-off Stripe gates are disabled. Keep the PR plan inert
+        # while exercising that fail-closed configuration invariant.
+        STRIPE_ACCOUNT_ID              = ""
+        STRIPE_API_VERSION             = "2025-09-30.clover"
+        STRIPE_BILLING_ENABLED         = "false"
+        STRIPE_INTEGRATION_ENABLED     = "false"
+        STRIPE_LIVE_MODE               = "true"
+        STRIPE_PORTAL_CONFIGURATION_ID = ""
+        STRIPE_PRICE_ID                = ""
+        ZOOM_CLIENT_ID                 = "not-a-secret"
+        ZOOM_CLIENT_SECRET             = "not-a-secret"
+        ZOOM_REDIRECT_URI              = "https://example.invalid/callback"
+        ZOOM_SECRET_TOKEN              = "not-a-secret"
+        ZOOM_SUCCESS_REDIRECT          = "https://example.invalid/settings"
+        ZOOM_WATCHDOG_ENABLED          = "false"
+      }
+    }
+  }
+  assert {
+    condition     = one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.secret_name if entry.name == "BILLING_SOURCE_POLICY_JSON"]) == "billing-source-policy-json" && contains([for secret in azurerm_container_app.app.secret : secret.name], "billing-source-policy-json")
+    error_message = "The policy must be an API-only secret reference"
+  }
+  assert {
+    condition = alltrue([for name in ["CORE_CAB_ASYNC_ENABLED", "CORE_CAB_CONTINUATION_ENABLED"] :
+    one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == "true"])
+    error_message = "Explicit async and continuation flags must reach only the API"
+  }
+  assert {
+    condition = alltrue([for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+    !contains([for secret in workload.secret : secret.name], "billing-source-policy-json") && alltrue([for entry in workload.template[0].container[0].env : !startswith(entry.name, "CORE_CAB_") && entry.name != "BILLING_SOURCE_POLICY_JSON"])])
+    error_message = "Configured CAB input must not reach worker or scheduler"
   }
 }

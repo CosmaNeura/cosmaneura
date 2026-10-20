@@ -265,6 +265,36 @@ async def ready(fixture):
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revoked", [False, True])
+async def test_expired_upload_rechecks_current_authority_before_renewal_signal(
+    admission_case, revoked
+):
+    from app.services.scribe_workflow import ScribeUploadAuthorizationExpired
+
+    f = admission_case
+    scope = await ready(f)
+    operation, _ = pair("authorize_upload", scope)
+
+    async def expire(*args, **kwargs):
+        if revoked:
+            with Session(f.engine) as s:
+                identity = s.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert identity is not None
+                identity.revoked_at = datetime.now(UTC)
+                s.add(identity)
+                s.commit()
+        raise ScribeUploadAuthorizationExpired("upload_authorization_expired")
+
+    f.client.capture_operation = expire
+    with pytest.raises(
+        authority.AuthorityKernelError
+        if revoked
+        else gateway.CaptureUploadAuthorizationExpired
+    ):
+        await gateway.execute_capture_operation(**arguments(f, operation))
+
+
 def arguments(fixture, operation, key=None):
     return {
         "caller": fixture.caller,

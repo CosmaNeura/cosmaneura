@@ -173,3 +173,56 @@ def test_existing_non_null_request_retains_exact_canonical_payload():
     value = body()
     value["title"] = "Visit"
     assert REQUEST_ADAPTER.validate_python(value).model_dump(mode="json") == value
+
+
+def test_private_note_unicode_body_and_exact_key_are_bounded(monkeypatch):
+    value = dict(
+        action="private_note_save",
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        request_nonce=str(uuid4()),
+        appointment_ref="appointment_00000000000000000000000001",
+        change_key=str(uuid4()),
+        expected_version=0,
+        text="é" * 2000,
+    )
+    h = headers({"creation_key": value["change_key"]})
+    monkeypatch.setattr(
+        route.scribe_encounters,
+        "encounter_workflow",
+        lambda **_: {
+            "version": "1",
+            "private_note": {"text": "", "version": 1, "updated_at": None},
+        },
+    )
+    assert client().post(route.PATH, json=value, headers=h).status_code == 200
+    h["Idempotency-Key"] = str(uuid4())
+    denied = client().post(route.PATH, json=value, headers=h)
+    assert denied.status_code == 422 and "é" not in denied.text
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("text", "x" * 2001),
+        ("text", "\ud800"),
+        ("expected_version", True),
+        ("clinical_note", "Invented secret"),
+    ],
+    ids=["oversize", "invalid_unicode", "boolean_version", "clinical_field"],
+)
+def test_private_note_contract_never_accepts_clinical_or_invalid_version_fields(
+    field, value
+):
+    payload = dict(
+        action="private_note_save",
+        expected_actor_ref=ACTOR,
+        expected_tenant_ref=TENANT,
+        request_nonce=str(uuid4()),
+        appointment_ref="appointment_00000000000000000000000001",
+        change_key=str(uuid4()),
+        expected_version=0,
+        text="Invented reminder",
+    )
+    with pytest.raises(ValueError):
+        REQUEST_ADAPTER.validate_python(payload | {field: value})

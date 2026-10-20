@@ -45,7 +45,7 @@ export function OnboardingZoomStep({
           </div>
           <p className="text-muted-foreground text-sm">
             Zoom integration is coming soon. You'll be able to connect your
-            account so Cosma can automatically join your meetings and generate
+            account so Cosmas can automatically join your meetings and generate
             visit notes after each session.
           </p>
         </div>
@@ -59,7 +59,7 @@ export function OnboardingZoomStep({
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Connect Zoom</h2>
         <p className="text-muted-foreground text-sm">
-          Connect your Zoom account so Cosma can automatically join your
+          Connect your Zoom account so Cosmas can automatically join your
           meetings and generate visit notes after each session.
         </p>
       </div>

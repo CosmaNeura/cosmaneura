@@ -1,8 +1,9 @@
 """Real local SQL from reviewed provider mapping to current capture binding."""
 
 import time
-from datetime import UTC, datetime
-from uuid import uuid4
+from datetime import UTC, date, datetime
+from typing import TypedDict
+from uuid import UUID, uuid4
 
 import pytest
 from companion_provider_provisioning_test import (
@@ -16,6 +17,7 @@ from companion_provider_provisioning_test import (
 )
 
 from app.configuration import companion_appointment_setup as setup_config
+from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.companion_encounters import CompanionEncounterSettings
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.services import (
@@ -31,6 +33,7 @@ from app.services.companion_appointment_setup_contract import AppointmentSetupRe
 from app.services.companion_encounter_contract import (
     ConnectionRequest,
     EncountersRequest,
+    EncounterWindow,
 )
 from app.services.companion_records import RecordBudget
 
@@ -44,11 +47,41 @@ REAL_VIEW_AS_GUARD = view_as.mount_context_session_blocked_by_view_as
 REAL_RECORD_GUARD = provider_record_authority.validate_provider_record_scope
 
 
+class DiscoveryArguments(TypedDict):
+    issuer: str
+    subject: str
+    session_id: str
+    authority_settings: AuthorityKernelSettings
+
+
+class EncounterArguments(TypedDict):
+    expected_tenant_ref: str
+    expected_actor_ref: str
+    connection_sha256: str
+    window: EncounterWindow
+
+
+class CaptureArguments(TypedDict):
+    workload_client_id: str
+    mount_context_token: str
+    interaction_ref: str
+    client_turn_id: UUID
+    workspace_id: UUID
+    appointment_ref: str
+    request_nonce: UUID
+    settings: AuthorityKernelSettings
+    capture_settings: ScribeCaptureSettings
+
+
 def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypatch):  # noqa: F811
     # Route services own their session; direct only that factory to the dedicated
     # local PostgreSQL engine, retaining their real transactions and commit path.
-    monkeypatch.setattr(companion_encounters, "global_session", lambda: session_for(engine))
-    monkeypatch.setattr(companion_appointment_setup, "global_session", lambda: session_for(engine))
+    monkeypatch.setattr(
+        companion_encounters, "global_session", lambda: session_for(engine)
+    )
+    monkeypatch.setattr(
+        companion_appointment_setup, "global_session", lambda: session_for(engine)
+    )
     monkeypatch.setattr(authority, "validate_provider_record_scope", REAL_RECORD_GUARD)
     monkeypatch.setattr(
         view_as, "mount_context_session_blocked_by_view_as", REAL_VIEW_AS_GUARD
@@ -77,12 +110,12 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
         session.add(appointment)
         session.commit()
         appointment_ref = str(appointment.id)
-    arguments = dict(
-        issuer=SETTINGS.clerk_issuer,
-        subject=args["verified_clerk_subject"],
-        session_id="sess_invented_companion",
-        authority_settings=SETTINGS,
-    )
+    arguments: DiscoveryArguments = {
+        "issuer": SETTINGS.clerk_issuer,
+        "subject": args["verified_clerk_subject"],
+        "session_id": "sess_invented_companion",
+        "authority_settings": SETTINGS,
+    }
     locks = []
 
     def observed(_connection, _cursor, statement, _parameters, _context, _many):
@@ -107,12 +140,14 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
     )
     doctor_lock = next(i for i, query in enumerate(locks) if "FROM doctor " in query)
     assert practice_lock < doctor_lock
-    common = dict(
-        expected_tenant_ref=connection.tenant_ref,
-        expected_actor_ref=connection.actor_ref,
-        connection_sha256=connection.connection_sha256,
-        window={"start_date": "2026-09-25", "end_date": "2026-09-26"},
-    )
+    common: EncounterArguments = {
+        "expected_tenant_ref": connection.tenant_ref,
+        "expected_actor_ref": connection.actor_ref,
+        "connection_sha256": connection.connection_sha256,
+        "window": EncounterWindow(
+            start_date=date(2026, 9, 25), end_date=date(2026, 9, 26)
+        ),
+    }
     setup_arguments = {
         **arguments,
         "settings_provider": lambda: setup_config.CompanionAppointmentSetupSettings(
@@ -183,17 +218,17 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
             settings=SETTINGS,
         )
         session.commit()
-        capture_args = dict(
-            workload_client_id=workload,
-            mount_context_token=token.context_token,
-            interaction_ref=resolved.interaction_ref,
-            client_turn_id=turn,
-            workspace_id=uuid4(),
-            appointment_ref=appointment_ref,
-            request_nonce=uuid4(),
-            settings=SETTINGS,
-            capture_settings=ScribeCaptureSettings(enabled=True),
-        )
+        capture_args: CaptureArguments = {
+            "workload_client_id": workload,
+            "mount_context_token": token.context_token,
+            "interaction_ref": resolved.interaction_ref,
+            "client_turn_id": turn,
+            "workspace_id": uuid4(),
+            "appointment_ref": appointment_ref,
+            "request_nonce": uuid4(),
+            "settings": SETTINGS,
+            "capture_settings": ScribeCaptureSettings(enabled=True),
+        }
         capture = scribe_capture_scope.resolve_capture_binding(**capture_args)
     assert (
         capture.appointment_ref == appointment_ref
@@ -201,6 +236,7 @@ def test_reviewed_connection_to_current_capture_and_revocation(engine, monkeypat
     )
     with session_for(engine) as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         link.revoked_at = datetime.now(UTC)
         session.add(link)
         session.commit()

@@ -12,6 +12,10 @@ import { render, screen } from "@testing-library/react"
 
 const noteList = vi.fn()
 
+vi.mock("~/utils/terminology", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/utils/terminology")>()
+  return { ...actual, useTerminology: () => actual.getTerminology(null) }
+})
 vi.mock("~/configuration/client", () => ({
   noteList: (...args: unknown[]) => noteList(...args),
 }))
@@ -126,6 +130,30 @@ describe("loadNotesLayoutData", () => {
     })
 
     expect((await loadNotesLayoutData()).noteStatuses).toEqual({})
+  })
+
+  it("shows a confirmed canonical name while retaining the original visit and cached source", async () => {
+    const payload = {
+      appointments: [
+        {
+          id: "appt_invented",
+          patient_id: "patient_source",
+          patient_name: "Invented name-only entry",
+        },
+      ],
+      patient_names: { appt_invented: "Invented confirmed patient" },
+    }
+    noteList.mockResolvedValue({ data: payload, response: { status: 200 } })
+    const loaded = await loadNotesLayoutData()
+    expect(loaded.appointments[0]).toMatchObject({
+      id: "appt_invented",
+      patient_id: "patient_source",
+      patient_name: "Invented confirmed patient",
+    })
+    expect(queryClient.getQueryData(["noteList"])).toEqual(payload)
+    expect(payload.appointments[0].patient_name).toBe(
+      "Invented name-only entry",
+    )
   })
 
   it("shares an in-flight request between concurrent route loads", async () => {

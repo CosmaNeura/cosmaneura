@@ -40,7 +40,7 @@ export function StepIndicator({
                   <span>{stepNum}</span>
                 )}
                 {isActive && (
-                  <span className="bg-primary/30 absolute inset-0 animate-ping rounded-full" />
+                  <span className="bg-primary/30 absolute inset-0 rounded-full motion-safe:animate-ping" />
                 )}
               </div>
               <span

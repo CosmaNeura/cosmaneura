@@ -381,6 +381,9 @@ def test_missing_invalid_or_tampered_manifest_snapshot_refuses_early(
     object.__setattr__(
         cases[2]["snapshot"], "manifest_bytes", cases[2]["manifest_bytes"] + b" "
     )
+    assert cases, (
+        "there is nothing to check, so the assertions below would pass vacuously"
+    )
     for index, case in enumerate(cases):
         code = (
             "validated_manifest_snapshot.invalid"
@@ -565,6 +568,7 @@ def test_upstream_binding_subclass_and_tampered_bytes_refuse_before_verifier(
     object.__setattr__(
         cases[1]["binding"], "_record_bytes", cases[1]["binding"].record_bytes + b" "
     )
+    assert cases, 'there is nothing to check, so the assertions below would pass vacuously'
     for case in cases:
         _refuses(module, case, "server_authenticated_binding.invalid")
         assert case["verifier"].calls == []

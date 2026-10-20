@@ -2,13 +2,13 @@
 
 from dataclasses import replace
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
 import pytest
 
 from app.services import scribe_capture_gateway as gateway
+from app.services.scribe_capture_admission import CaptureCaller
 from app.services.scribe_workflow import HttpScribeWorkflowClient
 
 from tests.authority_kernel.scribe_capture_gateway_test import pair
@@ -83,7 +83,12 @@ class Preparation:
                 client=wire,
             )
             return await gateway.execute_capture_operation(
-                caller=SimpleNamespace(),
+                caller=CaptureCaller(
+                    workload_client_id="synthetic-workload",
+                    mount_context_token="synthetic-context",
+                    interaction_ref="synthetic-interaction",
+                    client_turn_id=uuid4(),
+                ),
                 binding_ref="synthetic-binding",
                 workspace_id=uuid4(),
                 operation=self.operation,

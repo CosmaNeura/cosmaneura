@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from typeid import TypeID
 
 from app.configuration import database
@@ -433,7 +434,7 @@ def test_fresh_and_incremental_migration_match(configured_engine):
                 connection.execute(
                     text("SELECT version_num FROM alembic_version")
                 ).scalar_one()
-                == "71d6e1ac9b04"
+                == ScriptDirectory.from_config(Config("alembic.ini")).get_current_head()
             )
     finally:
         engine.dispose()

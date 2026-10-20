@@ -156,7 +156,10 @@ def _rows(session: Session, scope):
     rows = list(
         session.exec(
             select(ScribeCaptureReviewedSource)
-            .where(ScribeCaptureReviewedSource.binding_id == admission.binding_id)
+            .where(
+                ScribeCaptureReviewedSource.binding_id == admission.binding_id,
+                ScribeCaptureReviewedSource.session_id == scope.session_id,
+            )
             .order_by(cast(Any, ScribeCaptureReviewedSource.working_version))
         ).all()
     )
@@ -166,7 +169,9 @@ def _rows(session: Session, scope):
 def select_transcript(session, scope, source: ReviewedSource, transcripts, delivery):
     _, rows = _rows(session, scope)
     if not rows:
-        if transcripts or delivery is not None:
+        if (
+            transcripts and scope.recording_key_sha256 == "legacy"
+        ) or delivery is not None:
             raise ReviewedSourceConflict
         return None, set(), False
     by_id = {row.id: row for row in transcripts}
@@ -246,6 +251,7 @@ def import_source(
             transcript_data=source.entries,
             dispatch_pipeline=False,
             commit_import=False,
+            recording_scoped=scope.recording_key_sha256 != "legacy",
         )
         delivery = session.exec(
             select(ScribeTranscriptDelivery).where(

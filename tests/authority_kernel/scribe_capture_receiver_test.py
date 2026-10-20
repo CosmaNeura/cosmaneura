@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -60,7 +61,9 @@ def test_authentication_runs_before_body_and_capture_service(monkeypatch):
     def deny():
         raise HTTPException(status_code=401)
 
-    connection.app.dependency_overrides[authenticate_scribe_capture_request] = deny
+    cast(FastAPI, connection.app).dependency_overrides[
+        authenticate_scribe_capture_request
+    ] = deny
     monkeypatch.setattr(
         scope, "resolve_capture_binding", lambda **_: pytest.fail("scope reached")
     )
@@ -227,3 +230,46 @@ def test_denial_does_not_reflect_exception_or_scope(monkeypatch, error):
     assert response.status_code == 403
     assert response.headers["cache-control"] == "no-store"
     assert "private_sentinel" not in response.text
+
+
+@pytest.mark.parametrize("selected", [None, uuid4()])
+@pytest.mark.parametrize("expired", [False, True])
+def test_operation_routes_exact_session_without_changing_legacy_default(
+    monkeypatch, selected, expired
+):
+    from app.routes import scribe_capture as receiver
+    from app.services import scribe_capture_admission as admission
+    from app.services.scribe_workflow import DisabledScribeWorkflowClient
+
+    calls = []
+
+    async def operation(**kwargs):
+        calls.append(kwargs)
+        if expired:
+            raise receiver.gateway.CaptureUploadAuthorizationExpired
+        raise admission.AdmissionConflict
+
+    monkeypatch.setattr(receiver.gateway, "execute_capture_operation", operation)
+    connection = client()
+    cast(FastAPI, connection.app).dependency_overrides[
+        receiver.get_admission_client_factory
+    ] = lambda: DisabledScribeWorkflowClient
+    payload = {
+        "binding_ref": "scribe_capture_binding_01j00000000000000000000000",
+        "workspace_id": str(uuid4()),
+        "request_nonce": str(uuid4()),
+        "operation": {"kind": "capabilities"},
+    }
+    if selected is not None:
+        payload["expected_session_id"] = str(selected)
+    response = connection.post(
+        "/service/v1/agent/scribe/capture-operations",
+        json=payload,
+        headers={**headers(), "Idempotency-Key": "synthetic-operation-key"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == (
+        "UPLOAD_AUTHORIZATION_EXPIRED" if expired else "CAPTURE_OPERATION_CONFLICT"
+    )
+    assert calls[0]["caller"].selected_session_id == selected
+    assert response.headers["cache-control"] == "no-store"

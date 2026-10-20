@@ -7,11 +7,11 @@ launcher_path='/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-2026091
 validator_path='/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910/scripts/validate_staging_rehearsal_base_recovery_plan.py'
 manifest_path='/Users/jw/Desktop/Cosmas/cosmaneura-staging-recovery-live-20260910/scripts/staging_rehearsal_base_recovery_python_runtime.manifest'
 python_source_root='/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9'
-validator_sha256='52b787309a92d6952421fbc8b060bdf0020df6159ad289c6f3ea805bb8212d98'
-manifest_sha256='31ce8586794b020186db0dd05c8e33ca462084a31d27a38270fe3a9f9e344c86'
+validator_sha256='5325d566600b6e36bfc4ae49281c4d7ce2de2d8ab119108321b0217152c0d730'
+manifest_sha256='f97ed15eb719bfcdbfda875c4922bb98d54ec0e543321f6753f975790d1cd4a2'
 python_tree_entry_count='2006'
-python_tree_metadata_sha256='b662c5523b9e8b6c3b923640d5bd72bc08c166dd6d7293bbb21d67bda289ecda'
-python_tree_content_sha256='a4f26975947b867b232a79e5b1be0c0c7c230fa4fde9723f558f75a67e3b4e92'
+python_tree_metadata_sha256='9129b54d48d0925f8db90860bdaa4dda157dd76b3dc38b592eb2934ec001f133'
+python_tree_content_sha256='466874ccbd27f96a2597454540b10989a8715521441eecb95903328927abc297'
 python_tree_acl_entry_count='0'
 python_tree_acl_sha256='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
 bootstrap_root=''
@@ -219,9 +219,9 @@ observed_content=${observed_content%% *}
 snapshot_python="$python_snapshot/bin/python3.9"
 snapshot_framework="$python_snapshot/Python3"
 snapshot_file "$snapshot_python" 500 \
-  bdea59019a38eb6600cc9e71e984a97fedadc406448431281e7657030f54987e
+  6e7ae61f68a3838094fc56590f84c52069a97d7816f6bb79e0e85995b340e464
 snapshot_file "$snapshot_framework" 500 \
-  26422f0b21cb1e07236384afa4043c7401d39d09358c91df8bf3f5496f14712f
+  6d3f7badc96687779a34b0bb10b74800b69cd97f7cda4a39a41a35e5d7175d01
 /bin/chmod 0500 "$bootstrap_root" || refuse
 
 if /usr/bin/env -i "$snapshot_python" -IBS -c '

@@ -6,7 +6,7 @@ import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from threading import BoundedSemaphore, Event, get_ident
+from threading import BoundedSemaphore, Event, Thread, get_ident
 from types import SimpleNamespace
 from typing import Never
 from uuid import uuid4
@@ -26,7 +26,9 @@ from app.routes.dependencies.entra_service import (
     authenticate_scribe_capture_request,
 )
 from app.routes.scribe_native_capture import native_capture_api_app
+from app.services import authority
 from app.services import scribe_capture_admission as admission
+from app.services import scribe_capture_deadline as deadline_service
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_scope as scope_service
 from app.services.scribe_capture_deadline import (
@@ -195,39 +197,134 @@ async def test_slow_sync_auth_is_private_and_never_reaches_body_or_scope(
     await until(settled)
 
 
+def observed_binding_request(monkeypatch):
+    """Parent-visible post-auth markers, shared by failure and positive controls."""
+    body_entered, scope_entered = Event(), Event()
+    validated_request = route._validated_request
+
+    async def validated(request, body_model, max_body_bytes=route.MAX_BODY_BYTES):
+        body_entered.set()
+        return await validated_request(request, body_model, max_body_bytes)
+
+    def scope(**_):
+        scope_entered.set()
+        raise authority.AuthorityKernelDisabledError()
+
+    monkeypatch.setattr(route, "_validated_request", validated)
+    monkeypatch.setattr(scope_service, "resolve_capture_binding", scope)
+    return SimpleNamespace(
+        body_entered=body_entered,
+        scope_entered=scope_entered,
+        payload={
+            "workspace_id": str(uuid4()),
+            "appointment_ref": "appointment_01j00000000000000000000000",
+            "request_nonce": str(uuid4()),
+        },
+    )
+
+
+def coordinated_deadline(monkeypatch):
+    """Advance the unchanged 80 ms budget at an explicit fixture boundary.
+
+    Do not mutate the global clock or asyncio module: actual worker loops,
+    synchronous dependency dispatch and unrelated send timers remain real.
+    """
+    started = time.monotonic()
+    now = started
+    expired, waiting = asyncio.Event(), asyncio.Event()
+
+    async def wait(futures, *, timeout=None, return_when=asyncio.ALL_COMPLETED):
+        # The capture boundary waits on its outcome and disconnect watcher.
+        # Its one-future public response-send deadline retains the real timer.
+        futures = set(futures)
+        if len(futures) != 2 or return_when != asyncio.FIRST_COMPLETED:
+            return await asyncio.wait(futures, timeout=timeout, return_when=return_when)
+        assert timeout == pytest.approx(DELAY)
+        waiting.set()
+        timer = asyncio.create_task(expired.wait())
+        try:
+            done, pending = await asyncio.wait(
+                futures | {timer}, return_when=return_when
+            )
+            return done - {timer}, pending - {timer}
+        finally:
+            timer.cancel()
+            await asyncio.gather(timer, return_exceptions=True)
+
+    class AsyncioTimer:
+        def __getattr__(self, name):
+            return wait if name == "wait" else getattr(asyncio, name)
+
+    def expire():
+        nonlocal now
+        assert now == started
+        now = started + DELAY
+        expired.set()
+
+    clock = SimpleNamespace(monotonic=lambda: now)
+    monkeypatch.setattr(boundary, "time", clock)
+    monkeypatch.setattr(deadline_service, "time", clock)
+    monkeypatch.setattr(boundary, "asyncio", AsyncioTimer())
+    return SimpleNamespace(expire=expire, waiting=waiting)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outer_boundary", [False, True])
 async def test_sync_auth_retains_one_slot_until_dependency_settles(
     monkeypatch, outer_boundary
 ):
     target = app(monkeypatch)
+    clock = coordinated_deadline(monkeypatch)
+    observed = observed_binding_request(monkeypatch)
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(boundary, "_workers", slots)
     if outer_boundary:
         monkeypatch.setattr(middleware, "ALLOWED_HOST_LIST", "testserver")
         middleware.add_middleware(target)
         boundary.install_capture_boundaries(target)
-    release, entered, settled = Event(), [], []
+    release, entered, settled, auth_entered = Event(), [], [], Event()
 
     def auth():
         entered.append(get_ident())
+        auth_entered.set()
         release.wait(2)
         settled.append(get_ident())
         return EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
 
     target.dependency_overrides[authenticate_scribe_capture_request] = auth
+    request = None
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=target), base_url="http://testserver"
         ) as client:
-            first = await client.post(PREFIX + "capture-bindings/resolve", json={})
+            request = asyncio.create_task(
+                client.post(
+                    PREFIX + "capture-bindings/resolve",
+                    headers=headers(),
+                    json=observed.payload,
+                )
+            )
+            await until(auth_entered)
+            await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+            clock.expire()
+            first = await asyncio.wait_for(request, timeout=2)
             assert first.status_code == 504 and len(entered) == 1 and not settled
             await asyncio.sleep(0.04)  # Allow the cancelled private task to unwind.
-            second = await client.post(PREFIX + "capture-bindings/resolve", json={})
+            second = await client.post(
+                PREFIX + "capture-bindings/resolve",
+                headers=headers(),
+                json=observed.payload,
+            )
             assert second.status_code == 503
             assert len(entered) == 1 and not settled
     finally:
         release.set()
+        if request is not None:
+            if not request.done():
+                request.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(request, return_exceptions=True), timeout=2
+            )
         expires = time.monotonic() + 2
         while len(settled) != len(entered):
             assert time.monotonic() < expires, "sync authentication did not settle"
@@ -239,6 +336,115 @@ async def test_sync_auth_retains_one_slot_until_dependency_settles(
         assert time.monotonic() < expires, "settled request retained its slot"
         await asyncio.sleep(0.002)
     slots.release()
+    assert not observed.body_entered.is_set()
+    assert not observed.scope_entered.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outer_boundary", [False, True])
+async def test_sync_auth_deadline_before_worker_entry_never_dispatches(
+    monkeypatch, outer_boundary
+):
+    target = app(monkeypatch)
+    clock = coordinated_deadline(monkeypatch)
+    observed = observed_binding_request(monkeypatch)
+    slots = BoundedSemaphore(1)
+    monkeypatch.setattr(boundary, "_workers", slots)
+    if outer_boundary:
+        monkeypatch.setattr(middleware, "ALLOWED_HOST_LIST", "testserver")
+        middleware.add_middleware(target)
+        boundary.install_capture_boundaries(target)
+    release, worker_entered, worker_settled = Event(), Event(), Event()
+    entered = []
+
+    def held_thread(*, target, **kwargs):
+        def run():
+            worker_entered.set()
+            release.wait(2)
+            try:
+                target()
+            finally:
+                worker_settled.set()
+
+        return Thread(target=run, **kwargs)
+
+    def auth():
+        entered.append(get_ident())
+        pytest.fail("authentication entered after its request expired")
+
+    monkeypatch.setattr(boundary, "Thread", held_thread)
+    target.dependency_overrides[authenticate_scribe_capture_request] = auth
+    request = None
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=target), base_url="http://testserver"
+        ) as client:
+            request = asyncio.create_task(
+                client.post(
+                    PREFIX + "capture-bindings/resolve",
+                    headers=headers(),
+                    json=observed.payload,
+                )
+            )
+            await until(worker_entered)
+            await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+            clock.expire()
+            first = await asyncio.wait_for(request, timeout=2)
+            assert (
+                first.status_code == 504 and not entered and not worker_settled.is_set()
+            )
+            second = await client.post(
+                PREFIX + "capture-bindings/resolve",
+                headers=headers(),
+                json=observed.payload,
+            )
+            assert second.status_code == 503 and not entered
+    finally:
+        release.set()
+        if request is not None:
+            if not request.done():
+                request.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(request, return_exceptions=True), timeout=2
+            )
+        await until(worker_settled)
+    assert not entered
+    expires = time.monotonic() + 2
+    while not slots.acquire(blocking=False):
+        assert time.monotonic() < expires, (
+            "expired worker retained its slot after settlement"
+        )
+        await asyncio.sleep(0.002)
+    slots.release()
+    assert not observed.body_entered.is_set()
+    assert not observed.scope_entered.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outer_boundary", [False, True])
+async def test_sync_auth_binding_markers_reachable_with_valid_request(
+    monkeypatch, outer_boundary
+):
+    target = app(monkeypatch)
+    coordinated_deadline(monkeypatch)
+    observed = observed_binding_request(monkeypatch)
+    if outer_boundary:
+        monkeypatch.setattr(middleware, "ALLOWED_HOST_LIST", "testserver")
+        middleware.add_middleware(target)
+        boundary.install_capture_boundaries(target)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=target), base_url="http://testserver"
+    ) as client:
+        response = await asyncio.wait_for(
+            client.post(
+                PREFIX + "capture-bindings/resolve",
+                headers=headers(),
+                json=observed.payload,
+            ),
+            timeout=2,
+        )
+    assert response.status_code == 503
+    assert observed.body_entered.is_set() and observed.scope_entered.is_set()
 
 
 @pytest.mark.asyncio
@@ -262,9 +468,7 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
         payload=payload,
         key="retained-consent-key",
     )
-    monkeypatch.setattr(
-        admission, "_prepare", lambda *args, **kwargs: "retained-admission"
-    )
+    monkeypatch.setattr(admission, "_prepare_and_claim", lambda *args, **kwargs: claim)
     monkeypatch.setattr(admission, "_claim", lambda *args: claim)
     monkeypatch.setattr(
         admission, "_accept_receipt", lambda *args: calls.append("published receipt")
@@ -396,15 +600,19 @@ async def test_cancelled_request_never_releases_private_late_response(monkeypatc
 def test_expired_sql_has_no_statement_or_commit_and_does_not_affect_other_context():
     sent = []
     connection = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
-    cursor = SimpleNamespace(execute=sent.append)
+    cursor = SimpleNamespace(execute=lambda query, values: sent.append((query, values)))
     budget = CaptureBudget(2)
     with capture_budget(budget):
         before_capture_statement(
             connection, cursor, "SELECT retained", None, None, False
         )
-        assert len(sent) == 2 and all(
-            command.startswith("SET LOCAL ") for command in sent
+        assert len(sent) == 1
+        query, values = sent[0]
+        assert query == (
+            "SELECT set_config('statement_timeout', %s, true), "
+            "set_config('lock_timeout', %s, true)"
         )
+        assert 0 < int(values[1]) <= int(values[0]) <= 2000
         budget.cancel()
         with pytest.raises(CaptureDeadlineExceeded):
             before_capture_statement(
@@ -412,7 +620,7 @@ def test_expired_sql_has_no_statement_or_commit_and_does_not_affect_other_contex
             )
         with Session() as session, pytest.raises(CaptureDeadlineExceeded):
             session.commit()
-    assert len(sent) == 2
+    assert len(sent) == 1
     with Session() as session:
         session.commit()  # No SQL; global hook is inert outside capture context.
 
@@ -645,7 +853,9 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
     monkeypatch,
 ):
     target = app(monkeypatch, seconds=2)
-    entered, disconnect, release, cancelled, closed = (Event() for _ in range(5))
+    entered, disconnect, release, cancelled, closed, continued = (
+        Event() for _ in range(6)
+    )
     sent = []
     first = True
 
@@ -657,6 +867,7 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
         entered.set()
         await resistant_wait(release, cancelled)
         check_capture_deadline()
+        continued.set()
         pytest.fail("remote continuation after peer disconnect")
 
     monkeypatch.setattr(notes, "capture_note", work)
@@ -701,10 +912,12 @@ async def test_peer_disconnect_fences_remote_work_before_the_90_second_limit(
         await asyncio.wait_for(request, timeout=0.5)
         assert time.monotonic() - started < 0.5 and sent == []
         assert not closed.is_set()
+        await until(cancelled)
+        assert not closed.is_set() and sent == [] and not continued.is_set()
     finally:
         release.set()
     await until(closed)
-    assert cancelled.is_set()
+    assert cancelled.is_set() and not continued.is_set() and sent == []
 
 
 def test_connection_commit_is_rechecked_after_flush_or_other_prior_work():

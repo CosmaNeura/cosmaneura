@@ -393,7 +393,17 @@ def _reap_after_kill(child: int) -> bool:
 def _run() -> dict[str, Any]:
     _identity()
     _close_inherited()
-    read_fd, write_fd = os.pipe2(os.O_CLOEXEC)
+    pipe2 = getattr(os, "pipe2", None)
+    if not callable(pipe2):
+        raise ProbeRefused()
+    descriptors = pipe2(os.O_CLOEXEC)
+    if (
+        not isinstance(descriptors, tuple)
+        or len(descriptors) != 2
+        or not all(isinstance(descriptor, int) for descriptor in descriptors)
+    ):
+        raise ProbeRefused()
+    read_fd, write_fd = descriptors
     child = -1
     try:
         deadline = time.monotonic() + WALL_SECONDS
