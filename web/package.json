@@ -94,7 +94,7 @@
     "@types/react": "^19.0.12",
     "@types/react-dom": "^19.0.4",
     "@types/turndown": "^5.0.5",
-    "@typescript-eslint/eslint-plugin": "^8.28.0",
+    "@typescript-eslint/eslint-plugin": "^8.72.0",
     "@vitest/coverage-v8": "^5.0.5",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.23.0",
@@ -104,7 +104,7 @@
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.11",
     "react-router-devtools": "2.0.0-beta.0",
-    "typescript-eslint": "^8.28.0",
+    "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5"
   },
   "engines": {
@@ -139,7 +139,9 @@
       "lodash@>=4.0.0 <4.18.1": "^4.18.1",
       "minimatch@<3.1.5": "^3.1.5",
       "minimatch@>=9.0.0 <9.0.7": "^9.0.7",
-      "source-map-js@>=1.0.0 <1.2.2": "^1.2.2"
+      "source-map-js@>=1.0.0 <1.2.2": "^1.2.2",
+      "@tailwindcss/typography>postcss-selector-parser": "^7.1.6",
+      "unplugin@1.0.1": "^1.16.1"
     }
   },
   "prettier": {
