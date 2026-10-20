@@ -29,10 +29,11 @@ from pathlib import Path
 
 import pytest
 from pytest import Config, FixtureRequest
-from activemodel.pytest import database_reset_transaction, database_reset_truncate
+from activemodel.pytest import database_reset_transaction
 from activemodel.session_manager import SessionManager
 from decouple import config as decouple_config
-from sqlalchemy import text
+from sqlalchemy import inspect, text
+from sqlmodel import SQLModel
 
 from app.configuration.database import run_migrations
 
@@ -99,7 +100,16 @@ def database_reset_truncate_for_tests() -> None:
                         f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}"
                     )
                 )
-        database_reset_truncate()
+        with engine.begin() as connection:
+            inspector = inspect(connection)
+            for table in reversed(SQLModel.metadata.sorted_tables):
+                # Collection also registers synthetic SQLite-only models in
+                # global metadata. Clean only tables installed in this DB.
+                if (
+                    table.name != "alembic_version"
+                    and table.name in inspector.get_table_names(schema=table.schema)
+                ):
+                    connection.execute(table.delete())
     finally:
         with engine.begin() as connection:
             for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
@@ -111,6 +121,10 @@ log.info("multiprocess start method", start_method=multiprocessing.get_start_met
 
 # NOTE this runs on any pytest invocation, even if no tests are run
 def pytest_configure(config: Config):
+    config.addinivalue_line(
+        "markers",
+        "committed_database: use committed fixtures for independent connections",
+    )
     # TODO huh, maybe we should use anyio instead?
     # anyio is installed by some other packages and it's plugin is discovered automatically, we disable it in favor of asyncio
     config.option.plugins = ["no:anyio", "no:logging"]
@@ -223,6 +237,20 @@ def datatabase_reset_transaction_for_standard_tests(request):
     Use a single entrypoint to determine what database reset strategy to use. It's important that transaction and truncation
     are not mixed, I saw very odd DB related errors when this happened.
     """
+
+    if request.node.get_closest_marker("committed_database") is not None:
+        # Independent connections cannot see fixtures inside the rollback
+        # transaction. Clean committed fixtures before and after these tests.
+        database_reset_truncate_for_tests()
+        from tests.routes.utils import ensure_current_baa_version
+
+        ensure_current_baa_version()
+        try:
+            yield
+        finally:
+            database_reset_truncate_for_tests()
+            seed_test_data()
+        return
 
     if is_integration_test(request):
         # transaction truncation cannot be used with integration tests since the forked server does not retain the same

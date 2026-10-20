@@ -36,11 +36,27 @@ def _reset_namespace(environment: str = "test"):
     manager = Mock()
     manager.get_instance.return_value.get_engine.return_value = engine
     reset = Mock()
+    installed = SimpleNamespace(
+        name="installed", schema=None, delete=Mock(return_value="DELETE installed")
+    )
+    uninstalled = SimpleNamespace(name="sqlite_only", schema=None, delete=Mock())
+    version = SimpleNamespace(name="alembic_version", schema=None, delete=Mock())
+    inspector = Mock()
+    inspector.get_table_names.return_value = ["installed", "alembic_version"]
+
+    def execute(statement):
+        if statement == "DELETE installed":
+            reset()
+
+    connection.execute.side_effect = execute
     namespace = {
         "os": SimpleNamespace(environ={"PYTHON_ENV": environment}),
         "SessionManager": manager,
         "text": str,
-        "database_reset_truncate": reset,
+        "inspect": Mock(return_value=inspector),
+        "SQLModel": SimpleNamespace(
+            metadata=SimpleNamespace(sorted_tables=[installed, uninstalled, version])
+        ),
     }
     exec(
         compile(ast.Module(body=selected, type_ignores=[]), str(source), "exec"),
@@ -60,7 +76,7 @@ def test_reset_restores_every_named_guard_even_when_cleanup_fails(cleanup_fails)
     assert triggers["billing_header_action"] == "billing_header_action_guard"
 
     def cleanup():
-        assert connection.execute.call_count == len(triggers)
+        assert connection.execute.call_count == len(triggers) + 1
         if cleanup_fails:
             raise RuntimeError("synthetic cleanup failure")
 
@@ -72,15 +88,26 @@ def test_reset_restores_every_named_guard_even_when_cleanup_fails(cleanup_fails)
         namespace["database_reset_truncate_for_tests"]()
 
     statements = [call.args[0] for call in connection.execute.call_args_list]
-    expected = [
-        f"ALTER TABLE {table} {operation} TRIGGER {trigger}"
-        for operation in ("DISABLE", "ENABLE")
-        for table, trigger in triggers.items()
-    ]
+    expected = (
+        [
+            f"ALTER TABLE {table} DISABLE TRIGGER {trigger}"
+            for table, trigger in triggers.items()
+        ]
+        + ["DELETE installed"]
+        + [
+            f"ALTER TABLE {table} ENABLE TRIGGER {trigger}"
+            for table, trigger in triggers.items()
+        ]
+    )
     assert statements == expected
     reset.assert_called_once_with()
+    namespace["inspect"].assert_called_once_with(connection)
+    tables = namespace["SQLModel"].metadata.sorted_tables
+    tables[0].delete.assert_called_once_with()
+    tables[1].delete.assert_not_called()
+    tables[2].delete.assert_not_called()
     assert (
-        manager.get_instance.return_value.get_engine.return_value.begin.call_count == 2
+        manager.get_instance.return_value.get_engine.return_value.begin.call_count == 3
     )
 
 
