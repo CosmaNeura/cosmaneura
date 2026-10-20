@@ -46,6 +46,10 @@ def test_review_then_correction_changes_preview_without_implicit_review():
         _finalize(session, doctor, note)
         after = overview(session, doctor, target)
         assert after.included_count == 1 and after.notes[0].status == "included"
+        assert after.selected_source_fingerprint != before.selected_source_fingerprint
+        assert overview(session, doctor, target).selected_source_fingerprint == (
+            after.selected_source_fingerprint
+        )
         current = session.get(AIVisitNote, note.id)
         assert current is not None
         current.note = {"Plan": "Synthetic corrected plan"}
@@ -54,6 +58,27 @@ def test_review_then_correction_changes_preview_without_implicit_review():
         corrected = overview(session, doctor, target)
         assert corrected.included_count == 0
         assert corrected.notes[0].status == "needs_review"
+        assert (
+            corrected.selected_source_fingerprint != after.selected_source_fingerprint
+        )
+        _finalize(session, doctor, current)
+        reviewed_correction = overview(session, doctor, target)
+        assert reviewed_correction.included_count == 1
+        assert reviewed_correction.notes[0].note_id == after.notes[0].note_id
+        assert reviewed_correction.selected_source_fingerprint not in {
+            before.selected_source_fingerprint,
+            after.selected_source_fingerprint,
+        }
+        visit = session.get(Appointment, current.appointment_id)
+        assert visit is not None
+        visit.appointment_date -= timedelta(minutes=1)
+        session.flush()
+        date_corrected = overview(session, doctor, target)
+        assert date_corrected.included_count == reviewed_correction.included_count
+        assert date_corrected.notes[0].note_id == reviewed_correction.notes[0].note_id
+        assert date_corrected.selected_source_fingerprint != (
+            reviewed_correction.selected_source_fingerprint
+        )
 
 
 def test_old_selected_note_stays_visible_beyond_recent_preview():

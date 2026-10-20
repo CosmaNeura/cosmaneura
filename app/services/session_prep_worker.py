@@ -12,7 +12,10 @@ from app.configuration.authority import (
     AuthorityKernelSettings,
 )
 from app.services.session_prep import SessionPrepPreparedBrief, SessionPrepScopeDenied
-from app.services.session_prep_generator import generate_prepared_brief
+from app.services.session_prep_generator import (
+    SessionPrepGenerationError,
+    generate_prepared_brief,
+)
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 from app.services.session_prep_runtime import (
     current_source_state,
@@ -103,6 +106,8 @@ def run_one_build(
         failure = None
     except SessionPrepScopeDenied:
         prepared, failure = None, "scope_unavailable"
+    except SessionPrepGenerationError as error:
+        prepared, failure = None, error.code
     except Exception:
         # SDK exceptions and model validation messages can contain source text.
         prepared, failure = None, "generation_failed"
