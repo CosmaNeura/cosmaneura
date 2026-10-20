@@ -280,6 +280,7 @@ async def test_expired_upload_rechecks_current_authority_before_renewal_signal(
         if revoked:
             with Session(f.engine) as s:
                 identity = s.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert identity is not None
                 identity.revoked_at = datetime.now(UTC)
                 s.add(identity)
                 s.commit()

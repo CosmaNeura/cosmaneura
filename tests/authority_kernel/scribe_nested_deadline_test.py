@@ -6,9 +6,11 @@ from collections import Counter
 from contextvars import copy_context
 from threading import Thread
 from types import SimpleNamespace
+from typing import cast
 
 import psycopg
 import pytest
+from psycopg.abc import Query
 
 from app.services import scribe_capture_deadline as capture
 from app.services.companion_records import (
@@ -233,11 +235,11 @@ def test_cancellation_after_combined_setting_refuses_actual_sql(
             if isinstance(query, str) and query.startswith(
                 "SELECT set_config('statement_timeout'"
             ):
-                result = super().execute(query, *args, **kwargs)
+                result = super().execute(cast(Query, query), *args, **kwargs)
                 (capture_budget if cancelled == "capture" else record_budget).cancel()
                 return result
             dispatched.append(True)
-            return super().execute(query, *args, **kwargs)
+            return super().execute(cast(Query, query), *args, **kwargs)
 
     with engine.connect() as connection, Session(bind=connection) as session:
         raw = connection.connection.driver_connection
@@ -284,7 +286,7 @@ def test_real_native_removes_only_duplicate_setting_calls(
                     del frame
             else:
                 counts["other"] += 1
-            return super().execute(query, *args, **kwargs)
+            return super().execute(cast(Query, query), *args, **kwargs)
 
     def attach(connection, *_args):
         connection.cursor_factory = Cursor

@@ -15,7 +15,10 @@ from pydantic import BaseModel
 from app.configuration.scribe_workflow import ScribeWorkflowSettings
 from app.routes import scribe_capture_deadline as boundary
 from app.services import scribe_http_pool as connections
-from app.services.scribe_workflow import build_scribe_workflow_client
+from app.services.scribe_workflow import (
+    HttpScribeWorkflowClient,
+    build_scribe_workflow_client,
+)
 
 ORIGIN = "https://scribe.internal.example"
 PATH = "/synthetic-capture"
@@ -29,7 +32,7 @@ class Credential:
     calls = 0
     closed = False
 
-    async def get_token(self, scope):
+    async def get_token(self, *scopes: str, **kwargs):
         self.calls += 1
         return AccessToken("synthetic-fresh", int(time.time()) + 60)
 
@@ -54,7 +57,7 @@ class Stream(httpx.AsyncByteStream):
         self.closed = True
 
 
-def application(monkeypatch, handler, *, outer, seconds=1):
+def application(monkeypatch, handler, *, outer, seconds: float = 1):
     monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", seconds)
     original = connections.ScribeHttpPool
     transport = httpx.MockTransport(handler)
@@ -66,7 +69,7 @@ def application(monkeypatch, handler, *, outer, seconds=1):
     app = FastAPI()
     router = APIRouter(route_class=boundary.CaptureDeadlineRoute)
     parent_thread = get_ident()
-    private_context = ContextVar("test_pool_private_scope", default=None)
+    private_context = ContextVar[str | None]("test_pool_private_scope", default=None)
     credentials = []
 
     @router.post(PATH)
@@ -87,6 +90,7 @@ def application(monkeypatch, handler, *, outer, seconds=1):
             ),
             credential_factory=lambda _client_id: credential,
         )
+        assert isinstance(client, HttpScribeWorkflowClient)
         try:
             result = await client._post(
                 "/v1/fixed", uuid4(), Receipt(ok=True), "synthetic-key", Receipt
@@ -200,7 +204,10 @@ async def test_wrong_lifespan_loop_fails_closed_without_leaking_worker_slot(
 
     async def make_foreign():
         pool = connections.ScribeHttpPool(
-            ORIGIN, transport=httpx.MockTransport(lambda r: None)
+            ORIGIN,
+            transport=httpx.MockTransport(
+                lambda r: pytest.fail("unexpected HTTP request")
+            ),
         )
         await pool.close()
         return pool

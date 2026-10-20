@@ -4,15 +4,16 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from typing import Any, cast
 
 import pytest
-from typeid import TypeID
 
 from app.services import authority
 from app.services import doctor_access_row_ownership as ownership
 from app.services import scribe_capture_scope as capture
 
 from activemodel.session_manager import _session_context
+from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
 from sqlalchemy import update
@@ -47,13 +48,15 @@ def loaded_owner():
     # No connection or SQL: real mapped rows attached to a real Session are
     # enough to exercise the predicate's identity-map/transaction checks.
     with Session() as session:
-        doctor = Doctor(
-            id=TypeID("doctor"), clerk_id="user_synthetic_final_rows", biography=None
-        )
+        doctor = Doctor(clerk_id="user_synthetic_final_rows", biography=None)
         practice = Practice(
-            id=TypeID("practice"), legal_name="Invented final rows practice"
+            legal_name="Invented final rows practice",
+            join_code="synthetic-final",
+            email_domain="synthetic.invalid",
         )
-        member = PracticeMember(doctor_id=doctor.id, practice_id=practice.id)
+        member = PracticeMember(
+            doctor_id=doctor.id, practice_id=practice.id, role="provider"
+        )
         session.add_all([doctor, practice, member])
         transaction = session.get_transaction()
         assert transaction is not None
@@ -117,8 +120,14 @@ def test_join_locks_only_exact_already_owned_practice(loaded_owner):
 
     # Compile the actual statement, without executing a database query.
     session.exec = execute
+    # This predicate reads only the provider fields; mount identities stay unused.
     owner = capture._CaptureOwner(
-        None, None, None, scope["subject"], scope["doctor_id"], scope["practice_id"]
+        cast(TypeIDType, None),
+        cast(TypeIDType, None),
+        cast(TypeIDType, None),
+        scope["subject"],
+        scope["doctor_id"],
+        scope["practice_id"],
     )
     assert capture._capture_final_provider_rows(session, owner) == (
         proof._rows[0],
@@ -232,9 +241,9 @@ def test_membership_wait_keeps_post_wait_revocation_and_rollback(
             # An adversarial lower-level writer changes only the member row;
             # official offboarding's Practice->Doctor order remains unchanged.
             revoked_at = datetime.now(UTC)
-            writer.exec(
+            writer.execute(
                 update(PracticeMember)
-                .where(PracticeMember.id == member.id)
+                .where(cast(Any, PracticeMember.id) == member.id)
                 .values(
                     seat_state="inactive",
                     access_revoked_at=revoked_at,

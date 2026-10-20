@@ -54,7 +54,8 @@ def test_inherited_table_names_and_billing_constraints_are_retained():
         "(NOT continuation_consent AND initial_authorized_until IS NULL) OR (continuation_consent AND generation_id IS NOT NULL AND purpose = 'header.generate' AND initial_authorized_until IS NOT NULL AND initial_authorized_until > created_at AND initial_authorized_until <= expires_at)",
     }
     assert {i.name for i in action.indexes} == {
-        "ix_billing_action_request", "uq_billing_action_generation"
+        "ix_billing_action_request",
+        "uq_billing_action_generation",
     }
     assert {
         str(c.sqltext) for c in operation.constraints if isinstance(c, CheckConstraint)

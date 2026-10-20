@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import TypedDict
 
 import pytest
 from aiosmtplib.errors import (
@@ -78,6 +79,20 @@ def prepare(event=None, now=NOW):
         settings=SETTINGS,
         now=now,
     )
+
+
+def required_otp(event=None, now=NOW):
+    prepared = prepare(event, now)
+    assert prepared is not None
+    return prepared
+
+
+class OtpArguments(TypedDict):
+    delivery_id: str
+    signature_timestamp: str
+    signatures: str
+    settings: config.OtpDeliverySettings
+    now: float
 
 
 class OwnedRedis:
@@ -154,7 +169,7 @@ def endpoint(monkeypatch, redis_store):
 
 
 def test_native_payload_projects_only_code_and_recipient():
-    prepared = prepare()
+    prepared = required_otp()
     assert (
         prepared.recipient == "tester@synthetic.invalid" and prepared.code == "031729"
     )
@@ -216,19 +231,19 @@ def test_retry_signature_does_not_refresh_original_queue_age():
         prepare(now=NOW + 121)
     with pytest.raises(RejectedOtp, match="stale_event"):
         prepare(now=NOW + 109)
-    assert prepare(now=NOW + 30).deadline == NOW + 120
+    assert required_otp(now=NOW + 30).deadline == NOW + 120
 
 
 def test_tampering_duplicate_keys_and_oversize_are_rejected():
     raw = body()
     headers = signed(raw)
-    args = dict(
-        delivery_id=headers["svix-id"],
-        signature_timestamp=headers["svix-timestamp"],
-        signatures=headers["svix-signature"],
-        settings=SETTINGS,
-        now=NOW,
-    )
+    args: OtpArguments = {
+        "delivery_id": headers["svix-id"],
+        "signature_timestamp": headers["svix-timestamp"],
+        "signatures": headers["svix-signature"],
+        "settings": SETTINGS,
+        "now": NOW,
+    }
     with pytest.raises(RejectedOtp, match="invalid_signature"):
         prepare_otp(raw + b" ", **args)
     with pytest.raises(RejectedOtp, match="body_too_large"):
@@ -252,7 +267,7 @@ def test_same_email_replay_sends_once_and_stores_only_metadata(endpoint):
         route.PATH, content=raw, headers=signed(raw, now[0], "msg_retried")
     ).json() == {"status": "duplicate"}
     assert sent == [("tester@synthetic.invalid", "031729")]
-    record = json.loads(store.client.command("GET", prepare().ledger_key))
+    record = json.loads(store.client.command("GET", required_otp().ledger_key))
     assert set(record) == {
         "fingerprint",
         "owner",
@@ -266,7 +281,7 @@ def test_same_email_replay_sends_once_and_stores_only_metadata(endpoint):
 
 
 def test_claim_concurrency_wrong_owner_and_payload_conflict(redis_store):
-    prepared = prepare()
+    prepared = required_otp()
     assert redis_store.claim(prepared, "owner_a", NOW) == "claimed"
     assert redis_store.claim(prepared, "owner_b", NOW) == "busy"
     assert not redis_store.transition(
@@ -279,7 +294,7 @@ def test_claim_concurrency_wrong_owner_and_payload_conflict(redis_store):
 
 
 def test_expired_dispatch_owner_is_uncertain_not_automatically_repeated(redis_store):
-    prepared = prepare()
+    prepared = required_otp()
     assert redis_store.claim(prepared, "owner_a", NOW) == "claimed"
     assert redis_store.transition(prepared.ledger_key, "owner_a", "dispatching", NOW)
     assert redis_store.claim(prepared, "owner_b", NOW + 31) == "uncertain"
@@ -287,7 +302,7 @@ def test_expired_dispatch_owner_is_uncertain_not_automatically_repeated(redis_st
 
 
 def test_definite_failure_retries_bounded_but_never_acks_success(redis_store):
-    prepared = prepare()
+    prepared = required_otp()
     for attempt in range(3):
         current = NOW + 3 * attempt
         owner = f"owner_{attempt}"
@@ -451,28 +466,24 @@ def test_standard_svix_key_preserves_sha256_raw_body_verification(monkeypatch):
     settings = config.OtpDeliverySettings(SETTINGS.instance_id, key)
     raw = body()
     headers = signed(raw)
-    arguments = dict(
-        delivery_id=headers["svix-id"],
-        signature_timestamp=headers["svix-timestamp"],
-        signatures=headers["svix-signature"],
-        settings=settings,
-        now=NOW,
-    )
-    assert prepare_otp(raw, **arguments).recipient == EVENT["data"]["to_email_address"]
+    arguments: OtpArguments = {
+        "delivery_id": headers["svix-id"],
+        "signature_timestamp": headers["svix-timestamp"],
+        "signatures": headers["svix-signature"],
+        "settings": settings,
+        "now": NOW,
+    }
+    accepted = prepare_otp(raw, **arguments)
+    assert accepted is not None
+    assert accepted.recipient == EVENT["data"]["to_email_address"]
     with pytest.raises(RejectedOtp):
         prepare_otp(raw + b" ", **arguments)
     with pytest.raises(RejectedOtp):
-        prepare_otp(
-            raw,
-            **(
-                arguments
-                | {
-                    "settings": config.OtpDeliverySettings(
-                        SETTINGS.instance_id, b"t" * 24
-                    )
-                }
-            ),
+        wrong_key = arguments.copy()
+        wrong_key["settings"] = config.OtpDeliverySettings(
+            SETTINGS.instance_id, b"t" * 24
         )
+        prepare_otp(raw, **wrong_key)
 
 
 @pytest.mark.parametrize(
@@ -722,7 +733,7 @@ def test_stale_after_claim_never_dispatches(endpoint, monkeypatch):
         and not sent
     )
     assert (
-        json.loads(store.client.command("GET", prepare().ledger_key))["state"]
+        json.loads(store.client.command("GET", required_otp().ledger_key))["state"]
         == "claimed"
     )
 

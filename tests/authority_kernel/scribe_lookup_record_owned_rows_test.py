@@ -152,7 +152,9 @@ def test_mismatched_session_cannot_publish_lock_evidence(native, engine):
                     assert locked is not None
                     assert owned.current_capture_doctor_rows(other, locked[1]) is None
                 assert owned._CAPTURE_ROWS.get() is None
-            assert owned._LOOKUP_ROWS.get()[0] is current
+            owned_rows = owned._LOOKUP_ROWS.get()
+            assert owned_rows is not None
+            assert owned_rows[0] is current
         assert owned._LOOKUP_ROWS.get() is None
 
 
@@ -168,6 +170,7 @@ def test_nested_scope_restores_outer_evidence_and_cleans_up(native, engine):
             with owned.provider_doctor_access_rows(session, **arguments) as outer:
                 assert outer is not None
             doctor, proof = outer[1], outer[3]
+            inner = None
             with pytest.raises(RuntimeError, match="invented nested failure"):
                 with owned.lookup_doctor_access_row_scope(session):
                     with owned.provider_doctor_access_rows(
@@ -179,6 +182,7 @@ def test_nested_scope_restores_outer_evidence_and_cleans_up(native, engine):
                     )
                     raise RuntimeError("invented nested failure")
             assert owned.current_capture_doctor_rows(session, doctor) is proof
+            assert inner is not None
             assert not inner[3].matches_subject(session, arguments["subject"])
         assert owned.current_capture_doctor_rows(session, doctor) is None
         assert owned._CAPTURE_ROWS.get() is None and owned._LOOKUP_ROWS.get() is None
@@ -225,6 +229,7 @@ def test_next_lookup_denies_committed_revocation(native, engine, change):
         assert link is not None
         if change == "identity":
             row = writer.get(AuthorityActorExternalIdentity, link.source_identity_id)
+            assert row is not None
             row.revoked_at = datetime.now(UTC)
         elif change == "link":
             row = link
@@ -238,6 +243,7 @@ def test_next_lookup_denies_committed_revocation(native, engine, change):
             row.access_ends_at = datetime.now(UTC) - timedelta(days=1)
         else:
             row = writer.get(Doctor, link.doctor_id)
+            assert row is not None
             row.deleted_at = datetime.now(UTC)
         writer.add(row)
         writer.commit()

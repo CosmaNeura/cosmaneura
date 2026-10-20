@@ -186,7 +186,9 @@ def test_empty_owner_list_has_no_note_query_or_foreign_status(sidebar):
         SidebarNote(id="foreign-note", doctor_id="doctor_b", appointment_id="foreign"),
     )
     assert sidebar.read() == {
-        "appointments": [], "note_statuses": {}, "patient_names": {}
+        "appointments": [],
+        "note_statuses": {},
+        "patient_names": {},
     }
     assert not any("from sidebarnote" in sql for sql in sidebar.statements)
 

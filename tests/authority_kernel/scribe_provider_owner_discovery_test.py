@@ -3,6 +3,7 @@
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -144,10 +145,12 @@ def test_change_committed_after_discovery_denies_before_remote_io(
 
         def discovery(session, subject):
             owner, member = original(session, subject)
+            assert owner is not None
             if not changed and owned.lookup_uses_provider_session(session):
                 with session_for(engine) as writer:
                     if change.startswith("doctor_"):
                         row = writer.get(Doctor, owner.id)
+                        assert row is not None
                         if change == "doctor_subject":
                             row.clerk_id = "user_changed_" + uuid4().hex
                         else:
@@ -198,6 +201,7 @@ def test_absent_discovery_components_keep_original_refusal(
     with variant(monkeypatch, candidate):
         with session_for(engine) as session:
             owner = session.get(Doctor, native.args["doctor_id"])
+            assert owner is not None
             with owned.lookup_doctor_access_row_scope(session):
                 if component == "member":
                     member = session.exec(
@@ -237,6 +241,7 @@ def test_join_refreshes_loaded_owner_inputs(native, engine, component):
 
     with session_for(engine) as session:
         owner = session.get(Doctor, native.args["doctor_id"])
+        assert owner is not None
         member = session.exec(
             select(PracticeMember).where(PracticeMember.doctor_id == owner.id)
         ).one()
@@ -248,6 +253,7 @@ def test_join_refreshes_loaded_owner_inputs(native, engine, component):
             current, current_member = encounters._provider_owner_discovery_rows(
                 session, native.args["verified_clerk_subject"]
             )
+            assert current is not None and current_member is not None
             assert current is owner and current_member is member
             assert (
                 current.clerk_id == native.args["verified_clerk_subject"]
@@ -271,7 +277,11 @@ def test_nontransactional_adapter_preserves_separate_reads_and_absent_owner(
             )
 
     adapter = Adapter()
-    scope = owned.lookup_doctor_access_row_scope(adapter) if lookup else nullcontext()
+    scope = (
+        owned.lookup_doctor_access_row_scope(cast(Session, adapter))
+        if lookup
+        else nullcontext()
+    )
     with scope:
         row, member = encounters._provider_owner_discovery_rows(
             adapter, "user_invented"

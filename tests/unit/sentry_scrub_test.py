@@ -194,6 +194,7 @@ def test_scrub_replaces_url_or_unknown_transaction_names() -> None:
         }
 
         scrubbed = sentry.scrub_event(event)
+        assert scrubbed is not None
 
         assert SENTINEL not in json.dumps(scrubbed)
         assert scrubbed["transaction"] == "<redacted transaction>"

@@ -2,9 +2,11 @@
 
 import hashlib
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import FastAPI
 from pydantic import ValidationError
 
 from app.services import scribe_native_capture as service
@@ -229,7 +231,7 @@ def test_prepared_context_retains_native_route_policies_before_dispatch(
         def reject_identity():
             raise HTTPException(403, "denied")
 
-        connection.app.dependency_overrides[
+        cast(FastAPI, connection.app).dependency_overrides[
             route.authenticate_embed_platform_session
         ] = reject_identity
     response = connection.post(
@@ -452,6 +454,7 @@ def test_prepared_admission_still_denies_committed_authority_changes(
                 link = session.get(
                     ScribeCaptureProviderLink, native.provisioned.provider_link_ref
                 )
+                assert link is not None
                 link.revoked_at = datetime.now(UTC)
                 session.add(link)
             else:
