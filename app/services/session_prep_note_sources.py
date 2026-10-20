@@ -214,6 +214,9 @@ class PriorNoteOverview:
     included_count: int
     more_notes: bool
     selection_limited: bool
+    # A UI freshness hint only. Authorization and publication always re-read
+    # the reviewed source selection rather than accepting this client value.
+    selected_source_fingerprint: str | None = None
 
 
 def _prior_patient_scope(session, doctor_id, target):
@@ -378,6 +381,25 @@ def prior_note_overview(
         included_count=len(included),
         more_notes=len(recent) > PRIOR_NOTE_PREVIEW_LIMIT,
         selection_limited=selection.truncated,
+        selected_source_fingerprint="sha256_"
+        + hashlib.sha256(
+            json.dumps(
+                {
+                    "sources": [
+                        [
+                            source.source_ref,
+                            source.source_version,
+                            source.source_at.isoformat(),
+                            source.content_sha256,
+                        ]
+                        for source in selection.sources
+                    ],
+                    "selection_limited": selection.truncated,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
     )
 
 

@@ -6818,6 +6818,17 @@
           "selection_limited": {
             "type": "boolean",
             "title": "Selection Limited"
+          },
+          "selected_source_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Source Fingerprint"
           }
         },
         "type": "object",

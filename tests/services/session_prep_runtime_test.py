@@ -21,6 +21,7 @@ from app.services.session_prep import (
     SessionPrepScopeDenied,
     authorize_session_prep_read,
 )
+from app.services.session_prep_generator import SessionPrepGenerationError
 from app.services.session_prep_note_sources import (
     finalize_note_for_session_prep,
     note_content_sha256,
@@ -303,6 +304,29 @@ def test_model_failures_do_not_leave_running_jobs_or_store_exception_text(scope)
     assert failed.lease_until is None
     assert "private-error" not in failed.model_dump_json()
     assert SessionPrepArtifact.count() == 0
+
+
+@pytest.mark.parametrize(
+    "code", ["model_timeout", "output_truncated", "output_safety_rejected"]
+)
+def test_worker_preserves_fixed_generation_failure_code_and_bounded_recovery(
+    scope, code
+):
+    def fails(_selection):
+        raise SessionPrepGenerationError(code)
+
+    assert _work(fails) == "failed"
+    build = SessionPrepBuild.first()
+    assert build is not None
+    assert build.failure_code == code
+    assert build.state == "pending" and build.attempts == 1
+    assert build.lease_until is None
+    assert _work(fails, now=NOW + timedelta(seconds=1)) == "idle"
+    assert _work(now=NOW + timedelta(seconds=16)) == "ready"
+    build = SessionPrepBuild.first()
+    assert build is not None
+    assert build.state == "ready" and build.failure_code is None
+    assert SessionPrepArtifact.count() == 1
 
 
 def test_ready_artifacts_and_receipts_cannot_be_rewritten(scope):
