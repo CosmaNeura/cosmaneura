@@ -654,6 +654,18 @@ def test_production_apply_is_manual_and_bound_to_exact_plan_and_master(
         apply_job,
     )
     assert output_block is not None
+    # Workflow text is untrusted test input. Permit only these literal output
+    # expressions before executing the block; command substitutions/backticks
+    # or different variable expansions must fail without running any shell code.
+    output_expressions = [
+        line.strip() for line in output_block.group(0).strip().splitlines()[1:-1]
+    ]
+    assert set(output_expressions) == {
+        'echo "artifact_name=$artifact_name"',
+        'echo "artifact_digest=$PRODUCTION_PLAN_ARTIFACT_DIGEST"',
+        'echo "run_id=$PRODUCTION_PLAN_RUN_ID"',
+        'echo "run_attempt=${plan_run[7]}"',
+    }
     output_path = tmp_path / "plan-evidence-output"
     script = 'plan_run=("" "" "" "" "" "" "" "3")\n' + output_block.group(0)
     subprocess.run(
