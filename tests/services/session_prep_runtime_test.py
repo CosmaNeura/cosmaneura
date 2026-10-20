@@ -420,3 +420,87 @@ def test_generator_cannot_attach_another_records_citation(scope):
 
     assert _work(forged) == "failed"
     assert SessionPrepArtifact.count() == 0
+
+
+def test_worker_persists_only_the_validated_regeneration(scope, monkeypatch):
+    import app.services.session_prep_generator as generator
+    from app.services.session_prep_runtime import current_source_state
+
+    from tests.services.session_prep_generator_test import _fake
+
+    _doctor, _target, _note, _token, record = scope
+    with get_session() as session:
+        selection, _digest = current_source_state(
+            session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
+        )
+    prepared = _brief(selection)
+    rejected = prepared.model_copy(deep=True)
+    rejected.recap.text = (
+        "Start taking 50 mg of medication. private-rejected-draft-sentinel"
+    )
+    captured = _fake(
+        monkeypatch,
+        None,
+        responses=[
+            (rejected.model_dump_json(), "stop", None),
+            (prepared.model_dump_json(), "stop", None),
+        ],
+    )
+    assert _work(generator.generate_prepared_brief) == "ready"
+    assert len(captured["requests"]) == 2
+    assert SessionPrepArtifact.count() == 1
+    artifact = SessionPrepArtifact.first()
+    build = SessionPrepBuild.first()
+    assert artifact is not None and build is not None
+    assert "private-rejected-draft-sentinel" not in str(artifact.result_payload)
+    assert prepared.recap.text in str(artifact.result_payload)
+    assert build.state == "ready" and build.attempts == 1
+    assert build.failure_code is None
+
+
+def test_sources_changed_during_regeneration_cannot_publish(scope, monkeypatch):
+    import app.services.session_prep_generator as generator
+    from app.services.session_prep_runtime import current_source_state
+
+    _doctor, _target, note, _token, record = scope
+    with get_session() as session:
+        selection, _digest = current_source_state(
+            session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
+        )
+    prepared = _brief(selection)
+    rejected = prepared.model_copy(deep=True)
+    rejected.recap.text = "Start taking 50 mg of medication."
+    calls = []
+
+    def complete(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return rejected.model_dump_json()
+        assert len(calls) == 2
+        note.note = {"Plan": "A corrected synthetic note requires review."}
+        note.save()
+        return prepared.model_dump_json()
+
+    monkeypatch.setattr(generator, "should_use_test_openai_fallback", lambda: False)
+    monkeypatch.setattr(generator, "_complete_brief", complete)
+    assert _work(generator.generate_prepared_brief) == "superseded"
+    assert len(calls) == 2
+    assert SessionPrepArtifact.count() == 0
+
+
+def test_new_prompt_version_changes_digest_without_changing_sources(scope, monkeypatch):
+    import app.services.session_prep_generator as generator
+    import app.services.session_prep_runtime as runtime
+
+    _doctor, _target, _note, _token, record = scope
+    assert generator.PROMPT_VERSION == "source_only_prep_v3"
+    with get_session() as session:
+        current_selection, current_digest = runtime.current_source_state(
+            session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
+        )
+        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v2")
+        prior_selection, prior_digest = runtime.current_source_state(
+            session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
+        )
+    assert current_selection == prior_selection
+    assert current_digest != prior_digest
