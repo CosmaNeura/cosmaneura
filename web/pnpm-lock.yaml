@@ -37,7 +37,8 @@ overrides:
   glob@>=10.2.0 <10.5.0: ^10.5.0
   react-router@>=7.0.0-pre.0 <=7.5.1: ^7.5.2
   turbo-stream@<3.0.0: ^3.0.0
-  react-router-devtools>uuid: ^11.1.1
+  react-d3-tree>uuid: ^11.1.1
+  react-router-devtools>react-router: 7.18.3
 
 importers:
 
@@ -2281,9 +2282,6 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
-  '@types/cookie@0.6.0':
-    resolution: {integrity: sha512-4Kh9a6B2bQciAhf7FSuMRRkUWecJgJu9nPnx3yzpsfXX/c50REIqpHY4C82bXP90qrLtXtkDxTZosYO3UpOwlA==}
-
   '@types/d3-hierarchy@1.1.11':
     resolution: {integrity: sha512-lnQiU7jV+Gyk9oQYk0GGYccuexmQPTp08E0+4BidgFdiJivjEvf+esPSdZqCZ2C7UwTWejWpqetVaU8A+eX3FA==}
 
@@ -2463,9 +2461,6 @@ packages:
 
   '@vue/shared@3.5.12':
     resolution: {integrity: sha512-L2RPSAwUFbgZH20etwrXyVyCBu9OxRSi8T/38QsvnkJyvq2LufW2lDCOzm7t/U9C1mkhJGWYfCuFBCmIuNivrg==}
-
-  '@web3-storage/multipart-parser@1.0.0':
-    resolution: {integrity: sha512-BEO6al7BYqcnfX15W2cnGR+Q566ACXAT9UQykORCWW80lmkpWsnEob6zJS1ZVBKsSJC8+7vJkHwlp+lXG1UCdw==}
 
   abbrev@2.0.0:
     resolution: {integrity: sha512-6/mh1E2u2YgEsCHdY0Yx5oW+61gZU+1vXaoiHHrpKeuRNNgFvS+/jrwHiQhB5apAf5oB7UB7E19ol2R2LKH8hQ==}
@@ -4652,16 +4647,6 @@ packages:
       react-dom: '>=17'
       vite: '>=5.0.0'
 
-  react-router@7.0.0-pre.2:
-    resolution: {integrity: sha512-SKt4Era+LiwvXnqM05MsogMF79DJ33Gw6TYDjjfQyuU9Rca5ub+DrU4UpQshB28PuXqcjMd5Zbo1H1eM0LQPhg==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      react: '>=18'
-      react-dom: '>=18'
-    peerDependenciesMeta:
-      react-dom:
-        optional: true
-
   react-router@7.18.3:
     resolution: {integrity: sha512-gyXgtdr5uACJ5b1Q4udzjVV+tb/rlHIMJKuJ0e89R4Kzgz47z/rgP0dIKxktqIEUhDHluGTPJJH/wRha7CyqsA==}
     engines: {node: '>=20.0.0'}
@@ -4906,10 +4891,6 @@ packages:
     resolution: {integrity: sha512-UjgapumWlbMhkBgzT7Ykc5YXUT46F0iKu8SGXq0bcwP5dz/h0Plj6enJqjz1Zbq2l5WaqYnrVbwWOWMyF3F47g==}
     engines: {node: '>=0.10.0'}
 
-  source-map@0.7.4:
-    resolution: {integrity: sha512-l3BikUxvPOcn5E74dZiq5BGsTb5yEwhaTSzccU6t4sDOH8NWJCstKO5QT2CvtFoK6F0saL7p9xHAqHOlCPJygA==}
-    engines: {node: '>= 8'}
-
   space-separated-tokens@2.0.2:
     resolution: {integrity: sha512-PEGlAwrG8yXGXRjW32fGbg66JAlOAwbObuqVoJpv/mRgoWDQfgH1wDPvtzWyUSNAXBGSk8h755YDbbcEy3SH2Q==}
 
@@ -5079,9 +5060,6 @@ packages:
 
   tslib@2.8.1:
     resolution: {integrity: sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==}
-
-  turbo-stream@3.2.1:
-    resolution: {integrity: sha512-BaX0eWz3IrypOVDFqPv3VGD6uZZW8y3oFAOJqZQ+oopmOyQ8/xNm7IMwAJFvxax2DBa8zSk+/AeqA6D6b1PXGg==}
 
   turndown@7.2.0:
     resolution: {integrity: sha512-eCZGBN4nNNqM9Owkv9HAtWRYfLA4h909E/WGAWWBpmB275ehNhZyk87/Tpvjbp0jjNl9XwCsbe6bm6CqFsgD+A==}
@@ -5260,9 +5238,8 @@ packages:
     resolution: {integrity: sha512-pMZTvIkT1d+TFGvDOqodOclx0QWkkgi6Tdoa8gC8ffGAAqz9pzPTZWAybbsHHoED/ztMtkv/VoYTYyShUn81hA==}
     engines: {node: '>= 0.4.0'}
 
-  uuid@8.3.2:
-    resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
-    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
+  uuid@11.1.1:
+    resolution: {integrity: sha512-vIYxrBCC/N/K+Js3qSN88go7kIfNPssr/hHCesKCQNAjmgvYS2oqr69kIufEG+O4+PfezOH4EbIeHCfFov8ZgQ==}
     hasBin: true
 
   valibot@1.5.0:
@@ -7563,8 +7540,6 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
-  '@types/cookie@0.6.0': {}
-
   '@types/d3-hierarchy@1.1.11': {}
 
   '@types/debug@4.1.12':
@@ -7794,8 +7769,6 @@ snapshots:
 
   '@vue/shared@3.5.12':
     optional: true
-
-  '@web3-storage/multipart-parser@1.0.0': {}
 
   abbrev@2.0.0: {}
 
@@ -10130,7 +10103,7 @@ snapshots:
       dequal: 2.0.3
       react: 19.0.8
       react-dom: 19.0.8(react@19.0.8)
-      uuid: 8.3.2
+      uuid: 11.1.1
 
   react-day-picker@8.10.1(date-fns@4.1.0)(react@19.0.8):
     dependencies:
@@ -10278,7 +10251,7 @@ snapshots:
       react-diff-viewer-continued: 3.4.0(react-dom@19.0.8(react@19.0.8))(react@19.0.8)
       react-dom: 19.0.8(react@19.0.8)
       react-hotkeys-hook: 4.6.1(react-dom@19.0.8(react@19.0.8))(react@19.0.8)
-      react-router: 7.0.0-pre.2(react-dom@19.0.8(react@19.0.8))(react@19.0.8)
+      react-router: 7.18.3(react-dom@19.0.8(react@19.0.8))(react@19.0.8)
       react-tooltip: 5.28.0(react-dom@19.0.8(react@19.0.8))(react@19.0.8)
       vite: 6.4.3(@types/node@25.5.0)(jiti@2.7.0)(lightningcss@1.29.2)
     optionalDependencies:
@@ -10288,18 +10261,6 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
       - supports-color
-
-  react-router@7.0.0-pre.2(react-dom@19.0.8(react@19.0.8))(react@19.0.8):
-    dependencies:
-      '@types/cookie': 0.6.0
-      '@web3-storage/multipart-parser': 1.0.0
-      cookie: 1.1.1
-      react: 19.0.8
-      set-cookie-parser: 2.7.2
-      source-map: 0.7.4
-      turbo-stream: 3.2.1
-    optionalDependencies:
-      react-dom: 19.0.8(react@19.0.8)
 
   react-router@7.18.3(react-dom@19.0.8(react@19.0.8))(react@19.0.8):
     dependencies:
@@ -10641,8 +10602,6 @@ snapshots:
 
   source-map@0.6.1: {}
 
-  source-map@0.7.4: {}
-
   space-separated-tokens@2.0.2: {}
 
   statuses@2.0.2: {}
@@ -10811,8 +10770,6 @@ snapshots:
       typescript: 5.8.2
 
   tslib@2.8.1: {}
-
-  turbo-stream@3.2.1: {}
 
   turndown@7.2.0:
     dependencies:
@@ -11004,7 +10961,7 @@ snapshots:
 
   utils-merge@1.0.1: {}
 
-  uuid@8.3.2: {}
+  uuid@11.1.1: {}
 
   valibot@1.5.0(typescript@5.8.2):
     optionalDependencies:
