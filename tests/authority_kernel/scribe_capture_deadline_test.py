@@ -13,6 +13,9 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from azure.core.credentials import AccessToken
+from fastapi import FastAPI
+
 from app.configuration.scribe_capture import ScribeCaptureSettings
 from app.routes import middleware
 from app.routes import scribe_capture as route
@@ -40,8 +43,6 @@ from app.services.scribe_workflow import (
     ConsentRecord,
     HttpScribeWorkflowClient,
 )
-from azure.core.credentials import AccessToken
-from fastapi import FastAPI
 
 from activemodel import session_manager
 from activemodel.session_manager import aglobal_session

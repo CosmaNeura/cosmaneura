@@ -101,7 +101,7 @@ async def test_waiting_capture_keeps_other_requests_available(monkeypatch):
     target.dependency_overrides[route.get_admission_client_factory] = lambda: Client
 
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=target), base_url="http://testserver"
+        transport=httpx.ASGITransport(app=target), base_url="https://api-test.cosma.localhost"
     ) as connection:
 
         async def capture(sequence):
