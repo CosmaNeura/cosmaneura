@@ -239,23 +239,19 @@ def test_expired_or_missing_dependency_cannot_be_laundered(scope, remove):
     ]
 
 
-def test_fresh_mount_recovers_expired_session_but_revocation_hides_it(
-    scope, monkeypatch
-):
-    monkeypatch.setattr(authority, "datetime", datetime)
+def test_fresh_mount_recovers_expired_session_but_revocation_hides_it(scope):
     doctor, _, _, token, _ = scope
     client, turn = _client(), _chat(token)
     assert final(client, token, turn).status_code == 201
+    # Match the authority clock fixed by scope; wall time can be much later
+    # when this test executes near the end of the full suite.
+    expired_at = authority.datetime.now(UTC) - timedelta(seconds=1)
     with get_session() as session:
         old = session.exec(select(MountContextSession)).one()
         old_id = old.id
-        old.absolute_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        old.absolute_expires_at = expired_at
         session.add(old)
-        session.execute(
-            update(MountContextToken).values(
-                expires_at=datetime.now(UTC) - timedelta(seconds=1)
-            )
-        )
+        session.execute(update(MountContextToken).values(expires_at=expired_at))
         session.commit()
     assert read(client, token).status_code == 401
     fresh = authority.exchange_context_token(
@@ -343,6 +339,7 @@ def test_six_pair_and_utf8_bound_preserve_whole_answers(scope):
     )
 
 
+@pytest.mark.committed_database
 def test_busy_source_refuses_final_and_rolls_back_without_deadlock(scope):
     token, client = scope[3], _client()
     assert _work() == "ready"
@@ -429,12 +426,27 @@ def test_changed_canonical_final_is_never_displayed_as_verified(scope):
     assert final(client, token, turn).status_code == 201
     with get_session() as session:
         stored = session.exec(select(CanonicalConversationFinalPhase)).one()
-        # Simulate damaged retained data outside normal append-only ORM writes.
+        # Simulate damaged retained data with the test-owner connection;
+        # ordinary SQL updates are also protected by the append-only trigger.
         session.execute(
-            update(CanonicalConversationFinalPhase)
-            .where(cast(Any, CanonicalConversationFinalPhase.id) == stored.id)
-            .values(content="Tampered fictional answer")
+            text(
+                "ALTER TABLE canonical_conversation_final_phase DISABLE TRIGGER "
+                "canonical_conversation_final_phase_append_only"
+            )
         )
+        try:
+            session.execute(
+                update(CanonicalConversationFinalPhase)
+                .where(cast(Any, CanonicalConversationFinalPhase.id) == stored.id)
+                .values(content="Tampered fictional answer")
+            )
+        finally:
+            session.execute(
+                text(
+                    "ALTER TABLE canonical_conversation_final_phase ENABLE TRIGGER "
+                    "canonical_conversation_final_phase_append_only"
+                )
+            )
         session.commit()
     result = read(client, token, turn).json()
     assert result["turns"][0]["state"] == "stale"
