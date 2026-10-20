@@ -42,14 +42,20 @@ def test_inherited_table_names_and_billing_constraints_are_retained():
     operation = SQLModel.metadata.tables["billing_header_prepared_operation"]
     assert action is getattr(BillingHeaderAction, "__table__")
     assert operation is getattr(BillingHeaderPreparedOperation, "__table__")
+    # Include the retained asynchronous-generation and continuation fences.
     assert {
         str(c.sqltext) for c in action.constraints if isinstance(c, CheckConstraint)
     } == {
         "request_sha256 ~ '^[a-f0-9]{64}$' AND operation_sha256 ~ '^[a-f0-9]{64}$'",
-        "purpose IN ('completed-note.accept','header.read','header.generate','header.save')",
-        "expires_at > created_at AND expires_at <= created_at + interval '120 seconds'",
+        "purpose IN ('completed-note.accept','header.read','header.generate','header.save','header.generation-status')",
+        "expires_at > created_at AND expires_at <= created_at + CASE WHEN generation_id IS NULL THEN interval '120 seconds' ELSE interval '360 seconds' END",
+        "generation_id IS NULL OR purpose = 'header.generate'",
+        "completion_status IS NULL OR (generation_id IS NOT NULL AND finished_at IS NOT NULL AND completion_status IN ('succeeded','failed','unknown'))",
+        "(NOT continuation_consent AND initial_authorized_until IS NULL) OR (continuation_consent AND generation_id IS NOT NULL AND purpose = 'header.generate' AND initial_authorized_until IS NOT NULL AND initial_authorized_until > created_at AND initial_authorized_until <= expires_at)",
     }
-    assert {i.name for i in action.indexes} == {"ix_billing_action_request"}
+    assert {i.name for i in action.indexes} == {
+        "ix_billing_action_request", "uq_billing_action_generation"
+    }
     assert {
         str(c.sqltext) for c in operation.constraints if isinstance(c, CheckConstraint)
     } == {
