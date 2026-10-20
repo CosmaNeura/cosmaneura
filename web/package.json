@@ -103,7 +103,6 @@
     "happy-dom": "^20.0.0",
     "prettier": "^3.5.3",
     "prettier-plugin-tailwindcss": "^0.6.11",
-    "react-router-devtools": "2.0.0-beta.0",
     "typescript-eslint": "^8.72.0",
     "vitest": "^5.0.5"
   },
@@ -138,15 +137,13 @@
       "minimatch@<3.1.5": "^3.1.5",
       "minimatch@>=9.0.0 <9.0.7": "^9.0.7",
       "source-map-js@>=1.0.0 <1.2.2": "^1.2.2",
-      "@tailwindcss/typography>postcss-selector-parser": "^7.1.6",
-      "unplugin@1.0.1": "^1.16.1",
       "tar@<7.5.21": "^7.5.21",
       "js-cookie@<3.0.8": "^3.0.8",
       "glob@>=10.2.0 <10.5.0": "^10.5.0",
       "react-router@>=7.0.0-pre.0 <=7.5.1": "^7.5.2",
       "turbo-stream@<3.0.0": "^3.0.0",
-      "react-d3-tree>uuid": "^11.1.1",
-      "react-router-devtools>react-router": "7.18.3"
+      "@tailwindcss/typography>postcss-selector-parser": "^7.1.6",
+      "unplugin@1.0.1": "^1.16.1"
     }
   },
   "prettier": {
