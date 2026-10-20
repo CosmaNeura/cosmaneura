@@ -240,7 +240,7 @@ async def safe_request_validation_handler(
         )
     if request.url.path.startswith("/embed/v1/context-tokens/"):
         return token_problem_response(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             code="REQUEST_DENIED",
             title="Invalid request",
             detail="The context-token request is invalid.",
@@ -283,7 +283,7 @@ async def safe_request_validation_handler(
             status_code = status.HTTP_400_BAD_REQUEST
         else:
             code = "VALIDATION_FAILED"
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+            status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
         return agent_problem_response(
             status_code=status_code,
             code=code,
@@ -295,7 +295,7 @@ async def safe_request_validation_handler(
         # FastAPI's default 422 body includes rejected input. Service payloads
         # can contain PHI, so return only a generic contract error here.
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={"detail": "Invalid service request."},
         )
     return await request_validation_exception_handler(request, exc)
@@ -315,7 +315,7 @@ async def active_user_status():
 
     if active_users == 0:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
     return {"status": "ok"}

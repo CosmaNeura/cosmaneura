@@ -120,6 +120,7 @@ function openVisit() {
         loader: (args) => authLoader(args as Parameters<typeof authLoader>[0]),
         element: <Auth />,
         errorElement: <AuthError />,
+        hydrateFallbackElement: <div>Loading account</div>,
         children: [
           {
             path: "/notes",

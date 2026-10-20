@@ -216,7 +216,7 @@ def handle_meeting_started(
             and not _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
         )
         if not duplicate_active_occurrence and not continuing_race:
-            _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
+            _clear_meeting_keys(redis, meeting_id_str, preserve_lock=True)
             if event_occurrence is not None:
                 redis.set(
                     f"recall:meeting:{meeting_id}:occurrence_digest",

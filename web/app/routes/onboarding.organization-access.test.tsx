@@ -2,7 +2,10 @@ import { MemoryRouter } from "react-router"
 import { describe, expect, it } from "vitest"
 import { vi } from "vitest"
 
-import type { PracticeStatus } from "~/lib/practice-api"
+import type {
+  OrganizationAccessOpportunity,
+  PracticeStatus,
+} from "~/lib/practice-api"
 
 import {
   AccountRecoveryRequired,
@@ -93,12 +96,15 @@ describe("onboarding view-as safety", () => {
   })
 })
 
-function openOnboarding(current: PracticeStatus) {
+function openOnboarding(
+  current: PracticeStatus | null,
+  organizationAccess: OrganizationAccessOpportunity | null = null,
+) {
   const props = {
     loaderData: {
       accountRecoveryRequired: false,
       practice: current,
-      organizationAccess: null,
+      organizationAccess,
       channel: "direct",
       email: "clinician@example.com",
       onboarding_completed: true,
@@ -124,6 +130,40 @@ function openOnboarding(current: PracticeStatus) {
     </MemoryRouter>,
   )
 }
+
+describe("server-selected onboarding path", () => {
+  it("offers independent setup when the server reports no organization reservation", () => {
+    openOnboarding(null)
+
+    expect(
+      screen.getByRole("button", { name: "This is my practice" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: /organization.*access/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it.each(["pending", "support"] as const)(
+    "does not offer independent setup for the server's %s organization state",
+    (state) => {
+      openOnboarding(null, {
+        state,
+        organization_name: null,
+        email_domain: "example.com",
+      })
+
+      expect(
+        screen.getByRole("link", { name: "Contact support" }),
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: "This is my practice" }),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole("button", { name: /Continue to the BAA/i }),
+      ).not.toBeInTheDocument()
+    },
+  )
+})
 
 describe("onboarding for a clinician the owner revoked", () => {
   const revoked = {

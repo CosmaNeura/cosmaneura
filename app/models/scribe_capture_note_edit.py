@@ -34,11 +34,10 @@ class ScribeCaptureNoteEdit(
     result_sha256: str = Field(max_length=64)
 
 
+# Immutable closure of an exact, unpublished edit request.
 class ScribeCaptureNoteSaveFence(
     BaseModel, TimestampsMixin, TypeIDMixin("scribe_note_close"), table=True
 ):
-    """Immutable closure of an exact, unpublished edit request."""
-
     __table_args__ = (
         sa.UniqueConstraint(
             "binding_id", "client_key", name="uq_scribe_note_close_key"
@@ -53,3 +52,9 @@ class ScribeCaptureNoteSaveFence(
     session_id: UUID
     base_note_id: TypeIDType = AIVisitNote.foreign_key()
     request_sha256: str = Field(max_length=64)
+
+
+# The retained 9172abd84a3d schema has no inferred TypeID column comment.
+ScribeCaptureNoteSaveFence.metadata.tables[
+    "scribe_capture_note_save_fence"
+].c.id.comment = None

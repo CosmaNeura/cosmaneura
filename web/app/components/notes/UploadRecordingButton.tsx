@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -458,6 +459,10 @@ export function UploadRecordingButton() {
           >
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
+              <DialogDescription>
+                Add a recording from a completed {t.patient} visit to generate
+                clinical notes.
+              </DialogDescription>
             </DialogHeader>
             <VisitAudioUploadForm closeDialogBox={() => setOpen(false)} />
           </DialogContent>

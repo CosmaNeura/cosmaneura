@@ -40,3 +40,9 @@ class ScribeCaptureReviewedSource(
     source_sha256: str = Field(max_length=64)
     payload_sha256: str = Field(max_length=64)
     transcript_id: TypeIDType = AIVisitTranscript.foreign_key()
+
+
+# The retained c8526f5e8d80 schema has no inferred TypeID column comment.
+ScribeCaptureReviewedSource.metadata.tables[
+    "scribe_capture_reviewed_source"
+].c.id.comment = None

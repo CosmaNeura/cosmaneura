@@ -397,6 +397,7 @@ def test_versioned_response_fixtures_match_closed_runtime_and_schema_fields(stat
         (False, False, True),
     ],
 )
+@pytest.mark.committed_database
 def test_postgres_source_publication_and_final_acceptance_serialize(
     scope, monkeypatch, writer_first, new_note, latent_source
 ):
@@ -501,7 +502,9 @@ def test_postgres_source_publication_and_final_acceptance_serialize(
         try:
             if writer_first:
                 writer = pool.submit(publish_note_change)
-                assert held.wait(5)
+                if not held.wait(5):
+                    writer.result(timeout=1)
+                    pytest.fail("Source writer did not reach the lock barrier")
                 final = pool.submit(_final, client, token, turn, ref)
                 # Refuse and roll back before the writer's Doctor FK insert;
                 # a waiting reader would deadlock or exhaust this timeout.
@@ -509,7 +512,12 @@ def test_postgres_source_publication_and_final_acceptance_serialize(
                 assert response.status_code == 409, response.text
             else:
                 final = pool.submit(_final, client, token, turn, ref)
-                assert held.wait(5)
+                if not held.wait(5):
+                    response = final.result(timeout=1)
+                    pytest.fail(
+                        f"Final acceptance did not reach the lock barrier: "
+                        f"{response.status_code} {response.text}"
+                    )
                 writer = pool.submit(publish_note_change)
                 assert writer_entered.wait(5)
                 deadline = time.monotonic() + 3

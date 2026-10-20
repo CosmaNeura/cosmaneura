@@ -11,7 +11,9 @@ import { AppSidebar, type SidebarEntry } from "./app-sidebar"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 vi.mock("~/components/ViewAsAccountControl", () => ({
-  ViewAsAccountControl: () => null,
+  ViewAsAccountControl: ({ compact }: { compact?: boolean }) => (
+    <span data-testid="account-control" data-compact={String(compact)} />
+  ),
 }))
 
 vi.mock("~/components/brand/BrandLogo", () => ({
@@ -84,6 +86,10 @@ describe("AppSidebar on mobile", () => {
         "data-mobile",
         "true",
       ),
+    )
+    expect(screen.getByTestId("account-control")).toHaveAttribute(
+      "data-compact",
+      "true",
     )
     fireEvent.click(screen.getByRole("button", { name: "Toggle Sidebar" }))
 

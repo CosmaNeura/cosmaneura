@@ -161,6 +161,17 @@ describe("a note arriving for a just-uploaded visit", () => {
 
 describe("note transcript provenance", () => {
   afterEach(() => vi.restoreAllMocks())
+  it("uses one page heading and a nested heading for note content", () => {
+    show({ notes: [] })
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1)
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Synthetic Patient" }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Notes" }),
+    ).toBeVisible()
+  })
+
   it("opens the exact note requested from the prior-visit review list", () => {
     const scroll = vi
       .spyOn(HTMLElement.prototype, "scrollIntoView")
