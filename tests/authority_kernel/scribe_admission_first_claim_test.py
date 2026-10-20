@@ -232,7 +232,10 @@ async def test_resume_same_receipt_with_one_less_authority_transaction(
     event.listen(fixture.engine, "commit", commit)
     original = admission._prepare_and_claim
 
-    def previous(caller, binding_ref, workspace_id, *args, **kwargs):
+    def previous(
+        caller, binding_ref, workspace_id, *args, recover_legacy_request=False, **kwargs
+    ):
+        assert recover_legacy_request is False
         reference = admission._prepare(
             caller, binding_ref, workspace_id, *args, **kwargs
         )

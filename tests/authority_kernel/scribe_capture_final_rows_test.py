@@ -7,6 +7,7 @@ from threading import Event
 from typing import Any, cast
 
 import pytest
+from typeid import TypeID
 
 from app.services import authority
 from app.services import doctor_access_row_ownership as ownership
@@ -54,6 +55,10 @@ def loaded_owner():
             join_code="synthetic-final",
             email_domain="synthetic.invalid",
         )
+        # SQLModel assigns the generated identifiers at insert time; this fixture
+        # deliberately compiles SQL without a database, so assign real IDs now.
+        doctor.id = cast(TypeIDType, TypeID("doctor"))
+        practice.id = cast(TypeIDType, TypeID("practice"))
         member = PracticeMember(
             doctor_id=doctor.id, practice_id=practice.id, role="provider"
         )

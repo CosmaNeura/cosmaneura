@@ -519,7 +519,9 @@ def test_timeout_freezes_once_and_closed_worker_updates_cannot_emit(
     from tests.authority_kernel import scribe_native_capture_receiver_test as fixture
 
     client, _ = fixture.client(monkeypatch)
-    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 0.08)
+    # Allow worker scheduling before exercising the deliberate 20-second stall.
+    # The original 80ms could expire before the operation/ledger ever started.
+    monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 1.0)
     saved = []
 
     async def stall(**_):
