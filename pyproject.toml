@@ -176,7 +176,7 @@ asyncio_default_fixture_loop_scope = "session"
 [dependency-groups]
 debugging-extras = [
     "colorama>=0.4.6",
-    "datamodel-code-generator>=0.64.0,<0.65",
+    "datamodel-code-generator>=0.64.0,<0.82",
     "debugpy>=1.8.13",
     "docrepr>=0.2.0",
     "funcy-pipe>=0.11.1",
