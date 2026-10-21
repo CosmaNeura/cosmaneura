@@ -108,7 +108,7 @@ def run_one_build(
     except SessionPrepScopeDenied:
         prepared, failure = None, "scope_unavailable"
     except SessionPrepGenerationError as error:
-        prepared, failure = None, error.code
+        prepared, failure = None, error.failure_code
     except Exception:
         # SDK exceptions and model validation messages can contain source text.
         prepared, failure = None, "generation_failed"

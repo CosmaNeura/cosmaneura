@@ -507,7 +507,7 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, _token, record = scope
-    assert generator.PROMPT_VERSION == "source_only_prep_v4"
+    assert generator.PROMPT_VERSION == "source_only_prep_v5"
     with get_session() as session:
         current_selection, current_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
@@ -532,14 +532,14 @@ def test_new_prompt_version_cannot_serve_or_replay_an_old_brief(scope, monkeypat
     assert old.response.result.brief_prompt_version == "source_only_prep_v3"
     assert _read(token, record, old_action).replayed
 
-    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v4")
+    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v5")
     with pytest.raises(SessionPrepScopeDenied):
         _read(token, record, old_action)
     fresh_action = _action(token)
     assert _read(token, record, fresh_action).response.result.state == "pending"
     assert SessionPrepArtifact.count() == 1
     assert _work() == "ready"
-    fresh = _read(token, record, fresh_action, key="prep-read-key-v4-0002")
-    assert fresh.response.result.brief_prompt_version == "source_only_prep_v4"
+    fresh = _read(token, record, fresh_action, key="prep-read-key-v5-0002")
+    assert fresh.response.result.brief_prompt_version == "source_only_prep_v5"
     assert fresh.response.result.brief_version == 2
     assert fresh.response.result.brief_supersedes_ref == old.response.result.brief_ref
