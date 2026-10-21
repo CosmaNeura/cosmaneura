@@ -58,6 +58,12 @@ from app.services.scribe_workflow import (
     ScribeWorkflowRejectedError,
     SessionCreate,
 )
+from app.services.session_prep_capture_freshness import (
+    CaptureSourceCorrected,
+    retain_acknowledged_capture_correction,
+)
+
+from sqlalchemy.exc import SQLAlchemyError
 
 
 class CaptureGatewayError(Exception):
@@ -1020,6 +1026,22 @@ async def _execute_creator_review(
     # validating remote evidence; the caller does not need a duplicate check.
     if authorize_admitted_capture(caller, binding_ref, workspace_id) != scope:
         raise CaptureReceiptInvalid
+    if isinstance(operation, protocol.EditTranscript):
+        assert isinstance(checked, CreatorTranscriptEditReceiptV1)
+        try:
+            retain_acknowledged_capture_correction(
+                caller=caller,
+                binding_ref=binding_ref,
+                workspace_id=workspace_id,
+                scope=scope,
+                receipt=checked,
+            )
+        except CaptureSourceCorrected:
+            raise CaptureReceiptInvalid from None
+        except SQLAlchemyError:
+            # Scribe's saved receipt remains replayable. Never acknowledge
+            # success until the local exclusion commits, or expose DB details.
+            raise CaptureOperationUnconfirmed from None
     return checked
 
 

@@ -430,7 +430,11 @@ def _current_result(
         return REVIEWED_SOURCES_MARKER + value if include_sources else value
 
     selection, digest = current_source_state(
-        session, scope, observed_at=observed_at, settings=settings
+        session,
+        scope,
+        observed_at=observed_at,
+        settings=settings,
+        lock_capture_sources=True,
     )
     artifact = ready_artifact(session, scope.id, digest)
     # A receipt always describes its original read. Publication cannot upgrade
@@ -503,7 +507,11 @@ def _current_sources_only_result(
     pending read cannot silently acquire a later generated brief on replay.
     """
     selection, digest = current_source_state(
-        session, scope, observed_at=observed_at, settings=settings
+        session,
+        scope,
+        observed_at=observed_at,
+        settings=settings,
+        lock_capture_sources=True,
     )
     artifact = ready_artifact(session, scope.id, digest)
     if marker is None:
