@@ -125,6 +125,65 @@ afterEach(() => {
 })
 
 describe("real panel governed-history bridge", () => {
+  it("hydrates sixty clinical timeline sections grouped by visit with the latest open", async () => {
+    const dates = [
+      "2026-09-16",
+      "2026-09-23",
+      "2026-09-30",
+      "2026-10-07",
+      "2026-10-08",
+    ]
+    const headings = [
+      "S - SUBJECTIVE",
+      "Medications",
+      "O - OBJECTIVE",
+      "Observed and patient-assisted exam via video",
+      "Exam deferred to in-person visit 08/26/2026",
+      "Labs - fasting, 02/12/2026",
+      "Risk calculations",
+      "Screening gaps",
+      "A - ASSESSMENT",
+      "P - PLAN",
+      "Follow-ups",
+      "Return precautions - given verbally, repeated back accurately, sent in writing",
+    ]
+    const sections = Array.from(
+      { length: 60 },
+      (_, index) =>
+        `[${index + 1}] ${dates[Math.floor(index / 12)]} — ${headings[index % 12]}\n\n` +
+        `> Synthetic section ${index + 1}\n> Literal <img src=x onerror=alert(1)> text`,
+    )
+    const answer =
+      "Reviewed visit timeline — exact source sections:\n\n" +
+      sections.join("\n\n") +
+      "\n\n5 selected reviewed-note versions; not the entire chart."
+    const f = await fixture(async () => json(completedHistory(answer)))
+    await screen.findByText("Synthetic recorded question")
+    await waitFor(() =>
+      expect(document.querySelectorAll(".cnp-evidence-card")).toHaveLength(60),
+    )
+    const cards = document.querySelectorAll(".cnp-evidence-card")
+    expect(cards[59].textContent).toContain("Synthetic section 60")
+    expect(cards[59].textContent).toContain(
+      "Literal <img src=x onerror=alert(1)> text",
+    )
+    expect(document.querySelector(".cnp-evidence-card img")).toBeNull()
+    expect(document.querySelector(".cnp-root")?.textContent).toContain(
+      "5 selected reviewed-note versions; not the entire chart.",
+    )
+    const visits = Array.from(
+      document.querySelectorAll<HTMLDetailsElement>(".cnp-evidence-visit"),
+    )
+    expect(visits).toHaveLength(5)
+    expect(visits.map((visit) => visit.open)).toEqual(
+      dates.map((date) => date === dates[4]),
+    )
+    expect(f.historyRequests()).toHaveLength(1)
+    expect(f.requests.some((request) => request.url.endsWith("/chat"))).toBe(
+      false,
+    )
+  })
+
   it("hydrates exact recorded messages and sends no browser selectors or chat", async () => {
     const f = await fixture()
     await screen.findByText("Synthetic recorded answer")

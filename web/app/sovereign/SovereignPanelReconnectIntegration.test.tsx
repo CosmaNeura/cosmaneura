@@ -62,6 +62,9 @@ function tokenResponse(token: string, now: number) {
 function readyBrief(turn: string, recap: string) {
   return json({
     client_turn_id: turn,
+    schema_version: "1.1.0",
+    facts_state: "unavailable",
+    structured_facts: null,
     state: "ready",
     freshness: "current",
     current_through: "2026-09-24T12:00:00Z",
@@ -147,7 +150,7 @@ async function fixture() {
           emergency_note: "Call emergency services when needed.",
         })
       }
-      if (url.endsWith("/session-prep")) {
+      if (url.endsWith("/session-prep/structured-facts")) {
         const turn = JSON.parse(String(init?.body)).client_turn_id
         prepRequests.push({ turn, authorization })
         return readyBrief(
