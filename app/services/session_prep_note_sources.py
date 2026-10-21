@@ -11,6 +11,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
+from app.services.session_prep_capture_freshness import (
+    CaptureSourceCorrected,
+    lock_capture_source_admissions,
+    note_has_saved_capture_correction,
+)
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -141,6 +146,14 @@ def finalize_note_for_session_prep(
     ).one_or_none()
     if note is None or note.doctor_id != doctor_id or note.superseded_at is not None:
         raise NoteSourceDenied("Note scope is unavailable")
+    try:
+        lock_capture_source_admissions(session, [str(note.id)])
+    except CaptureSourceCorrected:
+        raise NoteSourceChanged(
+            "The source is busy; review the current revision"
+        ) from None
+    if note_has_saved_capture_correction(session, note):
+        raise NoteSourceChanged("The source changed; prepare and review a replacement")
     appointment = _owned_appointment(
         session, doctor_id=doctor_id, appointment_id=note.appointment_id
     )
@@ -315,6 +328,8 @@ def prior_note_overview(
         )
     digests: dict[str, str] = {}
     for note, _visit in rows.values():
+        if note_has_saved_capture_correction(session, note):
+            continue
         try:
             digests[str(note.id)] = note_content_sha256(note.note)
         except NoteSourceDenied:
@@ -461,6 +476,8 @@ def load_reviewed_note_sources(
             return ReviewedNoteSelection(tuple(selected), truncated=True)
         note_ref = str(note.id)
         if note_ref in seen:
+            continue
+        if note_has_saved_capture_correction(session, note):
             continue
         try:
             current_digest = note_content_sha256(note.note)

@@ -18,6 +18,7 @@ from app.services.session_prep_generator import (
 )
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 from app.services.session_prep_runtime import (
+    SessionPrepSourceBusy,
     current_source_state,
     prepare_artifact_result,
     ready_artifact,
@@ -140,8 +141,15 @@ def run_one_build(
             return "discarded"
         try:
             latest, latest_digest = current_source_state(
-                session, scope, observed_at=completed_at, settings=settings
+                session,
+                scope,
+                observed_at=completed_at,
+                settings=settings,
+                lock_capture_sources=True,
             )
+        except SessionPrepSourceBusy:
+            latest, latest_digest = None, wanted
+            failure = "source_busy"
         except Exception:
             latest, latest_digest = None, wanted
             failure = "scope_unavailable"

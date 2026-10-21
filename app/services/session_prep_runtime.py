@@ -30,6 +30,11 @@ from app.services.session_prep import (
     SessionPrepToolResponse,
     _empty_result,
 )
+from app.services.session_prep_capture_freshness import (
+    CaptureSourceBusy,
+    CaptureSourceCorrected,
+    lock_capture_source_admissions,
+)
 from app.services.session_prep_facts import StructuredFactSet, project_explicit_facts
 from app.services.session_prep_generator import (
     GENERATOR_VERSION,
@@ -98,6 +103,10 @@ class SessionPrepFactsToolResponse(SessionPrepToolResponse):
     result: SessionPrepFactsResult  # type: ignore[assignment]
 
 
+class SessionPrepSourceBusy(SessionPrepScopeDenied):
+    """Expected source contention; no permission or source content is exposed."""
+
+
 def _digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
@@ -135,6 +144,7 @@ def current_source_state(
     *,
     observed_at: datetime,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+    lock_capture_sources: bool = False,
 ) -> tuple[ReviewedNoteSelection, str]:
     """Authorize worker and read access using current canonical platform state."""
     binding = session.get(
@@ -195,6 +205,21 @@ def current_source_state(
         target_appointment_id=scope.appointment_id,
         observed_at=observed_at,
     )
+    if lock_capture_sources:
+        try:
+            lock_capture_source_admissions(
+                session, [note.source_ref for note in selection.sources]
+            )
+        except CaptureSourceBusy:
+            raise SessionPrepSourceBusy from None
+        except CaptureSourceCorrected:
+            raise SessionPrepScopeDenied from None
+        selection = load_reviewed_note_sources(
+            session=session,
+            doctor_id=doctor.id,
+            target_appointment_id=scope.appointment_id,
+            observed_at=observed_at,
+        )
     return selection, source_digest(selection)
 
 
@@ -301,7 +326,11 @@ def invoke_provider_session_prep(
     ):
         raise SessionPrepScopeDenied
     selection, digest = current_source_state(
-        session, scope, observed_at=observed_at, settings=settings
+        session,
+        scope,
+        observed_at=observed_at,
+        settings=settings,
+        lock_capture_sources=True,
     )
     request_digest = _digest([source_turn_ref, context_snapshot_ref, detail])
     receipt = session.exec(
@@ -339,9 +368,8 @@ def invoke_provider_session_prep(
             # Even a pending/failed brief receipt must not replay old facts.
             raise SessionPrepScopeDenied
         if isinstance(replay, SessionPrepFactsToolResponse) and (
-            replay.result.structured_facts != (
-                project_explicit_facts(selection) if selection.sources else None
-            )
+            replay.result.structured_facts
+            != (project_explicit_facts(selection) if selection.sources else None)
         ):
             # A newer conservative parser must not replay unsafe classifications
             # from an immutable older1.1 receipt with unchanged note revisions.

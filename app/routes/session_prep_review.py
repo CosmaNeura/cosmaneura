@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 import app.configuration.session_prep as configuration
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
+from app.services.session_prep_capture_freshness import (
+    note_has_saved_capture_correction,
+)
 from app.services.session_prep_note_sources import (
     NoteSourceChanged,
     NoteSourceDenied,
@@ -68,15 +71,20 @@ def note_review_statuses(
     ):
         return None
     eligible: dict[str, SessionPrepNoteReview] = {}
-    for note in notes:
-        if note.doctor_id != doctor.id or note.superseded_at is not None:
-            continue
-        try:
-            eligible[str(note.id)] = SessionPrepNoteReview(
-                content_sha256=note_content_sha256(note.note)
-            )
-        except NoteSourceDenied:
-            continue
+    with get_session() as managed:
+        for note in notes:
+            if (
+                note.doctor_id != doctor.id
+                or note.superseded_at is not None
+                or note_has_saved_capture_correction(cast(Session, managed), note)
+            ):
+                continue
+            try:
+                eligible[str(note.id)] = SessionPrepNoteReview(
+                    content_sha256=note_content_sha256(note.note)
+                )
+            except NoteSourceDenied:
+                continue
     if not eligible:
         return eligible
     with get_session() as session:

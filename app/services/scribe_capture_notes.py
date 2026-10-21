@@ -49,6 +49,10 @@ from app.services.scribe_workflow import (
     CaptureTranscript,
     ScribeWorkflowClient,
 )
+from app.services.session_prep_capture_freshness import (
+    CaptureSourceCorrected,
+    require_current_capture_source,
+)
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -677,6 +681,19 @@ def _inputs(
     scratch_notes: ScratchNotes | None = None,
 ) -> Inputs:
     request = scope.session_request
+    try:
+        require_current_capture_source(
+            session,
+            scope,
+            working_transcript_id=source.reviewed.reference.working_transcript_id
+            if source.reviewed
+            else None,
+            working_version=source.reviewed.reference.working_version
+            if source.reviewed
+            else None,
+        )
+    except CaptureSourceCorrected:
+        raise CaptureNoteConflict from None
     schema = session.exec(
         select(DoctorNoteSchema)
         .where(DoctorNoteSchema.id == schema_ref)
