@@ -144,6 +144,98 @@ def test_overbound_list_context_stays_in_whole_section_validation():
         assert project_explicit_facts(_selection("Medications", text)).facts == []
 
 
+@pytest.mark.parametrize("indent", ["    ", "     ", "\t", " \t "])
+@pytest.mark.parametrize(
+    "section,quote,kind,subject,value,state,setting",
+    [
+        (
+            "Medications",
+            "Taking losartan 25 mg.",
+            "medication",
+            "losartan",
+            "25 mg",
+            "documented_taking",
+            None,
+        ),
+        (
+            "Medications",
+            "Not taking losartan 25 mg.",
+            "medication",
+            "losartan",
+            "25 mg",
+            "documented_not_taking",
+            None,
+        ),
+        (
+            "Objective",
+            "Office BP 148/92.",
+            "vital",
+            "BP",
+            "148/92",
+            "measured",
+            "office",
+        ),
+        ("Orders", "CBC resulted.", "order", "CBC", None, "resulted", None),
+        (
+            "Orders",
+            "CBC order not documented.",
+            "order",
+            "CBC",
+            None,
+            "order_not_documented",
+            None,
+        ),
+    ],
+)
+def test_raw_code_indentation_vetoes_all_rows_before_whitespace_stripping(
+    indent, section, quote, kind, subject, value, state, setting
+):
+    # Includes inherited code-only acceptance and the new list+code regression.
+    for text in (
+        indent + quote,
+        indent + quote + "\n\n- CBC ordered.",
+        "- CBC ordered.\n\n" + indent + quote,
+    ):
+        selection = _selection(section, text)
+        result = project_explicit_facts(selection)
+        assert result.facts == []
+        assert result.coverage == "bounded_explicit_mentions"
+        candidate = FactCandidate(
+            kind=kind,
+            subject=subject,
+            value=value,
+            state=state,
+            setting=setting,
+            source_ref=selection.sources[0].source_ref,
+            source_version=7,
+            section=section,
+            quote=quote,
+        )
+        with pytest.raises(FactEvidenceError, match="^fact_status_evidence_invalid$"):
+            validate_fact_candidates([candidate], selection)
+
+
+def test_indented_correction_or_overbound_code_cannot_rescue_the_rest_of_a_list():
+    for text in (
+        "- Planned losartan 50 mg.\n- Continue losartan 25 mg.\n    This supersedes the previous 50 mg plan.",
+        "- CBC ordered.\n\tCBC cancelled.",
+        "- Taking losartan 25 mg.\n    " + "neutral " * 190 + ".",
+    ):
+        assert project_explicit_facts(_selection("P - PLAN", text)).facts == []
+
+
+def test_three_space_payload_and_blank_indentation_keep_valid_source_offsets():
+    text = "   Office BP 148/92.\n    \n \t \n -\tCBC ordered."
+    result = project_explicit_facts(_selection("O - OBJECTIVE", text))
+    assert [(f.kind, f.state, f.evidence.start) for f in result.facts] == [
+        ("vital", "measured", 3),
+        ("order", "ordered", text.index("CBC ordered.")),
+    ]
+    for fact in result.facts:
+        evidence = fact.evidence
+        assert text[evidence.start : evidence.end] == evidence.quote
+
+
 def test_list_negation_and_order_absence_keep_distinct_documented_states():
     text = "1. Patient denies taking losartan 25 mg.\n2. CBC order not documented.\n3. K/Cr not ordered."
     result = project_explicit_facts(_selection("P - PLAN", text))

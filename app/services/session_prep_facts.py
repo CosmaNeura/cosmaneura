@@ -514,6 +514,14 @@ _FOREIGN_CONTEXT = re.compile(
     r"another person|other person|someone else|somebody else|belongs to|belonged to)\b|"
     r"\b(?:it|this|that) (?:is|was) \S+['’]s\b", re.I,
 )
+_CODE_INDENTATION = re.compile(r"^(?: {4}|[ \t]*\t)")
+
+
+def _has_code_indentation(text: str) -> bool:
+    # Inspect raw lines before strip/folding can turn sample code into a chart
+    # assertion. Treat ambiguous indented continuations conservatively too.
+    return any(line.strip() and _CODE_INDENTATION.match(line)
+               for line in text.splitlines())
 
 
 def _safe_enclosing_context(section: str, text: str) -> bool:
@@ -523,7 +531,7 @@ def _safe_enclosing_context(section: str, text: str) -> bool:
     uncertain wording qualifies a fragment. This is not an exhaustive chart read.
     """
     title = _clinical_section_title(section)
-    if title not in _CLINICAL_SECTIONS or "?" in text or (
+    if title not in _CLINICAL_SECTIONS or _has_code_indentation(text) or "?" in text or (
         _AMBIGUOUS.search(text) or _UNASSERTED.search(text) or _FOREIGN_CONTEXT.search(text)
     ):
         return False

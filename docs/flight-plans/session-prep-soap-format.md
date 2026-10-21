@@ -29,6 +29,16 @@ mixed-dose text is never removed to rescue another row. Task boxes, emphasis,
 fences, code indentation and inline pseudo-markers are not normalized. All
 clinical assertion and correction predicates remain unchanged.
 
+Before any trimming or segmentation, any nonblank raw line with four or more
+leading ASCII spaces or a tab in its leading indentation rejects the entire
+section. This also conservatively rejects ambiguous indented list continuations.
+Whitespace-only lines are harmless; a tab after a recognized list marker is
+syntax rather than leading indentation. No code block is dropped while other
+rows are retained. This closes both inherited code-only acceptance in PR790 and
+new code-plus-list acceptance found in independent review of the first format
+commit. PR790 alone must not activate the new facts consumer: its receiver must
+include the final accepted descendant of this format correction.
+
 ## Applicability evidence and limits
 
 The committed fixture mechanically preserves displayed strings from existing
@@ -54,10 +64,18 @@ order/result absence, same-note correction, candidate-substring and rendered-not
 controls. Tests load only the pure stdlib/Pydantic module, bypass application
 startup and use no database, .env, credentials, network or model.
 
-Completed locally: 158 pure tests passed, including the existing fact safety
-suite and 47 format/applicability cases. Changed Python files pass Ruff and
-Pyright; the diff passes whitespace checks. Actual A/B/D format controls retain
-exact displayed prose and recover only A's listed-unconfirmed medication.
+The initial format commit passed 158 pure tests, but independent review found
+the indented-code context gap above. Final correction validation must include
+bare-code med/BP/order positive and negative examples, code-only/code-plus-list
+and mixed tab/space forms, direct candidate rejection, indented corrections and
+valid three-space/blank-line source-offset controls. Actual A/B/D format controls
+retain exact displayed prose and recover only A's listed-unconfirmed medication.
+
+The correction passes 180 pure tests (111 existing safety cases and 69 format/
+applicability cases), including the original review reproductions and direct
+candidate rejection across positive/negative med/BP/order code payloads.
+Changed-file Ruff, Pyright and whitespace checks pass. Renew independent review
+on this final pushed descendant before any new structured-facts activation.
 
 Independent same-task agent review is required after the final substantive push.
 The reviewer must be different from this change's implementer. PR790 must land
