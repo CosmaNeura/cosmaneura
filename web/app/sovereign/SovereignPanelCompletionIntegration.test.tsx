@@ -6,7 +6,10 @@ import { getClient } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
 import { emptyHistory } from "./SovereignHistory.fixture"
-import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
+import {
+  SOVEREIGN_PANEL_ASSET_PATH,
+  SOVEREIGN_PANEL_INTEGRITY,
+} from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
 
@@ -96,7 +99,9 @@ it("loads the pinned dashboard asset and completes preparation without a second 
           disclaimer: "Synthetic test only.",
           emergency_note: "Call emergency services when needed.",
         })
-      expect(url).toBe("https://provider-sovereign.example/session-prep")
+      expect(url).toBe(
+        "https://provider-sovereign.example/session-prep/structured-facts",
+      )
       expect(new Headers(init?.headers).get("authorization")).toBe(
         `Bearer ${token}`,
       )
@@ -108,6 +113,27 @@ it("loads the pinned dashboard asset and completes preparation without a second 
       turns.push(body.client_turn_id)
       const ready = turns.length === 2
       return json({
+        schema_version: "1.1.0",
+        facts_state: "ready",
+        structured_facts: {
+          coverage: "bounded_explicit_mentions",
+          source_dates: ["2026-09-24T12:00:00Z"],
+          selection_limited: false,
+          facts_limited: false,
+          facts: [
+            {
+              kind: "vital",
+              subject: "Blood pressure",
+              value: "120/80 mmHg",
+              state: "measured",
+              setting: "office",
+              note_date: "2026-09-24T12:00:00Z",
+              section: "Vitals",
+              quote: "Synthetic office blood pressure: 120/80 mmHg.",
+              correction: null,
+            },
+          ],
+        },
         client_turn_id: body.client_turn_id,
         state: ready ? "ready" : "pending",
         freshness: ready ? "current" : "none",
@@ -137,6 +163,9 @@ it("loads the pinned dashboard asset and completes preparation without a second 
     <T extends Node>(node: T): T => {
       if (node instanceof HTMLScriptElement) {
         expect(node.getAttribute("src")).toBe(SOVEREIGN_PANEL_ASSET_PATH)
+        expect(node.integrity).toBe(SOVEREIGN_PANEL_INTEGRITY)
+        expect(node.crossOrigin).toBe("anonymous")
+        expect(node.referrerPolicy).toBe("no-referrer")
         window.eval(panelSource)
         queueMicrotask(() => node.onload?.call(node, new Event("load")))
       }
@@ -159,9 +188,15 @@ it("loads the pinned dashboard asset and completes preparation without a second 
   expect(document.querySelector(".cnp-prep-view")?.textContent).toContain(
     "Session Prep pending",
   )
+  expect(document.querySelector(".cnp-facts-table")?.textContent).toContain(
+    "120/80 mmHg",
+  )
   await act(() => vi.advanceTimersByTimeAsync(5000))
   expect(document.querySelector(".cnp-prep-view")?.textContent).toContain(
     "Synthetic completed brief",
+  )
+  expect(document.querySelector(".cnp-facts-table")?.textContent).toContain(
+    "2026-09-24",
   )
   expect(turns).toHaveLength(2)
   expect(new Set(turns).size).toBe(2)
