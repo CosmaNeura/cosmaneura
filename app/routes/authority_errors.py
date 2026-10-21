@@ -43,7 +43,12 @@ def _problem_response(
     retryable: bool,
     trace_id: str | None,
     headers: dict[str, str],
+    retry_after_seconds: int | None = None,
 ) -> JSONResponse:
+    if retry_after_seconds is not None:
+        if type(retry_after_seconds) is not int or not 1 <= retry_after_seconds <= 60:
+            raise ValueError("Invalid bounded retry interval")
+        headers = {**headers, "Retry-After": str(retry_after_seconds)}
     resolved_trace_id = trace_id or new_trace_id()
     body = AuthorityProblemDetails(
         type=f"https://contracts.cosmaneura.com/problems/{code.lower().replace('_', '-')}",
@@ -53,6 +58,7 @@ def _problem_response(
         detail=detail,
         trace_id=resolved_trace_id,
         retryable=retryable,
+        retry_after_seconds=retry_after_seconds,
     )
     return JSONResponse(
         status_code=status_code,
@@ -93,6 +99,7 @@ def agent_problem_response(
     detail: str,
     retryable: bool = False,
     trace_id: str | None = None,
+    retry_after_seconds: int | None = None,
 ) -> JSONResponse:
     return _problem_response(
         status_code=status_code,
@@ -102,4 +109,5 @@ def agent_problem_response(
         retryable=retryable,
         trace_id=trace_id,
         headers={"Cache-Control": "no-store"},
+        retry_after_seconds=retry_after_seconds,
     )

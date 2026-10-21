@@ -27,6 +27,7 @@ import app.services.authority_audit
 import app.services.authority_conversation
 import app.services.authority_conversation_read as history
 import app.services.authority_usage
+import app.services.provider_chat_admission as admission
 import app.services.provider_question_context as provider_question
 import app.services.session_prep
 from app import log
@@ -1284,6 +1285,27 @@ async def write_conversation_turn(
             idempotency_key=idempotency_key,
             payload=data.model_dump(mode="json"),
             settings=settings,
+        )
+    except admission.ProviderChatAdmissionLimited as limited:
+        return agent_problem_response(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            code="RATE_LIMITED",
+            title="Rate limited",
+            detail="Session Prep is handling the current requests. Please wait briefly.",
+            retryable=True,
+            retry_after_seconds=limited.retry_after_seconds,
+            trace_id=resolved_trace_id,
+        )
+    except (
+        admission.ProviderChatAdmissionUnavailable,
+        admission.ProviderChatWindowExpired,
+    ):
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="The conversation phase cannot be accepted in its current window.",
+            trace_id=resolved_trace_id,
         )
     except history.ConversationContextChanged:
         return agent_problem_response(
