@@ -169,7 +169,12 @@ def real_record_capture(capture_engine, monkeypatch):
                 capture_settings=ScribeCaptureSettings(enabled=True),
             )
             binding = resolve_capture_binding(
-                **vars(caller),
+                workload_client_id=caller.workload_client_id,
+                mount_context_token=caller.mount_context_token,
+                client_turn_id=caller.client_turn_id,
+                interaction_ref=caller.interaction_ref,
+                settings=caller.settings,
+                capture_settings=caller.capture_settings,
                 workspace_id=uuid4(),
                 appointment_ref=str(previous.id),
                 request_nonce=uuid4(),
