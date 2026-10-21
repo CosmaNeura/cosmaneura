@@ -50,6 +50,10 @@ database, browser or cloud call is needed for this source checkpoint.
 Recovery before rollout restores the previous Core pin/SRI/source reference in
 a separately reviewed commit while retaining both assets. Recovery after rollout
 uses the selected previously accepted Core/Sovereign image pair and the exact
-release recovery plan, preserving configuration and schema state. It does not
-permit serving an unreviewed source pair or downgrading an applied migration.
+release recovery plan, preserving configuration and schema state. From the first
+candidate web activation onward, Core recovery must understand correction
+frontiers; the current 8d84a6e1d00d69912c9e164f57016fbddabaf1e3 image cannot be
+an active rollback. Retain the additive frontier table and its committed state:
+do not lower or reset frontiers, backfill them, or downgrade an applied migration.
+Recovery must not serve an unreviewed source pair.
 Local test success is not a claim of live beta completion.
