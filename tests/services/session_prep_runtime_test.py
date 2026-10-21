@@ -86,7 +86,7 @@ def scope(monkeypatch, request):
     # before finalization/exchange schedules the build, preserving its digest.
     prior_prompt = getattr(request, "param", None)
     if prior_prompt is not None:
-        assert prior_prompt == "source_only_prep_v3"
+        assert prior_prompt == "source_only_prep_v5"
         import app.services.session_prep_runtime as runtime
 
         monkeypatch.setattr(runtime, "PROMPT_VERSION", prior_prompt)

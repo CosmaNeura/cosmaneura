@@ -32,17 +32,23 @@ all six brief sections; the existing medication rejection code remains `04`.
 Fake SDK recovery must retain dated dose history, correction, documented use,
 uncertainty, source citations and numerical observations. Tests also require
 second-draft rejection, unchanged original source payloads and a different v6
-digest for identical sources. The existing database-backed cache/replay
-regression is updated from v5 to v6; a pure digest check does not claim its
-database integration was exercised.
+digest for identical sources. The database-backed cache/replay regression uses
+an explicit v5 predecessor. The two actual runtime controls passed in separate
+new synthetic PostgreSQL databases: a ready v5 artifact and replay are accepted
+before the version change, v6 rejects the old replay, and a fresh v6 artifact
+version 2 supersedes v5. The isolated runner denies outbound requests, avoids
+global conftest cleanup, and leaves every existing database unchanged.
 
 ## Release and recovery
 
 1. Independently review the final substantive pushed commit and its exact
-   focused test evidence. Hold merge/deployment while other Core work advances;
-   this checkpoint is intended for a later combined staging update.
+   focused test evidence. Reviewed PRs may merge after inspecting current-master
+   overlap while Scribe/Core work proceeds. This checkpoint performs no automatic
+   deployment or deployment pause.
 2. Bind that future update to its actual merged source, independently accepted
-   immutable image and compatible staging baseline. Do not alter native Scribe,
+   immutable image and compatible staging baseline, including the latest combined
+   source and preserving concurrent Scribe advances. Never restore or rebuild an
+   obsolete Core snapshot over those advances. Do not alter native Scribe,
    Sovereign, provider cohort, configuration or database for this increment.
 3. In staging, request a fresh brief using authorized fictional reviewed visits
    with recorded medication use, an earlier dose plan and a later correction.
