@@ -422,3 +422,356 @@ def test_late_valid_draft_cannot_escape_budget(monkeypatch, selection, times):
         generator.generate_prepared_brief(selection)
     assert failure.value.code == "model_timeout"
     assert len(captured["requests"]) == len(responses)
+
+
+def _completion_selection(*dated_notes):
+    return ReviewedNoteSelection(
+        sources=tuple(
+            ReviewedNoteSource(
+                source_ref=f"reviewed_status_synthetic_{index:04d}",
+                source_version=1,
+                source_at=datetime.fromisoformat(date).replace(tzinfo=UTC),
+                clinician_action_ref=f"prep_status_review_synthetic_{index:04d}",
+                content_sha256="0" * 64,
+                content={"Plan": text},
+            )
+            for index, (date, text) in enumerate(dated_notes, 1)
+        ),
+        truncated=False,
+    )
+
+
+def _completion_brief(selection, text, *, section="recap", refs=None):
+    prepared = _brief(selection)
+    references = refs or [source.source_ref for source in selection.sources]
+    item = prepared.recap.model_copy(update={"text": text, "source_refs": references})
+    if section == "recap":
+        prepared.recap = item
+    else:
+        setattr(prepared, section, [item])
+    return prepared
+
+
+@pytest.mark.parametrize(
+    "section",
+    [
+        "recap",
+        "trajectory_and_material_changes",
+        "talking_points",
+        "open_threads",
+        "cautions",
+        "suggested_outline",
+    ],
+)
+def test_missing_documentation_cannot_become_noncompletion_in_any_field(section):
+    selection = _completion_selection(
+        (
+            "2026-09-22",
+            "Further fatigue evaluation was needed. No completion or result documented.",
+        ),
+    )
+    prepared = _completion_brief(
+        selection,
+        "2026-09-22: Further fatigue evaluation was documented as needed but not completed.",
+        section=section,
+    )
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.validate_generated_brief(prepared, selection)
+    assert error.value.code == "output_fidelity_rejected"
+
+
+@pytest.mark.parametrize(
+    "source,assertion",
+    [
+        ("CBC ordered; no result documented.", "CBC was not performed."),
+        ("Ultrasound was proposed.", "Ultrasound has not been completed."),
+        (
+            "Referral was needed; no follow-up documentation.",
+            "Referral was incomplete.",
+        ),
+        ("CBC order cancelled; no result documented.", "CBC was never done."),
+        ("MRI completed; report available.", "MRI wasn't completed."),
+        ("Evaluation status was unclear.", "Evaluation failed to finish."),
+        ("No completion documented for CBC.", "CBC has yet to be completed."),
+        ("No MRI result documented.", "MRI was not actually obtained."),
+        (
+            "The CBC was not completed. No fatigue evaluation result documented.",
+            "Fatigue evaluation was not completed.",
+        ),
+        ("It is not accurate that CBC was not completed.", "CBC was not completed."),
+        ("The patient denied that CBC was not completed.", "CBC was not completed."),
+        ("It may be true that CBC was not completed.", "CBC was not completed."),
+        ("Do not claim CBC was not completed.", "CBC was not completed."),
+        ("If CBC was not completed, clarify its status.", "CBC was not completed."),
+        ("Template example: 'CBC was not completed.'", "CBC was not completed."),
+        ("'CBC was not completed.'", "CBC was not completed."),
+        ('"CBC was not completed. MRI was completed."', "CBC was not completed."),
+        (
+            "Patient said: 'CBC was not completed. MRI was completed.'",
+            "CBC was not completed.",
+        ),
+        ("Patient said: 'CBC was not completed.'", "CBC was not completed."),
+        ("Patient reported CBC was not completed.", "CBC was not completed."),
+    ],
+)
+def test_unsupported_or_wrong_subject_negative_status_is_rejected(source, assertion):
+    selection = _completion_selection(("2026-09-22", source))
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.validate_generated_brief(
+            _completion_brief(selection, f"2026-09-22: {assertion}"), selection
+        )
+    assert error.value.code == "output_fidelity_rejected"
+
+
+@pytest.mark.parametrize(
+    "source,summary",
+    [
+        (
+            "CBC ordered; no result documented.",
+            "CBC was ordered; no completion or result was documented.",
+        ),
+        (
+            "Evaluation was needed; no completion documented.",
+            "Further evaluation was documented as needed; its completion was not documented.",
+        ),
+        (
+            "MRI completed; report available.",
+            "MRI was documented as completed with a report available.",
+        ),
+        (
+            "CBC order cancelled; no result documented.",
+            "The documented CBC order was cancelled; no result was documented.",
+        ),
+        (
+            "Ultrasound was proposed.",
+            "Ultrasound was proposed; completion was not confirmed in the supplied note.",
+        ),
+        ("CBC was not completed.", "2026-09-22: CBC was not completed."),
+        ("CBC incomplete.", "2026-09-22: CBC incomplete."),
+        ("CBC wasn't completed.", "2026-09-22: CBC was not completed."),
+        ("CBC could not be completed.", "2026-09-22: CBC could not be completed."),
+        (
+            "Patient said: 'CBC was not completed.'",
+            "2026-09-22: Patient said: 'CBC was not completed.'",
+        ),
+        (
+            "Patient said: 'CBC was not completed. MRI was completed.'",
+            "2026-09-22: Patient said: 'CBC was not completed. MRI was completed.'",
+        ),
+        (
+            "CBC ordered; no result documented.",
+            "Clarify whether CBC was not completed or its completion was simply not documented.",
+        ),
+    ],
+)
+def test_documentation_scope_and_explicitly_grounded_statuses_are_preserved(
+    source, summary
+):
+    selection = _completion_selection(("2026-09-22", source))
+    generator.validate_generated_brief(_completion_brief(selection, summary), selection)
+
+
+def test_noncompletion_requires_its_relevant_cited_source_and_date():
+    selection = _completion_selection(
+        ("2026-09-22", "CBC was not completed."),
+        ("2026-09-29", "CBC completed; result available."),
+    )
+    valid = _completion_brief(
+        selection,
+        "2026-09-22: CBC was not completed. 2026-09-29: CBC was documented as completed.",
+    )
+    generator.validate_generated_brief(valid, selection)
+    for text, references in (
+        (
+            "2026-09-29: CBC was not completed.",
+            [s.source_ref for s in selection.sources],
+        ),
+        ("CBC was not completed.", [s.source_ref for s in selection.sources]),
+        ("2026-09-22: CBC was not completed.", [selection.sources[1].source_ref]),
+    ):
+        with pytest.raises(generator.SessionPrepGenerationError) as error:
+            generator.validate_generated_brief(
+                _completion_brief(selection, text, refs=references), selection
+            )
+        assert error.value.code == "output_fidelity_rejected"
+
+
+def test_fidelity_rejection_regenerates_only_from_original_sources(monkeypatch):
+    selection = _completion_selection(
+        ("2026-09-22", "CBC ordered; no completion or result documented."),
+    )
+    rejected = _completion_brief(
+        selection, "2026-09-22: CBC was not completed. private-rejected-status-sentinel"
+    )
+    expected = _completion_brief(
+        selection,
+        "2026-09-22: CBC was ordered; no completion or result was documented.",
+    )
+    captured = _fake(
+        monkeypatch,
+        None,
+        responses=[
+            (rejected.model_dump_json(), "stop", None),
+            (expected.model_dump_json(), "stop", None),
+        ],
+    )
+    assert generator.generate_prepared_brief(selection) == expected
+    first, second = captured["requests"]
+    assert first["messages"][1] == second["messages"][1]
+    assert second["messages"][0]["content"] == generator.REGENERATION_SYSTEM_PROMPT
+    assert "private-rejected-status-sentinel" not in json.dumps(captured["requests"])
+    assert all(option["max_retries"] == 0 for option in captured["all_options"])
+
+
+def test_repeated_unsupported_noncompletion_cannot_be_published(monkeypatch):
+    selection = _completion_selection(("2026-09-22", "No CBC result documented."))
+    rejected = _completion_brief(selection, "2026-09-22: CBC was not done.")
+    captured = _fake(monkeypatch, rejected.model_dump_json())
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.generate_prepared_brief(selection)
+    assert error.value.code == "output_fidelity_rejected"
+    assert str(error.value) == "output_fidelity_rejected"
+    assert len(captured["requests"]) == 2
+
+
+def test_artifact_constructor_rejects_unsupported_injected_generator_output():
+    from app.services.session_prep_runtime import prepare_artifact_result
+
+    selection = _completion_selection(
+        ("2026-09-22", "No CBC completion or result documented.")
+    )
+    artifact = SimpleNamespace(
+        id="prep_artifact_synthetic_0001", version=1, source_digest="0" * 64
+    )
+    rejected = _completion_brief(selection, "2026-09-22: CBC was not completed.")
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        prepare_artifact_result(
+            artifact=artifact,
+            selection=selection,
+            prepared=rejected,
+            snapshot_at=selection.sources[0].source_at,
+            generated_at=selection.sources[0].source_at,
+            predecessor=None,
+        )
+    assert error.value.code == "output_fidelity_rejected"
+    supported = _completion_brief(
+        selection, "2026-09-22: No CBC completion or result was documented."
+    )
+    result = prepare_artifact_result(
+        artifact=artifact,
+        selection=selection,
+        prepared=supported,
+        snapshot_at=selection.sources[0].source_at,
+        generated_at=selection.sources[0].source_at,
+        predecessor=None,
+    )
+    assert (
+        result.state == "ready" and result.brief_prompt_version == "source_only_prep_v4"
+    )
+    assert result.prepared_brief == supported
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "Was not completed on 2026-09-22.",
+        "It was not completed on 2026-09-22.",
+        "2026-09-22: Was not completed.",
+        "As of 2026-09-22, it was not completed.",
+        "2026-09-22: Not completed recently.",
+    ],
+)
+def test_a_date_or_grammatical_token_cannot_stand_in_for_a_relevant_action(assertion):
+    selection = _completion_selection(
+        (
+            "2026-09-22",
+            "CBC was not completed on 2026-09-22. It was not completed on 2026-09-22. CBC was not completed recently.",
+        ),
+    )
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.validate_generated_brief(
+            _completion_brief(selection, assertion), selection
+        )
+    assert error.value.code == "output_fidelity_rejected"
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    [
+        "CBC may be ordered, but fatigue evaluation was not completed.",
+        "CBC might be ordered and fatigue evaluation was not completed.",
+        "It is unclear whether CBC was ordered; fatigue evaluation was not completed.",
+        "MRI may be ordered, fatigue evaluation was not completed.",
+        "Clarify whether CBC was ordered, but fatigue evaluation was not completed.",
+        "CBC may be ordered while fatigue evaluation was not completed.",
+        "CBC may be ordered because fatigue evaluation was not completed.",
+        "CBC may be ordered fatigue evaluation was not completed.",
+    ],
+)
+def test_a_different_actions_qualifier_cannot_excuse_negative_completion(assertion):
+    selection = _completion_selection(
+        (
+            "2026-09-22",
+            "CBC was proposed. Fatigue evaluation was needed; no completion documented.",
+        ),
+    )
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.validate_generated_brief(
+            _completion_brief(selection, f"2026-09-22: {assertion}"), selection
+        )
+    assert error.value.code == "output_fidelity_rejected"
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "CBC may not be completed; clarify its status.",
+        "It is unclear whether CBC was not completed.",
+        "Clarify whether CBC was not completed or whether completion was undocumented.",
+    ],
+)
+def test_uncertainty_about_the_same_actions_status_remains_nonassertive(summary):
+    selection = _completion_selection(("2026-09-22", "No CBC completion documented."))
+    generator.validate_generated_brief(_completion_brief(selection, summary), selection)
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "2026-09-22:",
+        "2026-09-22 —",
+        "As of 2026-09-22,",
+        "On **2026-09-22**:",
+        "Source date: 2026-09-22 —",
+    ],
+)
+def test_introductory_date_punctuation_preserves_exact_attributed_status(prefix):
+    selection = _completion_selection(
+        ("2026-09-22", "Patient said: 'CBC was not completed.'")
+    )
+    generator.validate_generated_brief(
+        _completion_brief(
+            selection, f"{prefix} Patient said: 'CBC was not completed.'"
+        ),
+        selection,
+    )
+
+
+def test_an_exact_action_with_a_trailing_source_date_is_preserved():
+    selection = _completion_selection(("2026-09-22", "CBC was not completed."))
+    generator.validate_generated_brief(
+        _completion_brief(selection, "CBC was not completed on 2026-09-22."), selection
+    )
+
+
+def test_nominal_status_first_wording_requires_the_entire_source_statement():
+    selection = _completion_selection(("2026-09-22", "Incomplete CBC."))
+    generator.validate_generated_brief(
+        _completion_brief(selection, "2026-09-22: Incomplete CBC."), selection
+    )
+    selection = _completion_selection(("2026-09-22", "CBC was incomplete recently."))
+    with pytest.raises(generator.SessionPrepGenerationError) as error:
+        generator.validate_generated_brief(
+            _completion_brief(selection, "2026-09-22: Incomplete recently."), selection
+        )
+    assert error.value.code == "output_fidelity_rejected"
