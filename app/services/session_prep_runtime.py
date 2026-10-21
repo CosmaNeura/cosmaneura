@@ -6,9 +6,9 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from typeid import TypeID
 
 from app.configuration.authority import (
@@ -30,6 +30,7 @@ from app.services.session_prep import (
     SessionPrepToolResponse,
     _empty_result,
 )
+from app.services.session_prep_facts import StructuredFactSet, project_explicit_facts
 from app.services.session_prep_generator import (
     GENERATOR_VERSION,
     MODEL_PROFILE,
@@ -57,6 +58,44 @@ from app.models.session_prep_runtime import (
     SessionPrepReadReceipt,
 )
 from sqlmodel import Session, select
+
+
+class SessionPrepFactsResult(BaseModel):
+    """Opt-in exact observations; availability is independent of the brief."""
+
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal["1.1.0"] = "1.1.0"
+    preparation: SessionPrepResult
+    source_version_digest: str = Field(pattern=r"^sha256_[a-f0-9]{64}$")
+    facts_state: Literal["ready", "unavailable"]
+    reason_code: Literal["no_eligible_sources"] | None
+    structured_facts: StructuredFactSet | None
+
+    @model_validator(mode="after")
+    def consistent(self) -> SessionPrepFactsResult:
+        if self.facts_state == "ready":
+            if self.structured_facts is None or self.reason_code is not None:
+                raise ValueError("Available facts require exact source observations")
+            if self.structured_facts.source_count == 0:
+                raise ValueError("Available facts require reviewed sources")
+            if self.preparation.state == "ready" and (
+                self.preparation.source_version_digest != self.source_version_digest
+                or self.preparation.source_count != self.structured_facts.source_count
+            ):
+                raise ValueError(
+                    "Preparation and facts must use the same reviewed sources"
+                )
+        elif (
+            self.structured_facts is not None
+            or self.reason_code != "no_eligible_sources"
+        ):
+            raise ValueError("Unavailable facts cannot carry observations")
+        return self
+
+
+class SessionPrepFactsToolResponse(SessionPrepToolResponse):
+    tool_version: Literal["1.1.0"] = "1.1.0"  # type: ignore[assignment]
+    result: SessionPrepFactsResult  # type: ignore[assignment]
 
 
 def _digest(value: object) -> str:
@@ -242,11 +281,13 @@ def invoke_provider_session_prep(
     source_turn_ref: str,
     context_snapshot_ref: str,
     detail: str,
+    tool_version: str = "1.0.0",
     observed_at: datetime,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
 ) -> SessionPrepInvocation:
     """Caller must hold the current interaction lock and commit before egress."""
     authorized = authorization.authorized
+    facts_requested = tool_version == "1.1.0" and detail == "structured_facts"
     scope = session.exec(
         select(ProviderRecordAuthority).where(
             ProviderRecordAuthority.binding_id
@@ -255,7 +296,7 @@ def invoke_provider_session_prep(
     ).one_or_none()
     if (
         scope is None
-        or detail != "brief"
+        or not ((tool_version == "1.0.0" and detail == "brief") or facts_requested)
         or not hmac.compare_digest(scope.context_snapshot_ref, context_snapshot_ref)
     ):
         raise SessionPrepScopeDenied
@@ -283,11 +324,28 @@ def invoke_provider_session_prep(
             # Keep the immutable receipt, deny replay, and require a new action.
             raise SessionPrepScopeDenied
         try:
-            replay = SessionPrepToolResponse.model_validate(receipt.response_payload)
+            replay = (
+                SessionPrepFactsToolResponse
+                if facts_requested
+                else SessionPrepToolResponse
+            ).model_validate(receipt.response_payload)
         except ValidationError:
             raise SessionPrepInvariantError(
                 "Stored preparation receipt is invalid"
             ) from None
+        if isinstance(replay, SessionPrepFactsToolResponse) and (
+            replay.result.source_version_digest != f"sha256_{digest}"
+        ):
+            # Even a pending/failed brief receipt must not replay old facts.
+            raise SessionPrepScopeDenied
+        if isinstance(replay, SessionPrepFactsToolResponse) and (
+            replay.result.structured_facts != (
+                project_explicit_facts(selection) if selection.sources else None
+            )
+        ):
+            # A newer conservative parser must not replay unsafe classifications
+            # from an immutable older1.1 receipt with unchanged note revisions.
+            raise SessionPrepScopeDenied
         return SessionPrepInvocation(response=replay, replayed=True)
     if authorization.turn_closed:
         raise SessionPrepScopeDenied
@@ -325,16 +383,35 @@ def invoke_provider_session_prep(
     # Allocate before serializing the immutable response; the mixin's SQL
     # default otherwise runs only at flush, after these references are needed.
     receipt.id = cast(TypeIDType, TypeID("prep_read"))
-    response = SessionPrepToolResponse(
+    result_value: SessionPrepResult | SessionPrepFactsResult = result
+    response_type = SessionPrepToolResponse
+    if facts_requested:
+        try:
+            structured_facts = (
+                project_explicit_facts(selection) if selection.sources else None
+            )
+        except ValueError:
+            raise SessionPrepInvariantError(
+                "Structured fact evidence is invalid"
+            ) from None
+        result_value = SessionPrepFactsResult(
+            preparation=result,
+            source_version_digest=f"sha256_{digest}",
+            facts_state="ready" if selection.sources else "unavailable",
+            reason_code=None if selection.sources else "no_eligible_sources",
+            structured_facts=structured_facts,
+        )
+        response_type = SessionPrepFactsToolResponse
+    response = response_type(
         tool_call_ref=str(receipt.id),
         tool_name="session-prep.context.read",
-        tool_version="1.0.0",
+        tool_version=tool_version,  # type: ignore[arg-type]
         status="completed",
         approval_ref=None,
         access_intent_ref=None,
         access_outcome_ref=None,
         result_classification="phi_possible",
-        result=result,
+        result=result_value,  # type: ignore[arg-type]
         recorded_at=observed_at,
     )
     receipt.response_payload = response.model_dump(mode="json")

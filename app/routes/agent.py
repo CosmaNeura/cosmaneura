@@ -38,6 +38,7 @@ from app.configuration.session_prep import (
     SESSION_PREP_SYNTHETIC_SETTINGS,
     SessionPrepSyntheticSettings,
 )
+from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -418,7 +419,17 @@ class SessionPrepContextReadInvocation(BaseModel):
     arguments: SessionPrepReadArguments
 
 
+class SessionPrepFactsReadArguments(SessionPrepReadArguments):
+    detail: Literal["structured_facts"]  # type: ignore[assignment]
+
+
+class SessionPrepFactsReadInvocation(SessionPrepContextReadInvocation):
+    tool_version: Literal["1.1.0"]  # type: ignore[assignment]
+    arguments: SessionPrepFactsReadArguments  # type: ignore[assignment]
+
+
 _SESSION_PREP_TOOL_KEY = ("session-prep.context.read", "1.0.0")
+_SESSION_PREP_FACTS_TOOL_KEY = ("session-prep.context.read", "1.1.0")
 _MAX_TOOL_INVOCATION_BODY_BYTES = 8 * 1024
 
 
@@ -576,6 +587,7 @@ def get_session_prep_synthetic_settings() -> SessionPrepSyntheticSettings:
 @agent_api_app.post(
     "/tools/invoke",
     response_model=app.services.session_prep.SessionPrepToolResponse
+    | SessionPrepFactsToolResponse
     | provider_question.ProviderQuestionResponse
     | history.HistoryResponse,
     status_code=status.HTTP_200_OK,
@@ -586,6 +598,7 @@ def get_session_prep_synthetic_settings() -> SessionPrepSyntheticSettings:
                 "application/json": {
                     "schema": TypeAdapter(
                         SessionPrepContextReadInvocation
+                        | SessionPrepFactsReadInvocation
                         | provider_question.ProviderQuestionInvocation
                         | history.HistoryInvocation
                     ).json_schema(),
@@ -645,6 +658,7 @@ async def invoke_tool(
     ] = None,
 ) -> (
     app.services.session_prep.SessionPrepToolResponse
+    | SessionPrepFactsToolResponse
     | provider_question.ProviderQuestionResponse
     | history.HistoryResponse
     | JSONResponse
@@ -680,6 +694,7 @@ async def _invoke_tool(
     companion_brief: bool = False,
 ) -> (
     app.services.session_prep.SessionPrepToolResponse
+    | SessionPrepFactsToolResponse
     | provider_question.ProviderQuestionResponse
     | history.HistoryResponse
     | JSONResponse
@@ -715,6 +730,7 @@ async def _invoke_tool(
     tool_key = (data.tool_name, data.tool_version)
     if (companion_brief and tool_key != _SESSION_PREP_TOOL_KEY) or tool_key not in {
         _SESSION_PREP_TOOL_KEY,
+        _SESSION_PREP_FACTS_TOOL_KEY,
         *provider_question.TOOL_KEYS,
         history.TOOL_KEY,
     }:
@@ -735,6 +751,10 @@ async def _invoke_tool(
                 data.model_dump(mode="json", exclude_unset=True)
             )
             if tool_key in provider_question.TOOL_KEYS
+            else SessionPrepFactsReadInvocation.model_validate(
+                data.model_dump(mode="json", exclude_unset=True)
+            )
+            if tool_key == _SESSION_PREP_FACTS_TOOL_KEY
             else SessionPrepContextReadInvocation.model_validate(
                 data.model_dump(mode="json", exclude_unset=True)
             )
@@ -821,11 +841,16 @@ async def _invoke_tool(
                     source_turn_ref=invocation.arguments.source_turn_ref,
                     context_snapshot_ref=invocation.arguments.context_snapshot_ref,
                     detail=invocation.arguments.detail,
+                    tool_version=invocation.tool_version,
                     observed_at=datetime.now(UTC),
                     settings=authority_settings,
                 )
                 session.commit()
-            elif not companion_brief and session_prep_settings.is_complete():
+            elif (
+                not companion_brief
+                and not isinstance(invocation, SessionPrepFactsReadInvocation)
+                and session_prep_settings.is_complete()
+            ):
                 result = app.services.session_prep.SYNTHETIC_SESSION_PREP_SERVICE.invoke(
                     workload_client_id=principal.client_id,
                     interaction_ref=interaction_ref,
