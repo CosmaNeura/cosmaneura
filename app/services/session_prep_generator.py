@@ -3,7 +3,7 @@
 import json
 import re
 from time import monotonic
-from typing import Literal
+from typing import Literal, get_args
 
 import httpx
 from openai import APIConnectionError, APITimeoutError, RateLimitError
@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
 from app.services.session_prep import (
+    _PROHIBITED_EGRESS,
     ImmutableBrief,
     SessionPrepInvariantError,
     SessionPrepPreparedBrief,
@@ -20,7 +21,7 @@ from app.services.session_prep import (
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 
 GENERATOR_VERSION = "reviewed_notes_v1"
-PROMPT_VERSION = "source_only_prep_v4"
+PROMPT_VERSION = "source_only_prep_v5"
 MODEL_PROFILE = DEFAULT_MULTI_MODAL_MODEL
 MAX_OUTPUT_CHARACTERS = 40_000
 # Leave time for source revalidation/storage before the existing Celery task's
@@ -98,6 +99,47 @@ invent one. Return the complete supplied response_schema with the original
 source_ref citations and null patient_reported."""
 )
 
+SafetyCategory = Literal[
+    "diagnosis_assertion", "leading_action", "medication_action", "emergency_deferral"
+]
+# These bits follow the existing four egress patterns without changing them.
+# Persist only this closed mask code, never matched wording, fields or offsets.
+SAFETY_CATEGORIES: tuple[SafetyCategory, ...] = (
+    "diagnosis_assertion",
+    "leading_action",
+    "medication_action",
+    "emergency_deferral",
+)
+SAFETY_FAILURE_CODES = {mask: f"output_safety_{mask:02d}" for mask in range(1, 16)}
+_SAFETY_REGENERATION_INSTRUCTIONS: dict[SafetyCategory, str] = {
+    "diagnosis_assertion": (
+        "Assessment wording needs correction. Preserve every source-supported prior "
+        "assessment and its uncertainty as dated documentation using 'documented "
+        "assessment:' followed by the recorded assessment. Do not present a new "
+        "diagnosis or a diagnostic confirmation, even when describing an earlier note."
+    ),
+    "leading_action": (
+        "Action wording needs correction. Begin talking points and outline items "
+        "with Review, Discuss or Clarify, concerning documented facts. Do not begin "
+        "any field or sentence with an instruction to start, stop, increase or decrease. "
+        "Preserve historical actions as dated recorded status, not instructions."
+    ),
+    "medication_action": (
+        "Medication wording needs correction. Preserve the original dated dose values, "
+        "documented use, planned use and later corrections. Express the history with "
+        "neutral recorded-status nouns, never medication-action verbs, including "
+        "when describing a cancelled or superseded historical instruction. Do not "
+        "omit dose history or turn a plan into documented use."
+    ),
+    "emergency_deferral": (
+        "Emergency-related wording needs correction. Preserve source-supported dated "
+        "events and cautions as factual documentation, including their urgency. "
+        "Do not issue positive or negative emergency-care instructions in this chart "
+        "brief. Never minimize urgency or imply that emergency care can wait. Do not "
+        "invent an emergency event or omit a documented one to avoid wording rules."
+    ),
+}
+
 GenerationFailureCode = Literal[
     "source_bound_exceeded",
     "model_timeout",
@@ -116,9 +158,72 @@ GenerationFailureCode = Literal[
 class SessionPrepGenerationError(SessionPrepInvariantError):
     """A fixed metadata code; never retain model, source or SDK error content."""
 
-    def __init__(self, code: GenerationFailureCode):
+    def __init__(
+        self,
+        code: GenerationFailureCode,
+        *,
+        safety_categories: tuple[SafetyCategory, ...] = (),
+    ):
+        if (
+            type(code) is not str
+            or code not in get_args(GenerationFailureCode)
+            or type(safety_categories) is not tuple
+            or any(
+                type(item) is not str or item not in SAFETY_CATEGORIES
+                for item in safety_categories
+            )
+            or len(set(safety_categories)) != len(safety_categories)
+            or (safety_categories and code != "output_safety_rejected")
+        ):
+            raise ValueError("Invalid closed safety metadata")
         self.code = code
+        self.safety_categories = tuple(
+            item for item in SAFETY_CATEGORIES if item in safety_categories
+        )
         super().__init__(code)
+
+    @property
+    def failure_code(self) -> str:
+        """A bounded database-compatible code; the legacy error family is stable."""
+        mask = sum(
+            1 << index
+            for index, item in enumerate(SAFETY_CATEGORIES)
+            if item in self.safety_categories
+        )
+        return SAFETY_FAILURE_CODES.get(mask, self.code)
+
+
+def _safety_categories(
+    prepared: SessionPrepPreparedBrief,
+) -> tuple[SafetyCategory, ...]:
+    values = [prepared.recap.text]
+    for section in (
+        prepared.trajectory_and_material_changes,
+        prepared.talking_points,
+        prepared.open_threads,
+        prepared.cautions,
+        prepared.suggested_outline,
+    ):
+        values.extend(item.text for item in section)
+    if prepared.patient_reported is not None:
+        values.append(prepared.patient_reported.summary)
+    return tuple(
+        category
+        for category, pattern in zip(SAFETY_CATEGORIES, _PROHIBITED_EGRESS, strict=True)
+        if any(pattern.search(value) for value in values)
+    )
+
+
+def _regeneration_prompt(error: SessionPrepGenerationError) -> str:
+    # Only fixed category instructions join the original source-only prompt.
+    # Neither a rejected draft nor a matched substring is passed to the model.
+    instructions = [
+        _SAFETY_REGENERATION_INSTRUCTIONS[category]
+        for category in error.safety_categories
+    ]
+    return REGENERATION_SYSTEM_PROMPT + (
+        "\n" + "\n".join(instructions) if instructions else ""
+    )
 
 
 def generate_prepared_brief(
@@ -141,13 +246,14 @@ def generate_prepared_brief(
     if not selection.sources or len(source_json) > 96_000:
         raise SessionPrepGenerationError("source_bound_exceeded")
     deadline = monotonic() + MAX_MODEL_WORK_SECONDS
+    system_prompt = SYSTEM_PROMPT
     for attempt in range(2):
         remaining = deadline - monotonic()
         if remaining <= 0:
             raise SessionPrepGenerationError("model_timeout")
         content = _complete_brief(
             source_json=source_json,
-            system_prompt=SYSTEM_PROMPT if attempt == 0 else REGENERATION_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
             timeout_seconds=min(MAX_MODEL_CALL_SECONDS, remaining),
         )
         if monotonic() >= deadline:
@@ -166,6 +272,7 @@ def generate_prepared_brief(
                 raise
             # Regenerate only from the unchanged original source payload. Never
             # salvage, transform, log or send the rejected draft back to a model.
+            system_prompt = _regeneration_prompt(error)
             continue
         if monotonic() >= deadline:
             raise SessionPrepGenerationError("model_timeout")
@@ -234,7 +341,9 @@ def validate_generated_brief(
             "brief_validation_only", selection.sources[0].source_at, prepared, ()
         )
     ):
-        raise SessionPrepGenerationError("output_safety_rejected")
+        raise SessionPrepGenerationError(
+            "output_safety_rejected", safety_categories=_safety_categories(prepared)
+        )
     _validate_noncompletion_grounding(prepared, selection)
 
 
