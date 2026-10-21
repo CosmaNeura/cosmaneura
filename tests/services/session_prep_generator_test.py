@@ -503,7 +503,18 @@ def test_missing_documentation_cannot_become_noncompletion_in_any_field(section)
         ("It may be true that CBC was not completed.", "CBC was not completed."),
         ("Do not claim CBC was not completed.", "CBC was not completed."),
         ("If CBC was not completed, clarify its status.", "CBC was not completed."),
+        ("CBC was not completed?", "CBC was not completed."),
+        ("Is it true that CBC was not completed?", "CBC was not completed."),
+        ("Hypothetical scenario. CBC was not completed.", "CBC was not completed."),
+        (
+            "CBC was not completed; this statement is incorrect.",
+            "CBC was not completed.",
+        ),
         ("Template example: 'CBC was not completed.'", "CBC was not completed."),
+        ('"CBC was not completed.', "CBC was not completed."),
+        ("Patient reports CBC was not completed.", "CBC was not completed."),
+        ("Patient has reported CBC was not completed.", "CBC was not completed."),
+        ("According to the patient, CBC was not completed.", "CBC was not completed."),
         ("'CBC was not completed.'", "CBC was not completed."),
         ('"CBC was not completed. MRI was completed."', "CBC was not completed."),
         (
@@ -550,6 +561,14 @@ def test_unsupported_or_wrong_subject_negative_status_is_rejected(source, assert
         ("CBC incomplete.", "2026-09-22: CBC incomplete."),
         ("CBC wasn't completed.", "2026-09-22: CBC was not completed."),
         ("CBC could not be completed.", "2026-09-22: CBC could not be completed."),
+        (
+            "Patient reports CBC was not completed.",
+            "2026-09-22: Patient reports CBC was not completed.",
+        ),
+        (
+            "According to the patient, CBC was not completed.",
+            "2026-09-22: According to the patient, CBC was not completed.",
+        ),
         (
             "Patient said: 'CBC was not completed.'",
             "2026-09-22: Patient said: 'CBC was not completed.'",
@@ -706,6 +725,8 @@ def test_a_date_or_grammatical_token_cannot_stand_in_for_a_relevant_action(asser
         "CBC may be ordered while fatigue evaluation was not completed.",
         "CBC may be ordered because fatigue evaluation was not completed.",
         "CBC may be ordered fatigue evaluation was not completed.",
+        "Clarify whether CBC was ordered — fatigue evaluation was not completed.",
+        "It is unclear whether CBC was ordered yet fatigue evaluation was not completed.",
     ],
 )
 def test_a_different_actions_qualifier_cannot_excuse_negative_completion(assertion):

@@ -261,24 +261,29 @@ _SOURCE_NONFACTUAL = re.compile(
     r"not\s+(?:documented|confirmed|verified|established))\b",
     re.IGNORECASE,
 )
-_NONASSERTIVE_PREFIX = re.compile(
-    r"\b(?:whether|if|unclear|uncertain|"
-    r"do\s+not\s+(?:assume|infer)|no\s+(?:evidence|confirmation))\b",
+_NONASSERTIVE_WHOLE = re.compile(
+    r"(?:(?:Clarify|Check|Determine) whether|It is (?:unclear|uncertain) whether) "
+    r"(?P<action>[A-Za-z][A-Za-z0-9 -]{0,79}) (?:was|is|has been|had been) "
+    r"(?:not|never) (?:completed|performed|done|obtained)"
+    r"(?: or (?:whether completion was undocumented|its completion was simply not documented))?[.?]?"
+    r"|(?P<future_action>[A-Za-z][A-Za-z0-9 -]{0,79}) (?:may|might) not "
+    r"(?:be|have been) (?:completed|performed|done|obtained)[.?]?",
     re.IGNORECASE,
 )
-_NONASSERTIVE_SCOPE_BREAK = re.compile(
-    r"[,;:]|\b(?:but|and|or|however|whereas|although|while|because|since|then)\b",
+_NONASSERTIVE_ACTION_BOUNDARY = re.compile(
+    r"\b(?:may|might|whether|if|but|and|or|yet|then|however|although|while|because|"
+    r"since|was|were|is|are|be|been|ordered|completed|performed|not|never)\b|[-—–,;:!?]",
     re.IGNORECASE,
-)
-_UNCERTAIN_PREDICATE = re.compile(
-    r"\b(?:may|might|possibly)\s*(?:have\s*(?:been\s*)?)?$", re.IGNORECASE
 )
 _NOMINAL_NONCOMPLETION = frozenset(
     {"incomplete", "unfinished", "uncompleted", "unperformed"}
 )
-_QUOTATION = re.compile(r'"[^"]*"|“[^”]*”|(?<!\w)\'[^\']*\'(?!\w)')
+_QUOTATION = re.compile(r'"[^"]*"|“[^”]*”|‘[^’]*’|(?<!\w)\'[^\']*\'(?!\w)')
+_UNPAIRED_QUOTATION = re.compile(r'["“”]|(?<!\w)[\'‘’]|[\'‘’](?!\w)')
 _ATTRIBUTION = re.compile(
-    r"\b(?:patient|clinician|provider)\s+(?:reported|said|stated|wrote)\b",
+    r"\b(?:patient|clinician|provider)\s+(?:(?:has|had)\s+)?"
+    r"(?:reports?|reported|reporting|says?|said|saying|states?|stated|stating|writes?|wrote|writing)\b"
+    r"|\b(?:per|according to)\s+(?:the\s+)?(?:patient|clinician|provider)\b",
     re.IGNORECASE,
 )
 _STATUS_WORDS = frozenset(
@@ -316,12 +321,16 @@ def _clauses(value: str) -> list[str]:
     return clauses
 
 
-def _nonassertive_status(clause: str, match: re.Match[str]) -> bool:
-    """A qualifier on a different action cannot govern this status assertion."""
-    prefix = _NONASSERTIVE_SCOPE_BREAK.split(clause[: match.start()])[-1]
-    return (
-        _NONASSERTIVE_PREFIX.search(prefix) is not None
-        or _UNCERTAIN_PREDICATE.search(prefix) is not None
+def _nonassertive_status(clause: str) -> bool:
+    """Only a closed whole question about one action avoids factual grounding."""
+    clean = _ISO_DATE.sub("", _DATE_PHRASE.sub("", clause)).strip(" \t:*_`—–-")
+    match = _NONASSERTIVE_WHOLE.fullmatch(clean)
+    if match is None:
+        return False
+    action = match["action"] or match["future_action"]
+    return bool(
+        not _NONASSERTIVE_ACTION_BOUNDARY.search(action)
+        and set(_normalized_clause(action).split()) - _STATUS_WORDS
     )
 
 
@@ -351,9 +360,7 @@ def _validate_noncompletion_grounding(
                 continue
             # Questions and explicitly uncertain statements do not assert the
             # negative state. A qualifier after an assertion cannot excuse it.
-            assertions = [
-                match for match in matches if not _nonassertive_status(clause, match)
-            ]
+            assertions = [] if _nonassertive_status(clause) else matches
             if not assertions:
                 continue
             normalized = _normalized_clause(clause)
@@ -383,9 +390,17 @@ def _validate_noncompletion_grounding(
                 if dates != {source.source_at.date().isoformat()}:
                     continue
                 for text in source.content.values():
+                    # Sentence splitting cannot discard an enclosing question,
+                    # hypothetical setup or later denial. Conservatively reject
+                    # negative-status evidence from the whole qualified section;
+                    # a fresh brief can use documentation-scoped language.
+                    if (
+                        "?" in text
+                        or _SOURCE_NONFACTUAL.search(text)
+                        or _UNPAIRED_QUOTATION.search(_QUOTATION.sub("", text))
+                    ):
+                        continue
                     for evidence in _clauses(text):
-                        if _SOURCE_NONFACTUAL.search(evidence):
-                            continue
                         source_matches = list(_NONCOMPLETION.finditer(evidence))
                         if not source_matches:
                             continue
