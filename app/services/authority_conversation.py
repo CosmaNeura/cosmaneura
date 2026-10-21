@@ -14,6 +14,7 @@ from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
+from app.services.provider_database_deadline import provider_database_deadline
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -529,6 +530,7 @@ def _write_final_phase(
     )
 
 
+@provider_database_deadline
 def write_conversation_turn(
     *,
     workload_client_id: str,

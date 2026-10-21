@@ -15,6 +15,10 @@ from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
+from app.services.provider_database_deadline import (
+    install_provider_database_limits,
+    provider_database_deadline,
+)
 from app.services.provider_record_authority import (
     ProviderRecordScopeDenied,
     ensure_provider_record_scope,
@@ -831,6 +835,7 @@ def _require_current_token_window(
             raise ContextTokenExpiredError
 
 
+@provider_database_deadline
 def authorize_interaction(
     *,
     session: Session,
@@ -910,6 +915,7 @@ def authorize_interaction(
     )
 
 
+@provider_database_deadline
 def authorize_observational_reporting(
     *,
     session: Session,
@@ -1102,6 +1108,7 @@ def _validate_lineage_retry(
         raise ClientTurnConflictError
 
 
+@provider_database_deadline
 def resolve_mount_context(
     *,
     workload_client_id: str,
@@ -1155,6 +1162,9 @@ def resolve_mount_context(
         db.flush()
     except IntegrityError:
         db.rollback()
+        install_provider_database_limits(
+            session=db, workload_client_id=workload_client_id, settings=settings,
+        )
         raced = _existing_lineage(db, client_turn_id)
         if raced is None:
             raise
@@ -1189,9 +1199,11 @@ def resolve_mount_context(
     )
 
 
+@provider_database_deadline
 def bootstrap_mount_context(
     *,
     mount_context_token: str,
+    workload_client_id: str | None = None,
     session: Session | None = None,
     settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
 ) -> ResolvedMountContext:
@@ -1208,6 +1220,7 @@ def bootstrap_mount_context(
         with get_session() as managed_session:
             return bootstrap_mount_context(
                 mount_context_token=mount_context_token,
+                workload_client_id=workload_client_id,
                 session=cast(Session, managed_session),
                 settings=settings,
             )

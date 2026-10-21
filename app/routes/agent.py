@@ -39,6 +39,7 @@ from app.configuration.session_prep import (
     SESSION_PREP_SYNTHETIC_SETTINGS,
     SessionPrepSyntheticSettings,
 )
+from app.services.provider_database_deadline import ProviderDatabaseDeadlineExceeded
 from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
@@ -1010,6 +1011,7 @@ async def bootstrap_mount_context(
         context = await _run_agent_database(
             app.services.authority.bootstrap_mount_context,
             mount_context_token=mount_context_token,
+            workload_client_id=principal.client_id,
             settings=settings,
         )
         response_body = MountContextResponse.model_validate(context.public_body())
@@ -1153,13 +1155,13 @@ def resolve_mount_context(
             detail="The client turn identifier is already bound to another request.",
             trace_id=resolved_trace_id,
         )
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code="PLATFORM_UNAVAILABLE",
             title="Platform unavailable",
             detail="Mount-context resolution is temporarily unavailable.",
-            retryable=True,
+            retryable=not isinstance(error, ProviderDatabaseDeadlineExceeded),
             trace_id=resolved_trace_id,
         )
 
@@ -1299,6 +1301,7 @@ async def write_conversation_turn(
     except (
         admission.ProviderChatAdmissionUnavailable,
         admission.ProviderChatWindowExpired,
+        ProviderDatabaseDeadlineExceeded,
     ):
         return agent_problem_response(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

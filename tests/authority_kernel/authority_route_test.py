@@ -231,6 +231,7 @@ def test_mount_bootstrap_returns_only_context_and_trace(monkeypatch) -> None:
     def synthetic_bootstrap(**kwargs):
         assert kwargs == {
             "mount_context_token": "mctx_synthetic_token_000000000000",
+            "workload_client_id": "11111111-1111-4111-8111-111111111111",
             "settings": fastapi_app.dependency_overrides[
                 get_agent_authority_settings
             ](),
