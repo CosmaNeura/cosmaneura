@@ -507,12 +507,12 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, _token, record = scope
-    assert generator.PROMPT_VERSION == "source_only_prep_v5"
+    assert generator.PROMPT_VERSION == "source_only_prep_v6"
     with get_session() as session:
         current_selection, current_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
-        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v3")
+        monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v5")
         prior_selection, prior_digest = runtime.current_source_state(
             session, record, observed_at=NOW, settings=AUTHORITY_SETTINGS
         )
@@ -520,26 +520,26 @@ def test_new_prompt_version_changes_digest_without_changing_sources(scope, monke
     assert current_digest != prior_digest
 
 
-@pytest.mark.parametrize("scope", ["source_only_prep_v3"], indirect=True)
+@pytest.mark.parametrize("scope", ["source_only_prep_v5"], indirect=True)
 def test_new_prompt_version_cannot_serve_or_replay_an_old_brief(scope, monkeypatch):
     import app.services.session_prep_runtime as runtime
 
     _doctor, _target, _note, token, record = scope
-    assert runtime.PROMPT_VERSION == "source_only_prep_v3"
+    assert runtime.PROMPT_VERSION == "source_only_prep_v5"
     assert _work() == "ready"
     old_action = _action(token)
     old = _read(token, record, old_action)
-    assert old.response.result.brief_prompt_version == "source_only_prep_v3"
+    assert old.response.result.brief_prompt_version == "source_only_prep_v5"
     assert _read(token, record, old_action).replayed
 
-    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v5")
+    monkeypatch.setattr(runtime, "PROMPT_VERSION", "source_only_prep_v6")
     with pytest.raises(SessionPrepScopeDenied):
         _read(token, record, old_action)
     fresh_action = _action(token)
     assert _read(token, record, fresh_action).response.result.state == "pending"
     assert SessionPrepArtifact.count() == 1
     assert _work() == "ready"
-    fresh = _read(token, record, fresh_action, key="prep-read-key-v5-0002")
-    assert fresh.response.result.brief_prompt_version == "source_only_prep_v5"
+    fresh = _read(token, record, fresh_action, key="prep-read-key-v6-0002")
+    assert fresh.response.result.brief_prompt_version == "source_only_prep_v6"
     assert fresh.response.result.brief_version == 2
     assert fresh.response.result.brief_supersedes_ref == old.response.result.brief_ref
