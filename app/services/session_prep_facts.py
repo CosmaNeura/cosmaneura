@@ -384,7 +384,35 @@ _LAB = re.compile(
 )
 
 
+_MARKDOWN_LIST_PREFIX = re.compile(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?: {1,4}|\t)(?=\S)")
+
+
+def _source_blocks(text: str):
+    """Keep every payload/continuation; only known list markers are syntax.
+
+    Ordinary unmarked prose is never split at a newline. A list item continues
+    through following lines until another supported marker starts a new item.
+    Marker-only lines, code indentation and inline pseudo-markers stay as data.
+    """
+    start = offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = _MARKDOWN_LIST_PREFIX.match(line)
+        if marker is not None:
+            if offset > start:
+                yield text[start:offset], start
+            start = offset + marker.end()
+        offset += len(line)
+    if start < len(text):
+        yield text[start:], start
+
+
 def _segment_spans(text: str):
+    for block, offset in _source_blocks(text):
+        for quote, start in _sentence_spans(block):
+            yield quote, offset + start
+
+
+def _sentence_spans(text: str):
     # Semicolons/newlines retain enclosing qualifiers rather than manufacture
     # standalone patient assertions. Include punctuation-only and oversized
     # units so context validation cannot silently lose nonblank source text.
@@ -467,6 +495,19 @@ _CLINICAL_SECTIONS = frozenset({
     "physical exam", "physical examination", "vitals", "vital signs", "vitalsigns",
     "orders", "labs", "laboratory", "lab results", "laboratory results",
 })
+_SOAP_SECTIONS = {
+    "s": "subjective", "o": "objective", "a": "assessment", "p": "plan",
+}
+
+
+def _clinical_section_title(section: str) -> str:
+    title = section.strip().casefold()
+    soap = re.fullmatch(r"([soap])[ \t]*-[ \t]*(subjective|objective|assessment|plan)", title)
+    if soap is not None and _SOAP_SECTIONS[soap[1]] == soap[2]:
+        return soap[2]
+    return re.sub(r"[\W_]+", " ", title).strip()
+
+
 _FOREIGN_CONTEXT = re.compile(
     r"\b(?:neighbou?r|visitor|roommate|coworker|colleague|cousin|aunt|uncle|"
     r"grandparent|grandmother|grandfather|acquaintance|other patients?|"
@@ -481,7 +522,7 @@ def _safe_enclosing_context(section: str, text: str) -> bool:
     Omission is intentional when recognized foreign/hypothetical/conditional or
     uncertain wording qualifies a fragment. This is not an exhaustive chart read.
     """
-    title = re.sub(r"[\W_]+", " ", section.casefold()).strip()
+    title = _clinical_section_title(section)
     if title not in _CLINICAL_SECTIONS or "?" in text or (
         _AMBIGUOUS.search(text) or _UNASSERTED.search(text) or _FOREIGN_CONTEXT.search(text)
     ):
