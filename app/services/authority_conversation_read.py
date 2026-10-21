@@ -17,6 +17,7 @@ from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
 )
+from app.services.provider_database_deadline import provider_database_deadline
 from app.services.session_prep import (
     OpaqueRef,
     SessionPrepIdempotencyConflict,
@@ -655,6 +656,7 @@ def validate_final_history(
         raise ConversationContextChanged
 
 
+@provider_database_deadline
 def read_conversation(
     *,
     session: Session,
