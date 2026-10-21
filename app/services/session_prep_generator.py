@@ -1,6 +1,7 @@
 """Bounded, source-only preparation using Core's existing Azure model client."""
 
 import json
+import re
 from time import monotonic
 from typing import Literal
 
@@ -19,7 +20,7 @@ from app.services.session_prep import (
 from app.services.session_prep_note_sources import ReviewedNoteSelection
 
 GENERATOR_VERSION = "reviewed_notes_v1"
-PROMPT_VERSION = "source_only_prep_v3"
+PROMPT_VERSION = "source_only_prep_v4"
 MODEL_PROFILE = DEFAULT_MULTI_MODAL_MODEL
 MAX_OUTPUT_CHARACTERS = 40_000
 # Leave time for source revalidation/storage before the existing Celery task's
@@ -40,6 +41,20 @@ the earlier plan, with both source dates retained. Distinguish ordered tests,
 completed tests, available results, cancelled orders, and absent documentation.
 An absent result does not imply an order, completion, or normal result. Do not
 list a test as outstanding unless a supplied note explicitly documents its order.
+Missing documentation is not documented noncompletion: 'no completion or result
+was documented' must never become 'was not completed', 'was not performed',
+'was not obtained', or 'remained incomplete'. This applies to evaluations,
+referrals, follow-up actions and investigations as well as tests, in every brief
+field. A proposed, needed or cancelled action is not evidence that it was or was
+not carried out. Preserve actual explicitly documented completion/noncompletion,
+and retain later corrections without replacing earlier dated facts. When stating
+explicit noncompletion, use its exact relevant source wording with that note's
+ISO source date; another action's status in the same note is not evidence. Do not
+shorten the complete source clause or discard its qualifiers or attribution.
+Keep the whole relevant clause when stating explicit noncompletion. Do not
+turn a question, hypothetical example, quotation, denial or uncertainty into a
+factual completion status. When a status cannot be grounded, describe exactly
+what was or was not documented and ask the clinician to clarify; do not guess.
 For longitudinal measurements, preserve earlier dated numerical values alongside
 later values, distinguish office measurements from patient-reported home values,
 and never infer a measurement for a visit with none documented. Keep critical
@@ -68,7 +83,7 @@ REGENERATION_SYSTEM_PROMPT = (
     SYSTEM_PROMPT
     + """
 Create a fresh brief from these same original reviewed notes. Do not use a prior
-draft. The initial attempt did not meet the output safety rules; this is not
+draft. The initial attempt did not meet source-fidelity or output safety rules; this is not
 permission to remove or soften those rules. Preserve the dated factual values,
 medication status, cancelled orders and corrections using neutral historical
 documentation language. Do not omit critical facts to avoid the wording rules.
@@ -94,6 +109,7 @@ GenerationFailureCode = Literal[
     "output_schema_invalid",
     "output_lineage_invalid",
     "output_safety_rejected",
+    "output_fidelity_rejected",
 ]
 
 
@@ -143,7 +159,10 @@ def generate_prepared_brief(
         try:
             validate_generated_brief(prepared, selection)
         except SessionPrepGenerationError as error:
-            if error.code != "output_safety_rejected" or attempt == 1:
+            if (
+                error.code not in {"output_safety_rejected", "output_fidelity_rejected"}
+                or attempt == 1
+            ):
                 raise
             # Regenerate only from the unchanged original source payload. Never
             # salvage, transform, log or send the rejected draft back to a model.
@@ -216,3 +235,197 @@ def validate_generated_brief(
         )
     ):
         raise SessionPrepGenerationError("output_safety_rejected")
+    _validate_noncompletion_grounding(prepared, selection)
+
+
+_NONCOMPLETION = re.compile(
+    r"\b(?:(?:not|never|(?:wasn|weren|isn|aren|hasn|haven|hadn|didn|doesn|don)['’]t)"
+    r"(?:\s+(?:yet|be|been|actually|fully|successfully))*\s+"
+    r"(?:completed?|finished?|done|performed|obtained|carried\s+out|followed\s+through)"
+    r"|(?:yet\s+to\s+be|yet\s+to)\s+(?:completed?|done|performed|obtained)"
+    r"|failed\s+to\s+(?:complete|finish|perform|obtain)"
+    r"|incomplete|unfinished|uncompleted|unperformed)\b",
+    re.IGNORECASE,
+)
+_ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_DATE_PHRASE = re.compile(
+    r"\b(?:as\s+of|on|dated|source\s+date)\s*[:—–-]?\s*[*_`]*"
+    r"\d{4}-\d{2}-\d{2}[*_`]*",
+    re.IGNORECASE,
+)
+_CLAUSE_BREAK = re.compile(r"(?<=[.!?])\s+|[;\n]+")
+_SOURCE_NONFACTUAL = re.compile(
+    r"\b(?:if|unless|whether|may|might|possibly|hypothetical|example|template|instructions?|"
+    r"(?:do\s+not|don't|never)\s+(?:state|say|write|report|claim|conclude|assume|infer)|"
+    r"not\s+(?:true|accurate|correct)|incorrect|erroneous|false|"
+    r"denied|denies|disputed|refuted|uncertain|unclear|"
+    r"no\s+(?:evidence|documentation|confirmation)|"
+    r"not\s+(?:documented|confirmed|verified|established))\b",
+    re.IGNORECASE,
+)
+_NONASSERTIVE_WHOLE = re.compile(
+    r"(?:(?:Clarify|Check|Determine) whether|It is (?:unclear|uncertain) whether) "
+    r"(?P<action>[A-Za-z][A-Za-z0-9 -]{0,79}) (?:was|is|has been|had been) "
+    r"(?:not|never) (?:completed|performed|done|obtained)"
+    r"(?: or (?:whether completion was undocumented|its completion was simply not documented))?[.?]?"
+    r"|(?P<future_action>[A-Za-z][A-Za-z0-9 -]{0,79}) (?:may|might) not "
+    r"(?:be|have been) (?:completed|performed|done|obtained)[.?]?",
+    re.IGNORECASE,
+)
+_NONASSERTIVE_ACTION_BOUNDARY = re.compile(
+    r"\b(?:may|might|whether|if|but|and|or|yet|then|however|although|while|because|"
+    r"since|was|were|is|are|be|been|ordered|completed|performed|not|never)\b|[-—–,;:!?]",
+    re.IGNORECASE,
+)
+_NOMINAL_NONCOMPLETION = frozenset(
+    {"incomplete", "unfinished", "uncompleted", "unperformed"}
+)
+_QUOTATION = re.compile(r'"[^"]*"|“[^”]*”|‘[^’]*’|(?<!\w)\'[^\']*\'(?!\w)')
+_UNPAIRED_QUOTATION = re.compile(r'["“”]|(?<!\w)[\'‘’]|[\'‘’](?!\w)')
+_ATTRIBUTION = re.compile(
+    r"\b(?:patient|clinician|provider)\s+(?:(?:has|had)\s+)?"
+    r"(?:reports?|reported|reporting|says?|said|saying|states?|stated|stating|writes?|wrote|writing)\b"
+    r"|\b(?:per|according to)\s+(?:the\s+)?(?:patient|clinician|provider)\b",
+    re.IGNORECASE,
+)
+_STATUS_WORDS = frozenset(
+    "not never yet been actually fully successfully completed complete done "
+    "finished finish performed obtained carried out followed through incomplete "
+    "unfinished uncompleted unperformed failed was were is are has have had "
+    "did does do be to the a an it this that these those they them he she his her "
+    "its their as of on at by for from in into with without after before during "
+    "since until then now today previously earlier later source note notes "
+    "document documented documentation recorded reported said stated status "
+    "action actions required needed planned prior previous".split()
+)
+
+
+def _normalized_clause(value: str) -> str:
+    """Complete clause match, preserving words rather than keyword overlap."""
+    value = re.sub(
+        r"\b(was|were|is|are|has|have|had|did|does|do)n['’]t\b",
+        r"\1 not",
+        _ISO_DATE.sub("", _DATE_PHRASE.sub("", value)).casefold(),
+    )
+    return " ".join(re.findall(r"[a-z0-9]+", value))
+
+
+def _clauses(value: str) -> list[str]:
+    """Keep quoted status and its attribution together across sentence breaks."""
+    quotations = [(quote.start(), quote.end()) for quote in _QUOTATION.finditer(value)]
+    clauses, start = [], 0
+    for boundary in _CLAUSE_BREAK.finditer(value):
+        if any(begin <= boundary.start() < end for begin, end in quotations):
+            continue
+        clauses.append(value[start : boundary.start()])
+        start = boundary.end()
+    clauses.append(value[start:])
+    return clauses
+
+
+def _nonassertive_status(clause: str) -> bool:
+    """Only a closed whole question about one action avoids factual grounding."""
+    clean = _ISO_DATE.sub("", _DATE_PHRASE.sub("", clause)).strip(" \t:*_`—–-")
+    match = _NONASSERTIVE_WHOLE.fullmatch(clean)
+    if match is None:
+        return False
+    action = match["action"] or match["future_action"]
+    return bool(
+        not _NONASSERTIVE_ACTION_BOUNDARY.search(action)
+        and set(_normalized_clause(action).split()) - _STATUS_WORDS
+    )
+
+
+def _validate_noncompletion_grounding(
+    prepared: SessionPrepPreparedBrief, selection: ReviewedNoteSelection
+) -> None:
+    """Reject one demonstrated inference class; this is not general entailment.
+
+    A negative completion assertion must preserve the complete relevant source
+    clause and its date. Otherwise the fresh draft must use documentation-only
+    language. Conservative refusals are preferable to guessing a clinical state.
+    """
+    sources = {source.source_ref: source for source in selection.sources}
+    items = [(prepared.recap.text, prepared.recap.source_refs)]
+    for section in (
+        prepared.trajectory_and_material_changes,
+        prepared.talking_points,
+        prepared.open_threads,
+        prepared.cautions,
+        prepared.suggested_outline,
+    ):
+        items.extend((item.text, item.source_refs) for item in section)
+    for text, references in items:
+        for clause in _clauses(text):
+            matches = list(_NONCOMPLETION.finditer(clause))
+            if not matches:
+                continue
+            # Questions and explicitly uncertain statements do not assert the
+            # negative state. A qualifier after an assertion cannot excuse it.
+            assertions = [] if _nonassertive_status(clause) else matches
+            if not assertions:
+                continue
+            normalized = _normalized_clause(clause)
+            for match in assertions:
+                subject = (
+                    set(_normalized_clause(clause[: match.start()]).split())
+                    - _STATUS_WORDS
+                )
+                if subject:
+                    continue
+                if (
+                    len(assertions) == 1
+                    and match.group().casefold() in _NOMINAL_NONCOMPLETION
+                    and set(_normalized_clause(clause[match.end() :]).split())
+                    - _STATUS_WORDS
+                ):
+                    # 'Incomplete CBC' can identify the action after its nominal
+                    # status, but only as the complete source statement.
+                    continue
+                raise SessionPrepGenerationError("output_fidelity_rejected")
+            dates = set(_ISO_DATE.findall(clause))
+            supported = False
+            for reference in references:
+                source = sources[reference]
+                if dates != {source.source_at.date().isoformat()}:
+                    continue
+                for text in source.content.values():
+                    # Sentence splitting cannot discard an enclosing question,
+                    # hypothetical setup or later denial. Conservatively reject
+                    # negative-status evidence from the whole qualified section;
+                    # a fresh brief can use documentation-scoped language.
+                    if (
+                        "?" in text
+                        or _SOURCE_NONFACTUAL.search(text)
+                        or _UNPAIRED_QUOTATION.search(_QUOTATION.sub("", text))
+                    ):
+                        continue
+                    for evidence in _clauses(text):
+                        source_matches = list(_NONCOMPLETION.finditer(evidence))
+                        if not source_matches:
+                            continue
+                        source_clause = _normalized_clause(evidence)
+                        # Preserve the entire source clause: a substring can
+                        # discard uncertainty or attribution we did not enumerate.
+                        if normalized != source_clause:
+                            continue
+                        # A quoted status only supports the complete attributed
+                        # statement, never a shortened assertion of that status.
+                        quoted = any(
+                            quote.start() <= match.start() < quote.end()
+                            for quote in _QUOTATION.finditer(evidence)
+                            for match in source_matches
+                        )
+                        if (quoted or _ATTRIBUTION.search(evidence)) and (
+                            normalized != source_clause
+                            or not _ATTRIBUTION.search(evidence)
+                        ):
+                            continue
+                        supported = True
+                        break
+                    if supported:
+                        break
+                if supported:
+                    break
+            if not supported:
+                raise SessionPrepGenerationError("output_fidelity_rejected")
