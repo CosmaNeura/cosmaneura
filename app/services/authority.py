@@ -812,6 +812,25 @@ def _binding_fingerprint(context: ResolvedMountContext) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _require_current_token_window(
+    token: MountContextToken, mount_session: MountContextSession
+) -> None:
+    """Refuse the same bearer when an authority lock outlasts its validity."""
+    if token.revoked_at is not None or mount_session.revoked_at is not None:
+        raise ContextTokenInvalidError
+    if mount_session.status != "active" or token.session_id != mount_session.id:
+        raise ContextTokenInvalidError
+    observed_at = datetime.now(UTC)
+    for expires_at in (token.expires_at, mount_session.absolute_expires_at):
+        now = (
+            observed_at.replace(tzinfo=None)
+            if expires_at.tzinfo is None
+            else observed_at
+        )
+        if expires_at <= now:
+            raise ContextTokenExpiredError
+
+
 def authorize_interaction(
     *,
     session: Session,
@@ -847,16 +866,7 @@ def authorize_interaction(
         _before_context(mount_session)
         # Those locks can wait. Recheck both deadlines after the wait, keeping
         # the same bearer/token and session revocation refusals.
-        if token.revoked_at is not None or mount_session.revoked_at is not None:
-            raise ContextTokenInvalidError
-        if mount_session.status != "active" or token.session_id != mount_session.id:
-            raise ContextTokenInvalidError
-        for expires_at in (token.expires_at, mount_session.absolute_expires_at):
-            now = datetime.now(UTC)
-            if expires_at.tzinfo is None:
-                now = now.replace(tzinfo=None)
-            if expires_at <= now:
-                raise ContextTokenExpiredError
+        _require_current_token_window(token, mount_session)
     context = _context_for_session(
         session,
         mount_session,
@@ -864,6 +874,18 @@ def authorize_interaction(
     )
     if _before_context is None:
         lineage = session.exec(lineage_statement).first()
+    # Both context and lineage locks may wait after _active_token's check.
+    # The token row remains locked; refresh the same family without changing
+    # lock order so revocation during that wait cannot use cached ORM state.
+    current_mount = session.exec(
+        select(MountContextSession)
+        .where(MountContextSession.id == mount_session.id)
+        .execution_options(populate_existing=True)
+    ).first()
+    if current_mount is None:
+        raise ContextTokenInvalidError
+    _require_current_token_window(token, current_mount)
+    mount_session = current_mount
     if lineage is None:
         raise InteractionInvalidError
     if (
