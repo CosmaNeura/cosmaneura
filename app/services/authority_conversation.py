@@ -9,6 +9,7 @@ from typing import Any, Literal, cast
 from uuid import UUID
 
 import app.services.authority as authority
+import app.services.provider_chat_admission as admission
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
@@ -367,6 +368,7 @@ def _write_user_phase(
     payload: dict[str, Any],
     request_digest: str,
     idempotency_key: str,
+    accepted_at: datetime | None = None,
 ) -> ConversationWriteResult:
     if _turn_for_interaction(session, authorized.lineage.id) is not None:
         raise authority.ClientTurnConflictError
@@ -377,7 +379,7 @@ def _write_user_phase(
     ):
         raise authority.AuthorityRequestDeniedError
 
-    recorded_at = datetime.now(UTC)
+    recorded_at = accepted_at or datetime.now(UTC)
     turn = CanonicalConversationTurn(
         interaction_id=authorized.lineage.id,
         workload_client_id=workload_client_id,
@@ -553,6 +555,14 @@ def write_conversation_turn(
                 settings=settings,
             )
 
+    # Try without waiting before any authority row lock. Stored metadata chooses
+    # only the serialization key; current authority and exact replay win below.
+    attempt = admission.begin_admission(
+        session,
+        workload_client_id=workload_client_id,
+        mount_context_token=mount_context_token,
+        payload=payload,
+    )
     authorized = authority.authorize_interaction(
         session=session,
         workload_client_id=workload_client_id,
@@ -612,6 +622,18 @@ def write_conversation_turn(
         raise IdempotencyConflictError
 
     if phase == "user_accepted":
+        accepted_at = None
+        if (
+            attempt is not None
+            and authorized.context.surface == "provider_assistant"
+            and authorized.context.auth_tier == "provider"
+        ):
+            accepted_at = admission.admit_new_chat(
+                session,
+                attempt=attempt,
+                authorized=authorized,
+                workload_client_id=workload_client_id,
+            )
         result = _write_user_phase(
             session,
             authorized=authorized,
@@ -620,8 +642,18 @@ def write_conversation_turn(
             payload=canonical_payload,
             request_digest=request_digest,
             idempotency_key=idempotency_key,
+            accepted_at=accepted_at,
         )
     else:
+        if (
+            authorized.context.surface == "provider_assistant"
+            and authorized.context.auth_tier == "provider"
+        ):
+            admission.require_final_window(
+                session,
+                workload_client_id=workload_client_id,
+                interaction_id=authorized.lineage.id,
+            )
         result = _write_final_phase(
             session,
             authorized=authorized,
