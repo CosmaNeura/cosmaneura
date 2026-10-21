@@ -3,6 +3,10 @@
 import app.configuration.session_prep as configuration
 from app import log
 from app.celery import celery_app
+from app.services.session_prep_alerts import (
+    report_degraded_health,
+    report_maintenance_unavailable,
+)
 from app.services.session_prep_operations import expire_read_receipts, runtime_health
 from app.services.session_prep_worker import run_one_build
 
@@ -38,6 +42,7 @@ def maintain():
             "Session Prep maintenance failed",
             event_code="session_prep_maintenance_failed",
         )
+        report_maintenance_unavailable()
         return
     enabled = configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
     report = log.warning if enabled and health["status"] == "degraded" else log.info
@@ -48,6 +53,8 @@ def maintain():
         expired_receipts=expired,
         **health,
     )
+    if enabled and health["status"] == "degraded":
+        report_degraded_health(health)
 
 
 maintain_celery = celery_app.task(time_limit=30, ignore_result=True)(maintain)
