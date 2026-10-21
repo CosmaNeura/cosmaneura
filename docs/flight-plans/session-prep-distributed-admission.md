@@ -1,9 +1,8 @@
 # Session Prep distributed admission
 
 Tier 2: provider authority, canonical state and service boundary. This Core-only
-receiver increment depends on PR795's fresh expiry/revocation check after
-interaction lock waits; PR794 adds an existing cancellation regression test.
-The final branch must include both accepted parents before independent review.
+receiver increment is built on merged PR795's fresh expiry/revocation check
+after interaction lock waits and PR794's cancellation regression test.
 
 Across ten Sovereign replicas, local provider buckets cannot bound aggregate
 model work. Core will admit only the dedicated configured Sovereign workload's
