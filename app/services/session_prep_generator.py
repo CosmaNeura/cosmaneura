@@ -50,6 +50,8 @@ not carried out. Preserve actual explicitly documented completion/noncompletion,
 and retain later corrections without replacing earlier dated facts. When stating
 explicit noncompletion, use its exact relevant source wording with that note's
 ISO source date; another action's status in the same note is not evidence. Do not
+shorten the complete source clause or discard its qualifiers or attribution.
+Keep the whole relevant clause when stating explicit noncompletion. Do not
 turn a question, hypothetical example, quotation, denial or uncertainty into a
 factual completion status. When a status cannot be grounded, describe exactly
 what was or was not documented and ask the clinician to clarify; do not guess.
@@ -299,7 +301,7 @@ _STATUS_WORDS = frozenset(
 
 
 def _normalized_clause(value: str) -> str:
-    """Continuous wording match, not a bag of status/subject keywords."""
+    """Complete clause match, preserving words rather than keyword overlap."""
     value = re.sub(
         r"\b(was|were|is|are|has|have|had|did|does|do)n['’]t\b",
         r"\1 not",
@@ -339,8 +341,8 @@ def _validate_noncompletion_grounding(
 ) -> None:
     """Reject one demonstrated inference class; this is not general entailment.
 
-    A negative completion assertion must preserve continuous relevant source
-    wording and its date. Otherwise the fresh draft must use documentation-only
+    A negative completion assertion must preserve the complete relevant source
+    clause and its date. Otherwise the fresh draft must use documentation-only
     language. Conservative refusals are preferable to guessing a clinical state.
     """
     sources = {source.source_ref: source for source in selection.sources}
@@ -364,7 +366,6 @@ def _validate_noncompletion_grounding(
             if not assertions:
                 continue
             normalized = _normalized_clause(clause)
-            full_clause_required = False
             for match in assertions:
                 subject = (
                     set(_normalized_clause(clause[: match.start()]).split())
@@ -380,7 +381,6 @@ def _validate_noncompletion_grounding(
                 ):
                     # 'Incomplete CBC' can identify the action after its nominal
                     # status, but only as the complete source statement.
-                    full_clause_required = True
                     continue
                 raise SessionPrepGenerationError("output_fidelity_rejected")
             dates = set(_ISO_DATE.findall(clause))
@@ -405,9 +405,9 @@ def _validate_noncompletion_grounding(
                         if not source_matches:
                             continue
                         source_clause = _normalized_clause(evidence)
-                        if f" {normalized} " not in f" {source_clause} ":
-                            continue
-                        if full_clause_required and normalized != source_clause:
+                        # Preserve the entire source clause: a substring can
+                        # discard uncertainty or attribution we did not enumerate.
+                        if normalized != source_clause:
                             continue
                         # A quoted status only supports the complete attributed
                         # statement, never a shortened assertion of that status.

@@ -501,6 +501,8 @@ def test_missing_documentation_cannot_become_noncompletion_in_any_field(section)
         ("It is not accurate that CBC was not completed.", "CBC was not completed."),
         ("The patient denied that CBC was not completed.", "CBC was not completed."),
         ("It may be true that CBC was not completed.", "CBC was not completed."),
+        ("There is doubt that CBC was not completed.", "CBC was not completed."),
+        ("It is alleged that CBC was not completed.", "CBC was not completed."),
         ("Do not claim CBC was not completed.", "CBC was not completed."),
         ("If CBC was not completed, clarify its status.", "CBC was not completed."),
         ("CBC was not completed?", "CBC was not completed."),
