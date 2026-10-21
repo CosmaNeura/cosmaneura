@@ -9,6 +9,10 @@ from uuid import uuid4
 import sentry_sdk
 
 from app.configuration.sentry import sentry_enabled
+from app.configuration.session_prep_health_alerts import (
+    capture_health_category,
+    health_alerts_enabled,
+)
 from app.services.session_prep_operations import QUEUE_LAG_THRESHOLD_SECONDS
 
 
@@ -59,6 +63,8 @@ def _capture(alert_type: type[Exception]) -> None:
 
     try:
         if not sentry_enabled():
+            if health_alerts_enabled():
+                capture_health_category(alert_type.__name__)
             return
         event_id = uuid4().hex
         with sentry_sdk.new_scope() as scope:
