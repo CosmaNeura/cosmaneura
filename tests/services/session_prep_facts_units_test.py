@@ -370,3 +370,44 @@ def test_independent_units_and_decimal_footer_keep_actual_noninitial_quote_offse
     result = project_explicit_facts(selection)
     assert result.facts[0].evidence.start == text.index("Office BP 148/92.")
     _verify_spans(result, selection)
+
+
+@pytest.mark.parametrize(
+    "quote", ["Home BP 148/92 in office.", "Office BP 148/92 at home."]
+)
+@pytest.mark.parametrize("separator", ["\n", "; "])
+def test_conflicting_pressure_settings_do_not_gain_rows_from_independent_context(
+    quote, separator
+):
+    selection = _single("Objective", quote + separator + "No dizziness reported.")
+    assert project_explicit_facts(selection).facts == []
+    for setting in ("home", "office"):
+        source = selection.sources[0]
+        candidate = FactCandidate(
+            kind="vital",
+            subject="BP",
+            value="148/92",
+            state="measured",
+            setting=setting,
+            source_ref=source.source_ref,
+            source_version=4,
+            section="Objective",
+            quote=quote,
+        )
+        with pytest.raises(FactEvidenceError):
+            validate_fact_candidates([candidate], selection)
+
+
+@pytest.mark.parametrize(
+    "quote,setting",
+    [("Home BP 148/92 at home.", "home"), ("Office BP 148/92 in office.", "office")],
+)
+def test_consistent_pressure_settings_keep_their_literal_value_and_evidence(
+    quote, setting
+):
+    selection = _single("Objective", quote + "\nNo dizziness reported.")
+    result = project_explicit_facts(selection)
+    assert [(fact.value, fact.setting) for fact in result.facts] == [
+        ("148/92", setting)
+    ]
+    _verify_spans(result, selection)

@@ -908,6 +908,10 @@ _HOME_PRESSURE_BETWEEN = re.compile(
 def _pressure_observation(
     quote: str,
 ) -> tuple[str, str, Literal["office", "home", "unspecified"]] | None:
+    # Explicit conflicting settings cannot be resolved by choosing the first
+    # keyword. Apply the same refusal to projection and candidate validation.
+    if re.search(r"\bhome\b", quote, re.I) and re.search(r"\boffice\b", quote, re.I):
+        return None
     for pattern in (_HOME_PRESSURE_PROSE, _HOME_PRESSURE_BETWEEN):
         match = pattern.fullmatch(quote.strip())
         if match is not None:
