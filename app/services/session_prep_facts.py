@@ -244,26 +244,26 @@ def validate_fact_candidates(
             or candidate.quote not in tuple(_segments(text))
             or (
                 candidate.kind == "medication"
-                and _medication_state(candidate.quote, candidate.section)
-                != candidate.state
+                and _medication_observation(candidate.quote, candidate.section)
+                != (candidate.subject, candidate.value, candidate.state)
             )
             or (
                 candidate.kind == "order"
-                and candidate.state not in _order_states(candidate.quote)
+                and (candidate.subject, candidate.state)
+                not in _order_observations(candidate.quote)
             )
             or (
                 candidate.kind == "vital"
-                and (
-                    not _is_measured_pressure(candidate.quote, candidate.value)
-                    or candidate.setting != _pressure_setting(candidate.quote)
-                )
+                and _pressure_observation(candidate.quote)
+                != (candidate.subject, candidate.value, candidate.setting)
             )
         ):
             raise FactEvidenceError("fact_status_evidence_invalid")
         # Locate the whole selected segment, not an identical substring inside
         # an earlier sentence. Repeated identical whole segments deduplicate.
-        start = next(start for quote, start in _segment_spans(text)
-                     if quote == candidate.quote)
+        start = next(
+            start for quote, start in _segment_spans(text) if quote == candidate.quote
+        )
         fingerprint = "|".join(
             [
                 candidate.source_ref,
@@ -384,7 +384,9 @@ _LAB = re.compile(
 )
 
 
-_MARKDOWN_LIST_PREFIX = re.compile(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?: {1,4}|\t)(?=\S)")
+_MARKDOWN_LIST_PREFIX = re.compile(
+    r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])(?: {1,4}|\t)(?=\S)"
+)
 
 
 def _source_blocks(text: str):
@@ -416,6 +418,14 @@ def _sentence_spans(text: str):
     # Semicolons/newlines retain enclosing qualifiers rather than manufacture
     # standalone patient assertions. Include punctuation-only and oversized
     # units so context validation cannot silently lose nonblank source text.
+    lines = list(re.finditer(r"[^\r\n]+", text))
+    if len(lines) > 1 and all(_supported_unit(line.group().strip()) for line in lines):
+        # Newline boundaries are safe only when every complete line has a
+        # closed independent meaning. An unknown continuation stays attached.
+        for line in lines:
+            for quote, start in _sentence_spans(line.group()):
+                yield quote, line.start() + start
+        return
     for match in re.finditer(r"(?:(?:\d\.\d)|[^.!?])+[.!?]?|[.!?]+", text):
         quote = match.group().strip()
         if quote:
@@ -423,12 +433,19 @@ def _sentence_spans(text: str):
             parts = list(re.finditer(r"[^;]+", quote))
             # Only split a semicolon when EVERY part is a complete supported
             # assertion and its enclosing unit is within the evidence bound.
-            if len(quote) <= MAX_QUOTE_CHARACTERS and 1 < len(parts) == quote.count(';') + 1 and all(
-                _complete_fragment(part.group().strip()) for part in parts
+            if (
+                len(quote) <= MAX_QUOTE_CHARACTERS
+                and 1 < len(parts) == quote.count(";") + 1
+                and all(_supported_unit(part.group().strip()) for part in parts)
             ):
                 for part in parts:
-                    yield (part.group().strip(), start + part.start()
-                           + len(part.group()) - len(part.group().lstrip()))
+                    yield (
+                        part.group().strip(),
+                        start
+                        + part.start()
+                        + len(part.group())
+                        - len(part.group().lstrip()),
+                    )
             else:
                 yield quote, start
 
@@ -440,15 +457,18 @@ def _segments(text: str):
 
 _NEGATION = re.compile(
     r"\b(?:no|not|never|neither|nor|without|denies|denied|deny|declines|declined|"
-    r"refuses|refused)\b|\b\w+n['’]t\b", re.I,
+    r"refuses|refused)\b|\b\w+n['’]t\b",
+    re.I,
 )
 _AMBIGUOUS = re.compile(
     r"\b(?:but|however|although|unless|if|hypothetical|example|would|could|"
-    r"might|may|consider|considered|discussed|uncertain|possibly|whether)\b", re.I,
+    r"might|may|consider|considered|discussed|uncertain|possibly|whether)\b",
+    re.I,
 )
 _NOT_TAKING = re.compile(
     r"\b(?:not (?:currently |actually )?taking|never started|has not started|"
-    r"(?:denies|denied|deny) (?:currently |actually )?taking)\b", re.I,
+    r"(?:denies|denied|deny) (?:currently |actually )?taking)\b",
+    re.I,
 )
 
 
@@ -457,7 +477,8 @@ _UNASSERTED = re.compile(
     r"potential|suspected|mistake|incorrect|erroneous|error|historical|formerly|"
     r"previously|used to|in the past|last week|last month|before|after|"
     r"family|mother|father|parent|husband|wife|spouse|son|daughter|brother|sister|"
-    r"friend|caregiver|another patient)\b", re.I,
+    r"friend|caregiver|another patient)\b",
+    re.I,
 )
 _MED_PREDICATES: dict[State, str] = {
     "documented_taking": r"(?:currently )?(?:taking|takes)|has been taking",
@@ -467,13 +488,18 @@ _MED_PREDICATES: dict[State, str] = {
     "documented_prescribed": r"prescribed",
     "stopped": r"stopped|discontinued",
     "superseded": r"superseded|retracted",
-    "documented_not_taking": _NOT_TAKING.pattern.removeprefix(r"\b").removesuffix(r"\b"),
+    "documented_not_taking": _NOT_TAKING.pattern.removeprefix(r"\b").removesuffix(
+        r"\b"
+    ),
 }
 
 
 def _medication_mentions(quote: str):
-    return [match for match in _MEDICATION.finditer(quote)
-            if match["subject"].casefold() not in _DOSE_PREFIX_WORDS]
+    return [
+        match
+        for match in _MEDICATION.finditer(quote)
+        if match["subject"].casefold() not in _DOSE_PREFIX_WORDS
+    ]
 
 
 def _asserted_medication(lower: str, match: re.Match, state: State) -> bool:
@@ -482,27 +508,63 @@ def _asserted_medication(lower: str, match: re.Match, state: State) -> bool:
     prefix = r"^(?:(?:correction|plan|medications?): )?(?:patient (?:(?:is|was|reports|reported) )?)?"
     # Active "A supersedes B" does not say A was superseded.
     frequency = r"(?: (?:daily|once daily|twice daily))?"
-    if state != "superseded" and re.fullmatch(prefix + rf"(?:{predicate}) {subject_dose}{frequency}[.!]?", lower):
+    if state != "superseded" and re.fullmatch(
+        prefix + rf"(?:{predicate}) {subject_dose}{frequency}[.!]?", lower
+    ):
         return True
     frequency = r"(?: (?:daily|once daily|twice daily))?"
-    return bool(re.fullmatch(rf"{subject_dose}{frequency} (?:is |was |has been )?(?:{predicate})[.!]?", lower))
+    return bool(
+        re.fullmatch(
+            rf"{subject_dose}{frequency} (?:is |was |has been )?(?:{predicate})[.!]?",
+            lower,
+        )
+    )
 
 
-_CLINICAL_SECTIONS = frozenset({
-    "medication", "medications", "current medications", "medication reconciliation",
-    "medicationreconciliation", "plan", "assessment", "assessment and plan",
-    "assessment plan", "subjective", "objective", "hpi", "history of present illness",
-    "physical exam", "physical examination", "vitals", "vital signs", "vitalsigns",
-    "orders", "labs", "laboratory", "lab results", "laboratory results",
-})
+_CLINICAL_SECTIONS = frozenset(
+    {
+        "medication",
+        "medications",
+        "current medications",
+        "medication reconciliation",
+        "medicationreconciliation",
+        "plan",
+        "assessment",
+        "assessment and plan",
+        "assessment plan",
+        "subjective",
+        "objective",
+        "hpi",
+        "history of present illness",
+        "physical exam",
+        "physical examination",
+        "vitals",
+        "vital signs",
+        "vitalsigns",
+        "orders",
+        "labs",
+        "laboratory",
+        "lab results",
+        "laboratory results",
+    }
+)
 _SOAP_SECTIONS = {
-    "s": "subjective", "o": "objective", "a": "assessment", "p": "plan",
+    "s": "subjective",
+    "o": "objective",
+    "a": "assessment",
+    "p": "plan",
 }
 
 
 def _clinical_section_title(section: str) -> str:
     title = section.strip().casefold()
-    soap = re.fullmatch(r"([soap])[ \t]*-[ \t]*(subjective|objective|assessment|plan)", title)
+    # One known legacy generated heading; its date is literal source text,
+    # never provenance. Do not strip dates from arbitrary custom headings.
+    if title == "labs - fasting, 02/12/2026":
+        return "labs"
+    soap = re.fullmatch(
+        r"([soap])[ \t]*-[ \t]*(subjective|objective|assessment|plan)", title
+    )
     if soap is not None and _SOAP_SECTIONS[soap[1]] == soap[2]:
         return soap[2]
     return re.sub(r"[\W_]+", " ", title).strip()
@@ -512,7 +574,8 @@ _FOREIGN_CONTEXT = re.compile(
     r"\b(?:neighbou?r|visitor|roommate|coworker|colleague|cousin|aunt|uncle|"
     r"grandparent|grandmother|grandfather|acquaintance|other patients?|"
     r"another person|other person|someone else|somebody else|belongs to|belonged to)\b|"
-    r"\b(?:it|this|that) (?:is|was) \S+['’]s\b", re.I,
+    r"\b(?:it|this|that) (?:is|was) \S+['’]s\b",
+    re.I,
 )
 _CODE_INDENTATION = re.compile(r"^(?: {4}|[ \t]*\t)")
 
@@ -520,8 +583,9 @@ _CODE_INDENTATION = re.compile(r"^(?: {4}|[ \t]*\t)")
 def _has_code_indentation(text: str) -> bool:
     # Inspect raw lines before strip/folding can turn sample code into a chart
     # assertion. Treat ambiguous indented continuations conservatively too.
-    return any(line.strip() and _CODE_INDENTATION.match(line)
-               for line in text.splitlines())
+    return any(
+        line.strip() and _CODE_INDENTATION.match(line) for line in text.splitlines()
+    )
 
 
 def _safe_enclosing_context(section: str, text: str) -> bool:
@@ -531,22 +595,39 @@ def _safe_enclosing_context(section: str, text: str) -> bool:
     uncertain wording qualifies a fragment. This is not an exhaustive chart read.
     """
     title = _clinical_section_title(section)
-    if title not in _CLINICAL_SECTIONS or _has_code_indentation(text) or "?" in text or (
-        _AMBIGUOUS.search(text) or _UNASSERTED.search(text) or _FOREIGN_CONTEXT.search(text)
+    if (
+        title not in _CLINICAL_SECTIONS
+        or _has_code_indentation(text)
+        or "?" in text
+        or (_AMBIGUOUS.search(text) or _FOREIGN_CONTEXT.search(text))
     ):
         return False
     units = list(_segments(text))
     # Unknown surrounding prose can qualify an otherwise valid-looking patient
     # fragment. Accept only wholly supported assertion/correction context.
-    return bool(units and all(
-        len(unit) <= MAX_QUOTE_CHARACTERS and (_complete_fragment(unit) or re.fullmatch(
-            rf"this supersedes (?:the )?(?:previous )?(?:[a-z][a-z-]{{1,39}} )?{_DOSE} (?:plan|dose)[.!]?",
-            _fold(unit),
-        )) for unit in units
-    ))
+    if not units or not all(
+        len(unit) <= MAX_QUOTE_CHARACTERS
+        and (not _UNASSERTED.search(unit) or _medication_correction(unit) is not None)
+        and _supported_unit(unit)
+        for unit in units
+    ):
+        return False
+    # A same-section office absence cannot independently qualify a positive
+    # office measurement. Home readings plus office absence remain compatible.
+    office_absent = any(_office_absence(unit) for unit in units)
+    return not (
+        office_absent
+        and any(
+            (observation := _pressure_observation(unit)) is not None
+            and observation[2] == "office"
+            for unit in units
+        )
+    )
 
 
 def _medication_state(quote: str, section: str) -> State | None:
+    if _medication_correction(quote) is not None:
+        return "documented_continued"
     lower = _fold(quote)
     if "?" in quote or _AMBIGUOUS.search(lower) or _UNASSERTED.search(lower):
         return None
@@ -556,13 +637,18 @@ def _medication_state(quote: str, section: str) -> State | None:
     mention = mentions[0]
     negative = _NOT_TAKING.search(lower)
     if negative:
-        remainder = lower[:negative.start()] + lower[negative.end():]
+        remainder = lower[: negative.start()] + lower[negative.end() :]
         # A second predicate/negation can describe a different time or actor.
         if not _NEGATION.search(remainder) and not re.search(
             r"\b(?:taking|started|stopped|discontinued|continue|continues|continued|"
-            r"prescribed|supersedes|superseded)\b", remainder
+            r"prescribed|supersedes|superseded)\b",
+            remainder,
         ):
-            return "documented_not_taking" if _asserted_medication(lower, mention, "documented_not_taking") else None
+            return (
+                "documented_not_taking"
+                if _asserted_medication(lower, mention, "documented_not_taking")
+                else None
+            )
         return None
     if _NEGATION.search(lower):
         return None
@@ -575,7 +661,9 @@ def _medication_state(quote: str, section: str) -> State | None:
         ("superseded", r"\b(?:superseded|retracted)\b"),
         ("documented_prescribed", r"\bprescribed\b"),
     ]
-    states: list[State] = [state for state, pattern in predicates if re.search(pattern, lower)]
+    states: list[State] = [
+        state for state, pattern in predicates if re.search(pattern, lower)
+    ]
     # "Began taking" is one predicate, not an ambiguous taking/start pair.
     if "documented_started" in states and "documented_taking" in states:
         states.remove("documented_taking")
@@ -585,7 +673,8 @@ def _medication_state(quote: str, section: str) -> State | None:
         return None
     if re.search(r"medication|prescription", section, re.I) and re.fullmatch(
         re.escape(_fold(mention["subject"] + " " + mention["value"]))
-        + r"(?: (?:daily|once daily|twice daily))?(?: \((?:new this visit|patient-reported)\))?[.!]?", lower
+        + r"(?: (?:daily|once daily|twice daily))?(?: \((?:new this visit|prior to this visit|patient-reported)\))?[.!]?",
+        lower,
     ):
         return "documented_listed"
     return None
@@ -602,9 +691,19 @@ def _observation_precedes(prior: DocumentedFact, later: DocumentedFact) -> bool:
     )
 
 
-def _explicit_medication_correction(fact: DocumentedFact, prior: DocumentedFact, text: str) -> bool:
+def _explicit_medication_correction(
+    fact: DocumentedFact, prior: DocumentedFact, text: str
+) -> bool:
     if prior.value is None or prior.value == fact.value:
         return False
+    explicit = _medication_correction(fact.evidence.quote)
+    if explicit is not None:
+        return (
+            _fold(explicit["subject"]) == _fold(fact.subject) == _fold(prior.subject)
+            and explicit["value"] == fact.value
+            and re.sub(r"\s+", "", explicit["old_dose"]).casefold()
+            == re.sub(r"\s+", "", prior.value).casefold()
+        )
     quotes = list(_segments(text))
     try:
         index = quotes.index(fact.evidence.quote)
@@ -617,10 +716,12 @@ def _explicit_medication_correction(fact: DocumentedFact, prior: DocumentedFact,
     # Unsupported subject, question, uncertainty or suffix cannot become a link.
     subject = re.escape(_fold(fact.subject))
     dose = re.escape(_fold(prior.value))
-    return bool(re.fullmatch(
-        rf"this supersedes (?:the )?(?:previous )?(?:{subject} )?{dose} (?:plan|dose)[.!]?",
-        correction,
-    ))
+    return bool(
+        re.fullmatch(
+            rf"this supersedes (?:the )?(?:previous )?(?:{subject} )?{dose} (?:plan|dose)[.!]?",
+            correction,
+        )
+    )
 
 
 def _link_explicit_corrections(facts: list[DocumentedFact], sources: dict) -> None:
@@ -629,30 +730,40 @@ def _link_explicit_corrections(facts: list[DocumentedFact], sources: dict) -> No
         if len(text) > MAX_QUOTE_CHARACTERS:
             continue
         medication_correction = fact.kind == "medication" and fact.state in {
-            "documented_continued", "documented_taking"
+            "documented_continued",
+            "documented_taking",
         }
         order_cancellation = fact.kind == "order" and fact.state == "cancelled"
         if not (medication_correction or order_cancellation):
             continue
         prior_facts = [
-            prior for prior in facts[:index]
+            prior
+            for prior in facts[:index]
             if prior.kind == fact.kind
             and prior.subject.casefold() == fact.subject.casefold()
             and _observation_precedes(prior, fact)
-            and ((order_cancellation and prior.state == "ordered") or (
-                medication_correction
-                and prior.state in {"planned", "documented_prescribed", "documented_listed"}
-                and _explicit_medication_correction(fact, prior, text)
-            ))
+            and (
+                (order_cancellation and prior.state == "ordered")
+                or (
+                    medication_correction
+                    and prior.state
+                    in {"planned", "documented_prescribed", "documented_listed"}
+                    and _explicit_medication_correction(fact, prior, text)
+                )
+            )
         ]
         if prior_facts:
             # A singular previous plan/order does not establish correction of
             # every historical occurrence of the same drug/test.
             fact.supersedes = [prior_facts[-1].fact_ref]
             fact.correction_evidence = SourceEvidence(
-                source_ref=fact.evidence.source_ref, source_version=fact.evidence.source_version,
-                source_at=fact.evidence.source_at, section=fact.evidence.section,
-                quote=text, start=0, end=len(text),
+                source_ref=fact.evidence.source_ref,
+                source_version=fact.evidence.source_version,
+                source_at=fact.evidence.source_at,
+                section=fact.evidence.section,
+                quote=text,
+                start=0,
+                end=len(text),
             )
 
 
@@ -667,11 +778,27 @@ def _is_measured_pressure(quote: str, value: str | None) -> bool:
         and not _AMBIGUOUS.search(quote)
         and not re.search(r"\b(goal|target|desired)\b", _fold(quote))
         and len(list(_BLOOD_PRESSURE.finditer(quote))) == 1
-        and _fold(quote[:pressure.start()]).rstrip(":") in {
-            "", "office", "home", "measured", "office measured", "home measured",
-            "patient reports", "patient reports home", "patient-reported home",
+        and _fold(quote[: pressure.start()]).rstrip(":")
+        in {
+            "",
+            "office",
+            "home",
+            "measured",
+            "office measured",
+            "home measured",
+            "patient reports",
+            "patient reports home",
+            "patient-reported home",
         }
-        and re.fullmatch(r"(?: ?(?:measured|recorded|at home|in office))?[.!]?", quote[pressure.end():].strip(), re.I)
+        and re.fullmatch(
+            r"(?: ?(?:measured|recorded|at home|in office)| ?\(patient-reported\))?[.!]?",
+            quote[pressure.end() :].strip(),
+            re.I,
+        )
+        and (
+            "(patient-reported)" not in quote.casefold()
+            or "home" in _fold(quote[: pressure.start()])
+        )
     )
 
 
@@ -693,21 +820,172 @@ def _order_states(quote: str) -> list[State]:
     # Closed whole assertions prevent evidence absence, other actors, alleged
     # status and unrelated clause predicates from becoming physical order state.
     patterns: list[tuple[State, str]] = [
-        ("ordered", rf"(?:{lab}(?: order)? (?:is |was )?ordered|{lab} order placed|ordered {lab})"),
+        (
+            "ordered",
+            rf"(?:{lab}(?: order)? (?:is |was )?ordered|{lab} order placed|ordered {lab})",
+        ),
         ("cancelled", rf"{lab}(?: order)? (?:is |was )?(?:cancelled|canceled)"),
-        ("not_ordered", rf"{lab} (?:was |is |has been )?(?:not|never) (?:actually )?ordered"),
-        ("order_not_documented", rf"(?:{lab} orders? (?:is |was |were )?not documented|no {lab} orders? (?:was |were )?documented)"),
-        ("result_not_documented", rf"(?:{lab} results? (?:is |was |were )?not documented|no {lab} results? (?:was |were )?documented|{lab} results? unavailable|no {lab} results? available)"),
+        (
+            "not_ordered",
+            rf"{lab} (?:was |is |has been )?(?:not|never) (?:actually )?ordered",
+        ),
+        (
+            "order_not_documented",
+            rf"(?:{lab} orders? (?:is |was |were )?not documented|no {lab} orders? (?:was |were )?documented)",
+        ),
+        (
+            "result_not_documented",
+            rf"(?:{lab} results? (?:is |was |were )?not documented|no {lab} results? (?:is |are |was |were )?documented|{lab} results? unavailable|no {lab} results? available)",
+        ),
         ("resulted", rf"(?:{lab} (?:has |was )?resulted|{lab} results? available)"),
     ]
-    return [state for state, pattern in patterns if re.fullmatch(pattern + r"[.!]?", lower)]
+    return [
+        state for state, pattern in patterns if re.fullmatch(pattern + r"[.!]?", lower)
+    ]
 
 
 def _complete_fragment(quote: str) -> bool:
-    pressure = _BLOOD_PRESSURE.search(quote)
     return bool(
-        _medication_state(quote, "Medications") or _order_states(quote)
-        or (pressure and _is_measured_pressure(quote, pressure["value"]))
+        _medication_observation(quote, "Medications")
+        or _order_observations(quote)
+        or _pressure_observation(quote)
+    )
+
+
+_MEDICATION_CORRECTION = re.compile(
+    rf"(?P<subject>[A-Za-z][A-Za-z-]{{1,39}})\s+(?P<value>{_DOSE})"
+    rf"(?:\s+(?:daily|once daily|twice daily))?\s+\(continue;\s*"
+    rf"supersedes (?:the )?previous erroneous instruction to increase to "
+    rf"(?P<old_dose>{_DOSE})\)[.!]?",
+    re.I,
+)
+
+
+def _medication_correction(quote: str) -> re.Match[str] | None:
+    match = _MEDICATION_CORRECTION.fullmatch(quote.strip())
+    if (
+        match is None
+        or match["subject"].casefold() in _DOSE_PREFIX_WORDS
+        or (
+            _UNASSERTED.search(match["subject"])
+            or _FOREIGN_CONTEXT.search(match["subject"])
+            or _AMBIGUOUS.search(match["subject"])
+        )
+    ):
+        return None
+    if (
+        re.sub(r"\s+", "", match["value"]).casefold()
+        == re.sub(r"\s+", "", match["old_dose"]).casefold()
+    ):
+        return None
+    return match
+
+
+def _medication_observation(quote: str, section: str) -> tuple[str, str, State] | None:
+    correction = _medication_correction(quote)
+    if correction is not None:
+        return correction["subject"], correction["value"], "documented_continued"
+    state = _medication_state(quote, section)
+    mentions = _medication_mentions(quote)
+    if state is not None and len(mentions) == 1:
+        return mentions[0]["subject"], mentions[0]["value"], state
+    return None
+
+
+_HOME_PRESSURE_PROSE = re.compile(
+    r"(?:The )?patient reports home (?P<subject>blood pressures) ranging from "
+    r"(?P<value>\d{2,3} to \d{2,3} systolic and \d{2,3} to \d{2,3} diastolic) "
+    r"since starting [A-Za-z][A-Za-z-]{1,39}[.!]?",
+    re.I,
+)
+_HOME_PRESSURE_BETWEEN = re.compile(
+    r"Patient reports home (?P<subject>blood pressure) readings between "
+    r"(?P<value>\d{2,3} and \d{2,3}/\d{2,3} to \d{2,3})[.!]?",
+    re.I,
+)
+
+
+def _pressure_observation(
+    quote: str,
+) -> tuple[str, str, Literal["office", "home", "unspecified"]] | None:
+    for pattern in (_HOME_PRESSURE_PROSE, _HOME_PRESSURE_BETWEEN):
+        match = pattern.fullmatch(quote.strip())
+        if match is not None:
+            return match["subject"], match["value"], "home"
+    pressure = _BLOOD_PRESSURE.search(quote)
+    if pressure is not None and _is_measured_pressure(quote, pressure["value"]):
+        return pressure["subject"], pressure["value"], _pressure_setting(quote)
+    return None
+
+
+def _order_observations(quote: str) -> list[tuple[str, State]]:
+    # These whole clauses bind shared absence to the exact stated test set.
+    # Imperative "Order CBC ..." remains unstructured, not a placed order.
+    patterns: tuple[tuple[str, tuple[State, ...]], ...] = (
+        (
+            r"No (?P<a>potassium) or (?P<b>creatinine) results? (?:is |are )?documented[.!]?",
+            ("result_not_documented",),
+        ),
+        (
+            r"(?P<a>Potassium) and (?P<b>creatinine) tests (?:are |were )?not ordered;\s*no results documented[.!]?",
+            ("not_ordered", "result_not_documented"),
+        ),
+        (
+            rf"(?P<a>{_LAB.pattern})(?: order)? (?:is |was )?(?:cancelled|canceled);\s*no (?:completion or )?results? documented[.!]?",
+            ("cancelled", "result_not_documented"),
+        ),
+    )
+    for pattern, states in patterns:
+        match = re.fullmatch(pattern, quote.strip(), re.I)
+        if match is not None:
+            subjects = [match["a"]]
+            if "b" in match.groupdict():
+                subjects.append(match["b"])
+            return [(subject, state) for subject in subjects for state in states]
+    labs = list(_LAB.finditer(quote))
+    return (
+        [(labs[0].group(), state) for state in _order_states(quote)]
+        if len(labs) == 1
+        else []
+    )
+
+
+def _office_absence(quote: str) -> bool:
+    return (
+        re.fullmatch(
+            r"(?:Office (?:blood pressure|BP):?\s*(?:Not documented|not measured)|"
+            r"No office (?:blood pressure|BP) was measured or documented during this visit)[.!]?",
+            quote.strip(),
+            re.I,
+        )
+        is not None
+    )
+
+
+def _independent_context_unit(quote: str) -> bool:
+    return (
+        _office_absence(quote)
+        or re.fullmatch(
+            r"(?:No dizziness(?: reported)?|(?:The )?patient (?:reports no|denies) dizziness|"
+            r"No known drug allergies|(?:The )?patient explicitly reports no known drug allergies|"
+            r"Fatigue is improving|"
+            r"This note was generated with AI assistance|"
+            r"Greater than \d+(?:\.\d+)? minutes? was spent in patient care, including review of prior records, consultation with other providers, and documentation)[.!]?",
+            quote.strip(),
+            re.I,
+        )
+        is not None
+    )
+
+
+def _supported_unit(quote: str) -> bool:
+    return bool(
+        _complete_fragment(quote)
+        or _independent_context_unit(quote)
+        or re.fullmatch(
+            rf"this supersedes (?:the )?(?:previous )?(?:[a-z][a-z-]{{1,39}} )?{_DOSE} (?:plan|dose)[.!]?",
+            _fold(quote),
+        )
     )
 
 
@@ -730,44 +1008,38 @@ def project_explicit_facts(selection: ReviewedNoteSelection) -> StructuredFactSe
                     section=section,
                     quote=quote,
                 )
-                pressure = _BLOOD_PRESSURE.search(quote)
-                if pressure and _is_measured_pressure(quote, pressure["value"]):
+                pressure = _pressure_observation(quote)
+                if pressure is not None:
                     candidates.append(
                         FactCandidate(
                             **common,
                             kind="vital",
-                            subject=pressure["subject"],
-                            value=pressure["value"],
+                            subject=pressure[0],
+                            value=pressure[1],
                             state="measured",
-                            setting=_pressure_setting(quote),
+                            setting=pressure[2],
                         )
                     )
-                medications = _medication_mentions(quote)
-                state = _medication_state(quote, section)
-                # A sentence with two doses may describe a planned change;
-                # retain its quote as evidence, never decide which was taken.
-                if len(medications) == 1 and state is not None:
-                    match = medications[0]
+                medication = _medication_observation(quote, section)
+                if medication is not None:
                     candidates.append(
                         FactCandidate(
                             **common,
                             kind="medication",
-                            subject=match["subject"],
-                            value=match["value"],
-                            state=state,
+                            subject=medication[0],
+                            value=medication[1],
+                            state=medication[2],
                         )
                     )
-                labs = list(_LAB.finditer(quote))
-                if len(labs) == 1:
-                    for order_state in _order_states(quote):
-                        candidates.append(
-                            FactCandidate(
-                                **common,
-                                kind="order",
-                                subject=labs[0].group(),
-                                state=order_state,
-                            )
+                for subject, order_state in _order_observations(quote):
+                    candidates.append(
+                        FactCandidate(
+                            **common,
+                            kind="order",
+                            subject=subject,
+                            state=order_state,
                         )
+                    )
     limited = len(candidates) > MAX_FACTS
     result = validate_fact_candidates(candidates[:MAX_FACTS], selection)
     result.facts_limited = limited

@@ -73,7 +73,7 @@ def test_only_matched_soap_aliases_preserve_original_source_title(
         "S - Family History",
         "Family History",
         "P - PLAN - 2026-01-01",
-        "Labs - fasting, 02/12/2026",
+        "Labs - fasting, 02/13/2026",
         "O : OBJECTIVE",
         "S - SUBJECTIVE / Family History",
         "Custom Plan",
@@ -292,7 +292,7 @@ def test_list_candidate_uses_actual_occurrence_and_cannot_select_a_substring():
         validate_fact_candidates([candidate], qualified)
 
 
-def test_actual_rendered_soap_controls_restore_only_straight_listed_medication():
+def test_actual_rendered_soap_controls_cover_dated_observations_and_correction():
     path = (
         Path(__file__).parents[1]
         / "fixtures/session_prep/rendered_soap_format_controls.json"
@@ -316,13 +316,50 @@ def test_actual_rendered_soap_controls_restore_only_straight_listed_medication()
                 SimpleNamespace(sources=sources, truncated=False),
             )
         )
-        assert [
-            (f.subject, f.value, f.state, f.evidence.section) for f in result.facts
-        ] == [
-            ("Losartan", "25mg", "documented_listed", "Medications"),
-        ]
-        fact = result.facts[0]
-        assert fact.evidence.source_at == datetime(2026, 9, 30, tzinfo=UTC)
-        assert fact.supersedes == []
-        text = sources[0].content[fact.evidence.section]
-        assert text[fact.evidence.start : fact.evidence.end] == fact.evidence.quote
+        assert any(
+            f.value == "148/92 mmHg"
+            and f.setting == "office"
+            and f.evidence.source_at.date().isoformat() == "2026-09-30"
+            for f in result.facts
+        )
+        assert any(
+            f.value == "128 to 136 systolic and 78 to 84 diastolic"
+            and f.setting == "home"
+            and f.evidence.source_at.date().isoformat() == "2026-10-07"
+            for f in result.facts
+        )
+        correction = next(f for f in result.facts if f.state == "documented_continued")
+        prior = next(f for f in result.facts if f.fact_ref in correction.supersedes)
+        assert (correction.value, correction.evidence.source_at.date().isoformat()) == (
+            "25 mg",
+            "2026-10-08",
+        )
+        assert (
+            prior.value,
+            prior.state,
+            prior.evidence.source_at.date().isoformat(),
+        ) == ("50 mg", "documented_listed", "2026-10-07")
+        orders = {
+            (f.subject.casefold(), f.state)
+            for f in result.facts
+            if f.kind == "order"
+            and f.evidence.source_at.date().isoformat() == "2026-10-08"
+        }
+        assert {
+            ("cbc", "cancelled"),
+            ("cbc", "result_not_documented"),
+            ("potassium", "not_ordered"),
+            ("potassium", "result_not_documented"),
+            ("creatinine", "not_ordered"),
+            ("creatinine", "result_not_documented"),
+        } <= orders
+        assert not any(
+            f.state in {"ordered", "documented_taking"} for f in result.facts
+        )
+        for fact in result.facts:
+            source = next(
+                s for s in sources if s.source_ref == fact.evidence.source_ref
+            )
+            text = source.content[fact.evidence.section]
+            assert text[fact.evidence.start : fact.evidence.end] == fact.evidence.quote
+            assert fact.evidence.source_at == source.source_at
