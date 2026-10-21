@@ -1,0 +1,69 @@
+{
+  "source_kind": "Preserved staging accessibility captures of fictional visits A/B/D; displayed strings, not raw reviewed-note JSON",
+  "format_control_limit": "Original Markdown marker bytes were not captured. Prefix only observed rendered list items with representative ordinary Markdown markers; retain all other displayed prose. Synthetic source dates use displayed visit labels, not fetched reviewed-note timestamps. These are applicability controls, not live source receipts.",
+  "notes": [
+    {
+      "visit": "a",
+      "date_used_for_synthetic_control": "2026-09-30",
+      "rendered_capture_sha256": "8adf15fc6a76175aceafd99162e95d9895c05f70ecc19c690bb381deeaf2f5ae",
+      "plain_sections": {
+        "S - SUBJECTIVE": "The patient reports elevated home blood pressure. The patient reports no dizziness. The patient explicitly reports no known drug allergies.",
+        "Medications": "Losartan 25mg once daily (new this visit)",
+        "O - OBJECTIVE": "Office blood pressure: 148/92 mmHg\nNo dizziness reported\nNo potassium or creatinine result documented",
+        "Labs - fasting, 02/12/2026": "No potassium or creatinine result documented.",
+        "A - ASSESSMENT": "Hypertension",
+        "P - PLAN": "Start Losartan 25mg once daily for hypertension management.\nKeep a home blood pressure log to monitor response to therapy.\nSchedule follow-up appointment in one week to reassess blood pressure and medication effect.\nGreater than 0 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      },
+      "representative_list_sections": {
+        "S - SUBJECTIVE": "The patient reports elevated home blood pressure. The patient reports no dizziness. The patient explicitly reports no known drug allergies.",
+        "Medications": "- Losartan 25mg once daily (new this visit)",
+        "O - OBJECTIVE": "- Office blood pressure: 148/92 mmHg\n- No dizziness reported\n- No potassium or creatinine result documented",
+        "Labs - fasting, 02/12/2026": "No potassium or creatinine result documented.",
+        "A - ASSESSMENT": "- Hypertension",
+        "P - PLAN": "- Start Losartan 25mg once daily for hypertension management.\n- Keep a home blood pressure log to monitor response to therapy.\n- Schedule follow-up appointment in one week to reassess blood pressure and medication effect.\nGreater than 0 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      }
+    },
+    {
+      "visit": "b",
+      "date_used_for_synthetic_control": "2026-10-07",
+      "rendered_capture_sha256": "5910d8302e63c95f1ef0383e3fc0a05a0c068f04feb05a148869855acdbe29a0",
+      "plain_sections": {
+        "S - SUBJECTIVE": "The patient reports home blood pressures ranging from 128 to 136 systolic and 78 to 84 diastolic since starting losartan. The patient denies dizziness. Fatigue is improving. The patient explicitly reports no known drug allergies.",
+        "Medications": "Losartan 25 mg daily (prior to this visit)\nLosartan 50 mg daily (new this visit)",
+        "O - OBJECTIVE": "No office blood pressure was measured or documented during this visit.\nNo potassium or creatinine result is documented.\nNo CBC result is documented.",
+        "Labs - fasting, 02/12/2026": "Not mentioned in transcript",
+        "A - ASSESSMENT": "Hypertension: Blood pressure improved per home log since starting losartan 25 mg daily.\nFatigue: Improving, but further evaluation needed.",
+        "P - PLAN": "Increase losartan to 50 mg daily to further improve blood pressure control.\nPatient to take losartan 50 mg daily for hypertension management.\nPatient to monitor and record home blood pressure to assess response to medication adjustment.\nOrder CBC to evaluate ongoing fatigue.\nReview blood pressure log in one week to assess efficacy of medication adjustment and monitor for adverse effects.\nGreater than 0 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      },
+      "representative_list_sections": {
+        "S - SUBJECTIVE": "The patient reports home blood pressures ranging from 128 to 136 systolic and 78 to 84 diastolic since starting losartan. The patient denies dizziness. Fatigue is improving. The patient explicitly reports no known drug allergies.",
+        "Medications": "- Losartan 25 mg daily (prior to this visit)\n- Losartan 50 mg daily (new this visit)",
+        "O - OBJECTIVE": "- No office blood pressure was measured or documented during this visit.\n- No potassium or creatinine result is documented.\n- No CBC result is documented.",
+        "Labs - fasting, 02/12/2026": "Not mentioned in transcript",
+        "A - ASSESSMENT": "- Hypertension: Blood pressure improved per home log since starting losartan 25 mg daily.\n- Fatigue: Improving, but further evaluation needed.",
+        "P - PLAN": "- Increase losartan to 50 mg daily to further improve blood pressure control.\n- Patient to take losartan 50 mg daily for hypertension management.\n- Patient to monitor and record home blood pressure to assess response to medication adjustment.\n- Order CBC to evaluate ongoing fatigue.\n- Review blood pressure log in one week to assess efficacy of medication adjustment and monitor for adverse effects.\nGreater than 0 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      }
+    },
+    {
+      "visit": "d",
+      "date_used_for_synthetic_control": "2026-10-08",
+      "rendered_capture_sha256": "01899f14d1dc58ea151a618860227db1e00178da495a7e0e6458e72ea3a7aa9e",
+      "plain_sections": {
+        "S - SUBJECTIVE": "Patient reports home blood pressure readings between 128 and 136/78 to 84. No dizziness. No known drug allergies.",
+        "Medications": "Losartan 25 mg daily (continue; supersedes previous erroneous instruction to increase to 50 mg)",
+        "O - OBJECTIVE": "Home blood pressure readings: 128-136/78-84 (patient-reported)\nOffice blood pressure: Not documented\nNo dizziness reported",
+        "Labs - fasting, 02/12/2026": "CBC order cancelled; no completion or result documented\nPotassium and creatinine tests not ordered; no results documented",
+        "A - ASSESSMENT": "Hypertension, stable on current regimen; home BP readings within target range, no symptoms reported\nNo evidence of adverse effects from Losartan\nNo laboratory abnormalities documented; CBC, potassium, and creatinine not performed",
+        "P - PLAN": "Continue Losartan 25 mg daily for ongoing hypertension management (supersedes previous erroneous instruction to increase to 50 mg)\nReview and monitor home blood pressure log in one week to assess blood pressure control\nCancel CBC order to avoid unnecessary testing\nDiscuss alternatives to CBC at the next visit to determine appropriate laboratory monitoring\nGreater than 1 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      },
+      "representative_list_sections": {
+        "S - SUBJECTIVE": "Patient reports home blood pressure readings between 128 and 136/78 to 84. No dizziness. No known drug allergies.",
+        "Medications": "- Losartan 25 mg daily (continue; supersedes previous erroneous instruction to increase to 50 mg)",
+        "O - OBJECTIVE": "- Home blood pressure readings: 128-136/78-84 (patient-reported)\n- Office blood pressure: Not documented\n- No dizziness reported",
+        "Labs - fasting, 02/12/2026": "- CBC order cancelled; no completion or result documented\n- Potassium and creatinine tests not ordered; no results documented",
+        "A - ASSESSMENT": "- Hypertension, stable on current regimen; home BP readings within target range, no symptoms reported\n- No evidence of adverse effects from Losartan\n- No laboratory abnormalities documented; CBC, potassium, and creatinine not performed",
+        "P - PLAN": "- Continue Losartan 25 mg daily for ongoing hypertension management (supersedes previous erroneous instruction to increase to 50 mg)\n- Review and monitor home blood pressure log in one week to assess blood pressure control\n- Cancel CBC order to avoid unnecessary testing\n- Discuss alternatives to CBC at the next visit to determine appropriate laboratory monitoring\nGreater than 1 minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.\nThis note was generated with AI assistance."
+      }
+    }
+  ]
+}
