@@ -293,7 +293,9 @@ def test_historical_action_wording_gets_one_fresh_source_bound_draft(monkeypatch
     first, second = captured["requests"]
     assert first["messages"][1] == second["messages"][1]
     assert first["messages"][0]["content"] == generator.SYSTEM_PROMPT
-    assert second["messages"][0]["content"] == generator._regeneration_prompt(failure.value)
+    assert second["messages"][0]["content"] == generator._regeneration_prompt(
+        failure.value
+    )
     assert all(len(call["messages"]) == 2 for call in captured["requests"])
     assert "private-rejected-draft-sentinel" not in json.dumps(captured["requests"])
     assert all(option["max_retries"] == 0 for option in captured["all_options"])
@@ -687,7 +689,7 @@ def test_artifact_constructor_rejects_unsupported_injected_generator_output():
         predecessor=None,
     )
     assert (
-        result.state == "ready" and result.brief_prompt_version == "source_only_prep_v5"
+        result.state == "ready" and result.brief_prompt_version == "source_only_prep_v6"
     )
     assert result.prepared_brief == supported
 
