@@ -293,10 +293,7 @@ def provider_receiver_session(
     cancelled: threading.Event,
     settings: Any = AUTHORITY_KERNEL_SETTINGS,
 ) -> Iterator[None]:
-    if (
-        not settings.enabled
-        or workload_client_id not in SOVEREIGN_TOOL_AUTH_SETTINGS.allowed_client_ids
-    ):
+    if not provider_receiver_enabled(workload_client_id, settings):
         yield
         return
     prior = session_manager._session_context.get()
@@ -334,6 +331,15 @@ def provider_receiver_session(
             if session_token is not None:
                 session_manager._session_context.reset(session_token)
             _work.reset(work_token)
+
+
+def provider_receiver_enabled(
+    workload_client_id: str | None, settings: Any = AUTHORITY_KERNEL_SETTINGS
+) -> bool:
+    return bool(
+        settings.enabled
+        and workload_client_id in SOVEREIGN_TOOL_AUTH_SETTINGS.allowed_client_ids
+    )
 
 
 def _after_fork() -> None:
