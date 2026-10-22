@@ -20,7 +20,17 @@ type Status =
   | "unsaved"
   | "saving"
   | "unavailable"
+  | "sign-in-required"
+  | "access-unavailable"
+  | "request-rejected"
   | "conflict"
+
+function failureStatus(code?: number): Status {
+  if (code === 401) return "sign-in-required"
+  if (code === 403 || code === 404) return "access-unavailable"
+  if (code === 400 || code === 422) return "request-rejected"
+  return "unavailable"
+}
 
 /** Private reminders never enter clinical note fields, export, or browser storage. */
 export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
@@ -55,7 +65,7 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
       )
       if (!active.current || generation.current !== reading) return
       if (!result.data) {
-        setStatus("unavailable")
+        setStatus(failureStatus(result.response?.status))
         return
       }
       current.current = result.data.text
@@ -112,7 +122,11 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
       )
       if (!active.current || generation.current !== writing) return false
       if (!result.data) {
-        setStatus(result.response?.status === 409 ? "conflict" : "unavailable")
+        setStatus(
+          result.response?.status === 409
+            ? "conflict"
+            : failureStatus(result.response?.status),
+        )
         return false
       }
       version.current = result.data.version
@@ -174,7 +188,13 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
         rows={3}
         className="bg-background w-full resize-y rounded-md border p-3 text-base"
         value={text}
-        disabled={status === "loading" || !loaded.current}
+        disabled={
+          status === "loading" ||
+          status === "sign-in-required" ||
+          status === "access-unavailable" ||
+          status === "request-rejected" ||
+          !loaded.current
+        }
         onChange={(event) => {
           current.current = event.target.value
           setText(event.target.value)
@@ -195,20 +215,28 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
               unsaved: "Unsaved changes",
               saving: "Saving…",
               unavailable:
-                "We couldn’t save or load your private note. Try again.",
+                "We couldn’t load or save your private note. Try again. Any unsaved changes are kept on this page.",
+              "sign-in-required":
+                "Your sign-in session could not be verified. Sign in again, then check access. Any unsaved changes are kept on this page.",
+              "access-unavailable":
+                "Private notes are unavailable for this visit in the current account. Check the account and visit before checking access again. Any unsaved changes are kept on this page.",
+              "request-rejected":
+                "This private-note request could not be accepted. Keep this page open to retain any unsaved changes.",
               conflict:
                 "Your private note changed on another device. Review the saved version before saving again.",
             }[status]
           }
         </p>
-        {status === "unavailable" && (
+        {(status === "unavailable" ||
+          status === "sign-in-required" ||
+          status === "access-unavailable") && (
           <Button
             variant="outline"
             onClick={() =>
               void (text === saved && !retained.current ? load() : save())
             }
           >
-            Try again
+            {status === "unavailable" ? "Try again" : "Check access again"}
           </Button>
         )}
         {status === "conflict" && (
@@ -236,7 +264,13 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
           <p>Your private note has unsaved changes.</p>
           <div className="mt-2 flex gap-2">
             <Button
-              disabled={status === "saving" || status === "conflict"}
+              disabled={
+                status === "saving" ||
+                status === "conflict" ||
+                status === "sign-in-required" ||
+                status === "access-unavailable" ||
+                status === "request-rejected"
+              }
               onClick={() =>
                 void save().then((clean) => {
                   if (clean) blocker.proceed()
