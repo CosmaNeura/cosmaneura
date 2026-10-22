@@ -8,9 +8,11 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from anyio import CancelScope
+from psycopg import _connection_base
 from starlette.concurrency import run_in_threadpool
 
 import app.services.provider_database_connection as bounds
@@ -51,7 +53,7 @@ def test_real_pool_exhaustion_and_release():
         def close(self):
             pass
 
-    pool = QueuePool(Connection, pool_size=2, max_overflow=0, timeout=0.03)
+    pool = QueuePool(cast(Any, Connection), pool_size=2, max_overflow=0, timeout=0.03)
     first, second = pool.connect(), pool.connect()
     started = time.monotonic()
     with pytest.raises(PoolTimeout):
@@ -72,11 +74,13 @@ def test_owned_engine_preserves_global_pool_and_serializer():
         "postgresql+psycopg://fictional@127.0.0.1/fictional", json_serializer=serializer
     )
     owned = bounds.provider_engine(source)
+    owned_pool = cast(QueuePool, owned.pool)
+    source_pool = cast(QueuePool, source.pool)
     assert owned is not source and owned.pool is not source.pool
-    assert owned.pool.size() == 2 and owned.pool._max_overflow == 0
-    assert owned.pool._timeout == bounds.POOL_SECONDS
-    assert source.pool._timeout == 30 and source.pool._max_overflow == 10
-    assert owned.dialect._json_serializer is serializer
+    assert owned_pool.size() == 2 and owned_pool._max_overflow == 0
+    assert owned_pool._timeout == bounds.POOL_SECONDS
+    assert source_pool._timeout == 30 and source_pool._max_overflow == 10
+    assert getattr(owned.dialect, "_json_serializer") is serializer
     assert owned.hide_parameters and not owned.echo
     assert bounds.provider_engine(source) is owned
 
@@ -86,7 +90,7 @@ def test_engine_lock_wait_is_bounded():
     try:
         started = time.monotonic()
         with pytest.raises(bounds.ProviderDatabaseDeadlineExceeded):
-            bounds.provider_engine(None)
+            bounds.provider_engine(cast(Any, None))
         assert time.monotonic() - started < 0.3
     finally:
         bounds._engine_lock.release()
@@ -104,7 +108,7 @@ def stalled_socket(cancel=False):
             stopped.append(True)
 
     pgconn = SimpleNamespace(socket=reader.fileno(), finish=reader.close)
-    connection = SimpleNamespace(pgconn=pgconn, _closed=False)
+    connection: Any = SimpleNamespace(pgconn=pgconn, _closed=False)
     connection._discard = lambda: bounds.ProviderConnection._discard(connection)
     event = threading.Event()
     token = bounds._work.set(bounds.ReceiverWork(event, time.monotonic() + 1))
@@ -146,7 +150,7 @@ def test_ready_socket_is_successful_and_not_closed():
         return "ready"
 
     try:
-        connection = SimpleNamespace(
+        connection: Any = SimpleNamespace(
             pgconn=SimpleNamespace(socket=reader.fileno(), finish=reader.close)
         )
         assert bounds.ProviderConnection.wait(connection, receive()) == "ready"
@@ -164,7 +168,7 @@ def test_postgres_integrity_error_preserves_rollback_connection():
         yield selectors.EVENT_READ
         raise bounds.psycopg.errors.UniqueViolation("synthetic")
 
-    connection = SimpleNamespace(
+    connection: Any = SimpleNamespace(
         pgconn=SimpleNamespace(socket=reader.fileno(), finish=reader.close)
     )
     connection._discard = lambda: bounds.ProviderConnection._discard(connection)
@@ -207,7 +211,7 @@ def test_cancelled_or_expired_wait_never_advances_command_generator(cancelled):
 
     try:
         with pytest.raises(bounds.ProviderConnectionUnavailable):
-            bounds._wait(Command(), -1, time.monotonic() + 1)
+            bounds._wait(cast(Any, Command()), -1, time.monotonic() + 1)
         assert operations == ["closed"]
     finally:
         bounds._work.reset(token)
@@ -247,6 +251,54 @@ def test_nonblocking_connect_respects_tighter_configured_timeout(
     assert operations == (
         ["started", "polled", "closed"] if polled else ["started", "closed"]
     )
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_actual_psycopg_commit_generator_stays_undispatched(monkeypatch, cancelled):
+    sent = []
+    closed = []
+
+    def pending(_pgconn):
+        yield selectors.EVENT_READ
+
+    monkeypatch.setattr(_connection_base.generators, "execute", pending)
+    pgconn = SimpleNamespace(
+        socket=-1,
+        transaction_status=bounds.psycopg.pq.TransactionStatus.INTRANS,
+        send_query=sent.append,
+        finish=lambda: closed.append(True),
+    )
+    # Deliberate inert driver double: actual installed Psycopg methods produce
+    # COMMIT and send it before their first yield, without a database.
+    connection: Any = SimpleNamespace(
+        pgconn=pgconn,
+        _num_transactions=0,
+        _tpc=None,
+        _pipeline=None,
+        _check_connection_ok=lambda: None,
+    )
+    connection._exec_command = lambda command: bounds.psycopg.Connection._exec_command(
+        connection, command
+    )
+    connection._discard = lambda: bounds.ProviderConnection._discard(connection)
+    positive = bounds.psycopg.Connection._commit_gen(connection)
+    assert next(positive) == selectors.EVENT_READ and sent == [b"COMMIT"]
+    positive.close()
+    sent.clear()
+    event = threading.Event()
+    if cancelled:
+        event.set()
+    token = bounds._work.set(
+        bounds.ReceiverWork(event, time.monotonic() + (1 if cancelled else -1))
+    )
+    try:
+        with pytest.raises(bounds.ProviderConnectionUnavailable):
+            bounds.ProviderConnection.wait(
+                connection, bounds.psycopg.Connection._commit_gen(connection)
+            )
+        assert sent == [] and closed == [True] and connection._closed
+    finally:
+        bounds._work.reset(token)
 
 
 def test_actual_libpq_handshake_stall_has_bounded_wait(monkeypatch):
@@ -378,6 +430,40 @@ def test_ambient_service_is_rejected_before_libpq_or_dns(monkeypatch):
         bounds.ProviderConnection.connect(host="fictional.invalid")
 
 
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"host": None},
+        {"host": 123},
+        {"host": "fictional.invalid", "connect_timeout": None},
+        {"host": "fictional.invalid", "port": None},
+    ],
+)
+def test_malformed_conninfo_values_are_not_coerced_into_dns(monkeypatch, parameters):
+    monkeypatch.setattr(bounds, "conninfo_to_dict", lambda *args, **kwargs: parameters)
+    monkeypatch.setattr(
+        bounds, "_address", lambda *args: pytest.fail("DNS must not run")
+    )
+    with pytest.raises(bounds.ProviderConnectionUnavailable):
+        bounds.ProviderConnection.connect()
+
+
+def test_valid_integer_port_has_explicit_address_resolution(monkeypatch):
+    resolved = []
+
+    def address(host, port, _deadline):
+        resolved.append((host, port))
+        raise bounds.ProviderConnectionUnavailable("synthetic")
+
+    monkeypatch.setattr(
+        bounds, "conninfo_to_dict", lambda *args, **kwargs: {"host": "x", "port": 5432}
+    )
+    monkeypatch.setattr(bounds, "_address", address)
+    with pytest.raises(bounds.ProviderConnectionUnavailable):
+        bounds.ProviderConnection.connect()
+    assert resolved == [("x", "5432")]
+
+
 def test_nonprovider_and_disabled_work_use_original_context(monkeypatch):
     monkeypatch.setattr(
         bounds.session_manager,
@@ -428,7 +514,7 @@ def test_session_setup_failure_and_pool_timeout_restore_context(monkeypatch):
 
 
 def test_already_active_session_is_not_retargeted():
-    prior = SimpleNamespace(in_transaction=lambda: True)
+    prior: Any = SimpleNamespace(in_transaction=lambda: True)
     token = bounds.session_manager._session_context.set(prior)
     try:
         with pytest.raises(bounds.ProviderDatabaseDeadlineExceeded):
@@ -494,7 +580,7 @@ def test_real_retained_route_worker_receives_cancellation(monkeypatch, actual_sc
                     while True:
                         yield selectors.EVENT_READ
 
-                connection = SimpleNamespace(
+                connection: Any = SimpleNamespace(
                     pgconn=SimpleNamespace(socket=reader.fileno(), finish=reader.close)
                 )
                 connection._discard = lambda: bounds.ProviderConnection._discard(
@@ -539,4 +625,5 @@ def test_fork_replaces_only_owned_pool_without_closing_parent_connections(monkey
     bounds._work.set(bounds.ReceiverWork(threading.Event(), time.monotonic() + 20))
     bounds._after_fork()
     assert calls == [{"close": False}]
+    assert bounds._engine is not None
     assert bounds._engine[1:] == (source, owned) and bounds._work.get() is None

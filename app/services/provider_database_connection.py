@@ -21,6 +21,7 @@ from typing import Any
 import psycopg
 from psycopg import pq
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from psycopg.rows import tuple_row
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.service_auth import SOVEREIGN_TOOL_AUTH_SETTINGS
@@ -133,7 +134,7 @@ def _wait(gen: Generator[Any, int, Any], descriptor: int, deadline: float) -> An
         gen.close()
 
 
-class ProviderConnection(psycopg.Connection):
+class ProviderConnection(psycopg.Connection[tuple[Any, ...]]):
     @classmethod
     def connect(cls, conninfo: str = "", **kwargs: Any) -> ProviderConnection:
         started = time.monotonic()
@@ -141,23 +142,27 @@ class ProviderConnection(psycopg.Connection):
         pgconn = None
         try:
             params = conninfo_to_dict(conninfo, **kwargs)
-            host = params.get("host", "")
+            host = params.get("host")
             # No ambient PGHOST/PGSERVICE discovery or unbounded multi-host retries.
             if (
-                not host
+                not isinstance(host, str)
+                or not host
                 or "," in host
                 or params.get("service")
                 or os.environ.get("PGSERVICE")
             ):
                 raise ProviderConnectionUnavailable("provider_database_unavailable")
-            params["connect_timeout"] = str(
-                max(1, min(3, int(params.get("connect_timeout", "3"))))
-            )
-            deadline = min(deadline, started + int(params["connect_timeout"]))
+            configured = params.get("connect_timeout", 3)
+            if not isinstance(configured, (str, int)):
+                raise ProviderConnectionUnavailable("provider_database_unavailable")
+            timeout = max(1, min(3, int(configured)))
+            params["connect_timeout"] = str(timeout)
+            deadline = min(deadline, started + timeout)
             if not host.startswith("/"):
-                address = params.get("hostaddr") or _address(
-                    host, params.get("port", "5432"), deadline
-                )
+                port = params.get("port", "5432")
+                if not isinstance(port, (str, int)):
+                    raise ProviderConnectionUnavailable("provider_database_unavailable")
+                address = params.get("hostaddr") or _address(host, str(port), deadline)
                 params["hostaddr"] = str(ipaddress.ip_address(address))
             _remaining(deadline)
             # hostaddr avoids a second libpq DNS lookup; retain host for TLS identity.
@@ -169,7 +174,7 @@ class ProviderConnection(psycopg.Connection):
                     if status == pq.PollingStatus.OK:
                         pgconn.nonblocking = 1
                         _remaining(deadline)
-                        return cls(pgconn)
+                        return cls(pgconn, row_factory=tuple_row)
                     if status not in (
                         pq.PollingStatus.READING,
                         pq.PollingStatus.WRITING,
@@ -250,7 +255,7 @@ def provider_engine(source: Engine) -> Engine:
                 pool_pre_ping=True,
                 echo=False,
                 hide_parameters=True,
-                json_serializer=source.dialect._json_serializer,
+                json_serializer=getattr(source.dialect, "_json_serializer"),
             )
             _engine = (os.getpid(), source, owned)
         return _engine[2]
