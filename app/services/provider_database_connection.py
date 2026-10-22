@@ -141,7 +141,12 @@ class ProviderConnection(psycopg.Connection):
             params = conninfo_to_dict(conninfo, **kwargs)
             host = params.get("host", "")
             # No ambient PGHOST/PGSERVICE discovery or unbounded multi-host retries.
-            if not host or "," in host or params.get("service"):
+            if (
+                not host
+                or "," in host
+                or params.get("service")
+                or os.environ.get("PGSERVICE")
+            ):
                 raise ProviderConnectionUnavailable("provider_database_unavailable")
             if not host.startswith("/"):
                 address = params.get("hostaddr") or _address(

@@ -296,6 +296,26 @@ def test_ambient_or_multi_host_connections_fail_closed(kwargs):
         bounds.ProviderConnection.connect(**kwargs)
 
 
+def test_ambient_service_is_rejected_before_libpq_or_dns(monkeypatch):
+    monkeypatch.setenv("PGSERVICE", "synthetic-untrusted-service")
+    monkeypatch.setattr(
+        bounds, "_address", lambda *args: pytest.fail("DNS must not run")
+    )
+    monkeypatch.setattr(
+        bounds,
+        "pq",
+        SimpleNamespace(
+            PGconn=SimpleNamespace(
+                connect_start=lambda *args: pytest.fail("libpq must not run")
+            )
+        ),
+    )
+    with pytest.raises(
+        bounds.ProviderConnectionUnavailable, match="^provider_database_unavailable$"
+    ):
+        bounds.ProviderConnection.connect(host="fictional.invalid")
+
+
 def test_nonprovider_and_disabled_work_use_original_context(monkeypatch):
     monkeypatch.setattr(
         bounds.session_manager,
