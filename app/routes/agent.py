@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
-from anyio import CancelScope
+from anyio import CancelScope, CapacityLimiter, to_thread
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import (
@@ -40,8 +40,12 @@ from app.configuration.session_prep import (
     SESSION_PREP_SYNTHETIC_SETTINGS,
     SessionPrepSyntheticSettings,
 )
-from app.services.provider_database_connection import provider_receiver_session
+from app.services.provider_database_connection import (
+    provider_receiver_enabled,
+    provider_receiver_session,
+)
 from app.services.provider_database_deadline import ProviderDatabaseDeadlineExceeded
+from app.services.provider_thread_admission import provider_thread_slot
 from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
@@ -74,31 +78,56 @@ async def _run_agent_database[T](
     # Retain the worker task: cancelling the route must not let aglobal_session
     # close its ContextVar session while synchronous database work still uses it.
     cancelled = threading.Event()
+    start_lock = threading.Lock()
+    started = False
+    workload = receiver_workload or kwargs.get("workload_client_id")
+    settings = kwargs.get("settings", receiver_settings)
+    dedicated = provider_receiver_enabled(workload, settings)
 
     def run_owned() -> T:
-        workload = receiver_workload or kwargs.get("workload_client_id")
-        settings = kwargs.get("settings", receiver_settings)
+        nonlocal started
+        if dedicated:
+            with start_lock:
+                if cancelled.is_set():
+                    raise ProviderDatabaseDeadlineExceeded
+                started = True
         with provider_receiver_session(workload, cancelled, settings):
             return function(*args, **kwargs)
 
-    worker = asyncio.create_task(run_in_threadpool(run_owned))
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        cancelled.set()
-        # AnyIO shields level cancellation; asyncio.shield keeps direct (even
-        # repeated) Task.cancel() calls from cancelling the retained worker.
-        with CancelScope(shield=True):
-            while not worker.done():
-                try:
-                    await asyncio.shield(worker)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-            if not worker.cancelled():
-                worker.exception()  # Retrieve failure; preserve original cancellation.
-        raise
+    async def dispatch(limiter: CapacityLimiter | None) -> T:
+        worker = asyncio.create_task(
+            run_in_threadpool(run_owned)
+            if limiter is None
+            else to_thread.run_sync(run_owned, limiter=limiter)
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            with start_lock:
+                cancelled.set()
+                active = started
+            if dedicated and not active:
+                # A thread already submitted but not started observes the same
+                # locked veto before touching a Session or calling the body.
+                worker.cancel()
+            # Started work retains its reservation through Session cleanup.
+            # Nonprovider cancellation keeps the existing retained-worker path.
+            with CancelScope(shield=True):
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    worker.exception()  # Preserve original caller cancellation.
+            raise
+
+    if dedicated:
+        async with provider_thread_slot() as limiter:
+            return await dispatch(limiter)
+    return await dispatch(None)
 
 
 class MountContextResponse(BaseModel):

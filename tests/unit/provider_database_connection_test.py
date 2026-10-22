@@ -11,11 +11,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from anyio import CancelScope
+from anyio import CancelScope, CapacityLimiter, to_thread
 from psycopg import _connection_base
 from starlette.concurrency import run_in_threadpool
 
 import app.services.provider_database_connection as bounds
+from app.services.provider_thread_admission import provider_thread_slot
 
 from sqlalchemy import create_engine
 from sqlalchemy.exc import TimeoutError as PoolTimeout
@@ -565,6 +566,11 @@ def test_real_retained_route_worker_receives_cancellation(monkeypatch, actual_sc
         "threading": threading,
         "run_in_threadpool": run_in_threadpool,
         "CancelScope": CancelScope,
+        "CapacityLimiter": CapacityLimiter,
+        "to_thread": to_thread,
+        "provider_receiver_enabled": bounds.provider_receiver_enabled,
+        "provider_thread_slot": provider_thread_slot,
+        "ProviderDatabaseDeadlineExceeded": bounds.ProviderDatabaseDeadlineExceeded,
         "provider_receiver_session": bounds.provider_receiver_session
         if actual_scope
         else scoped,
