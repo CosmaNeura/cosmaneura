@@ -2,6 +2,8 @@
 
 import ast
 import asyncio
+import inspect
+import json
 import selectors
 import socket
 import threading
@@ -13,10 +15,15 @@ from typing import Any, cast
 import pytest
 from anyio import CancelScope
 from psycopg import _connection_base
+from psycopg.adapt import AdaptersMap, Dumper, PyFormat
+from psycopg.rows import dict_row, tuple_row
+from psycopg.types.json import Jsonb
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
 import app.services.provider_database_connection as bounds
 
+from activemodel.session_manager import _serialize_pydantic_model
 from sqlalchemy import create_engine
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.pool import QueuePool
@@ -83,6 +90,172 @@ def test_owned_engine_preserves_global_pool_and_serializer():
     assert getattr(owned.dialect, "_json_serializer") is serializer
     assert owned.hide_parameters and not owned.echo
     assert bounds.provider_engine(source) is owned
+
+
+@pytest.fixture
+def completed_connect(monkeypatch):
+    """Real Connection initialization over an inert completed libpq double."""
+    parameters = []
+
+    class PGconn:
+        status = bounds.psycopg.pq.ConnStatus.OK
+        nonblocking = 0
+        finished = 0
+
+        def connect_poll(self):
+            return bounds.psycopg.pq.PollingStatus.OK
+
+        def finish(self):
+            self.finished += 1
+            self.status = bounds.psycopg.pq.ConnStatus.BAD
+
+    pgconn = PGconn()
+
+    def start(conninfo):
+        parameters.append(bounds.conninfo_to_dict(conninfo.decode()))
+        return pgconn
+
+    monkeypatch.setattr(
+        bounds,
+        "pq",
+        SimpleNamespace(
+            PGconn=SimpleNamespace(connect_start=start),
+            PollingStatus=bounds.psycopg.pq.PollingStatus,
+        ),
+    )
+    return pgconn, parameters
+
+
+def test_actual_sqlalchemy_json_adapter_context_survives_connect(completed_connect):
+    pgconn, parameters = completed_connect
+    source = create_engine(
+        "postgresql+psycopg://fictional@127.0.0.1/fictional",
+        json_serializer=_serialize_pydantic_model,
+    )
+    args, kwargs = source.dialect.create_connect_args(source.url)
+    adapter_context = kwargs["context"]
+    assert adapter_context is getattr(source.dialect, "_psycopg_adapters_map")
+    connected = bounds.ProviderConnection.connect(*args, **kwargs)
+
+    class SyntheticPayload(BaseModel):
+        marker: str
+
+    try:
+        dumper_type = connected.adapters.get_dumper(Jsonb, PyFormat.TEXT)
+        dumped = dumper_type(Jsonb, connected).dump(
+            Jsonb(SyntheticPayload(marker="fictional"))
+        )
+        assert dumped is not None and json.loads(bytes(dumped)) == {
+            "marker": "fictional"
+        }
+        assert connected.adapters is not adapter_context
+        assert connected.row_factory is tuple_row
+        assert parameters == [
+            {
+                "host": "127.0.0.1",
+                "hostaddr": "127.0.0.1",
+                "dbname": "fictional",
+                "user": "fictional",
+                "connect_timeout": "3",
+            }
+        ]
+        assert pgconn.nonblocking == 1 and not pgconn.finished
+    finally:
+        connected.close()
+        source.dispose()
+
+
+@pytest.mark.parametrize(
+    "autocommit,threshold", [(False, 5), (True, None), (True, 0), (False, 12)]
+)
+def test_python_connect_options_preserve_installed_psycopg_semantics(
+    completed_connect, autocommit, threshold
+):
+    pgconn, parameters = completed_connect
+    connected = bounds.ProviderConnection.connect(
+        host="127.0.0.1",
+        autocommit=autocommit,
+        prepare_threshold=threshold,
+        row_factory=cast(Any, dict_row),
+        cursor_factory=cast(Any, bounds.psycopg.ClientCursor),
+    )
+    try:
+        assert connected.autocommit is autocommit
+        assert connected.prepare_threshold == threshold
+        assert connected.row_factory is dict_row
+        assert connected.cursor_factory is bounds.psycopg.ClientCursor
+        assert not set(parameters[0]) & {
+            "autocommit",
+            "prepare_threshold",
+            "context",
+            "row_factory",
+            "cursor_factory",
+        }
+        assert not pgconn.finished
+    finally:
+        connected.close()
+
+
+def test_adapter_map_is_copied_without_mutating_source_context(completed_connect):
+    adapter_context = AdaptersMap(bounds.psycopg.adapters)
+    original = adapter_context.get_dumper(Jsonb, PyFormat.TEXT)
+    connected = bounds.ProviderConnection.connect(
+        host="127.0.0.1", context=adapter_context
+    )
+
+    class SyntheticDumper(Dumper):
+        def dump(self, obj):
+            assert isinstance(obj, Jsonb)
+            return b'"fictional"'
+
+    try:
+        assert connected.adapters is not adapter_context
+        connected.adapters.register_dumper(Jsonb, SyntheticDumper)
+        assert connected.adapters.get_dumper(Jsonb, PyFormat.TEXT) is SyntheticDumper
+        assert adapter_context.get_dumper(Jsonb, PyFormat.TEXT) is original
+    finally:
+        connected.close()
+
+
+def test_default_python_connect_options_match_psycopg(completed_connect):
+    connected = bounds.ProviderConnection.connect(
+        host="127.0.0.1", context=None, row_factory=None, cursor_factory=None
+    )
+    try:
+        assert connected.autocommit is False and connected.prepare_threshold == 5
+        assert connected.row_factory is tuple_row
+        assert connected.cursor_factory is bounds.psycopg.Cursor
+        upstream = inspect.signature(bounds.psycopg.Connection.connect).parameters
+        actual = inspect.signature(bounds.ProviderConnection.connect).parameters
+        for name in (
+            "autocommit",
+            "prepare_threshold",
+            "context",
+            "row_factory",
+            "cursor_factory",
+        ):
+            assert actual[name].kind == upstream[name].kind
+            assert actual[name].default == upstream[name].default
+    finally:
+        connected.close()
+
+
+def test_invalid_adapter_context_finishes_connection_without_raw_error(
+    completed_connect,
+):
+    pgconn, _parameters = completed_connect
+    with pytest.raises(
+        bounds.ProviderConnectionUnavailable, match="^provider_database_unavailable$"
+    ):
+        bounds.ProviderConnection.connect(host="127.0.0.1", context=cast(Any, object()))
+    assert pgconn.finished == 1
+
+
+def test_unknown_conninfo_option_still_fails_before_libpq(completed_connect):
+    pgconn, parameters = completed_connect
+    with pytest.raises(bounds.ProviderConnectionUnavailable):
+        bounds.ProviderConnection.connect(host="127.0.0.1", unknown_python_option=True)
+    assert parameters == [] and pgconn.finished == 0
 
 
 def test_engine_lock_wait_is_bounded():

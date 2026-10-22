@@ -20,8 +20,10 @@ from typing import Any
 
 import psycopg
 from psycopg import pq
+from psycopg.abc import AdaptContext
+from psycopg.adapt import AdaptersMap
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from psycopg.rows import tuple_row
+from psycopg.rows import RowFactory, tuple_row
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.service_auth import SOVEREIGN_TOOL_AUTH_SETTINGS
@@ -136,7 +138,17 @@ def _wait(gen: Generator[Any, int, Any], descriptor: int, deadline: float) -> An
 
 class ProviderConnection(psycopg.Connection[tuple[Any, ...]]):
     @classmethod
-    def connect(cls, conninfo: str = "", **kwargs: Any) -> ProviderConnection:
+    def connect(
+        cls,
+        conninfo: str = "",
+        *,
+        autocommit: bool = False,
+        prepare_threshold: int | None = 5,
+        context: AdaptContext | None = None,
+        row_factory: RowFactory[tuple[Any, ...]] | None = None,
+        cursor_factory: type[psycopg.Cursor[tuple[Any, ...]]] | None = None,
+        **kwargs: Any,
+    ) -> ProviderConnection:
         started = time.monotonic()
         deadline = started + CONNECT_SECONDS
         pgconn = None
@@ -174,7 +186,19 @@ class ProviderConnection(psycopg.Connection[tuple[Any, ...]]):
                     if status == pq.PollingStatus.OK:
                         pgconn.nonblocking = 1
                         _remaining(deadline)
-                        return cls(pgconn, row_factory=tuple_row)
+                        connection = cls(pgconn, row_factory=tuple_row)
+                        # Match Psycopg's Python-only connect options. SQLAlchemy
+                        # supplies its JSON serializer through this adapter map;
+                        # none of these options belongs in libpq conninfo.
+                        connection._autocommit = bool(autocommit)
+                        if row_factory:
+                            connection.row_factory = row_factory
+                        if cursor_factory:
+                            connection.cursor_factory = cursor_factory
+                        if context:
+                            connection._adapters = AdaptersMap(context.adapters)
+                        connection.prepare_threshold = prepare_threshold
+                        return connection
                     if status not in (
                         pq.PollingStatus.READING,
                         pq.PollingStatus.WRITING,

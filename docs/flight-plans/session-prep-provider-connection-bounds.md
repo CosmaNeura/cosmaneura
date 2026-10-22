@@ -18,7 +18,14 @@ workload credentials are unshared. No browser claim selects the lane.
 
 The lane owns a two-connection SQLAlchemy pool with no overflow, one-second pool
 and engine-initialization-lock waits, and the original JSON serializer. Its
-Psycopg connection uses nonblocking connect/poll hooks with a shared three-second
+Psycopg Python-only connection options are separated from libpq parameters.
+SQLAlchemy's adapter context is copied with `AdaptersMap(context.adapters)`;
+autocommit, prepared-statement threshold and row/cursor factories retain the
+installed Psycopg API semantics, with the default tuple-row factory. An actual
+offline SQLAlchemy-dialect regression checks Pydantic JSON serialization through
+the copied adapters. This addresses a local integration failure before TCP;
+it does not establish a successful configured PostgreSQL Session or live behavior.
+The connection uses nonblocking connect/poll hooks with a shared three-second
 connect budget, retaining a tighter explicitly configured connect timeout.
 A literal IP skips DNS; a hostname has a one-second caller wait
 and at most two daemon resolver calls. If an OS lookup remains stuck, its permit
