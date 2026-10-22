@@ -1,4 +1,4 @@
-"""Explicit staging-only, unbound SDK client for three preparation alerts.
+"""Unbound staging client for three alerts and one fixed worker heartbeat.
 
 This independent opt-in never initializes or binds the global Sentry client.
 The existing global switch and production telemetry keep their behavior.
@@ -10,6 +10,7 @@ import atexit
 import json
 import os
 import re
+from copy import deepcopy
 from datetime import UTC, datetime
 from threading import Lock
 from typing import Any
@@ -20,6 +21,7 @@ import urllib3
 from celery.signals import worker_process_shutdown
 from decouple import config
 from sentry_sdk.consts import VERSION
+from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import HttpTransport
 from sentry_sdk.utils import Dsn
 
@@ -33,6 +35,16 @@ _MODULE = "app.services.session_prep_alerts"
 _FIELDS = frozenset({"event_id", "platform", "level", "exception"})
 _SDK_FIELDS = frozenset({"timestamp", "release", "environment", "server_name", "sdk"})
 _IDENTITY = "session-prep-health"
+_HEARTBEAT_SLUG = "session-prep-staging-worker"
+_HEARTBEAT_FIELDS = frozenset(
+    {"type", "event_id", "check_in_id", "monitor_slug", "status", "duration",
+     "environment", "release", "monitor_config"}
+)
+_HEARTBEAT_CONFIG = {
+    "schedule": {"type": "interval", "value": 1, "unit": "minute"},
+    "timezone": "UTC", "checkin_margin": 2, "max_runtime": 1,
+    "failure_issue_threshold": 1, "recovery_threshold": 1,
+}
 _client: Any = None
 _client_pid = os.getpid()
 _client_lock = Lock()
@@ -108,6 +120,34 @@ def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _canonical_heartbeat(value: Any) -> bool:
+    """No caller, job, record, exception or arbitrary monitor data is allowed."""
+    if type(value) is not dict or set(value) != _HEARTBEAT_FIELDS:
+        return False
+    config_value = value["monitor_config"]
+    if type(config_value) is not dict or config_value != _HEARTBEAT_CONFIG:
+        return False
+    schedule = config_value.get("schedule")
+    if (
+        type(schedule) is not dict or type(schedule.get("value")) is not int
+        or any(type(config_value.get(field)) is not int for field in
+               ("checkin_margin", "max_runtime", "failure_issue_threshold", "recovery_threshold"))
+    ):
+        return False
+    return (
+        type(value["event_id"]) is str
+        and re.fullmatch(r"[0-9a-f]{32}", value["event_id"]) is not None
+        and type(value["check_in_id"]) is str
+        and value["check_in_id"] == value["event_id"]
+        and value["type"] == "check_in"
+        and value["monitor_slug"] == _HEARTBEAT_SLUG
+        and value["status"] == "ok"
+        and type(value["duration"]) is float and value["duration"] == 0.0
+        and value["environment"] == "staging"
+        and value["release"] == _IDENTITY
+    )
+
+
 def _closed_envelope(envelope: Any) -> bool:
     """Reject unknown headers, attachments, reports, traces and extra payload."""
     try:
@@ -119,7 +159,7 @@ def _closed_envelope(envelope: Any) -> bool:
         item = envelope.items[0]
         if (
             set(item.headers) - {"type", "content_type"}
-            or item.headers.get("type") != "event"
+            or item.headers.get("type") not in ("event", "check_in")
             or item.headers.get("content_type") not in (None, "application/json")
         ):
             return False
@@ -127,7 +167,8 @@ def _closed_envelope(envelope: Any) -> bool:
         if type(raw) is not bytes or not 0 < len(raw) <= 1024:
             return False
         event = json.loads(raw, object_pairs_hook=_unique)
-        return _canonical_event(event) and envelope.headers["event_id"] == event["event_id"]
+        canonical = _canonical_heartbeat if item.headers["type"] == "check_in" else _canonical_event
+        return canonical(event) and envelope.headers["event_id"] == event["event_id"]
     except Exception:
         return False
 
@@ -148,7 +189,10 @@ class _HealthTransport(HttpTransport):
     def _send_envelope(self, envelope):
         # Check again after queuing. Do not append SDK client-report/session
         # items after this gate, and never invoke its raw-response log path.
-        if not _closed_envelope(envelope) or self._check_disabled("error"):
+        if not _closed_envelope(envelope):
+            return
+        category = "monitor" if envelope.items[0].headers["type"] == "check_in" else "error"
+        if self._check_disabled(category):
             return
         try:
             if self.parsed_dsn is None or self.parsed_dsn.scheme != "https":
@@ -207,27 +251,62 @@ def _after_fork() -> None:
     _client_lock = Lock()
 
 
+def _health_client() -> Any:
+    global _client
+    if os.getpid() != _client_pid:
+        _after_fork()
+    with _client_lock:
+        if _client is None:
+            _client = _make_client(config("SENTRY_DSN", default="", cast=str))
+        return _client
+
+
 def capture_health_category(category: str) -> None:
     """No arbitrary event, exception, count, job identifier or context input."""
-    global _client
     try:
         if (
             type(category) is not str or category not in _CATEGORIES
             or not health_alerts_enabled() or sentry_enabled()
         ):
             return
-        if os.getpid() != _client_pid:
-            _after_fork()
-        with _client_lock:
-            if _client is None:
-                _client = _make_client(config("SENTRY_DSN", default="", cast=str))
-            client = _client
+        client = _health_client()
         client.capture_event(
             {"event_id": uuid4().hex, "platform": "python", "level": "error",
              "exception": {"values": [{"type": category, "module": _MODULE}]}},
             hint={}, scope=None,
         )
     except Exception:
+        return
+
+
+def capture_worker_heartbeat() -> None:
+    """One successful task check-in; no global scope or application input.
+
+    The existing beat/broker/worker path must execute this call. Sentry must
+    actually ingest it and enable the fixed monitor/alert for missed check-ins
+    to provide external detection; local capture alone proves neither.
+    """
+    try:
+        if not health_alerts_enabled() or sentry_enabled():
+            return
+        reference = uuid4().hex
+        value = {
+            "type": "check_in", "event_id": reference, "check_in_id": reference,
+            "monitor_slug": _HEARTBEAT_SLUG, "status": "ok", "duration": 0.0,
+            "environment": "staging", "release": _IDENTITY,
+            "monitor_config": deepcopy(_HEARTBEAT_CONFIG),
+        }
+        envelope = Envelope(headers={"event_id": reference, "sent_at": datetime.now(UTC).isoformat()})
+        envelope.add_checkin(value)
+        if not _closed_envelope(envelope):
+            return
+        # Direct transport avoids the SDK's global check-in API and every
+        # ambient scope/processor. The transport validates again before HTTP.
+        client = _health_client()
+        if client.transport is not None:
+            client.transport.capture_envelope(envelope)
+    except Exception:
+        # Telemetry must never fail or retry an otherwise successful task.
         return
 
 
