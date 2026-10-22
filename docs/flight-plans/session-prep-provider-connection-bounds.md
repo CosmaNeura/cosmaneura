@@ -19,7 +19,8 @@ workload credentials are unshared. No browser claim selects the lane.
 The lane owns a two-connection SQLAlchemy pool with no overflow, one-second pool
 and engine-initialization-lock waits, and the original JSON serializer. Its
 Psycopg connection uses nonblocking connect/poll hooks with a shared three-second
-connect budget. A literal IP skips DNS; a hostname has a one-second caller wait
+connect budget, retaining a tighter explicitly configured connect timeout.
+A literal IP skips DNS; a hostname has a one-second caller wait
 and at most two daemon resolver calls. If an OS lookup remains stuck, its permit
 remains occupied until it returns; subsequent calls fail closed rather than
 creating more threads. The selected address is supplied as hostaddr while the
@@ -34,7 +35,8 @@ retained-worker helper as bootstrap, canonical phases, tools, history and
 observational reporting; its route name, parameters and public schema remain.
 
 Query, commit and rollback socket polling has a three-second budget and checks
-the cancellation signal. Each database checkpoint also observes a shared
+the cancellation signal before advancing a command generator. Each database
+checkpoint also observes a shared
 twenty-second receiver budget. Expiry discards the owned connection and returns
 the existing value-free unavailable category. Ordinary PostgreSQL errors retain
 their original rollback and integrity-conflict path. No mutation or model retry

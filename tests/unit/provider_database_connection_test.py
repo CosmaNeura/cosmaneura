@@ -187,6 +187,68 @@ def test_receiver_deadline_does_not_reset_between_waits():
         bounds._work.reset(token)
 
 
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_cancelled_or_expired_wait_never_advances_command_generator(cancelled):
+    event = threading.Event()
+    if cancelled:
+        event.set()
+    token = bounds._work.set(
+        bounds.ReceiverWork(event, time.monotonic() + (1 if cancelled else -1))
+    )
+    operations = []
+
+    class Command:
+        def __next__(self):
+            operations.append("sent")
+            return selectors.EVENT_READ
+
+        def close(self):
+            operations.append("closed")
+
+    try:
+        with pytest.raises(bounds.ProviderConnectionUnavailable):
+            bounds._wait(Command(), -1, time.monotonic() + 1)
+        assert operations == ["closed"]
+    finally:
+        bounds._work.reset(token)
+
+
+@pytest.mark.parametrize("configured,polled", [("2", False), ("3", True)])
+def test_nonblocking_connect_respects_tighter_configured_timeout(
+    monkeypatch, configured, polled
+):
+    operations = []
+    clock = iter([100.0, 101.9, 102.1])
+    monkeypatch.setattr(bounds.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(bounds, "CONNECT_SECONDS", 3.0)
+
+    class Connection:
+        def connect_poll(self):
+            operations.append("polled")
+            return bounds.psycopg.pq.PollingStatus.FAILED
+
+        def finish(self):
+            operations.append("closed")
+
+    def start(*args):
+        operations.append("started")
+        return Connection()
+
+    monkeypatch.setattr(
+        bounds,
+        "pq",
+        SimpleNamespace(
+            PGconn=SimpleNamespace(connect_start=start),
+            PollingStatus=bounds.psycopg.pq.PollingStatus,
+        ),
+    )
+    with pytest.raises(bounds.ProviderConnectionUnavailable):
+        bounds.ProviderConnection.connect(host="127.0.0.1", connect_timeout=configured)
+    assert operations == (
+        ["started", "polled", "closed"] if polled else ["started", "closed"]
+    )
+
+
 def test_actual_libpq_handshake_stall_has_bounded_wait(monkeypatch):
     # Owned inert TCP listener: it never becomes PostgreSQL or receives SQL.
     listener = socket.socket()

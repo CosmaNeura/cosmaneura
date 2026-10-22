@@ -115,6 +115,7 @@ def _address(host: str, port: str, deadline: float) -> str:
 def _wait(gen: Generator[Any, int, Any], descriptor: int, deadline: float) -> Any:
     """Drive Psycopg's real nonblocking query/commit/rollback generator."""
     try:
+        _remaining(deadline)
         mask = next(gen)
         with selectors.DefaultSelector() as selector:
             while True:
@@ -135,7 +136,8 @@ def _wait(gen: Generator[Any, int, Any], descriptor: int, deadline: float) -> An
 class ProviderConnection(psycopg.Connection):
     @classmethod
     def connect(cls, conninfo: str = "", **kwargs: Any) -> ProviderConnection:
-        deadline = time.monotonic() + CONNECT_SECONDS
+        started = time.monotonic()
+        deadline = started + CONNECT_SECONDS
         pgconn = None
         try:
             params = conninfo_to_dict(conninfo, **kwargs)
@@ -148,14 +150,15 @@ class ProviderConnection(psycopg.Connection):
                 or os.environ.get("PGSERVICE")
             ):
                 raise ProviderConnectionUnavailable("provider_database_unavailable")
+            params["connect_timeout"] = str(
+                max(1, min(3, int(params.get("connect_timeout", "3"))))
+            )
+            deadline = min(deadline, started + int(params["connect_timeout"]))
             if not host.startswith("/"):
                 address = params.get("hostaddr") or _address(
                     host, params.get("port", "5432"), deadline
                 )
                 params["hostaddr"] = str(ipaddress.ip_address(address))
-            params["connect_timeout"] = str(
-                max(1, min(3, int(params.get("connect_timeout", "3"))))
-            )
             _remaining(deadline)
             # hostaddr avoids a second libpq DNS lookup; retain host for TLS identity.
             pgconn = pq.PGconn.connect_start(make_conninfo("", **params).encode())
