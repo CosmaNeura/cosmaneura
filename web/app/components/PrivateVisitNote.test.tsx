@@ -96,6 +96,44 @@ describe("private reminder autosave", () => {
     expect(input).not.toBeDisabled()
   })
 
+  it("offers a confirmed saved-note reload after an invalid save without silently dropping input", async () => {
+    api.save.mockResolvedValue({ response: { status: 422 } })
+    const originalConfirm = Object.getOwnPropertyDescriptor(window, "confirm")
+    const confirm = vi.fn().mockReturnValue(false)
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      value: confirm,
+    })
+    const input = await show()
+    fireEvent.change(input, {
+      target: { value: "Invented rejected edit\u0000" },
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(750)
+    })
+    expect(input).toBeDisabled()
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "could not be accepted",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Reload saved note" }))
+    expect(input).toHaveValue("Invented rejected edit\u0000")
+    expect(api.read).toHaveBeenCalledTimes(1)
+    confirm.mockReturnValue(true)
+    api.read.mockResolvedValueOnce({
+      data: { text: "Invented saved reminder", version: 3 },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reload saved note" }))
+    })
+    expect(input).toHaveValue("Invented saved reminder")
+    expect(input).not.toBeDisabled()
+    expect(screen.getByRole("status")).toHaveTextContent("Saved")
+    expect(api.save).toHaveBeenCalledTimes(1)
+    if (originalConfirm)
+      Object.defineProperty(window, "confirm", originalConfirm)
+    else Reflect.deleteProperty(window, "confirm")
+  })
+
   it("ignores an older visit’s read after opening another visit", async () => {
     let older!: (value: unknown) => void
     api.read

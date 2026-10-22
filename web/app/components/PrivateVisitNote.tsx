@@ -48,9 +48,7 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
     expected_version: number
     text: string
   } | null>(null)
-  const blocker = useBlocker(
-    (text !== saved || retained.current !== null) && status !== "loading",
-  )
+  const blocker = useBlocker(text !== saved || retained.current !== null)
 
   const load = useCallback(async () => {
     const reading = generation.current
@@ -239,7 +237,7 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
             {status === "unavailable" ? "Try again" : "Check access again"}
           </Button>
         )}
-        {status === "conflict" && (
+        {(status === "conflict" || status === "request-rejected") && (
           <Button
             variant="outline"
             onClick={() => {
@@ -265,6 +263,7 @@ export function PrivateVisitNote({ appointmentId }: { appointmentId: string }) {
           <div className="mt-2 flex gap-2">
             <Button
               disabled={
+                status === "loading" ||
                 status === "saving" ||
                 status === "conflict" ||
                 status === "sign-in-required" ||
