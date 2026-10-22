@@ -32,9 +32,106 @@ describe("private reminder autosave", () => {
     const input = await show()
     expect(input).toBeDisabled()
     expect(screen.getByRole("status")).toHaveTextContent(
-      "couldn’t save or load",
+      "couldn’t load or save",
     )
     expect(api.save).not.toHaveBeenCalled()
+  })
+
+  it.each<[number, string, string | null]>([
+    [401, "sign-in session could not be verified", "Check access again"],
+    [
+      403,
+      "unavailable for this visit in the current account",
+      "Check access again",
+    ],
+    [
+      404,
+      "unavailable for this visit in the current account",
+      "Check access again",
+    ],
+    [422, "request could not be accepted", null],
+    [503, "couldn’t load or save", "Try again"],
+  ])(
+    "keeps a failed %s read closed without presenting it as a save",
+    async (code, message, action) => {
+      api.read.mockResolvedValue({ response: { status: code } })
+      expect(await show()).toBeDisabled()
+      expect(screen.getByRole("status")).toHaveTextContent(message!)
+      expect(api.save).not.toHaveBeenCalled()
+      if (action)
+        expect(screen.getByRole("button", { name: action })).toBeVisible()
+      else
+        expect(
+          screen.queryByRole("button", { name: "Try again" }),
+        ).not.toBeInTheDocument()
+    },
+  )
+
+  it("keeps the exact unresolved save and disables editing after access is denied", async () => {
+    api.save
+      .mockResolvedValueOnce({ response: { status: 403 } })
+      .mockResolvedValueOnce({
+        data: { text: "Invented retained edit", version: 3 },
+      })
+    const input = await show()
+    fireEvent.change(input, { target: { value: "Invented retained edit" } })
+    await act(async () => {
+      vi.advanceTimersByTime(750)
+    })
+    const pending = api.save.mock.calls[0][0].body
+    expect(input).toHaveValue("Invented retained edit")
+    expect(input).toBeDisabled()
+    expect(screen.getByRole("status")).toHaveTextContent("current account")
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(api.save).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Check access again" }),
+      )
+    })
+    expect(api.save.mock.calls[1][0].body).toEqual(pending)
+    expect(screen.getByRole("status")).toHaveTextContent("Saved")
+    expect(input).not.toBeDisabled()
+  })
+
+  it("offers a confirmed saved-note reload after an invalid save without silently dropping input", async () => {
+    api.save.mockResolvedValue({ response: { status: 422 } })
+    const originalConfirm = Object.getOwnPropertyDescriptor(window, "confirm")
+    const confirm = vi.fn().mockReturnValue(false)
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      value: confirm,
+    })
+    const input = await show()
+    fireEvent.change(input, {
+      target: { value: "Invented rejected edit\u0000" },
+    })
+    await act(async () => {
+      vi.advanceTimersByTime(750)
+    })
+    expect(input).toBeDisabled()
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "could not be accepted",
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Reload saved note" }))
+    expect(input).toHaveValue("Invented rejected edit\u0000")
+    expect(api.read).toHaveBeenCalledTimes(1)
+    confirm.mockReturnValue(true)
+    api.read.mockResolvedValueOnce({
+      data: { text: "Invented saved reminder", version: 3 },
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Reload saved note" }))
+    })
+    expect(input).toHaveValue("Invented saved reminder")
+    expect(input).not.toBeDisabled()
+    expect(screen.getByRole("status")).toHaveTextContent("Saved")
+    expect(api.save).toHaveBeenCalledTimes(1)
+    if (originalConfirm)
+      Object.defineProperty(window, "confirm", originalConfirm)
+    else Reflect.deleteProperty(window, "confirm")
   })
 
   it("ignores an older visit’s read after opening another visit", async () => {

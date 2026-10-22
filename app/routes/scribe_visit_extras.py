@@ -27,7 +27,7 @@ from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
 from app.models.scribe_capture_binding import ScribeCaptureProviderLink
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 router = APIRouter()
 
@@ -51,7 +51,14 @@ class PrivateNoteValidationError(BaseModel):
     detail: Literal["Invalid private note request."]
 
 
-def browser_workflow(request, appointment_id, action, **fields):
+def browser_workflow(
+    request,
+    appointment_id,
+    action,
+    *,
+    existing_session: Session | None = None,
+    **fields,
+):
     deny_view_as_browser_activity(request)
     if getattr(request.state, "view_as", None) is not None:
         raise HTTPException(403, "This action is unavailable during read-only view-as.")
@@ -97,6 +104,7 @@ def browser_workflow(request, appointment_id, action, **fields):
             settings_provider=lambda: SCRIBE_ENCOUNTER_SETTINGS,
             authority_settings=AUTHORITY_KERNEL_SETTINGS,
             deadline=RecordBudget(time.monotonic() + 15),
+            existing_session=existing_session,
         )
     except scribe_encounters.EncounterConflict:
         raise HTTPException(
@@ -127,7 +135,10 @@ def scribe_private_note_read(
     request: Request, response: Response, appointment_id: Annotated[TypeIDType, Path()]
 ) -> PrivateNoteView:
     response.headers["Cache-Control"] = "no-store"
-    result = browser_workflow(request, appointment_id, "private_note_read")
+    with get_session() as session:
+        result = browser_workflow(
+            request, appointment_id, "private_note_read", existing_session=session
+        )
     return PrivateNoteView.model_validate(result["private_note"])
 
 
@@ -142,7 +153,12 @@ def scribe_private_note_save(
     body: PrivateNoteSave,
 ) -> PrivateNoteView:
     response.headers["Cache-Control"] = "no-store"
-    result = browser_workflow(
-        request, appointment_id, "private_note_save", **body.model_dump(mode="json")
-    )
+    with get_session() as session:
+        result = browser_workflow(
+            request,
+            appointment_id,
+            "private_note_save",
+            existing_session=session,
+            **body.model_dump(mode="json"),
+        )
     return PrivateNoteView.model_validate(result["private_note"])

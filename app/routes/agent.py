@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
-from anyio import CancelScope
+from anyio import CancelScope, CapacityLimiter, to_thread
 from fastapi import APIRouter, Depends, Header, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import (
@@ -39,7 +40,12 @@ from app.configuration.session_prep import (
     SESSION_PREP_SYNTHETIC_SETTINGS,
     SessionPrepSyntheticSettings,
 )
+from app.services.provider_database_connection import (
+    provider_receiver_enabled,
+    provider_receiver_session,
+)
 from app.services.provider_database_deadline import ProviderDatabaseDeadlineExceeded
+from app.services.provider_thread_admission import provider_thread_slot
 from app.services.session_prep_runtime import SessionPrepFactsToolResponse
 
 from activemodel.session_manager import aglobal_session, get_session
@@ -62,28 +68,66 @@ agent_api_app = APIRouter(
 agent_api_app.include_router(capture_api_app)
 
 
-async def _run_agent_database[T, **P](
-    function: Callable[P, T], *args: P.args, **kwargs: P.kwargs
+async def _run_agent_database[T](
+    function: Callable[..., T],
+    *args: object,
+    receiver_workload: str | None = None,
+    receiver_settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+    **kwargs: Any,
 ) -> T:
     # Retain the worker task: cancelling the route must not let aglobal_session
     # close its ContextVar session while synchronous database work still uses it.
-    worker = asyncio.create_task(run_in_threadpool(function, *args, **kwargs))
-    try:
-        return await asyncio.shield(worker)
-    except asyncio.CancelledError:
-        # AnyIO shields level cancellation; asyncio.shield keeps direct (even
-        # repeated) Task.cancel() calls from cancelling the retained worker.
-        with CancelScope(shield=True):
-            while not worker.done():
-                try:
-                    await asyncio.shield(worker)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-            if not worker.cancelled():
-                worker.exception()  # Retrieve failure; preserve original cancellation.
-        raise
+    cancelled = threading.Event()
+    start_lock = threading.Lock()
+    started = False
+    workload = receiver_workload or kwargs.get("workload_client_id")
+    settings = kwargs.get("settings", receiver_settings)
+    dedicated = provider_receiver_enabled(workload, settings)
+
+    def run_owned() -> T:
+        nonlocal started
+        if dedicated:
+            with start_lock:
+                if cancelled.is_set():
+                    raise ProviderDatabaseDeadlineExceeded
+                started = True
+        with provider_receiver_session(workload, cancelled, settings):
+            return function(*args, **kwargs)
+
+    async def dispatch(limiter: CapacityLimiter | None) -> T:
+        worker = asyncio.create_task(
+            run_in_threadpool(run_owned)
+            if limiter is None
+            else to_thread.run_sync(run_owned, limiter=limiter)
+        )
+        try:
+            return await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            with start_lock:
+                cancelled.set()
+                active = started
+            if dedicated and not active:
+                # A thread already submitted but not started observes the same
+                # locked veto before touching a Session or calling the body.
+                worker.cancel()
+            # Started work retains its reservation through Session cleanup.
+            # Nonprovider cancellation keeps the existing retained-worker path.
+            with CancelScope(shield=True):
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    worker.exception()  # Preserve original caller cancellation.
+            raise
+
+    if dedicated:
+        async with provider_thread_slot() as limiter:
+            return await dispatch(limiter)
+    return await dispatch(None)
 
 
 class MountContextResponse(BaseModel):
@@ -869,7 +913,11 @@ async def _invoke_tool(
         return result
 
     try:
-        result = await _run_agent_database(invoke_in_session)
+        result = await _run_agent_database(
+            invoke_in_session,
+            receiver_workload=principal.client_id,
+            receiver_settings=authority_settings,
+        )
     except history.ConversationContextChanged:
         return agent_problem_response(
             status_code=409,
@@ -1080,7 +1128,7 @@ async def bootstrap_mount_context(
     response_model=MountContextResponse,
     status_code=status.HTTP_200_OK,
 )
-def resolve_mount_context(
+async def resolve_mount_context(
     response: Response,
     principal: Annotated[
         EntraServicePrincipal,
@@ -1109,7 +1157,8 @@ def resolve_mount_context(
 ) -> MountContextResponse | JSONResponse:
     resolved_trace_id = normalize_trace_id(trace_id)
     try:
-        result = app.services.authority.resolve_mount_context(
+        result = await _run_agent_database(
+            app.services.authority.resolve_mount_context,
             workload_client_id=principal.client_id,
             mount_context_token=mount_context_token,
             client_turn_id=client_turn_id,
@@ -1793,7 +1842,11 @@ async def read_conversation_turns(
             )
 
     try:
-        result = await _run_agent_database(read_in_session)
+        result = await _run_agent_database(
+            read_in_session,
+            receiver_workload=principal.client_id,
+            receiver_settings=settings,
+        )
     except history.ConversationNotFound:
         return problem("RESOURCE_NOT_FOUND", 404)
     except history.ConversationContextChanged:
