@@ -35,7 +35,7 @@ from app.services.scribe_encounter_contract import (
 )
 from app.services.scribe_encounter_status import saved_encounter_statuses
 
-from activemodel.session_manager import global_session
+from activemodel.session_manager import get_session, global_session
 from app.models.appointment import Appointment
 from app.models.authority import (
     AuthorityAuditEvent,
@@ -49,7 +49,7 @@ from app.models.scribe_capture_binding import ScribeCaptureBinding
 from app.models.scribe_encounter_creation import ScribeEncounterCreation
 from app.models.scribe_patient_identity import ScribePatientIdentity
 from sqlalchemy import event
-from sqlmodel import col, select
+from sqlmodel import Session, col, select
 
 
 class EncounterConflict(RecordUnavailable):
@@ -335,6 +335,7 @@ def encounter_workflow(
     deadline,
     include_lookup_status: bool = True,
     expected_capture_binding_ref: str | None = None,
+    existing_session: Session | None = None,
 ):
     """Authorize each request; optionally omit unpublished lookup display status.
 
@@ -359,7 +360,11 @@ def encounter_workflow(
         tenant_ref=request.expected_tenant_ref,
         settings=authority_settings,
     )
-    with global_session() as session:
+    # Browser routes already own an ActiveModel request scope. Reuse only that
+    # exact inherited Session; native/service calls keep their fresh scope.
+    with get_session() if existing_session is not None else global_session() as session:
+        if existing_session is not None and session is not existing_session:
+            raise authority.AuthorityRequestDeniedError
         provider_transaction = None
         provider_locks_current = False
 
