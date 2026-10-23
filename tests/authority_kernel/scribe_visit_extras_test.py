@@ -390,11 +390,10 @@ def test_expand_rung_rehearsal_in_isolated_synthetic_schema(engine):
 
 
 def test_confirmed_matching_connects_reviewed_history_without_private_content(
-    engine, workflow, monkeypatch
+    engine, workflow
 ):
     from datetime import UTC, datetime, timedelta
 
-    from app.configuration.scribe_encounters import ScribeEncounterSettings
     from app.services import session_prep_note_sources as sources
 
     from app.models.ai_visit_note import AIVisitNote
@@ -402,9 +401,6 @@ def test_confirmed_matching_connects_reviewed_history_without_private_content(
     from app.models.doctor_note_schema import DoctorNoteSchema
 
     args, _, request, invoke = workflow
-    monkeypatch.setattr(
-        sources, "SCRIBE_ENCOUNTER_SETTINGS", ScribeEncounterSettings(enabled=True)
-    )
     canonical = invoke(request())["encounter"]
     source = invoke(
         request(
