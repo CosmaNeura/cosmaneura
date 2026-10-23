@@ -206,6 +206,27 @@ describe("real panel governed-history bridge", () => {
     })
     expect(f.requests.some((item) => item.url.endsWith("/chat"))).toBe(false)
     expect(document.querySelector(".cnp-card")).toBeNull()
+    const save = vi.fn((_blob: Blob | MediaSource) => "blob:synthetic-answer")
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static createObjectURL = save
+      },
+    )
+    const download = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {})
+    const requestCount = f.requests.length
+    fireEvent.click(screen.getByRole("button", { name: "Save answer .md" }))
+    expect(save).toHaveBeenCalledTimes(1)
+    const blob = save.mock.calls[0][0] as Blob
+    expect(blob.type).toBe("text/markdown")
+    expect(await blob.text()).toBe("Synthetic recorded answer")
+    expect((download.mock.contexts[0] as HTMLAnchorElement).download).toBe(
+      "cosmaneura-saved-answer.md",
+    )
+    expect(f.requests).toHaveLength(requestCount)
+    expect(screen.queryByRole("button", { name: "Download .md" })).toBeNull()
   })
 
   it.each([401, 403])(
