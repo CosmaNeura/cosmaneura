@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
 
-from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
 from app.services.session_prep_capture_freshness import (
     CaptureSourceCorrected,
     lock_capture_source_admissions,
@@ -233,9 +232,7 @@ class PriorNoteOverview:
 
 
 def _prior_patient_scope(session, doctor_id, target):
-    """Use explicit per-visit identity decisions without rewriting provenance."""
-    if not SCRIBE_ENCOUNTER_SETTINGS.enabled:
-        return Appointment.patient_id == target.patient_id
+    """Honor retained identity decisions independently of encounter creation."""
     identity = session.exec(
         select(ScribePatientIdentity).where(
             ScribePatientIdentity.appointment_id == target.id,
