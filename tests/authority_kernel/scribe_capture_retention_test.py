@@ -85,6 +85,14 @@ def test_no_patient_entries_does_not_erase_known_clinician_role():
     assert "preserve known Doctor and Other roles" in context
 
 
+@pytest.mark.parametrize("heading", ["ROS:", "Review of Systems", "Systems review"])
+def test_existing_ros_field_is_not_described_as_absent(heading):
+    context = notes.capture_retention_context(
+        [], NoteTypeCustomization(), field_names=(heading,)
+    )
+    assert "has NO Review of Systems/ROS field" not in context
+
+
 @pytest.mark.asyncio
 async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatch):
     key = os.environ.get("SCRIBE_RETENTION_MODEL_KEY")

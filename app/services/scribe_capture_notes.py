@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
@@ -241,8 +242,9 @@ def capture_retention_context(
     )
     patients = sum(entry.speaker == "Patient" for entry in entries)
     has_ros = any(
-        "ros" in name.casefold().replace("-", " ").replace("_", " ").split()
-        or "review of systems" in name.casefold()
+        re.search(
+            r"\bros\b|review[\s_-]+of[\s_-]+systems|systems[\s_-]+review", name, re.I
+        )
         for name in field_names
     )
     context = (
