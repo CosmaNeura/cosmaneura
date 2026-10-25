@@ -248,6 +248,9 @@ def capture_retention_context(
         "verify that a declarative source statement denies that specific finding; "
         "remove any clause supported only by a question. A partial answer confirms "
         "only what was explicitly said, not all alternatives in a preceding question. "
+        "For example, question 'Any cough or wheezing?' followed by answer 'No cough' "
+        "supports only 'No cough'; wheezing remains unreported. This illustrates the "
+        "answer-scope rule and supplies no clinical facts for this capture. "
         "A current medication list not supplied remains unspecified, "
         "even when no medication changes are reported. "
     )
