@@ -1,6 +1,6 @@
-// Shared per-environment beta allowlist for features still gated to specific
-// accounts (the Zoom recording bot and the engagement-role "personality"
-// badge both reference this single list, so the cohorts can never drift apart).
+// Base per-environment beta allowlist for features gated to specific accounts.
+// Zoom retains this base cohort and adds two staging-only synthetic accounts
+// separately in zoom-feature.ts, without enabling their engagement badges.
 //
 // Staging and production have separate allowlists. Staging is detected from
 // VITE_PYTHON_URL, NOT import.meta.env.MODE: deployed builds run

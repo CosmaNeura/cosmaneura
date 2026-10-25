@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 
+import { isBetaUserEnabled } from "./beta-access"
 import { isZoomEnabled } from "./zoom-feature"
 
 // Staging and production have separate allowlists, so the environment must be
@@ -8,6 +9,10 @@ import { isZoomEnabled } from "./zoom-feature"
 // VITE_PYTHON_URL instead.
 const STAGING_URL = "https://staging-app.cosmaneura.com/"
 const PROD_URL = "https://app.cosmaneura.com/"
+const LAB_EMAILS = [
+  "scribe-lab-a+clerk_test@cosmaneura.com",
+  "scribe-lab-b+clerk_test@cosmaneura.com",
+]
 
 const PROD_ALLOWED = [
   "dev@cosmaneura.com",
@@ -19,6 +24,43 @@ const PROD_ALLOWED = [
 
 describe("isZoomEnabled", () => {
   afterEach(() => vi.unstubAllEnvs())
+
+  describe("synthetic lab accounts", () => {
+    it.each(LAB_EMAILS)("enables only Zoom on exact staging: %s", (email) => {
+      vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
+      expect(isZoomEnabled(email)).toBe(true)
+      expect(isZoomEnabled(` ${email.toUpperCase()} `)).toBe(true)
+      expect(isBetaUserEnabled(email)).toBe(false)
+    })
+
+    it.each([
+      PROD_URL,
+      "http://staging-app.cosmaneura.com",
+      "https://staging-app.cosmaneura.com.evil.invalid",
+      "https://evil.invalid/staging-app.cosmaneura.com",
+      "https://evil.invalid?origin=staging-app.cosmaneura.com",
+      "https://staging-app.cosmaneura.com@evil.invalid",
+      "https://user:pass@staging-app.cosmaneura.com",
+      "https://staging-app.cosmaneura.com:8443",
+      "https://staging-app.cosmaneura.com/unexpected",
+      "https://staging-app.cosmaneura.com/?unexpected=1",
+      "https://staging-app.cosmaneura.com/#unexpected",
+      "//staging-app.cosmaneura.com",
+      "staging-app.cosmaneura.com",
+      "",
+    ])("denies lab accounts for other or malformed origins: %s", (origin) => {
+      vi.stubEnv("VITE_PYTHON_URL", origin)
+      for (const email of LAB_EMAILS) expect(isZoomEnabled(email)).toBe(false)
+    })
+
+    it("does not admit another lab account or lookalike email", () => {
+      vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
+      expect(isZoomEnabled("scribe-lab-c+clerk_test@cosmaneura.com")).toBe(
+        false,
+      )
+      expect(isZoomEnabled(`${LAB_EMAILS[0]}.invalid`)).toBe(false)
+    })
+  })
 
   describe("staging — only the test account", () => {
     it("enables zoom-reviewer@", () => {
