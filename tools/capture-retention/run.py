@@ -78,6 +78,16 @@ def bootstrap():
 
 async def main(args):
     fixture = json.loads(FIXTURES.read_text())
+    ids = [case["id"] for case in fixture["cases"]]
+    if (
+        len(ids) != 10
+        or len(set(ids)) != 10
+        or ids[:2] != ["R2", "R3"]
+        or any(
+            not name.startswith(f"RET-{i:02d}-") for i, name in enumerate(ids[2:], 1)
+        )
+    ):
+        raise SystemExit("Refusing incomplete or reordered acceptance fixture matrix")
     if not fixture["synthetic_only"] or any(
         not c["synthetic_only"] for c in fixture["cases"]
     ):
@@ -327,6 +337,14 @@ async def main(args):
                         "BLOCKED: model access/configuration; receipt preserved"
                     )
                 await asyncio.sleep(args.interval)
+    expected_count = 12 if args.batch == "primary" else 8
+    if (
+        len(results) != expected_count
+        or len({r["name"] for r in results}) != expected_count
+    ):
+        raise SystemExit(
+            "Incomplete acceptance result matrix; preserved receipts remain unqualified"
+        )
     summary = {
         "identity": identity,
         "results": [
@@ -339,6 +357,7 @@ async def main(args):
         "candidate_oracle_passed": all(
             r["status"] == "PASS" for r in results if "-candidate-" in r["name"]
         ),
+        "all_model_contracts_passed": all("resolved_fields" in r for r in results),
         "independent_content_review_required": True,
     }
     summary_path = output / f"{args.batch}-summary.json"
@@ -347,7 +366,10 @@ async def main(args):
             raise SystemExit("Prior summary differs; preserve it for review")
     else:
         write(summary_path, summary)
-    if not summary["candidate_oracle_passed"]:
+    if (
+        not summary["candidate_oracle_passed"]
+        or not summary["all_model_contracts_passed"]
+    ):
         raise SystemExit("FAIL: one or more candidate model/semantic checks failed")
 
 
