@@ -200,18 +200,18 @@ class ReportedHistoryGrounding:
                     changes = self._indexes(value["change_history"])
                     if set(current) & set(changes):
                         raise HistoryGroundingInvalid
+                    # The model's category choice does not establish a current
+                    # patient list when recorded speaker roles are unidentified.
+                    # Retain named drugs and all temporal statements without
+                    # presenting that untrusted classification as a clinical fact.
                     resolved[heading] = (
-                        (
-                            "Selected current medication reports:\n"
-                            + self._render(current)
-                        )
-                        if current
-                        else "Current medication list not specified in selected source entries; review the transcript."
+                        "Current medication list is unverified; review the source statements."
                     )
-                    if changes:
+                    selected = sorted(current + changes)
+                    if selected:
                         resolved[heading] += (
                             "\n\nSelected medication source statements:\n"
-                            + self._render(changes)
+                            + self._render(selected)
                         )
                 else:
                     indexes = self._indexes(refs[heading])

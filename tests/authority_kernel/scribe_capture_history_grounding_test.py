@@ -93,10 +93,7 @@ def test_empty_selection_is_review_limitation_not_normal_or_absent_history():
     g = contract(["A source requiring review."])
     _, rendered = g.resolve(response(g), max_bytes=10000)
     assert rendered["O - OBJECTIVE"] == history.REVIEW_REQUIRED
-    assert (
-        "Current medication list not specified in selected source entries"
-        in rendered["Medications"]
-    )
+    assert "Current medication list is unverified" in rendered["Medications"]
     assert "no medications" not in rendered["Medications"].lower()
 
 
@@ -111,7 +108,7 @@ def test_current_list_and_retrospective_change_history_stay_distinct():
     assert (
         texts[1] in rendered["Medications"] and texts[2] not in rendered["Medications"]
     )
-    assert "Current medication list not specified" in rendered["Medications"]
+    assert "Current medication list is unverified" in rendered["Medications"]
     _, rendered = g.resolve(response(g, current=[1], changes=[2]), max_bytes=10000)
     assert texts[0] in rendered["Medications"] and texts[1] in rendered["Medications"]
     assert "not specified" not in rendered["Medications"]
@@ -131,8 +128,28 @@ def test_medication_group_heading_never_recasts_a_selected_future_decision_as_pa
     assert "Reported medication change history:" not in medication
     assert "was prescribed" not in medication
     _, rendered = g.resolve(response(g, changes=[2, 3]), max_bytes=10000)
-    assert "Current medication list not specified" in rendered["Medications"]
+    assert "Current medication list is unverified" in rendered["Medications"]
     assert all(text in rendered["Medications"] for text in texts[1:])
+
+
+def test_model_category_cannot_establish_current_list_and_union_keeps_source_order():
+    texts = [
+        "I have not taken any new medicine.",
+        "I take synthetic TestMed daily.",
+        "We are not prescribing a new medicine.",
+    ]
+    g = contract(texts)
+    _, rendered = g.resolve(response(g, current=[1]), max_bytes=10000)
+    medication = rendered["Medications"]
+    assert "Current medication list is unverified" in medication
+    assert "Selected current medication reports" not in medication
+    assert texts[0] in medication
+    _, rendered = g.resolve(response(g, current=[2], changes=[3, 1]), max_bytes=10000)
+    medication = rendered["Medications"]
+    assert [medication.index(text) for text in texts] == sorted(
+        medication.index(text) for text in texts
+    )
+    assert "Current medication list is unverified" in medication
 
 
 @pytest.mark.parametrize("indexes", [[True], [1.0], [0], [-1], [2], [1, 1], "1", None])
