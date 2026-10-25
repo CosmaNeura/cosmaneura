@@ -70,3 +70,11 @@ conservative about unfamiliar paraphrases and must be accompanied by independent
 content review. Its fixtures prove that the archived omissions, wrong numbers,
 wrong symptom timing, negation inversions, and person swaps fail. An oracle PASS
 alone never establishes universal note completeness or deployment readiness.
+
+If an independently justified oracle correction is needed, preserve original
+receipts and run `grade_saved.py --run /absolute/primary-run --output
+/absolute/new-regrade.json`. It requires all 12 primary results, records their
+hashes and both original/current assessments, and fails if any candidate remains
+failed. Regrading makes no model request and cannot turn a missing/failed model
+response into a pass. Independent review must approve the oracle correction and
+actual content; never overwrite the original results.
