@@ -149,7 +149,11 @@ def mock_recall(monkeypatch):
         bot_name="Cosmas AI Note-Taker",
         manual_recording=True,
         metadata=None,
+        deadline=None,
+        before_mutation=None,
     ):
+        if before_mutation is not None:
+            before_mutation()
         calls["create_bot"].append(
             {
                 "meeting_url": meeting_url,
@@ -160,7 +164,11 @@ def mock_recall(monkeypatch):
         )
         return {"id": BOT_ID}
 
-    def fake_start_recording(bot_id, wait_for_ready=True):
+    def fake_start_recording(
+        bot_id, wait_for_ready=True, *, deadline=None, before_mutation=None
+    ):
+        if before_mutation is not None:
+            before_mutation()
         calls["start_recording"].append(bot_id)
         return {"id": f"recording-{bot_id}"}
 
@@ -170,7 +178,7 @@ def mock_recall(monkeypatch):
     def fake_leave_call(bot_id):
         calls["leave_call"].append(bot_id)
 
-    def fake_send_chat_message(bot_id, message, to="everyone"):
+    def fake_send_chat_message(bot_id, message, to="everyone", *, deadline=None):
         calls["send_chat_message"].append((bot_id, message, to))
 
     monkeypatch.setattr(recall, "create_bot", fake_create_bot)

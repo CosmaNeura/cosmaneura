@@ -28,6 +28,10 @@ from app.services.external_webhook_inbox import (
     store_zoom_teardown_intent,
 )
 from app.services.recall import BOT_NAME
+from app.services.zoom_launch_boundary import (
+    LAUNCH_NETWORK_BUDGET_SECONDS,
+    ZoomLaunchBoundary,
+)
 
 from activemodel.session_manager import get_session
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -592,6 +596,8 @@ def _start_appointment_session(
     meeting_id: str,
     _participant_id: str,
     _user_name: str,
+    *,
+    launch_lock=None,
 ):
     """Start one recording for an already server-bound appointment."""
     redis = get_redis()
@@ -605,6 +611,13 @@ def _start_appointment_session(
             meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
+
+    occurrence = _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+    if not occurrence:
+        raise ValueError("zoom_launch_occurrence_unconfirmed")
+    boundary = ZoomLaunchBoundary(
+        redis, launch_lock, str(meeting_id), occurrence, doctor_id
+    )
 
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
     if not doctor or not doctor_access_in_force(doctor):
@@ -633,17 +646,18 @@ def _start_appointment_session(
         )
         return
 
+    boundary.require(LAUNCH_NETWORK_BUDGET_SECONDS)
+
     appointment = _consume_bound_appointment(
         doctor_id,
         str(meeting_id),
-        occurrence_digest=_rget(
-            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
-        ),
+        occurrence_digest=occurrence,
     )
     if appointment is None:
         # Never create a bot or start PHI capture until the server has bound
         # this Zoom meeting to one exact, tenant-valid appointment.
         return
+    boundary.require(LAUNCH_NETWORK_BUDGET_SECONDS)
 
     # Recall fetches the ZAK just-in-time from our /external/v1/recall/zak/{token}
     # endpoint when the bot joins. The token in the URL is the only auth Recall
@@ -657,10 +671,18 @@ def _start_appointment_session(
         meeting_url=meeting_url,
         zak_url=zak_url,
         manual_recording=True,
+        deadline=boundary.operation_deadline,
+        before_mutation=lambda: boundary.require(LAUNCH_NETWORK_BUDGET_SECONDS),
     )
     bot_id = bot_data["id"]
-    ttl = timedelta(hours=24)
-    redis.set(f"recall:meeting:{meeting_id}:bot_id", bot_id, ex=ttl)
+    # Retain a known bot for normal meeting-end cleanup even if the following
+    # database write fails. A lost lease cannot overwrite a successor, but it
+    # must still attempt the durable release for this exact original bot.
+    publication_error = None
+    try:
+        boundary.publish_bot(bot_id)
+    except Exception as exc:
+        publication_error = exc
     # Until recording-scoped ownership is fully established, a worker death
     # or ambiguous start response must cause this bot to be released rather
     # than leave an untracked recorder in the call.
@@ -668,15 +690,20 @@ def _start_appointment_session(
         action="release",
         meeting_id=str(meeting_id),
         bot_id=bot_id,
-        occurrence_digest=_rget(
-            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
-        ),
+        occurrence_digest=occurrence,
         generation=None,
         stop_recording=True,
         cleanup_session=False,
     )
 
-    recording_data = recall.start_recording(bot_id)
+    if publication_error is not None:
+        raise publication_error
+
+    recording_data = recall.start_recording(
+        bot_id,
+        deadline=boundary.operation_deadline,
+        before_mutation=lambda: boundary.require(45.0),
+    )
     recording_id = recording_data.get("id")
     if not recording_id:
         log.warning(
@@ -684,24 +711,30 @@ def _start_appointment_session(
             bot_ref=provider_log_ref(bot_id),
             meeting_ref=provider_log_ref(str(meeting_id)),
         )
-        recall.leave_call(bot_id)
-        redis.delete(f"recall:meeting:{meeting_id}:bot_id")
-        complete_zoom_teardown_intent(launch_teardown_intent.delivery_id)
-        return
+        # Keep the original exact release obligation even for a known denial;
+        # the reconciler can leave safely without guessing current ownership.
+        raise ValueError("zoom_launch_recording_unconfirmed")
 
     # Until Phase 2 provides a durable, exact encounter authorization, one
     # Zoom meeting lifecycle may own only one recording segment.  Persist the
     # fence as soon as Recall confirms the first recording ID; it intentionally
     # outlives merge-window cleanup and is reset only by a new meeting.started
     # (or the canonical meeting.ended cleanup).
-    redis.set(f"recall:meeting:{meeting_id}:capture_started", "1", ex=ttl)
-    redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
+    boundary.publish_recording(
+        bot_id, recording_id, str(appointment.id), str(appointment.patient_id)
+    )
+    boundary.complete(
+        launch_teardown_intent.delivery_id, str(meeting_id), str(appointment.id)
+    )
 
     # Reinforce the recording disclosure with an in-call chat notice. Best-effort
     # only: Zoom's native recording-consent prompt is the primary gate, so a
     # failure here must never abort a recording that already started.
     try:
-        recall.send_chat_message(bot_id, recall.CONSENT_CHAT_MESSAGE)
+        boundary.require()
+        recall.send_chat_message(
+            bot_id, recall.CONSENT_CHAT_MESSAGE, deadline=boundary.operation_deadline
+        )
     except Exception as exc:
         log.warning(
             "failed to post recording disclosure to zoom chat",
@@ -710,29 +743,12 @@ def _start_appointment_session(
             error_type=type(exc).__name__,
         )
 
-    redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id, ex=ttl)
-    redis.set(
-        f"recall:recording:{recording_id}:appointment_id",
-        str(appointment.id),
-        ex=ttl,
-    )
-    redis.set(
-        f"recall:recording:{recording_id}:patient_id",
-        str(appointment.patient_id),
-        ex=ttl,
-    )
-    complete_zoom_teardown_intent(launch_teardown_intent.delivery_id)
     log.info(
         "appointment session started",
         meeting_ref=provider_log_ref(str(meeting_id)),
         bot_ref=provider_log_ref(bot_id),
         appointment_ref=provider_log_ref(str(appointment.id)),
     )
-
-    zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
-    if zoom_mtg:
-        zoom_mtg.status = ZoomMeetingStatus.started
-        zoom_mtg.save()
 
 
 def handle_participant_joined(
@@ -782,7 +798,7 @@ def handle_participant_joined(
         )
         return
 
-    with _lifecycle_lock(redis, meeting_id_str):
+    with _lifecycle_lock(redis, meeting_id_str) as launch_lock:
         occurrence_bound = _bind_participant_occurrence(
             redis,
             meeting_id=meeting_id_str,
@@ -849,6 +865,7 @@ def handle_participant_joined(
                 meeting_id=meeting_id_str,
                 participant_id=first_id,
                 user_name="",
+                launch_lock=launch_lock,
             )
             return
 
@@ -883,7 +900,11 @@ def handle_participant_joined(
 
         if not recording_active:
             _resume_or_start_recording_locked(
-                redis, meeting_id_str, participant_reference, ""
+                redis,
+                meeting_id_str,
+                participant_reference,
+                "",
+                launch_lock=launch_lock,
             )
         else:
             log.info(
@@ -927,8 +948,10 @@ def _resume_or_start_recording(
     confirmed teardown and reject every resume/second-segment attempt.
     """
     redis = get_redis()
-    with _lifecycle_lock(redis, meeting_id):
-        _resume_or_start_recording_locked(redis, meeting_id, participant_id, user_name)
+    with _lifecycle_lock(redis, meeting_id) as launch_lock:
+        _resume_or_start_recording_locked(
+            redis, meeting_id, participant_id, user_name, launch_lock=launch_lock
+        )
 
 
 def _resume_or_start_recording_locked(
@@ -936,6 +959,8 @@ def _resume_or_start_recording_locked(
     meeting_id: str,
     participant_id: str,
     user_name: str,
+    *,
+    launch_lock=None,
 ) -> None:
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     capture_started = bool(redis.get(f"recall:meeting:{meeting_id}:capture_started"))
@@ -953,7 +978,9 @@ def _resume_or_start_recording_locked(
 
     # The caller holds the lifecycle lock so two join deliveries cannot both
     # observe an empty slot and create bots.
-    _start_appointment_session(meeting_id, participant_id, user_name)
+    _start_appointment_session(
+        meeting_id, participant_id, user_name, launch_lock=launch_lock
+    )
 
 
 def _consume_bound_appointment(
