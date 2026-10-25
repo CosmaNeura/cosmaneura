@@ -2,7 +2,10 @@
 
 This is a synthetic model diagnostic, not a rebuilt-client or end-to-end test.
 `run.py` calls the actual `ConfiguredNoteModel`, existing structured prompt,
-response envelope, `PlanGrounding.resolve`, and final note validator. It constructs
+response envelope, history source-reference resolver, `PlanGrounding.resolve`, and
+final note validator. The history contract activates only for all-unidentified
+speech with saved patient-only Subjective; its complete source selections are
+reviewed for omissions and classification as well as exact wording. It constructs
 unsaved Core objects and uses no encounter query, live database, or saved-note
 regeneration. The isolated authority-test bootstrap replaces unrelated services;
 the configured model request is live, with the existing 30-second timeout and no
@@ -50,7 +53,8 @@ An exclusive process lock prevents competing runs. Each attempt is written befor
 the request: an interrupted attempt with no result blocks automatic resubmission.
 The manifest preserves complete synthetic inputs and candidate grounding. Each
 attempt also retains its actual source entries, including constructed role variants,
-before making a request. Files are
+before making a request. The raw response is additionally saved to an exclusive
+`.model.json` sidecar before contract/semantic validation. Files are
 created exclusively with mode 0600 and contain synthetic model output; do not
 substitute clinical transcripts. Console output contains metadata only. Cleanup
 requires no external action: this lane creates no visits, participants, service

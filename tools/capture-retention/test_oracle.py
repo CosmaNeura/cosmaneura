@@ -60,6 +60,23 @@ def test_actual_source_quotation_is_accepted():
     assert grade(4, GOOD[2] + ' "There was no fall."')["passed"]
 
 
+@pytest.mark.parametrize("contrast", ["but", "however", "yet"])
+def test_negation_does_not_cross_contrast_into_positive_findings(contrast):
+    result = grade(
+        4,
+        f"Unidentified speaker: no fall, {contrast} numbness and weakness are present. No radiating arm pain.",
+    )
+    assert not result["passed"]
+    assert {"negative-numbness", "negative-weakness"} <= set(result["failures"])
+
+
+def test_appended_positive_counterclaim_cannot_hide_behind_valid_denial():
+    assert not grade(4, GOOD[2] + " Numbness and weakness are present.")["passed"]
+    assert grade(
+        4, "Unidentified speaker: no fall, numbness, weakness or radiating arm pain."
+    )["passed"]
+
+
 def test_r2_earlier_negatives_and_fluid_measurement_cannot_be_lost_to_late_summary():
     complete = (
         "Unidentified speaker: 12 days of mild dizziness, lasting 30 seconds. "

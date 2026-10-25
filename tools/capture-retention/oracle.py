@@ -36,6 +36,11 @@ def evaluate(case, fields, *, patient_only=True):
     }
     text = "\n".join(clinical.values())
     sentences = [s.strip() for s in re.split(r"[.\n;]+", text) if s.strip()]
+    clauses = [
+        part
+        for sentence in sentences
+        for part in re.split(r"\b(?:but|however|yet)\b", sentence)
+    ]
     failures = []
 
     def require(name, condition):
@@ -44,6 +49,33 @@ def evaluate(case, fields, *, patient_only=True):
 
     def has(pattern):
         return bool(re.search(pattern, text))
+
+    def negative(pattern):
+        return any(re.search(pattern, clause) for clause in clauses)
+
+    def require_negative(name, pattern):
+        require(name, negative(pattern))
+        symptom = {
+            "fall": r"\bfall\b",
+            "numbness": r"\bnumbness\b",
+            "weakness": r"\bweakness\b",
+            "radiation": r"radiat|pain travel",
+            "fainting": r"faint",
+            "chest-pain": r"chest pain",
+            "dyspnea": r"shortness of breath|dyspnea",
+            "fever": r"\bfever\b",
+        }[name.removeprefix("negative-")]
+        require(
+            "no-positive-" + name.removeprefix("negative-"),
+            not any(
+                re.search(symptom, clause)
+                and re.search(
+                    r"\b(?:present|developed|occurs|reports|experienced|has)\b", clause
+                )
+                and not re.search(pattern, clause)
+                for clause in clauses
+            ),
+        )
 
     def together(*patterns):
         return any(
@@ -122,14 +154,14 @@ def evaluate(case, fields, *, patient_only=True):
             }
             if check == "negatives":
                 for key, pattern in negatives.items():
-                    require("negative-" + key, has(pattern))
+                    require_negative("negative-" + key, pattern)
                 require("no-positive-fall", not has(r"(?:had|sustained|after) a fall"))
                 require(
                     "no-positive-radiation", not has(r"pain (?:radiates|travels) down")
                 )
             else:
                 for key in negatives:
-                    require("no-invented-negative-" + key, not has(negatives[key]))
+                    require("no-invented-negative-" + key, not negative(negatives[key]))
                 require(
                     "no-invented-neuro-exam",
                     not has(r"normal (?:neuro|neurolog)|neuro[^.\n]{0,30}normal"),
@@ -220,14 +252,16 @@ def evaluate(case, fields, *, patient_only=True):
                 "negative-dyspnea": r"(?:no|denies|without)[^.\n;]{0,65}(?:shortness of breath|dyspnea)",
                 "negative-fever": r"(?:no|denies|without)[^.\n;]{0,85}fever",
             }.items():
-                require(name, has(pattern))
+                require_negative(name, pattern)
         elif check == "r3_numbers":
             require("right-shoulder", has(r"right shoulder"))
             require("onset-four-days", has(r"4 days"))
-            require("negative-fever", has(r"(?:no|denies|without)[^.\n;]{0,85}fever"))
-            require(
+            require_negative(
+                "negative-fever", r"(?:no|denies|without)[^.\n;]{0,85}fever"
+            )
+            require_negative(
                 "negative-chest-pain",
-                has(r"(?:no|denies|without)[^.\n;]{0,85}chest pain"),
+                r"(?:no|denies|without)[^.\n;]{0,85}chest pain",
             )
             require(
                 "no-unanswered-other-injury-denial",

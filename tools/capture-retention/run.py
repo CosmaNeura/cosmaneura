@@ -158,7 +158,7 @@ async def main(args):
                 chat=SimpleNamespace(completions=SimpleNamespace(create=create))
             )
 
-    notes.openai = Recorder()
+    setattr(notes, "openai", Recorder())
     identity = {
         "source_sha": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -180,6 +180,7 @@ async def main(args):
             path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
             for path in (
                 "app/services/scribe_capture_notes.py",
+                "app/services/scribe_capture_history_grounding.py",
                 "app/services/scribe_capture_plan_grounding.py",
                 "app/jobs/summarize.py",
                 "app/configuration/openai.py",
@@ -247,7 +248,9 @@ async def main(args):
                     note_type="Synthetic Telehealth SOAP", fields=fixture["schema"]
                 )
                 customization = Customization(**fixture["customization"])
-                doctor = Doctor(biography="")
+                doctor = Doctor(
+                    clerk_id="user_synthetic_retention_fixture", biography=""
+                )
                 transcript = Transcript(duration=len(entries), transcript_data=entries)
                 grounding = notes.plans.PlanGrounding(
                     notes.plans.prospective_fields(schema.fields),
@@ -255,6 +258,13 @@ async def main(args):
                         notes.plans.PlanSource.speech(e.speaker, e.content)
                         for e in entries
                     ),
+                )
+                history_grounding = notes.history.ReportedHistoryGrounding.for_capture(
+                    tuple(schema.fields),
+                    grounding.fields,
+                    grounding.sources,
+                    patient_only=variant == "candidate"
+                    and customization.subjective_source == "patient_only",
                 )
                 prompt = (
                     notes.summarize.build_structured_prompt(
@@ -264,7 +274,9 @@ async def main(args):
                         customization,
                         action_items="",
                         doctor=doctor,
-                        source_indexes=bool(grounding.fields),
+                        source_indexes=bool(
+                            grounding.fields or history_grounding.fields
+                        ),
                     )
                     + (
                         notes.capture_retention_context(
@@ -274,8 +286,11 @@ async def main(args):
                         else ""
                     )
                     + grounding.prompt()
+                    + history_grounding.prompt(has_plans=bool(grounding.fields))
                 )
-                notes.GROUNDING = baseline if variant == "baseline" else candidate
+                setattr(
+                    notes, "GROUNDING", baseline if variant == "baseline" else candidate
+                )
                 item = {
                     "name": name,
                     "identity": identity,
@@ -303,7 +318,7 @@ async def main(args):
                 try:
                     response_schema = (
                         notes.capture_response_schema(
-                            tuple(schema.fields), grounding.fields
+                            tuple(schema.fields), grounding.fields, history_grounding
                         )
                         if variant == "candidate"
                         else None
@@ -312,11 +327,19 @@ async def main(args):
                         response_schema=response_schema
                     ).complete(prompt, json_output=True)
                     item["raw_response"] = raw
+                    write(
+                        output / (name + ".model.json"),
+                        {"name": name, "identity": identity, "raw_response": raw},
+                    )
+                    raw, histories = history_grounding.resolve(
+                        raw, max_bytes=notes.MAX_MODEL_BYTES
+                    )
                     raw_fields, plans = grounding.resolve(
                         raw, max_bytes=notes.MAX_MODEL_BYTES
                     )
                     fields = notes._validated_note(raw_fields, schema.fields)
                     fields.update(plans)
+                    fields.update(histories)
                     fields = notes._validated_note(json.dumps(fields), schema.fields)
                     item["resolved_fields"] = fields
                     item["oracle"] = evaluate(case, fields)
