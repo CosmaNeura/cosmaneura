@@ -210,7 +210,7 @@ class ReportedHistoryGrounding:
                     )
                     if changes:
                         resolved[heading] += (
-                            "\n\nReported medication change history:\n"
+                            "\n\nSelected medication source statements:\n"
                             + self._render(changes)
                         )
                 else:
