@@ -23,6 +23,7 @@ from app.commands import scribe_transcript as ingest
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.jobs import summarize
 from app.services import scribe_capture_gap_source as gaps
+from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_plan_grounding as plans
 from app.services import scribe_capture_reviewed_source as reviewed_sources
 from app.services.scribe_capture_admission import (
@@ -243,7 +244,9 @@ class ConfiguredNoteModel:
 
 
 def capture_response_schema(
-    field_names: tuple[str, ...], plan_fields: tuple[str, ...]
+    field_names: tuple[str, ...],
+    plan_fields: tuple[str, ...],
+    history_grounding: history.ReportedHistoryGrounding | None = None,
 ) -> dict[str, Any]:
     """Constrain shape only; source validation and clinical review still apply."""
 
@@ -256,19 +259,19 @@ def capture_response_schema(
         }
 
     fields = closed({name: {"type": "string"} for name in field_names})
-    if not plan_fields:
+    if not plan_fields and not (history_grounding and history_grounding.fields):
         return fields
-    return closed(
-        {
-            "fields": fields,
-            "plan_source_refs": closed(
-                {
-                    name: {"type": "array", "items": {"type": "integer"}}
-                    for name in plan_fields
-                }
-            ),
-        }
-    )
+    properties = {"fields": fields}
+    if plan_fields:
+        properties["plan_source_refs"] = closed(
+            {
+                name: {"type": "array", "items": {"type": "integer"}}
+                for name in plan_fields
+            }
+        )
+    if history_grounding and history_grounding.fields:
+        properties[history.KEY] = history_grounding.schema()
+    return closed(properties)
 
 
 def capture_retention_context(
@@ -1328,9 +1331,15 @@ async def capture_note(
         )
         + ((plans.PlanSource.scratch(scratch_notes.content),) if scratch_notes else ()),
     )
+    history_grounding = history.ReportedHistoryGrounding.for_capture(
+        tuple(inputs.schema.fields),
+        plan_grounding.fields,
+        plan_grounding.sources,
+        patient_only=inputs.customization.subjective_source == "patient_only",
+    )
     generator = model or ConfiguredNoteModel(
         response_schema=capture_response_schema(
-            tuple(inputs.schema.fields), plan_grounding.fields
+            tuple(inputs.schema.fields), plan_grounding.fields, history_grounding
         )
     )
     prompt = summarize.build_structured_prompt(
@@ -1340,10 +1349,10 @@ async def capture_note(
         inputs.customization,
         action_items="",
         doctor=inputs.doctor,
-        source_indexes=bool(plan_grounding.fields),
+        source_indexes=bool(plan_grounding.fields or history_grounding.fields),
     )
     scratch_prompt = scratch_notes.grounding() if scratch_notes else ""
-    if scratch_notes and plan_grounding.fields:
+    if scratch_notes and (plan_grounding.fields or history_grounding.fields):
         scratch_prompt = f"[source {len(plan_grounding.sources)}] " + scratch_prompt
     raw = await _model_call(
         generator,
@@ -1358,17 +1367,22 @@ async def capture_note(
             inputs.customization,
             field_names=tuple(inputs.schema.fields),
         )
-        + plan_grounding.prompt(),
+        + plan_grounding.prompt()
+        + history_grounding.prompt(has_plans=bool(plan_grounding.fields)),
         json_output=True,
     )
     try:
+        raw, grounded_history = history_grounding.resolve(
+            raw, max_bytes=MAX_MODEL_BYTES
+        )
         raw_fields, grounded_plans = plan_grounding.resolve(
             raw, max_bytes=MAX_MODEL_BYTES
         )
-    except plans.PlanGroundingInvalid:
+    except (plans.PlanGroundingInvalid, history.HistoryGroundingInvalid):
         raise CaptureNoteUnconfirmed from None
     note = _validated_note(raw_fields, inputs.schema.fields)
     note.update(grounded_plans)
+    note.update(grounded_history)
     # The selected source text can be larger than the model's integer refs.
     # Apply the same complete-note bounds before any storage/finalization.
     note = _validated_note(orjson.dumps(note).decode(), inputs.schema.fields)
