@@ -40,7 +40,6 @@
     {
       "id": "R2",
       "synthetic_only": true,
-      "consent_record": "historical-fixture-consent-R2",
       "source_origin": "Complete observed saved ASR passages, all roles unknown; original wording retained",
       "source_sha256": "bb5eabe1c1b130b04c8fe4edb8ce292f0f1caec35f5f906c916c1446dc68d3de",
       "entries": [
@@ -246,12 +245,12 @@
         "headache",
         "medications",
         "r2_numbers"
-      ]
+      ],
+      "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio."
     },
     {
       "id": "R3",
       "synthetic_only": true,
-      "consent_record": "historical-fixture-consent-R3",
       "source_origin": "Complete observed saved ASR passages, all roles unknown; original wording retained",
       "source_sha256": "c89ffbfeaecd3471ba6a9d0beef296c161e520517c426ea828c86f835420f068",
       "entries": [
@@ -469,12 +468,12 @@
         "pain",
         "negatives",
         "r3_numbers"
-      ]
+      ],
+      "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio."
     },
     {
       "id": "RET-01-corrected-pain",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -491,12 +490,12 @@
       ],
       "checks": [
         "pain"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-02-prior-current-headache",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -505,12 +504,12 @@
       ],
       "checks": [
         "headache"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-03-explicit-negative-history",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -527,12 +526,12 @@
       ],
       "checks": [
         "negatives"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-04-medication-unknown-vs-unchanged",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -545,12 +544,12 @@
       ],
       "checks": [
         "medications"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-05-question-without-answer",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -559,12 +558,12 @@
       ],
       "checks": [
         "question"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-06-unresolved-number-conflict",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -573,12 +572,12 @@
       ],
       "checks": [
         "conflict"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-07-person-and-role-boundary",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -591,12 +590,12 @@
       ],
       "checks": [
         "persons"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     },
     {
       "id": "RET-08-source-instructions-and-plan-guard",
       "synthetic_only": true,
-      "consent_record": "constructed-text-fixture-no-audio",
       "entries": [
         {
           "speaker": "Unknown",
@@ -609,7 +608,8 @@
       ],
       "checks": [
         "instruction"
-      ]
+      ],
+      "processing_scope": "Constructed synthetic text only; no recording or audio processing."
     }
   ]
 }
