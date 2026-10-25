@@ -52,6 +52,10 @@ def test_past_presence_with_explicit_current_absence_is_not_inverted_time():
     )["passed"]
 
 
+def test_question_without_answer_can_leave_findings_unmentioned():
+    assert grade(6, "Not mentioned in transcript.")["passed"]
+
+
 BAD = [
     (2, "Unidentified speaker: current pain 4/10; 2/10 is a future goal."),
     (2, "Unidentified speaker: mild pain. Marker 2 is a test."),

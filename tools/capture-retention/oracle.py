@@ -209,12 +209,13 @@ def evaluate(case, fields, *, patient_only=True):
                 not has(r"patient[^.\n]{0,35}headache"),
             )
     if all(entry["speaker"] == "Unknown" for entry in case["entries"]):
-        require(
-            "explicit-source-uncertainty",
-            has(
-                r"unidentified|unknown speaker|speaker[^.\n]{0,30}(?:uncertain|not identified)|source[^.\n]{0,30}uncertain"
-            ),
-        )
+        if case["checks"] != ["question"]:
+            require(
+                "explicit-source-uncertainty",
+                has(
+                    r"unidentified|unknown speaker|speaker[^.\n]{0,30}(?:uncertain|not identified)|source[^.\n]{0,30}uncertain"
+                ),
+            )
         if patient_only:
             subjective = next(
                 (v for k, v in clinical.items() if "subjective" in k.casefold()), ""
