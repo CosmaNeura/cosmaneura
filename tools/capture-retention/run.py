@@ -328,6 +328,8 @@ async def main(args):
             raise SystemExit("Prior summary differs; preserve it for review")
     else:
         write(summary_path, summary)
+    if not summary["candidate_oracle_passed"]:
+        raise SystemExit("FAIL: one or more candidate model/semantic checks failed")
 
 
 if __name__ == "__main__":
