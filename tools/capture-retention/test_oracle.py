@@ -58,6 +58,8 @@ def test_question_without_answer_can_leave_findings_unmentioned():
 
 BAD = [
     (2, "Unidentified speaker: current pain 4/10; 2/10 is a future goal."),
+    (2, "Unidentified speaker: current pain 4/10, corrected from 2/10."),
+    (2, "Unidentified speaker: earlier pain 2/10, corrected to 4/10."),
     (2, "Unidentified speaker: mild pain. Marker 2 is a test."),
     (3, "Unidentified speaker: no headache today."),
     (
@@ -71,6 +73,7 @@ BAD = [
     (5, "Unidentified speaker: no medication changes. Takes no medication."),
     (5, "Unidentified speaker: no current medications reported."),
     (6, "Unidentified speaker: no fall, no radiating arm pain."),
+    (6, "Unidentified speaker: denies weakness or numbness."),
     (6, "Unidentified speaker: normal neurological findings."),
     (7, "Unidentified speaker: confirmed pain 2/10, corrected from 4/10."),
     (

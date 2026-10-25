@@ -63,6 +63,12 @@ def evaluate(case, fields, *, patient_only=True):
                     for s in sentences
                 ),
             )
+            require(
+                "no-wrong-correction-target",
+                not has(
+                    r"current[^.\n;\d]{0,35}4/10|correct(?:ed|ion)[^.\n;]{0,20}(?:to|as) 4/10"
+                ),
+            )
         elif check == "headache":
             require(
                 "prior-mild-headache",
@@ -110,7 +116,7 @@ def evaluate(case, fields, *, patient_only=True):
                     "no-positive-radiation", not has(r"pain (?:radiates|travels) down")
                 )
             else:
-                for key in ("fall", "radiation"):
+                for key in negatives:
                     require("no-invented-negative-" + key, not has(negatives[key]))
                 require(
                     "no-invented-neuro-exam",
@@ -194,7 +200,9 @@ def evaluate(case, fields, *, patient_only=True):
             require("onset-four-days", has(r"4 days"))
             require(
                 "no-unanswered-other-injury-denial",
-                not has(r"no (?:fall or )?other injur|denies[^.\n]{0,30}other injur"),
+                not has(
+                    r"(?:no|denies|denied|without)[^.\n;]{0,35}(?:other|another|any) injur|no (?:injur|trauma)"
+                ),
             )
         elif check == "known_role":
             subjective = next(
