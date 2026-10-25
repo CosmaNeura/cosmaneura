@@ -56,6 +56,22 @@ def test_question_without_answer_can_leave_findings_unmentioned():
     assert grade(6, "Not mentioned in transcript.")["passed"]
 
 
+def test_r2_earlier_negatives_and_fluid_measurement_cannot_be_lost_to_late_summary():
+    complete = (
+        "Unidentified speaker: 12 days of mild dizziness, lasting 30 seconds. "
+        "2 episodes yesterday. Blood pressure 118/72. 4 glasses of water daily. "
+        "No fainting. No chest pain, no shortness of breath, no fever. "
+        "Mild headache yesterday; no headache today. "
+        "No medication changes; current medication list unspecified."
+    )
+    assert grade(0, complete)["passed"]
+    assert "negative-fever" in grade(0, complete.replace(", no fever", ""))["failures"]
+    assert (
+        "daily-fluid-intake"
+        in grade(0, complete.replace("4 glasses of water daily. ", ""))["failures"]
+    )
+
+
 BAD = [
     (2, "Unidentified speaker: current pain 4/10; 2/10 is a future goal."),
     (2, "Unidentified speaker: current pain 4/10, corrected from 2/10."),

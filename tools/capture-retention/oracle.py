@@ -193,6 +193,14 @@ def evaluate(case, fields, *, patient_only=True):
                 "duration-30-seconds": r"30 seconds",
                 "two-episodes": r"2 (?:mild )?episodes",
                 "bp-118-72": r"118\s*(?:/|over)\s*72",
+                "daily-fluid-intake": r"4 glasses[^.\n]{0,30}(?:daily|per day|a day)|(?:daily|per day)[^.\n]{0,30}4 glasses",
+            }.items():
+                require(name, has(pattern))
+            for name, pattern in {
+                "negative-fainting": r"(?:no|never|not|denies)[^.\n;]{0,25}faint",
+                "negative-chest-pain": r"(?:no|denies|without)[^.\n;]{0,35}chest pain",
+                "negative-dyspnea": r"(?:no|denies|without)[^.\n;]{0,65}(?:shortness of breath|dyspnea)",
+                "negative-fever": r"(?:no|denies|without)[^.\n;]{0,85}fever",
             }.items():
                 require(name, has(pattern))
         elif check == "r3_numbers":
