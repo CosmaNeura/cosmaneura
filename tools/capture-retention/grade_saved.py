@@ -27,6 +27,14 @@ def regrade(directory):
                 receipt = json.loads(path.read_text())
                 if receipt["identity"] != inputs["identity"]:
                     raise ValueError("Receipt/input identity differs")
+                expected_source = hashlib.sha256(
+                    json.dumps(cases[case_id]["entries"], sort_keys=True).encode()
+                ).hexdigest()
+                if (
+                    receipt["name"] != name
+                    or receipt["source_sha256"] != expected_source
+                ):
+                    raise ValueError("Receipt/case identity differs")
                 result = (
                     evaluate(cases[case_id], receipt["resolved_fields"])
                     if "resolved_fields" in receipt
@@ -38,6 +46,7 @@ def regrade(directory):
                         "receipt_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "original_oracle": receipt.get("oracle"),
                         "current_oracle": result,
+                        "model_contract_passed": "resolved_fields" in receipt,
                     }
                 )
     return {
@@ -52,6 +61,7 @@ def regrade(directory):
             for row in rows
             if "-candidate-" in row["name"]
         ),
+        "all_model_contracts_passed": all(row["model_contract_passed"] for row in rows),
         "original_receipts_unchanged": True,
         "independent_content_review_required": True,
     }
@@ -73,4 +83,8 @@ if __name__ == "__main__":
             }
         )
     )
-    raise SystemExit(0 if result["candidate_oracle_passed"] else 1)
+    raise SystemExit(
+        0
+        if result["candidate_oracle_passed"] and result["all_model_contracts_passed"]
+        else 1
+    )
