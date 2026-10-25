@@ -44,7 +44,7 @@ def test_authorized_active_meeting_retry_rechecks_participants_under_lock(
     monkeypatch.setattr(
         zoom_webhooks,
         "_resume_or_start_recording_locked",
-        lambda _redis, *args: calls.append(args),
+        lambda _redis, *args, **kwargs: calls.append(args),
     )
 
     try:
