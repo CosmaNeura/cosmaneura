@@ -59,12 +59,18 @@ _LIFECYCLE_LOCK_BLOCKING_TIMEOUT_SECONDS = 90
 # and production are separate Zoom apps, but the same account can be connected
 # in both; gating keeps the staging test account out of production (and vice
 # versa) so one real meeting never gets two bots.
-#   - staging:    only the dedicated internal test account
+#   - staging:    only the dedicated reviewer and two synthetic lab accounts
 #   - production: only the specific beta accounts below
 #   - dev/test:   no gating (real bots aren't dispatched there anyway)
 # The frontend mirrors these allowlists in web/app/utils/zoom-feature.ts.
 # See _start_appointment_session.
-STAGING_ZOOM_EMAILS = frozenset({"zoom-reviewer@cosmaneura.com"})
+STAGING_ZOOM_EMAILS = frozenset(
+    {
+        "zoom-reviewer@cosmaneura.com",
+        "scribe-lab-a+clerk_test@cosmaneura.com",
+        "scribe-lab-b+clerk_test@cosmaneura.com",
+    }
+)
 PROD_ZOOM_EMAILS = frozenset(
     {
         "dev@cosmaneura.com",
