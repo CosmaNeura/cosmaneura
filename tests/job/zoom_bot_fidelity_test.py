@@ -90,6 +90,9 @@ def test_selection_prompt_keeps_source_schema_examples_and_preferences(case):
 
 def test_bot_has_one_final_call_and_no_action_extractor(monkeypatch):
     t, schema, example, doctor = inputs()
+    t.transcript_data = [
+        SimpleNamespace(speaker="Unknown", content="Recording check complete.")
+    ]
     monkeypatch.setattr(summarize.Doctor, "one", lambda _: doctor)
     monkeypatch.setattr(
         summarize, "extract_action_items", lambda *_: pytest.fail("extractor called")
@@ -98,7 +101,19 @@ def test_bot_has_one_final_call_and_no_action_extractor(monkeypatch):
 
     def create(**kw):
         requests.append(kw)
-        content = json.dumps({"field_source_refs": {k: [] for k in schema.fields}})
+        content = json.dumps(
+            {
+                bot.KEY: [
+                    {
+                        "source_index": 1,
+                        "purpose": "nonclinical",
+                        "field": None,
+                        "answer_scope": "not_question",
+                        "context_refs": [],
+                    }
+                ]
+            }
+        )
         return SimpleNamespace(
             choices=[
                 SimpleNamespace(

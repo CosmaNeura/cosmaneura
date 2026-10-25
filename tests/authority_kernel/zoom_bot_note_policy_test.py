@@ -216,7 +216,7 @@ def test_real_task_wrapper_excludes_only_bot_contract_failure(
                 SimpleNamespace(
                     finish_reason="stop",
                     message=SimpleNamespace(
-                        content='{"field_source_refs":{"Plan":[999]}}'
+                        content='{"source_dispositions":[{"source_index":999,"purpose":"care_plan","field":"Plan","answer_scope":"not_question","context_refs":[]}]}'
                     ),
                 )
             ]
@@ -250,12 +250,17 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
     candidate, monkeypatch
 ):
     from app.services.zoom_bot_note_grounding import DRAFT_REVIEW, REASON_REVIEW
+    from app.services.zoom_bot_source_dispositions import CONTEXT_REVIEW
 
     from app.models.ai_visit_note import AIVisitNote
     from app.models.ai_visit_transcript import TranscriptEntry
 
     session, _, transcript, _, _, schema = candidate
-    schema.fields = {"Assessment": "Tentative impression", "Plan": "Planned care"}
+    schema.fields = {
+        "Objective": "Examination data",
+        "Assessment": "Tentative impression",
+        "Plan": "Planned care",
+    }
     schema.save()
     transcript.transcript_data = [
         TranscriptEntry(
@@ -263,7 +268,13 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
             content="Could we follow up next week?",
             startTime=0,
             endTime=1000,
-        ).model_dump()
+        ).model_dump(),
+        TranscriptEntry(
+            speaker="Unknown",
+            content="We will follow up next week.",
+            startTime=1000,
+            endTime=2000,
+        ).model_dump(),
     ]
     transcript.save()
     monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _: True)
@@ -273,7 +284,22 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
         calls.append(kwargs)
         content = json.dumps(
             {
-                "field_source_refs": {"Assessment": [1], "Plan": [1]},
+                "source_dispositions": [
+                    {
+                        "source_index": 1,
+                        "purpose": "clinical_question",
+                        "field": "Objective",
+                        "answer_scope": "unanswered",
+                        "context_refs": [],
+                    },
+                    {
+                        "source_index": 2,
+                        "purpose": "care_plan",
+                        "field": "Plan",
+                        "answer_scope": "not_question",
+                        "context_refs": [],
+                    },
+                ],
             }
         )
         return SimpleNamespace(
@@ -289,10 +315,13 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
     session.expire_all()
     note = AIVisitNote.get(appointment_id=transcript.appointment_id)
     assert note and note.note == {
-        "Assessment": DRAFT_REVIEW
-        + "\n\nTranscript — unidentified speaker [source 1]:\nCould we follow up next week?",
+        "Objective": DRAFT_REVIEW
+        + "\n\n"
+        + CONTEXT_REVIEW
+        + "\nTranscript — unidentified speaker [source 1]:\nCould we follow up next week?",
+        "Assessment": "Review the transcript before completing this section.",
         "Plan": DRAFT_REVIEW
-        + "\n\nTranscript — unidentified speaker [source 1]:\nCould we follow up next week?\n\n"
+        + "\n\nTranscript — unidentified speaker [source 2]:\nWe will follow up next week.\n\n"
         + REASON_REVIEW
         + "\n\nThis note was generated with AI assistance.",
     }

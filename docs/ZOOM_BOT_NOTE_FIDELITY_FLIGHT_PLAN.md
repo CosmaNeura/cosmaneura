@@ -24,14 +24,29 @@ an unsupported serious-pathology exclusion and extended an unanswered injury
 question to a denial. All 28 prior calls remain preserved; no failed candidate was
 deployed or silently repaired.
 
-The selected pilot now makes one index-only call for every existing schema field.
-The server renders complete selected source statements with printed source numbers,
-model-classified or unidentified attribution and a placement-review notice. Empty
-fields remain visibly review-needed. No model-written clinical string is accepted
-for any field. The conventional narrative composer and capture code are unchanged.
+The first all-field source draft also failed: two configured calls preserved source
+words but omitted R3's partially answered injury question and put note-construction
+chatter/history recap into Assessment. Its exact `46de29e` source and all 30 prior
+calls remain preserved; no failed candidate was deployed or silently repaired.
 
-This is a source-referenced draft, not polished SOAP. Assessment offers source
-statements to review, not new inferred diagnoses or clinical reasoning. Schema,
+The revised pilot makes one source-purpose disposition per original source ordinal
+in the same index-only call. Every ordinal is required exactly once. Clinical content
+targets an existing field; nonclinical chatter is explicitly classified and excluded.
+There is no duplicate-exclusion mechanism: matching role labels or words do not prove
+the same person or event. Partial/unanswered clinical questions retain their original
+words and any selected reply as neutral source context; fully answered questions can
+be excluded only with retained reply indexes. Those classifications remain unverified.
+
+The server renders complete retained statements in original order, with printed
+source numbers, model-classified or unidentified attribution and a placement-review
+notice. Empty fields remain visibly review-needed. No model-written clinical string
+is accepted. Patient-only Subjective is mechanically enforced for its primary and
+context sources. Recognized Assessment headings accept only source entries classified
+as clinical impressions; Plan cannot take medication history or questions as actions.
+The conventional narrative composer, capture code and all stored settings are unchanged.
+
+This is a source-referenced draft, not polished SOAP. Assessment cannot be populated
+with a generic history recap in lieu of a stated impression. Schema,
 example and customization rows stay unchanged, but source order and whole blocks
 limit grouping, pronoun/style rewriting and reason preferences. A complete source
 block may mix topics or include a question; it is never shortened into a finding.
@@ -41,6 +56,10 @@ correction's context, choose the wrong section or imply incorrect person groupin
 These remain independent semantic/usability gates. The separate offline selection
 oracle checks pinned R2/R3 omissions and correction context, without feeding any
 fixture truth into runtime. No unknown custom heading escapes source grounding.
+Conservative recognized-heading rules do not establish semantic placement for every
+custom/combined heading. Context labels never establish an examination, diagnosis or
+verified answer relationship. The larger per-source response can add latency and
+reach the existing envelope bound earlier; no truncation, repair call or retry is added.
 
 Only Recall's durable transcript dispatch adds the explicit versioned policy hint.
 Both dispatch and execution require staging, the exact existing synthetic A/B
