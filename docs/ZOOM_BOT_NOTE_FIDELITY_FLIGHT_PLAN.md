@@ -43,6 +43,8 @@ notice. Empty fields remain visibly review-needed. No model-written clinical str
 is accepted. Patient-only Subjective is mechanically enforced for its primary and
 context sources. Recognized Assessment headings accept only source entries classified
 as clinical impressions; Plan cannot take medication history or questions as actions.
+Every primary Plan correction requires a direct retained care-plan anchor in that
+same field. Additional history is only labeled context, never the decision itself.
 The conventional narrative composer, capture code and all stored settings are unchanged.
 
 This is a source-referenced draft, not polished SOAP. Assessment cannot be populated

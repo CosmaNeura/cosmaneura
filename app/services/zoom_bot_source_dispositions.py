@@ -152,6 +152,17 @@ def resolve(
     context = {field: set() for field in fields}
     for index, row in rows.items():
         field, purpose = row["field"], row["purpose"]
+        if (
+            field in plans
+            and purpose == "contextual_correction"
+            and not any(
+                rows[ref]["purpose"] == "care_plan" and rows[ref]["field"] == field
+                for ref in row["context_refs"]
+            )
+        ):
+            # History may supply context to a real care decision; it cannot
+            # create that decision merely by being labeled a correction.
+            raise DispositionInvalid
         if field is not None:
             refs[field].add(index)
             if purpose == "clinical_question" or (

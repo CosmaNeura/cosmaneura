@@ -197,7 +197,7 @@ def test_history_or_question_cannot_be_promoted_to_prospective_plan(selected, ki
         resolve(selected)
 
 
-def test_correction_keeps_anchor_and_marks_history_as_context_not_a_plan_decision(
+def test_plan_correction_requires_care_anchor_and_retains_history_as_context(
     selected,
 ):
     selected = [
@@ -207,12 +207,27 @@ def test_correction_keeps_anchor_and_marks_history_as_context_not_a_plan_decisio
     ]
     assert resolve(selected)[0]["Plan"] == [1, 2]
     selected[0] = row(1, "reported_history", "Objective")
+    with pytest.raises(p.DispositionInvalid):
+        resolve(selected)
+    selected[2] = row(3, "care_plan", "Plan")
+    selected[1]["context_refs"] = [1, 3]
     refs, context = resolve(selected)
-    assert refs["Plan"] == [1, 2] and context["Plan"] == {1}
+    assert refs["Plan"] == [1, 2, 3] and context["Plan"] == {1, 3}
     assert "no finding, diagnosis or care decision is inferred" in p.CONTEXT_REVIEW
     selected[1]["context_refs"] = []
     with pytest.raises(p.DispositionInvalid):
         resolve(selected)
+
+
+def test_plan_correction_cannot_borrow_care_anchor_from_another_field():
+    fields = {**FIELDS, "Follow-up": "Next review"}
+    selected = [
+        row(1, "care_plan", "Follow-up"),
+        row(2, "contextual_correction", "Plan", [1]),
+        row(3, "nonclinical", None),
+    ]
+    with pytest.raises(p.DispositionInvalid):
+        p.resolve(selected, fields, ["Doctor", "Patient", "Doctor"], patient_only=True)
 
 
 def test_shape_does_not_claim_semantic_qualification_or_rewrite_input(selected):
