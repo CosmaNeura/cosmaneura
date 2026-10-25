@@ -117,6 +117,24 @@ def test_current_list_and_retrospective_change_history_stay_distinct():
     assert "not specified" not in rendered["Medications"]
 
 
+def test_medication_group_heading_never_recasts_a_selected_future_decision_as_past():
+    texts = [
+        "I take synthetic TestMed daily.",
+        "I have not taken any new medicine.",
+        "We are not prescribing a new medicine.",
+    ]
+    g = contract(texts)
+    _, rendered = g.resolve(response(g, current=[1], changes=[2, 3]), max_bytes=10000)
+    medication = rendered["Medications"]
+    assert all(text in medication for text in texts)
+    assert "Selected medication source statements:" in medication
+    assert "Reported medication change history:" not in medication
+    assert "was prescribed" not in medication
+    _, rendered = g.resolve(response(g, changes=[2, 3]), max_bytes=10000)
+    assert "Current medication list not specified" in rendered["Medications"]
+    assert all(text in rendered["Medications"] for text in texts[1:])
+
+
 @pytest.mark.parametrize("indexes", [[True], [1.0], [0], [-1], [2], [1, 1], "1", None])
 def test_invalid_source_index_contract_fails_closed(indexes):
     g = contract(["Source."])
