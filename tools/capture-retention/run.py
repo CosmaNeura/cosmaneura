@@ -301,9 +301,16 @@ async def main(args):
                     },
                 )
                 try:
-                    raw = await notes.ConfiguredNoteModel().complete(
-                        prompt, json_output=True
+                    response_schema = (
+                        notes.capture_response_schema(
+                            tuple(schema.fields), grounding.fields
+                        )
+                        if variant == "candidate"
+                        else None
                     )
+                    raw = await notes.ConfiguredNoteModel(
+                        response_schema=response_schema
+                    ).complete(prompt, json_output=True)
                     item["raw_response"] = raw
                     raw_fields, plans = grounding.resolve(
                         raw, max_bytes=notes.MAX_MODEL_BYTES

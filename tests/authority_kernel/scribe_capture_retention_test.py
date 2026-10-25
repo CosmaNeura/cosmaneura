@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -94,6 +95,53 @@ def test_existing_ros_field_is_not_described_as_absent(heading):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("plan_fields", [(), ("P - PLAN",)])
+async def test_actual_template_shape_reaches_single_model_request(
+    monkeypatch, plan_fields
+):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="stop", message=SimpleNamespace(content="{}")
+                )
+            ]
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+    monkeypatch.setattr(
+        notes, "openai", SimpleNamespace(with_options=lambda **_: client)
+    )
+    headings = ("S - SUBJECTIVE", "P - PLAN", "CODING, ATTESTATION, SIGNATURE")
+    schema = notes.capture_response_schema(headings, plan_fields)
+    await notes.ConfiguredNoteModel(response_schema=schema).complete(
+        "Synthetic", json_output=True
+    )
+    assert len(calls) == 1
+    contract = calls[0]["response_format"]
+    assert (
+        contract["type"] == "json_schema" and contract["json_schema"]["strict"] is True
+    )
+    actual = contract["json_schema"]["schema"]
+    fields = actual["properties"]["fields"] if plan_fields else actual
+    assert fields["required"] == list(headings)
+    assert fields["additionalProperties"] is False
+    if plan_fields:
+        assert actual["required"] == ["fields", "plan_source_refs"]
+        refs = actual["properties"]["plan_source_refs"]
+        assert refs["required"] == ["P - PLAN"]
+        assert refs["properties"]["P - PLAN"] == {
+            "type": "array",
+            "items": {"type": "integer"},
+        }
+
+
+@pytest.mark.asyncio
 async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatch):
     key = os.environ.get("SCRIBE_RETENTION_MODEL_KEY")
     destination = os.environ.get("SCRIBE_RETENTION_OUTPUT")
@@ -137,9 +185,12 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
             self.outputs = []
 
         async def complete(self, prompt, *, json_output):
-            raw = await notes.ConfiguredNoteModel().complete(
-                prompt, json_output=json_output
-            )
+            raw = await notes.ConfiguredNoteModel(
+                response_schema=notes.capture_response_schema(
+                    tuple(FIXTURE["schema"]),
+                    notes.plans.prospective_fields(FIXTURE["schema"]),
+                )
+            ).complete(prompt, json_output=json_output)
             self.outputs.append(raw)
             with output.with_suffix(".model.json").open("x") as stream:
                 os.chmod(stream.name, 0o600)

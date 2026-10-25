@@ -201,6 +201,9 @@ class NoteModel(Protocol):
 class ConfiguredNoteModel:
     """Reuse the deployed Core model without inheriting automatic SDK retries."""
 
+    def __init__(self, *, response_schema: dict[str, Any] | None = None):
+        self.response_schema = response_schema
+
     async def complete(self, prompt: str, *, json_output: bool) -> str:
         def request() -> str:
             check_capture_deadline()
@@ -208,6 +211,15 @@ class ConfiguredNoteModel:
             options: dict[str, Any] = {}
             if json_output:
                 options["response_format"] = {"type": "json_object"}
+                if self.response_schema is not None:
+                    options["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "capture_note",
+                            "strict": True,
+                            "schema": self.response_schema,
+                        },
+                    }
             check_capture_deadline()
             response = client.chat.completions.create(
                 model=DEFAULT_MULTI_MODAL_MODEL,
@@ -228,6 +240,35 @@ class ConfiguredNoteModel:
         # transcript/note, so a late response cannot publish after cancellation.
         async with asyncio.timeout(35):
             return await asyncio.to_thread(request)
+
+
+def capture_response_schema(
+    field_names: tuple[str, ...], plan_fields: tuple[str, ...]
+) -> dict[str, Any]:
+    """Constrain shape only; source validation and clinical review still apply."""
+
+    def closed(properties: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+
+    fields = closed({name: {"type": "string"} for name in field_names})
+    if not plan_fields:
+        return fields
+    return closed(
+        {
+            "fields": fields,
+            "plan_source_refs": closed(
+                {
+                    name: {"type": "array", "items": {"type": "integer"}}
+                    for name in plan_fields
+                }
+            ),
+        }
+    )
 
 
 def capture_retention_context(
@@ -266,6 +307,11 @@ def capture_retention_context(
         "entire source for these omissions, not just its last summary. "
         "A current medication list not supplied remains unspecified, "
         "even when no medication changes are reported. "
+        "Assessment sections contain only an assessment or diagnosis explicitly "
+        "stated by a source, with its original attribution and uncertainty. Do not "
+        "write a second symptom/history recap in Assessment. When no assessment "
+        "or diagnosis was stated, mark it not mentioned. Keep supported history "
+        "and symptom findings in their existing appropriate narrative section. "
     )
     if not has_ros:
         context += (
@@ -1256,7 +1302,6 @@ async def capture_note(
             session.commit()
 
     await checkpoint()
-    generator = model or ConfiguredNoteModel()
     # An intermediate generated action list is not an independent source. Reuse
     # Core's structured builder with explicit empty actions to skip its legacy
     # extractor and draft once from the complete transcript and typed sources.
@@ -1267,6 +1312,11 @@ async def capture_note(
             for entry in source.entries
         )
         + ((plans.PlanSource.scratch(scratch_notes.content),) if scratch_notes else ()),
+    )
+    generator = model or ConfiguredNoteModel(
+        response_schema=capture_response_schema(
+            tuple(inputs.schema.fields), plan_grounding.fields
+        )
     )
     prompt = summarize.build_structured_prompt(
         inputs.transcript,
