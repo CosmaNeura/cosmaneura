@@ -73,6 +73,7 @@ def test_r2_earlier_negatives_and_fluid_measurement_cannot_be_lost_to_late_summa
 
 
 BAD = [
+    (2, GOOD[0] + " (source 99)"),
     (2, "Unidentified speaker: current pain 4/10; 2/10 is a future goal."),
     (2, "Unidentified speaker: current pain 4/10, corrected from 2/10."),
     (2, "Unidentified speaker: earlier pain 2/10, corrected to 4/10."),

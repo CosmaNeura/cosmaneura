@@ -292,6 +292,8 @@ def capture_retention_context(
             "the history or treat a spoken name as a role label. "
         )
     context += (
+        "Source indexes belong only in the structured plan_source_refs property. "
+        "Do not add source-number citations to narrative note prose. "
         "This source reminder does not alter the prospective-plan JSON contract. "
         "When that contract is present, plan_source_refs must be an OBJECT whose "
         "keys are the prospective field names and whose values are arrays of integer "

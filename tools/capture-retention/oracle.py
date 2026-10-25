@@ -50,6 +50,8 @@ def evaluate(case, fields, *, patient_only=True):
             all(re.search(p, sentence) for p in patterns) for sentence in sentences
         )
 
+    require("no-unvalidated-narrative-citations", not has(r"\bsource\s+\d+"))
+
     for check in case["checks"]:
         if check == "pain":
             require("current-pain-2/10", together(r"pain|score", r"2/10"))
