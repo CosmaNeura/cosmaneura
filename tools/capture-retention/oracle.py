@@ -51,6 +51,15 @@ def evaluate(case, fields, *, patient_only=True):
         )
 
     require("no-unvalidated-narrative-citations", not has(r"\bsource\s+\d+"))
+    def canonical(value):
+        return re.sub(r"\W+", " ", normalized(value)).strip()
+
+    source_words = canonical(" ".join(e["content"] for e in case["entries"]))
+    quotations = re.findall(r'["“]([^"”]+)["”]', text)
+    require(
+        "no-invented-narrative-quotation",
+        all(canonical(quote) in source_words for quote in quotations),
+    )
 
     for check in case["checks"]:
         if check == "pain":
