@@ -42,6 +42,7 @@ from app.services.scribe_capture_deadline import (
 from app.services.scribe_capture_notebook import ScratchNotes
 from app.services.scribe_capture_protocol import CaptureOperation
 from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
+from app.services.scribe_failure_diagnostics import report_unconfirmed
 from app.services.scribe_workflow import (
     ScribeWorkflowClient,
     build_scribe_workflow_client,
@@ -364,7 +365,10 @@ async def perform_capture_operation(
         admission.AdmissionError,
         gateway.CaptureOperationUnconfirmed,
         SQLAlchemyError,
-    ):
+    ) as error:
+        report_unconfirmed(
+            boundary="capture_operation", operation=data.operation.kind, error=error
+        )
         return _admission_problem(503, "CAPTURE_OPERATION_UNCONFIRMED", retryable=True)
     finally:
         try:

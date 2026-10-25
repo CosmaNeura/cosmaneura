@@ -34,6 +34,7 @@ from app.services.scribe_encounter_contract import (
     PatientsRequest,
     PrivateNoteSaveRequest,
 )
+from app.services.scribe_failure_diagnostics import report_unconfirmed
 from app.services.superadmin_capability import SuperadminCapabilityError
 from app.services.view_as import ViewAsError
 from app.utils.encryption import DecryptionError, EncryptionError
@@ -163,7 +164,8 @@ async def scribe_encounter_workflow(
         TypeError,
         EncryptionError,
         DecryptionError,
-    ):
+    ) as error:
+        report_unconfirmed(boundary="encounter", operation=data.action, error=error)
         return problem(503)
 
 
