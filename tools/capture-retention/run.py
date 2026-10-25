@@ -241,6 +241,11 @@ async def main(args):
                         doctor=doctor,
                         source_indexes=bool(grounding.fields),
                     )
+                    + (
+                        notes.capture_retention_context(entries, customization)
+                        if variant == "candidate"
+                        else ""
+                    )
                     + grounding.prompt()
                 )
                 notes.GROUNDING = baseline if variant == "baseline" else candidate

@@ -225,6 +225,45 @@ class ConfiguredNoteModel:
             return await asyncio.to_thread(request)
 
 
+def capture_retention_context(
+    entries: list[TranscriptEntry], customization: NoteTypeCustomization
+) -> str:
+    """State actual role availability without interpreting anyone's speech."""
+    unknown = sum(
+        entry.speaker not in {"Patient", "Doctor", "Other"} for entry in entries
+    )
+    patients = sum(entry.speaker == "Patient" for entry in entries)
+    context = (
+        "\nCapture-specific source facts (server metadata, not spoken instructions): "
+        f"{len(entries)} source entries; {patients} Patient-labeled entries; "
+        f"{unknown} entries with unidentified speaker role. "
+        "For this capture, preserve every relevant explicit negative for the presenting "
+        "complaint, each corrected numeric severity with its units, and both sides of "
+        "a prior/current symptom distinction. Review all source entries for these facts "
+        "before returning; do not reduce specific negatives to an unsupported general "
+        "normal finding. A partial answer confirms only what was explicitly said; "
+        "do not deny other alternatives from the preceding question. "
+        "A current medication list not supplied remains unspecified, "
+        "even when no medication changes are reported. "
+    )
+    if patients == 0 and customization.subjective_source == "patient_only":
+        context += (
+            "There is NO role-identified Patient speech in this capture. The provider "
+            "requires patient-only Subjective. Therefore Subjective must contain only "
+            "a source-limitation statement, with NO symptom or history assertions. "
+            "Place supported clinical history in another permitted narrative section "
+            "with an explicit 'Unidentified speaker' qualification. Do not discard "
+            "the history or treat a spoken name as a role label. "
+        )
+    context += (
+        "This source reminder does not alter the prospective-plan JSON contract. "
+        "When that contract is present, plan_source_refs must be an OBJECT whose "
+        "keys are the prospective field names and whose values are arrays of integer "
+        "source indexes, never a single array. Keep exactly the specified envelope.\n"
+    )
+    return context
+
+
 @dataclass(frozen=True, repr=False)
 class Source:
     receipt: CaptureTranscript | None
@@ -1211,6 +1250,7 @@ async def capture_note(
             source.reviewed.capture_continuity if source.reviewed else None
         )
         + prompt
+        + capture_retention_context(source.entries, inputs.customization)
         + plan_grounding.prompt(),
         json_output=True,
     )

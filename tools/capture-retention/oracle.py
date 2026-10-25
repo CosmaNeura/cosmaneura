@@ -187,6 +187,10 @@ def evaluate(case, fields, *, patient_only=True):
         elif check == "r3_numbers":
             require("right-shoulder", has(r"right shoulder"))
             require("onset-four-days", has(r"4 days"))
+            require(
+                "no-unanswered-other-injury-denial",
+                not has(r"no (?:fall or )?other injur|denies[^.\n]{0,30}other injur"),
+            )
         elif check == "known_role":
             subjective = next(
                 (v for k, v in clinical.items() if "subjective" in k.casefold()), ""

@@ -15,7 +15,9 @@ from app.services import scribe_capture_notes as notes
 from app.services.scribe_workflow import CaptureTranscript
 
 from app.models.ai_visit_note import AIVisitNote
+from app.models.ai_visit_transcript import TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.note_type_customization import NoteTypeCustomization
 from sqlmodel import Session
 
 from tests.authority_kernel.scribe_capture_notes_test import (
@@ -30,6 +32,35 @@ admission_case = _admission_case
 capture_engine = _capture_engine
 TOOLS = Path(__file__).resolve().parents[2] / "tools/capture-retention"
 FIXTURE = json.loads((TOOLS / "fixtures.json").read_text())
+
+
+def test_source_role_context_does_not_infer_from_spoken_introductions():
+    entries = [
+        TranscriptEntry(
+            speaker="Unknown", content="I am Doctor Lane.", startTime=0, endTime=1000
+        )
+    ]
+    context = notes.capture_retention_context(entries, NoteTypeCustomization())
+    assert (
+        "0 Patient-labeled entries; 1 entries with unidentified speaker role" in context
+    )
+    assert "NO role-identified Patient speech" in context
+    assert "I am Doctor Lane" not in context
+
+
+def test_known_patient_and_provider_preferences_remain_distinct():
+    entries = [
+        TranscriptEntry(
+            speaker="Patient", content="My pain is mild.", startTime=0, endTime=1000
+        )
+    ]
+    assert "NO role-identified" not in notes.capture_retention_context(
+        entries, NoteTypeCustomization()
+    )
+    entries[0].speaker = "Unknown"
+    assert "NO role-identified" not in notes.capture_retention_context(
+        entries, NoteTypeCustomization(subjective_source="patient_and_doctor")
+    )
 
 
 @pytest.mark.asyncio
@@ -78,6 +109,18 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
                 prompt, json_output=json_output
             )
             self.outputs.append(raw)
+            with output.with_suffix(".model.json").open("x") as stream:
+                os.chmod(stream.name, 0o600)
+                json.dump(
+                    {
+                        "raw_response": raw,
+                        "grounding": notes.GROUNDING,
+                        "prompt": prompt,
+                        "scope": "synthetic actual-model response before contract validation",
+                    },
+                    stream,
+                    indent=2,
+                )
             return raw
 
     model = ActualModel()
