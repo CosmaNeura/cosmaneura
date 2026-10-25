@@ -64,6 +64,22 @@ def test_known_patient_and_provider_preferences_remain_distinct():
     )
 
 
+def test_no_patient_entries_does_not_erase_known_clinician_role():
+    entries = [
+        TranscriptEntry(
+            speaker="Doctor",
+            content="The examination was deferred.",
+            startTime=0,
+            endTime=1000,
+        )
+    ]
+    context = notes.capture_retention_context(entries, NoteTypeCustomization())
+    assert (
+        "0 Patient-labeled entries; 0 entries with unidentified speaker role" in context
+    )
+    assert "preserve known Doctor and Other roles" in context
+
+
 @pytest.mark.asyncio
 async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatch):
     key = os.environ.get("SCRIBE_RETENTION_MODEL_KEY")

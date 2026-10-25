@@ -258,12 +258,18 @@ def capture_retention_context(
         "even when no medication changes are reported. "
     )
     if patients == 0 and customization.subjective_source == "patient_only":
+        attribution = (
+            "with an explicit 'Unidentified speaker' qualification. "
+            if unknown == len(entries)
+            else "with each entry's original role attribution; preserve known Doctor "
+            "and Other roles, and qualify only unknown-role speech as unidentified. "
+        )
         context += (
             "There is NO role-identified Patient speech in this capture. The provider "
             "requires patient-only Subjective. Therefore Subjective must contain only "
             "a source-limitation statement, with NO symptom or history assertions. "
             "Place supported clinical history in another permitted narrative section "
-            "with an explicit 'Unidentified speaker' qualification. Do not discard "
+            f"{attribution}Do not discard "
             "the history or treat a spoken name as a role label. "
         )
     context += (
