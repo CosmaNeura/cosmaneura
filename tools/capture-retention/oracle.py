@@ -258,6 +258,16 @@ def evaluate(case, fields, *, patient_only=True):
                 not has(r"patient[^.\n]{0,35}headache"),
             )
     if all(entry["speaker"] == "Unknown" for entry in case["entries"]):
+        # A caveat in Objective cannot repair an invented attribution elsewhere.
+        # Source quotations have already been checked against actual utterances.
+        unquoted = re.sub(r'["“][^"”]+["”]', "", text)
+        require(
+            "no-manufactured-speaker-role",
+            not re.search(
+                r"\b(?:patient|clinician|doctor|provider)\s+(?:said|stated|reports?|reported|denies|denied|describes?|described|notes?|noted|confirms?|confirmed)\b",
+                unquoted,
+            ),
+        )
         if case["checks"] != ["question"]:
             require(
                 "explicit-source-uncertainty",

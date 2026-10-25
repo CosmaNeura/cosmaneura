@@ -152,6 +152,14 @@ def test_unknown_role_does_not_override_patient_only():
     ]
 
 
+@pytest.mark.parametrize("role", ["patient", "clinician", "doctor", "provider"])
+def test_unknown_role_caveat_in_another_field_does_not_permit_attributed_claim(role):
+    result = grade(
+        2, GOOD[0], **{"Medications": f"The {role} stated no medication changes."}
+    )
+    assert "no-manufactured-speaker-role" in result["failures"]
+
+
 def test_invented_plan_is_rejected():
     assert not grade(
         9, GOOD[7], **{"P - PLAN": "Take ibuprofen and follow up tomorrow."}
