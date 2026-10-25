@@ -23,9 +23,11 @@ recognized existing history/Objective/ROS/medication fields use source indexes i
 the same model response. A capture-local resolver stores the selected complete
 source text and its actual attribution, replacing generated prose in those fields.
 It does not add note fields, infer roles, or copy the whole transcript by default.
-Current medication reports and retrospective change history have separate selections;
-an empty list selection states its source limitation, never that no medicine is
-taken. Typed scratch notes keep their distinct source label. Empty history selection
+Current medication reports and retrospective change history have separate selections,
+but those model categories never establish a verified current patient list. Medication
+fields retain explicit list uncertainty and render the union of selected statements
+in source order under a neutral heading, never asserting that no medicine is taken.
+Typed scratch notes keep their distinct source label. Empty history selection
 requires review. Known-role captures and other Subjective preferences retain the
 existing path. The prospective PlanGrounding implementation is unchanged.
 
