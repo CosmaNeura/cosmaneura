@@ -56,7 +56,7 @@ substitute clinical transcripts. Console output contains metadata only. Cleanup
 requires no external action: this lane creates no visits, participants, service
 resources, or saved clinical records.
 
-`tests/authority_kernel/scribe_capture_retention_test.py` adds an opt-in separate
+`tests/authority_kernel/scribe_capture_retention_model_test.py` adds an opt-in separate
 actual-model-to-local-persistence check. It requires the existing guarded
 `W8_CORE_CAPTURE_TEST_URL` disposable database, `SCRIBE_RETENTION_MODEL_KEY` in
 process memory, and a fresh absolute `SCRIBE_RETENTION_OUTPUT` JSON path. Run it
