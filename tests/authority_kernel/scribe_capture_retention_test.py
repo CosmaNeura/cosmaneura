@@ -74,7 +74,9 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
     assert not output.exists(), "Preserve prior results; select a fresh output path"
     f = admission_case
     args = await setup(f, monkeypatch)
-    case = FIXTURE["cases"][1]  # Complete observed R3, roles remain Unknown.
+    case_id = os.environ.get("SCRIBE_RETENTION_CASE", "R3")
+    assert case_id in {"R2", "R3"}
+    case = next(c for c in FIXTURE["cases"] if c["id"] == case_id)
     with Session(f.engine) as session:
         schema = session.get(DoctorNoteSchema, f.schema_ref)
         assert schema is not None
@@ -139,6 +141,7 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
     retry = await notes.capture_note(**args)
     evidence = {
         "scope": "actual configured staging model; actual local PostgreSQL; synthetic downstream capture fixture",
+        "case_id": case_id,
         "oracle": evaluation,
         "resolved_fields": result.fields,
         "raw_responses": model.outputs,
