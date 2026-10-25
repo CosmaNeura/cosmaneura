@@ -353,6 +353,7 @@ def encounter_workflow(
             raise RecordUnavailable
 
     available()
+    scoped_read = isinstance(request, (CatalogRequest, LookupRequest))
     args = dict(
         issuer=issuer,
         subject=subject,
@@ -376,14 +377,14 @@ def encounter_workflow(
             with (
                 transaction_budget(session, deadline),
                 lookup_doctor_access_row_scope(session)
-                if isinstance(request, LookupRequest)
+                if scoped_read
                 else nullcontext(),
             ):
                 connection, doctor_id, link = _current_provider(session, args)
-                if isinstance(request, LookupRequest):
+                if scoped_read:
                     # The initial routine individually locks the full provider
                     # authority/link/member rows. Only this synchronous lookup
-                    # may use their existing fresh final-row validator, in the
+                    # or catalog may use their fresh final-row validator, in the
                     # same uninterrupted transaction. It re-reads permission;
                     # neither a decision nor a transaction spans remote I/O.
                     provider_transaction = (
@@ -629,7 +630,7 @@ def encounter_workflow(
                     raise ValueError("unsupported_action")
                 session.expire_all()
                 if (
-                    isinstance(request, LookupRequest)
+                    scoped_read
                     and provider_locks_current
                     and provider_transaction is not None
                     and provider_transaction.is_active
@@ -658,7 +659,7 @@ def encounter_workflow(
                 available()
                 return result
         finally:
-            if isinstance(request, LookupRequest) and provider_transaction is not None:
+            if scoped_read and provider_transaction is not None:
                 for name in ("after_transaction_create", "after_transaction_end"):
                     event.remove(session, name, transaction_changed)
             session.rollback()

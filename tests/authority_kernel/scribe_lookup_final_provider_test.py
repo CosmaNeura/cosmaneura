@@ -161,13 +161,13 @@ def test_transaction_transition_requires_original_full_final_check(
     assert calls == ["full", "full"]
 
 
-def test_catalog_retains_full_provider_checks(native, monkeypatch):
+def test_create_retains_full_provider_checks(native, monkeypatch):
     def forbidden(*_args, **_kwargs):
-        pytest.fail("Only an exact lookup can use the lock-local final check")
+        pytest.fail("A mutation cannot use the lock-local final check")
 
     monkeypatch.setattr(scribe_encounters, "_locked_provider", forbidden)
-    result = native.invoke(native.request("list"))
-    assert native.row in result["encounters"]
+    result = native.invoke(native.request())
+    assert result["encounter"]["workspace_id"] != native.row["workspace_id"]
 
 
 def test_lookup_refreshes_unsaved_stale_orm(native, monkeypatch):

@@ -3,6 +3,7 @@
 import importlib
 import json
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -70,6 +71,30 @@ def engine():
         55937,
         "scribe_ux_lab_owner",
     )
+    catalog_scope = (
+        (url.database, url.host, url.username)
+        == ("scribe_configured_core_test", None, "scribe_configured_owner")
+        and url.query.get("host")
+        == "/private/tmp/scribe-configured-core.retention-20261025"
+        and url.query.get("port") == "55458"
+        and re.fullmatch(
+            r"-csearch_path=catalog_scope_[0-9a-f]{32}",
+            str(url.query.get("options", "")),
+        )
+        is not None
+    )
+    if catalog_scope:
+        assert json.loads(
+            Path(
+                "/private/tmp/scribe-configured-core.retention-20261025/owner.json"
+            ).read_text()
+        ) == {
+            "task": "virtual-lab-retention-20261025",
+            "synthetic_only": True,
+            "listen_addresses": "",
+            "socket": "/private/tmp/scribe-configured-core.retention-20261025",
+            "port": 55458,
+        }
     if desktop_scope:
         marker = Path("/private/tmp/scribe-ux-latency-lab-20261007/ownership.json")
         assert json.loads(marker.read_text()) == {
@@ -80,7 +105,7 @@ def engine():
             "username": "scribe_ux_lab_owner",
             "only_synthetic": True,
         }
-    assert original_scope or ux_scope or desktop_scope
+    assert original_scope or ux_scope or desktop_scope or catalog_scope
     for source in (Path(__file__).parents[2] / "app/models").glob("*.py"):
         if source.stem != "__init__":
             importlib.import_module("app.models." + source.stem)
