@@ -1,0 +1,438 @@
+{
+  "synthetic_only": true,
+  "source": "Actual named-participant model diagnostics; not a live Recall recording. Speaker labels are exactly from the final actual request.",
+  "cases": [
+    {
+      "id": "R2",
+      "synthetic_only": true,
+      "source_origin": "Complete observed saved ASR passages, all roles unknown; original wording retained",
+      "source_sha256": "bb5eabe1c1b130b04c8fe4edb8ce292f0f1caec35f5f906c916c1446dc68d3de",
+      "entries": [
+        {
+          "speaker": "Doctor",
+          "content": "This is a completely synthetic practice visit."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I am Doctor Lane, speaking with Casey Vale."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We will check several details carefully and correct anything that was misstated."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Casey, please describe the dizziness you mentioned and give me the time course in your own words."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The dizziness began twelve days ago."
+        },
+        {
+          "speaker": "Patient",
+          "content": "Earlier I said twenty days, but twelve is correct."
+        },
+        {
+          "speaker": "Patient",
+          "content": "It lasts about thirty seconds when I stand up quickly."
+        },
+        {
+          "speaker": "Patient",
+          "content": "It does not last thirty minutes."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have never fainted."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The opening marker is orange telescope, and this is invented test information."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "To confirm: symptoms began twelve days ago, episodes last thirty seconds, and there has been no fainting."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Have you noticed chest pain, shortness of breath, fever, or a headache?"
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Please distinguish a symptom you actually have from one you are denying."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have no chest pain, no shortness of breath, and no fever."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I did have a mild headache yesterday, but I do not have one today."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I initially called the dizziness severe."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I would correct that to mild."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I can still walk and carry out my normal routine."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "How many episodes occurred yesterday?"
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Also tell me about fluid intake and whether you have started or stopped any medicines."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I want the corrected count to replace the earlier number rather than leave two competing versions in the final summary."
+        },
+        {
+          "speaker": "Patient",
+          "content": "There were two episodes yesterday, not seven."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I drink about four glasses of water daily."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have not started, stopped, or changed any medicine."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The middle marker is turquoise notebook."
+        },
+        {
+          "speaker": "Patient",
+          "content": "My blood pressure reading at home was one hundred eighteen over seventy-two, not one hundred eighty over seventy-two."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "The corrected home reading is one hundred eighteen over seventy-two, with two mild episodes yesterday."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "For this practice plan, rise slowly, keep a brief symptom diary, and maintain regular fluids."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We are not starting a new medicine."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Follow-up should be in ten days, not ten weeks."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I understand."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I will record when the dizziness happens and how long it lasts."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I will use the corrected count of two and the duration of thirty seconds."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I do not want the denied symptoms shown as present."
+        },
+        {
+          "speaker": "Patient",
+          "content": "My late marker is indigo lantern."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Final check: twelve days of brief mild dizziness on standing, no fainting, no chest pain, no shortness of breath, and no current headache."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "No medication change is planned."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Follow-up is ten days."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "The closing marker is cedar compass."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "This concludes the synthetic corrections test."
+        }
+      ],
+      "archived_faulty_draft": {
+        "Patient": "Casey Vale",
+        "MRN / DOB": "Not mentioned in transcript",
+        "Provider": "Doctor Lane",
+        "Payer": "Not mentioned in transcript",
+        "Date of service": "Not mentioned in transcript",
+        "Modality": "Not mentioned in transcript",
+        "Sites": "Not mentioned in transcript",
+        "Place of service": "Not mentioned in transcript",
+        "Telehealth attestation": "Not mentioned in transcript",
+        "S - SUBJECTIVE": "- The patient reports dizziness beginning 12 days ago.\n- Episodes occur when standing up quickly and last about 30 seconds.\n- The patient initially described the dizziness as severe but corrected it to mild.\n- The patient is able to walk and carry out their normal routine.\n- The patient had two episodes yesterday.\n- The patient drinks about four glasses of water daily.\n- The patient has not started, stopped, or changed any medicine.",
+        "PMH / PSH": "Not mentioned in transcript",
+        "Medications": "- No current medications reported.\n- No new medications prescribed this visit.",
+        "Allergies": "Not mentioned in transcript",
+        "Family hx": "Not mentioned in transcript",
+        "Social hx": "Not mentioned in transcript",
+        "Immunizations": "Not mentioned in transcript",
+        "O - OBJECTIVE": "- Home blood pressure reading: 118/72 mmHg.",
+        "Video examination": "Not mentioned in transcript",
+        "Deferred examination": "Not mentioned in transcript",
+        "Laboratory tests": "Not mentioned in transcript",
+        "Risk calculations": "Not mentioned in transcript",
+        "Screening gaps": "Not mentioned in transcript",
+        "A - ASSESSMENT": "- Brief, mild dizziness on standing for 12 days, no fainting.\n- No chest pain, no shortness of breath, no fever, no current headache.",
+        "P - PLAN": "Transcript \u2014 Unidentified speaker:\nFor this practice plan, rise slowly, keep a brief symptom diary, and maintain regular fluids.\n\nTranscript \u2014 Unidentified speaker:\nWe are not starting a new medicine.",
+        "Follow-ups": "Transcript \u2014 Unidentified speaker:\nFollow up should be in 10 days, not 10 weeks.",
+        "Return precautions": "Review the transcript before completing this section.",
+        "CODING, ATTESTATION, SIGNATURE": "Not mentioned in transcript"
+      },
+      "checks": [
+        "headache",
+        "medications",
+        "r2_numbers"
+      ],
+      "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio.",
+      "observedFinalPromptSHA256": "aec2e8124d6cc5f7903183d2ac6e043d2b2399ceebd6a32f8090b24f8a26bf96",
+      "baselineFields": {
+        "Subjective": "The patient reports experiencing dizziness that began twelve days ago. The dizziness occurs when standing up quickly, lasts about thirty seconds per episode, and is described as mild (previously described as severe, but corrected to mild). The patient has not fainted and is able to walk and carry out normal routines. There were two episodes of dizziness yesterday (corrected from an earlier count of seven). The patient drinks about four glasses of water daily. The patient had a mild headache yesterday but does not have one today. The patient has not started, stopped, or changed any medications. The patient's home blood pressure reading was 118/72 (corrected from an earlier misstatement of 180/72).",
+        "Objective": "No physical examination findings or vital signs were provided during this encounter. The only objective data is the patient's home blood pressure reading of 118/72.",
+        "Assessment": "Orthostatic dizziness, mild, with onset twelve days ago, triggered by standing quickly. No associated syncope, chest pain, shortness of breath, or current headache. The symptoms are mild and do not interfere with daily activities. No medication changes or new medications reported. Home blood pressure is within normal limits. The likely etiology is benign orthostatic dizziness, possibly related to mild dehydration or rapid postural changes.",
+        "Plan": "- Rise slowly from sitting or lying positions to reduce episodes of orthostatic dizziness.\n- Maintain regular fluid intake to prevent dehydration and reduce dizziness.\n- Keep a brief symptom diary, recording when dizziness occurs and how long it lasts, to monitor frequency and duration of episodes.\n- Use the corrected episode count (two episodes yesterday) and duration (thirty seconds) in the diary for accurate tracking.\n- No new medications will be started, as symptoms are mild and manageable with conservative measures.\n- Schedule a follow-up appointment in 10 days to reassess dizziness and review the symptom diary.\n\nThis note was generated with AI assistance."
+      }
+    },
+    {
+      "id": "R3",
+      "synthetic_only": true,
+      "source_origin": "Complete observed saved ASR passages, all roles unknown; original wording retained",
+      "source_sha256": "c89ffbfeaecd3471ba6a9d0beef296c161e520517c426ea828c86f835420f068",
+      "entries": [
+        {
+          "speaker": "Doctor",
+          "content": "This is a completely synthetic practice visit."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I am Doctor Lane, speaking with Avery Stone about shoulder discomfort."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We will take one deliberate quiet pause in the middle and continue the same visit afterward."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Avery, tell me how the discomfort began and which side is affected."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I am Avery Stone."
+        },
+        {
+          "speaker": "Patient",
+          "content": "My right shoulder became sore after moving boxes four days ago."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I first said left, but the correct side is right."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The discomfort is mild at rest and increases when I reach overhead."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The opening marker is marble kite."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have no fever or chest pain."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I have right shoulder discomfort beginning four days ago after lifting boxes."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Is there numbness, weakness, or pain traveling down the arm?"
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Have you had a fall or another injury?"
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We are checking that the details before the pause remain part of the same conversation."
+        },
+        {
+          "speaker": "Patient",
+          "content": "There was no fall."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have no numbness and no weakness."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The pain does not travel down my arm."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I can hold a cup and get dressed."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The first-half marker is golden acorn."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I will stop speaking now for the planned quiet pause, and then I will continue."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We have resumed the same synthetic visit after the quiet pause."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Avery, please continue."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I want to confirm that no earlier details disappeared and that new information is added only once."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "What is the current pain score, and what has helped the shoulder so far?"
+        },
+        {
+          "speaker": "Patient",
+          "content": "My current pain score is two out of ten."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I said four before thinking carefully, so please use two."
+        },
+        {
+          "speaker": "Patient",
+          "content": "Resting from heavy lifting has helped."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I have not taken any new medicine."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The first marker after the pause is emerald bicycle."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The sore side is still the right shoulder."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "For this practice plan, avoid heavy lifting for five days and use comfortable gentle movement."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "We are not prescribing a new medicine."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Please keep track of whether reaching overhead becomes easier."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "Follow-up is in seven days."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "I almost said seventeen, but seven days is the correct interval."
+        },
+        {
+          "speaker": "Patient",
+          "content": "I understand the plan: five days without heavy lifting, gentle comfortable movement, and follow-up in seven days rather than seventeen."
+        },
+        {
+          "speaker": "Patient",
+          "content": "My right shoulder is the affected side, not my left."
+        },
+        {
+          "speaker": "Patient",
+          "content": "The late marker is purple windmill."
+        },
+        {
+          "speaker": "Patient",
+          "content": "There is still no numbness, weakness, fever, or chest pain."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "The final summary should retain the history from before the pause and the corrected score and plan from after it."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "No new medicine was started."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "The final decisive marker is crystal badger."
+        },
+        {
+          "speaker": "Doctor",
+          "content": "This ends the resumed portion and completes our entirely synthetic recording test."
+        }
+      ],
+      "archived_faulty_draft": {
+        "Patient": "Avery Stone",
+        "MRN / DOB": "Not mentioned in transcript",
+        "Provider": "Dr. Lane",
+        "Payer": "Not mentioned in transcript",
+        "Date of service": "Not mentioned in transcript",
+        "Modality": "Not mentioned in transcript",
+        "Sites": "Not mentioned in transcript",
+        "Place of service": "Not mentioned in transcript",
+        "Telehealth attestation": "Not mentioned in transcript",
+        "S - SUBJECTIVE": "- Avery reports right shoulder discomfort that began 4 days ago after moving boxes.\n- The discomfort is mild at rest and increases when reaching overhead.\n- Avery can hold a cup and get dressed.\n- No new medications taken.\n- Resting from heavy lifting has helped.",
+        "PMH / PSH": "Not mentioned in transcript",
+        "Medications": "No new medications started this visit.\nNo current medications mentioned in transcript.",
+        "Allergies": "Not mentioned in transcript",
+        "Family hx": "Not mentioned in transcript",
+        "Social hx": "Not mentioned in transcript",
+        "Immunizations": "Not mentioned in transcript",
+        "O - OBJECTIVE": "Not mentioned in transcript",
+        "Video examination": "Not mentioned in transcript",
+        "Deferred examination": "Not mentioned in transcript",
+        "Laboratory tests": "Not mentioned in transcript",
+        "Risk calculations": "Not mentioned in transcript",
+        "Screening gaps": "Not mentioned in transcript",
+        "A - ASSESSMENT": "- Right shoulder discomfort, mild at rest, increased with overhead movement, onset after lifting boxes, no associated numbness, weakness, fever, or chest pain.",
+        "P - PLAN": "Transcript \u2014 Unidentified speaker:\nFor this practice plan, avoid heavy lifting for 5 days and use comfortable gentle movement.\n\nTranscript \u2014 Unidentified speaker:\nWe are not prescribing a new medicine.\n\nTranscript \u2014 Unidentified speaker:\nPlease keep track of whether reaching overhead becomes easier.\n\nTranscript \u2014 Unidentified speaker:\nFive days without heavy lifting, gentle comfortable movement, and follow up in seven days rather than 17.",
+        "Follow-ups": "Transcript \u2014 Unidentified speaker:\nFollow-up is in 7 days.\n\nTranscript \u2014 Unidentified speaker:\nI almost said 17, but seven days is the correct interval.\n\nTranscript \u2014 Unidentified speaker:\nFive days without heavy lifting, gentle comfortable movement, and follow up in seven days rather than 17.",
+        "Return precautions": "Review the transcript before completing this section.",
+        "CODING, ATTESTATION, SIGNATURE": "Not mentioned in transcript"
+      },
+      "checks": [
+        "pain",
+        "negatives",
+        "r3_numbers"
+      ],
+      "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio.",
+      "observedFinalPromptSHA256": "66f3894eb9fe8d40d6cb7f9cdc921d60fc5574bebe087f8dfdb59d889c19d588",
+      "baselineFields": {
+        "Subjective": "The patient is Avery Stone. They report right shoulder soreness that began four days ago after moving boxes. The discomfort is mild at rest and increases when reaching overhead. Avery initially stated the left shoulder was affected but corrected this to the right. They deny any fall, numbness, weakness, or pain radiating down the arm. Avery is able to hold a cup and get dressed. Resting from heavy lifting has helped. They have not taken any new medicine. Current pain score is 2 out of 10.",
+        "Objective": "No vital signs, physical examination findings, or diagnostic test results were provided during this encounter.",
+        "Assessment": "Acute right shoulder strain, likely due to recent lifting of boxes. The pain is mild (2/10), worsens with overhead movement, and is improving with rest. There are no red flag symptoms such as numbness, weakness, fever, chest pain, or pain radiating down the arm. No evidence of more serious injury (e.g., fracture, dislocation, or neurological compromise).",
+        "Plan": "- Avoid heavy lifting for five days to prevent aggravation and allow healing of the right shoulder strain.\n- Use comfortable gentle movement for the affected shoulder to maintain mobility and prevent stiffness.\n- Keep track of whether reaching overhead becomes easier to monitor recovery progress.\n- Attend follow-up appointment in seven days to reassess right shoulder pain and function.\n- No new medicine was prescribed as symptoms are mild and improving with conservative measures.\n\nThis note was generated with AI assistance."
+      }
+    }
+  ]
+}

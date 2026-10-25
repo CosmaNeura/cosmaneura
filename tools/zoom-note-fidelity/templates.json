@@ -1,0 +1,38 @@
+{
+  "synthetic_only": true,
+  "provenance": "Actual normal synthetic A/B Settings PDF extraction observed 2026-10-25; no runtime dependency on lab paths.",
+  "templates": {
+    "R2": {
+      "account": "A",
+      "fields": {
+        "Subjective": "Document the patient's reported symptoms, concerns, and relevant history, including any changes since the last visit and information provided by the patient or caregivers.",
+        "Objective": "Record measurable or observed findings from the physical exam, vital signs, laboratory results, imaging, and other diagnostic data.",
+        "Assessment": "Summarize your clinical impression, including diagnoses, differential diagnoses, and reasoning based on the subjective and objective information.",
+        "Plan": "Outline the next steps for management, including treatments, medications, follow-up recommendations, referrals, and patient education."
+      },
+      "fieldExamples": {
+        "Plan": "Take regular breaks from typing. Follow up in seven days if symptoms have not improved. No medication changes or testing were discussed.",
+        "Objective": "No vital signs or physical examination findings were provided during this encounter.",
+        "Assessment": "Improving left wrist discomfort, as discussed during the visit. No additional diagnosis was established.",
+        "Subjective": "The patient reports left wrist stiffness after typing. Discomfort was 4/10 yesterday and is 1/10 now. The patient denies a fall, numbness, and hand weakness. Medication and allergy histories were not reviewed."
+      },
+      "sourceResultSHA256": "7a2fb435e5c328ffb62bebcf5fe17adec6176ec04061535dc9cc7b303869b8dc"
+    },
+    "R3": {
+      "account": "B",
+      "fields": {
+        "Subjective": "Document the patient's reported symptoms, concerns, and relevant history, including any changes since the last visit, using the patient's own words when possible.",
+        "Objective": "Record measurable and observed findings from the physical exam, vital signs, laboratory results, imaging, and other diagnostic tests.",
+        "Assessment": "Summarize your clinical impression, including the primary and secondary diagnoses, and provide reasoning or supporting evidence for each.",
+        "Plan": "Outline the next steps for management, including treatments, medications, follow-up recommendations, referrals, and patient education."
+      },
+      "fieldExamples": {
+        "Plan": "Take regular breaks from typing. Follow up in seven days if symptoms have not improved. No medication changes or testing were discussed.",
+        "Objective": "No vital signs or physical examination findings were provided during this encounter.",
+        "Assessment": "Improving left wrist discomfort, as discussed during the visit. No additional diagnosis was established.",
+        "Subjective": "The patient reports left wrist stiffness after typing. Discomfort was 4/10 yesterday and is 1/10 now. The patient denies a fall, numbness, and hand weakness. Medication and allergy histories were not reviewed."
+      },
+      "sourceResultSHA256": "149a459fc5dfae4d1f5aab34b9cb497ecd10c3c073bc31dce4c682384fc8427f"
+    }
+  }
+}

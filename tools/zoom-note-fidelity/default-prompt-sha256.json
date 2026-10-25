@@ -1,0 +1,18 @@
+{
+  "[\"R2\", {}, false]": "1b5ca71a184afce099263f077ed26e4a328cd427548b8c17061fb9ba932c29d4",
+  "[\"R2\", {}, true]": "a25bbf5917ed496468788b34910c2d515194d1dc2fe9de7dfecfe2192d7b9d33",
+  "[\"R2\", {\"require_plan_reason\": false}, false]": "d356d33faccfeb7a30f2a62c220d7940edb060c7c166dd509e9c81a676c10e61",
+  "[\"R2\", {\"require_plan_reason\": false}, true]": "0e3ac744b40501fd968254db0ab2a23e613515f312a344d978a244681abdf612",
+  "[\"R2\", {\"ros_distinct_from_subjective\": false}, false]": "2e25b9aff2f8936367eb0772f94bec36aa367c30ef08e30a174c0ae9ace3ffa8",
+  "[\"R2\", {\"ros_distinct_from_subjective\": false}, true]": "b11042a3e1c7b2e7a8767d4b80f3f398557082c6def6428726bd2cb9545a15c9",
+  "[\"R2\", {\"custom_instructions\": \"Use concise prose.\", \"pronoun_style\": \"neutral\", \"subjective_source\": \"patient_and_doctor\"}, false]": "902448ff01fb589f92827b8bf2ac4bb7b49e230f4c3c4639d996527773accf98",
+  "[\"R2\", {\"custom_instructions\": \"Use concise prose.\", \"pronoun_style\": \"neutral\", \"subjective_source\": \"patient_and_doctor\"}, true]": "fe483c6f383c2f035bdf46f88ccbab7a6acdda7bb02735791f9635abb3d41b6c",
+  "[\"R3\", {}, false]": "3628b8ebb0016036e0406dc0e1dd40513ef138d17182660a9f615e0f16c9da42",
+  "[\"R3\", {}, true]": "3049f8556c85b7dd450f2a232af2a8b4dd27ec6df0cb9cf52bbf6109a47080b2",
+  "[\"R3\", {\"require_plan_reason\": false}, false]": "9326fdbea8180a4158ae2d61caea70f791a63c29ef6ea4051208dbb0718dbdfa",
+  "[\"R3\", {\"require_plan_reason\": false}, true]": "c36a4f4bb90b39831b9875e6a7a31ef9af219c13829b3609b661127a1f2c5858",
+  "[\"R3\", {\"ros_distinct_from_subjective\": false}, false]": "de6990f34844499f5665758e80790a3be61550ac47310722c00b36adaf0c08db",
+  "[\"R3\", {\"ros_distinct_from_subjective\": false}, true]": "2a382e76cda5547007546b61caee0da9b6ece11b177c70f974c92b4c7ea28385",
+  "[\"R3\", {\"custom_instructions\": \"Use concise prose.\", \"pronoun_style\": \"neutral\", \"subjective_source\": \"patient_and_doctor\"}, false]": "9bd4de5d7ac775cad5b3e5e8b962feffd5c6bff07ffdd6b91fccebf097f7681d",
+  "[\"R3\", {\"custom_instructions\": \"Use concise prose.\", \"pronoun_style\": \"neutral\", \"subjective_source\": \"patient_and_doctor\"}, true]": "53365ac7d99f475264a924a82123c69e1b67afee0b41318ff387479d37adb07f"
+}
