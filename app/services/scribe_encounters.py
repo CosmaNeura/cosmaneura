@@ -659,7 +659,7 @@ def encounter_workflow(
                 available()
                 return result
         finally:
-            if isinstance(request, LookupRequest) and provider_transaction is not None:
+            if scoped_read and provider_transaction is not None:
                 for name in ("after_transaction_create", "after_transaction_end"):
                     event.remove(session, name, transaction_changed)
             session.rollback()

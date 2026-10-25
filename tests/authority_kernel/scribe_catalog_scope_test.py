@@ -1,5 +1,6 @@
 """Catalog critical-section reduction keeps actual PostgreSQL authority locks."""
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
@@ -7,9 +8,11 @@ from threading import Event
 
 import pytest
 
+from app.configuration.scribe_encounters import ScribeEncounterSettings
 from app.services import authority, scribe_encounters
 from app.services import doctor_access_row_ownership as owned
 from app.services.companion_appointment_setup import _current_provider
+from app.services.companion_records import RecordBudget
 
 from activemodel import session_manager
 from app.models.authority import AuthorityActor, AuthorityActorExternalIdentity
@@ -20,11 +23,71 @@ from sqlalchemy import event, text
 from sqlalchemy.exc import OperationalError
 from sqlmodel import select
 
-from tests.authority_kernel.companion_provider_provisioning_test import session_for
+from tests.authority_kernel.companion_provider_provisioning_test import (
+    SETTINGS,
+    session_for,
+)
 from tests.authority_kernel.scribe_encounters_test import engine as _engine
 from tests.authority_kernel.scribe_encounters_test import workflow as _workflow
 
 engine, workflow = _engine, _workflow
+
+
+@pytest.mark.parametrize("outcome", ["success", "denial"])
+def test_reused_session_catalog_removes_only_its_transaction_listeners(
+    engine, workflow, monkeypatch, outcome
+):
+    args, _, request, invoke = workflow
+    visit = invoke(request())["encounter"]
+    actual_visit = scribe_encounters._visit
+
+    def denied(*args, **kwargs):
+        actual_visit(*args, **kwargs)
+        raise authority.AuthorityRequestDeniedError
+
+    if outcome == "denial":
+        monkeypatch.setattr(scribe_encounters, "_visit", denied)
+    names = ("after_transaction_create", "after_transaction_end")
+    with session_for(engine) as session:
+        caller_events = []
+
+        def caller_listener(*_):
+            caller_events.append(True)
+
+        for name in names:
+            event.listen(session, name, caller_listener)
+        baseline = {name: len(getattr(session.dispatch, name)) for name in names}
+        try:
+            for _ in range(3):
+                params = dict(
+                    issuer=SETTINGS.clerk_issuer,
+                    subject=args["verified_clerk_subject"],
+                    session_id="session_synthetic_catalog_reuse",
+                    request=request("list"),
+                    settings_provider=lambda: ScribeEncounterSettings(enabled=True),
+                    authority_settings=SETTINGS,
+                    deadline=RecordBudget(time.monotonic() + 15),
+                    existing_session=session,
+                )
+                if outcome == "denial":
+                    with pytest.raises(authority.AuthorityRequestDeniedError):
+                        scribe_encounters.encounter_workflow(**params)
+                else:
+                    assert scribe_encounters.encounter_workflow(**params)[
+                        "encounters"
+                    ] == [visit]
+                assert {
+                    name: len(getattr(session.dispatch, name)) for name in names
+                } == baseline
+                assert all(
+                    event.contains(session, name, caller_listener) for name in names
+                )
+                assert owned._LOOKUP_ROWS.get() is None
+                assert owned._CAPTURE_ROWS.get() is None
+            assert caller_events
+        finally:
+            for name in names:
+                event.remove(session, name, caller_listener)
 
 
 def previous_final(session, *, expected, doctor_id, args):
