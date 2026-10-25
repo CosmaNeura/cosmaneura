@@ -18,6 +18,22 @@ remain unchanged. Assessment retains only a source-stated assessment or diagnosi
 it does not generate a second history recap. A missing assessment remains explicitly
 not mentioned. Structured output constrains format, not clinical correctness.
 
+When every transcript role is unidentified and Subjective is patient-only,
+recognized existing history/Objective/ROS/medication fields use source indexes in
+the same model response. A capture-local resolver stores the selected complete
+source text and its actual attribution, replacing generated prose in those fields.
+It does not add note fields, infer roles, or copy the whole transcript by default.
+Current medication reports and retrospective change history have separate selections;
+an empty list selection states its source limitation, never that no medicine is
+taken. Typed scratch notes keep their distinct source label. Empty history selection
+requires review. Known-role captures and other Subjective preferences retain the
+existing path. The prospective PlanGrounding implementation is unchanged.
+
+This boundary prevents rewritten direct quotations and manufactured roles in the
+grounded fields. It does not prove that all relevant entries were selected or
+classified correctly. Questions, unresolved conflicts, corrections and source
+instructions remain adversarial semantic cases in the actual-model evaluation.
+
 Validation requires the complete observed synthetic ASR transcripts (42 and 45
 passages), three baseline/candidate repetitions each, the eight bounded semantic
 cases, known-role and unknown-role checks, and the actual response envelope and
