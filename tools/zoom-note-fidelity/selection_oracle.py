@@ -40,7 +40,12 @@ def evaluate_selection(case, selections, *, patient_only=True):
         local = set(refs)
         for trigger, context in rules["ifAnyThenAny"]:
             if local.intersection(trigger) and not local.intersection(context):
-                failures.append("missing-context:" + ",".join(map(str, trigger)))
+                failures.append(
+                    "missing-context:"
+                    + ",".join(map(str, trigger))
+                    + "->"
+                    + ",".join(map(str, context))
+                )
     if patient_only:
         for field, refs in selections.items():
             if field.casefold() == "subjective" and any(

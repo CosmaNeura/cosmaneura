@@ -74,7 +74,13 @@ def test_selected_correction_or_reference_requires_its_known_context(
     )
     refs["Source evidence"] += context
     result = ORACLE.evaluate_selection(CASES[name], refs)
-    assert "missing-context:" + ",".join(map(str, trigger)) not in result["failures"]
+    failure = (
+        "missing-context:"
+        + ",".join(map(str, trigger))
+        + "->"
+        + ",".join(map(str, context))
+    )
+    assert failure not in result["failures"]
 
 
 def test_source_change_refuses_old_index_expectations_and_nonpatient_subjective():
@@ -99,4 +105,14 @@ def test_invalid_source_references_are_not_coverage(bad):
 def test_context_in_another_field_does_not_repair_an_isolated_old_claim():
     refs = {"Subjective": [16], "Assessment": [17]}
     failures = ORACLE.evaluate_selection(CASES["R2"], refs)["failures"]
-    assert "missing-context:16" in failures and "missing-context:17" in failures
+    assert "missing-context:16->17" in failures and "missing-context:17->16" in failures
+
+
+def test_both_context_groups_are_required_for_the_same_source():
+    case = CASES["R2"]
+    first = ORACLE.evaluate_selection(case, {"Source": [33, 22]})["failures"]
+    second = ORACLE.evaluate_selection(case, {"Source": [33, 7]})["failures"]
+    both = ORACLE.evaluate_selection(case, {"Source": [33, 22, 7]})["failures"]
+    assert "missing-context:33->7,11" in first
+    assert "missing-context:33->22,27" in second
+    assert not any(item.startswith("missing-context:33->") for item in both)
