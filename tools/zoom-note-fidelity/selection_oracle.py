@@ -36,9 +36,11 @@ def evaluate_selection(case, selections, *, patient_only=True):
     for fact, alternatives in rules["requiredAny"].items():
         if not selected.intersection(alternatives):
             failures.append("omitted-source:" + fact)
-    for trigger, context in rules["ifAnyThenAny"]:
-        if selected.intersection(trigger) and not selected.intersection(context):
-            failures.append("missing-context:" + ",".join(map(str, trigger)))
+    for refs in selections.values():
+        local = set(refs)
+        for trigger, context in rules["ifAnyThenAny"]:
+            if local.intersection(trigger) and not local.intersection(context):
+                failures.append("missing-context:" + ",".join(map(str, trigger)))
     if patient_only:
         for field, refs in selections.items():
             if field.casefold() == "subjective" and any(

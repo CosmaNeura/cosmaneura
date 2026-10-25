@@ -67,7 +67,7 @@ def test_omitting_every_source_for_each_known_fact_is_detected(name, fact):
 def test_selected_correction_or_reference_requires_its_known_context(
     name, trigger, context
 ):
-    refs = {"Source evidence": trigger}
+    refs = {"Source evidence": list(trigger)}
     assert any(
         x.startswith("missing-context:")
         for x in ORACLE.evaluate_selection(CASES[name], refs)["failures"]
@@ -94,3 +94,9 @@ def test_invalid_source_references_are_not_coverage(bad):
     assert ORACLE.evaluate_selection(CASES["R2"], {"Subjective": bad})["failures"] == [
         "invalid-selection"
     ]
+
+
+def test_context_in_another_field_does_not_repair_an_isolated_old_claim():
+    refs = {"Subjective": [16], "Assessment": [17]}
+    failures = ORACLE.evaluate_selection(CASES["R2"], refs)["failures"]
+    assert "missing-context:16" in failures and "missing-context:17" in failures

@@ -11,7 +11,7 @@ Default prompt hashes bind pre-pilot source `624f0c98179405386e97a663013347f8194
 The prose oracle detects listed known errors; it missed broad unsupported clinical
 exclusions during actual evaluation. A finite pass is never a clinical certificate.
 The selection oracle adds pinned source-index coverage and correction/context
-dependencies for R2/R3. Omitting facts can fail even when every emitted word is
+dependencies within each field for R2/R3. Omitting facts can fail even when every emitted word is
 verbatim source. These declarative fixture rules are evaluation only: no runtime
 code imports them or uses test truth to repair a note. Other cases, unknown source
 hashes, section usefulness and unlisted context dependencies need separate review.
