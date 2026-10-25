@@ -42,6 +42,16 @@ def test_supported_examples_pass(index, text):
     assert grade(index, text)["passed"]
 
 
+def test_past_presence_with_explicit_current_absence_is_not_inverted_time():
+    assert grade(
+        3, "Unidentified speaker: mild headache was present yesterday but not today."
+    )["passed"]
+    assert not grade(
+        3,
+        "Unidentified speaker: mild headache yesterday. Severe headache present today.",
+    )["passed"]
+
+
 BAD = [
     (2, "Unidentified speaker: current pain 4/10; 2/10 is a future goal."),
     (2, "Unidentified speaker: mild pain. Marker 2 is a test."),

@@ -73,13 +73,18 @@ def evaluate(case, fields, *, patient_only=True):
                 together(
                     r"headache|none|one",
                     r"today|current|now",
-                    r"\bno\b|\bnone\b|deni|absen|resolved|not have",
+                    r"\bno\b|\bnone\b|deni|absen|resolved|not have|not today",
                 ),
             )
             require(
                 "no-inverted-headache-time",
-                not together(
-                    r"headache", r"today|current", r"present|has a|having a|severe"
+                not any(
+                    re.search(r"headache", clause)
+                    and re.search(r"today|current|now", clause)
+                    and re.search(r"present|has a|having a|severe", clause)
+                    and not re.search(r"\bno\b|\bnot\b|deni|absen|resolved", clause)
+                    for sentence in sentences
+                    for clause in re.split(r"\bbut\b|,", sentence)
                 ),
             )
             require(
