@@ -346,6 +346,11 @@ def capture_retention_context(
             "Place supported clinical history in another permitted narrative section "
             f"{attribution}Do not discard "
             "the history or treat a spoken name as a role label. "
+            "When using Objective for this retained material, label it as reported "
+            "transcript history, not as a performed examination or objective finding. "
+            "That section must retain reported symptoms, their prior/current times, "
+            "quantified history and explicit denials as well as measurements; do not "
+            "restrict it to measurements and silently omit the remaining history. "
         )
     context += (
         "Source indexes belong only in the structured plan_source_refs property. "
