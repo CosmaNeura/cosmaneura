@@ -466,7 +466,14 @@ def dispatch_pipeline(operation_id: str) -> None:
         return
     try:
         if claim.schema_pending:
-            app.jobs.transcribe.queue_schema_transcription(transcript)
+            from app.services import zoom_bot_note_policy
+
+            if zoom_bot_note_policy.eligible(transcript):
+                app.jobs.transcribe.queue_schema_transcription(
+                    transcript, note_policy=zoom_bot_note_policy.POLICY
+                )
+            else:
+                app.jobs.transcribe.queue_schema_transcription(transcript)
             if not _mark_pipeline_step(claim, "schema"):
                 return
         if claim.engagement_pending:
