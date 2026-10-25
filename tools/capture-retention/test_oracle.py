@@ -105,6 +105,7 @@ def test_new_medication_history_cannot_gain_a_visit_only_time_limit():
     case = {**CASES["R3"], "checks": ["r3_numbers"]}
     base = (
         "Unidentified speaker: right shoulder pain for 4 days. No fever or chest pain. "
+        "Current medication list unknown. "
     )
     assert evaluate(case, {"O - OBJECTIVE": base + "No new medicine was started."})[
         "passed"
@@ -116,6 +117,19 @@ def test_new_medication_history_cannot_gain_a_visit_only_time_limit():
             {"O - OBJECTIVE": base + "No new medicine was started during this visit."},
         )["failures"]
     )
+
+
+def test_r3_change_report_cannot_stand_in_for_an_established_current_list():
+    case = {**CASES["R3"], "checks": ["r3_numbers"]}
+    fields = {
+        "O - OBJECTIVE": "Unidentified speaker: right shoulder pain for 4 days. No fever or chest pain.",
+        "Medications": "Selected current medication reports: I have not taken any new medicine.",
+    }
+    assert "medication-list-unknown" in evaluate(case, fields)["failures"]
+    fields["Medications"] = (
+        "Current medication list is unverified. Unidentified speaker: I have not taken any new medicine."
+    )
+    assert evaluate(case, fields)["passed"]
 
 
 BAD = [

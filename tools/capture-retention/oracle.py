@@ -82,6 +82,14 @@ def evaluate(case, fields, *, patient_only=True):
             all(re.search(p, sentence) for p in patterns) for sentence in sentences
         )
 
+    def require_unknown_medication_list():
+        require(
+            "medication-list-unknown",
+            has(
+                r"(?:current |existing )?medication(?:s| list)?[^.\n]{0,45}(?:unknown|unspecified|unverified|not (?:discussed|listed|mentioned|provided|specified|verified))|unknown[^.\n]{0,20}medication"
+            ),
+        )
+
     require("no-unvalidated-narrative-citations", not has(r"\bsource\s+\d+"))
 
     def canonical(value):
@@ -179,12 +187,7 @@ def evaluate(case, fields, *, patient_only=True):
                     for s in sentences
                 ),
             )
-            require(
-                "medication-list-unknown",
-                has(
-                    r"(?:current |existing )?medication(?:s| list)?[^.\n]{0,45}(?:unknown|unspecified|not (?:discussed|listed|mentioned|provided|specified))|unknown[^.\n]{0,20}medication"
-                ),
-            )
+            require_unknown_medication_list()
             require(
                 "no-empty-medication-claim",
                 not has(
@@ -254,6 +257,7 @@ def evaluate(case, fields, *, patient_only=True):
             }.items():
                 require_negative(name, pattern)
         elif check == "r3_numbers":
+            require_unknown_medication_list()
             require("right-shoulder", has(r"right shoulder"))
             require("onset-four-days", has(r"4 days"))
             require_negative(
