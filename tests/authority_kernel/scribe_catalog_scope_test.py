@@ -130,15 +130,28 @@ def test_catalog_preserves_full_visits_and_lock_order_with_fewer_reads(
         assert owned._LOOKUP_ROWS.get() is None and owned._CAPTURE_ROWS.get() is None
         assert engine.pool.checkedout() == 0
         runs.append(statements)
-    old_locks = [s for s in runs[0] if " for update" in s]
-    new_locks = [s for s in runs[1] if " for update" in s]
+    # Provider locks retain their exact statements/order. Patient identity locks
+    # now use one ordered exact-ref query; the batch suite proves every row is
+    # actually locked against a concurrent writer before projection.
+    old_locks = [
+        s for s in runs[0] if " for update" in s and "scribe_patient_identity" not in s
+    ]
+    new_locks = [
+        s for s in runs[1] if " for update" in s and "scribe_patient_identity" not in s
+    ]
+    identity_locks = [
+        s for s in runs[1] if " for update" in s and "scribe_patient_identity" in s
+    ]
+    assert len(identity_locks) == 1
+    assert "order by catalog_targets.ordinal" in identity_locks[0]
+    assert "for update of scribe_patient_identity" in identity_locks[0]
     remaining = iter(old_locks)
     assert all(any(old == new for old in remaining) for new in new_locks)
     assert set(new_locks) == set(old_locks)
     assert len(runs[1]) < len(runs[0]) * 0.7
     record_property("previous_statements", len(runs[0]))
     record_property("current_statements", len(runs[1]))
-    record_property("all_distinct_lock_statements_retained", True)
+    record_property("provider_lock_statements_retained", True)
 
 
 @pytest.mark.parametrize("change", ["actor", "identity", "link", "member", "label"])
