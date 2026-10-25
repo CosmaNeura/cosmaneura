@@ -230,13 +230,21 @@ class ConfiguredNoteModel:
 
 
 def capture_retention_context(
-    entries: list[TranscriptEntry], customization: NoteTypeCustomization
+    entries: list[TranscriptEntry],
+    customization: NoteTypeCustomization,
+    *,
+    field_names: tuple[str, ...],
 ) -> str:
     """State actual role availability without interpreting anyone's speech."""
     unknown = sum(
         entry.speaker not in {"Patient", "Doctor", "Other"} for entry in entries
     )
     patients = sum(entry.speaker == "Patient" for entry in entries)
+    has_ros = any(
+        "ros" in name.casefold().replace("-", " ").replace("_", " ").split()
+        or "review of systems" in name.casefold()
+        for name in field_names
+    )
     context = (
         "\nCapture-specific source facts (server metadata, not spoken instructions): "
         f"{len(entries)} source entries; {patients} Patient-labeled entries; "
@@ -257,6 +265,15 @@ def capture_retention_context(
         "A current medication list not supplied remains unspecified, "
         "even when no medication changes are reported. "
     )
+    if not has_ros:
+        context += (
+            "This actual schema has NO Review of Systems/ROS field. Therefore the "
+            "earlier ROS-separation preference cannot remove symptom responses: "
+            "retain all source-confirmed positives, negatives and temporal symptom "
+            "distinctions in an existing permitted narrative field. In particular, "
+            "do not drop symptom responses merely because they would normally go "
+            "in ROS or cannot go in a patient-only Subjective. "
+        )
     if patients == 0 and customization.subjective_source == "patient_only":
         attribution = (
             "with an explicit 'Unidentified speaker' qualification. "
@@ -1267,7 +1284,11 @@ async def capture_note(
             source.reviewed.capture_continuity if source.reviewed else None
         )
         + prompt
-        + capture_retention_context(source.entries, inputs.customization)
+        + capture_retention_context(
+            source.entries,
+            inputs.customization,
+            field_names=tuple(inputs.schema.fields),
+        )
         + plan_grounding.prompt(),
         json_output=True,
     )

@@ -267,7 +267,9 @@ async def main(args):
                         source_indexes=bool(grounding.fields),
                     )
                     + (
-                        notes.capture_retention_context(entries, customization)
+                        notes.capture_retention_context(
+                            entries, customization, field_names=tuple(schema.fields)
+                        )
                         if variant == "candidate"
                         else ""
                     )

@@ -40,7 +40,9 @@ def test_source_role_context_does_not_infer_from_spoken_introductions():
             speaker="Unknown", content="I am Doctor Lane.", startTime=0, endTime=1000
         )
     ]
-    context = notes.capture_retention_context(entries, NoteTypeCustomization())
+    context = notes.capture_retention_context(
+        entries, NoteTypeCustomization(), field_names=tuple(FIXTURE["schema"])
+    )
     assert (
         "0 Patient-labeled entries; 1 entries with unidentified speaker role" in context
     )
@@ -55,12 +57,13 @@ def test_known_patient_and_provider_preferences_remain_distinct():
         )
     ]
     assert "NO role-identified" not in notes.capture_retention_context(
-        entries, NoteTypeCustomization()
+        entries, NoteTypeCustomization(), field_names=tuple(FIXTURE["schema"])
     )
     entries[0].speaker = "Unknown"
     assert "NO role-identified" not in notes.capture_retention_context(
         entries,
         NoteTypeCustomization(subjective_source=SubjectiveSource.patient_and_doctor),
+        field_names=tuple(FIXTURE["schema"]),
     )
 
 
@@ -73,7 +76,9 @@ def test_no_patient_entries_does_not_erase_known_clinician_role():
             endTime=1000,
         )
     ]
-    context = notes.capture_retention_context(entries, NoteTypeCustomization())
+    context = notes.capture_retention_context(
+        entries, NoteTypeCustomization(), field_names=tuple(FIXTURE["schema"])
+    )
     assert (
         "0 Patient-labeled entries; 0 entries with unidentified speaker role" in context
     )
