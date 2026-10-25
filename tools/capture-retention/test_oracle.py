@@ -56,6 +56,10 @@ def test_question_without_answer_can_leave_findings_unmentioned():
     assert grade(6, "Not mentioned in transcript.")["passed"]
 
 
+def test_actual_source_quotation_is_accepted():
+    assert grade(4, GOOD[2] + ' "There was no fall."')["passed"]
+
+
 def test_r2_earlier_negatives_and_fluid_measurement_cannot_be_lost_to_late_summary():
     complete = (
         "Unidentified speaker: 12 days of mild dizziness, lasting 30 seconds. "
