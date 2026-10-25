@@ -60,6 +60,46 @@ def test_actual_source_quotation_is_accepted():
     assert grade(4, GOOD[2] + ' "There was no fall."')["passed"]
 
 
+PERSON_REPORTS = [
+    entry["content"] for entry in CASES["RET-07-person-and-role-boundary"]["entries"]
+]
+
+
+def source_blocks(reports):
+    return "Reported transcript history:\n" + "\n\n".join(
+        "Transcript — Unidentified speaker:\n" + report for report in reports
+    )
+
+
+def test_separate_complete_source_blocks_preserve_self_identified_person_scope():
+    text = source_blocks(PERSON_REPORTS)
+    assert grade(8, text)["passed"]
+    assert not grade(8, text + "\n\nTaylor had a headache yesterday.")["passed"]
+
+
+@pytest.mark.parametrize(
+    "reports",
+    [
+        [" ".join(PERSON_REPORTS)],  # Merged reports are not one source block.
+        [part for report in PERSON_REPORTS for part in report.split(". ")],
+        [
+            "I am Morgan. My right shoulder pain is two out of ten.",
+            "I am Taylor. I had a headache yesterday and none today.",
+        ],
+        [
+            "I am Morgan.",
+            "I had a headache yesterday and none today.",
+            "I am Taylor.",
+            "My right shoulder pain is two out of ten.",
+        ],
+        [PERSON_REPORTS[0], PERSON_REPORTS[0]],
+        [PERSON_REPORTS[0], PERSON_REPORTS[1].replace("two", "four")],
+    ],
+)
+def test_person_scope_cannot_cross_or_rewrite_source_blocks(reports):
+    assert not grade(8, source_blocks(reports))["passed"]
+
+
 @pytest.mark.parametrize("contrast", ["but", "however", "yet"])
 def test_negation_does_not_cross_contrast_into_positive_findings(contrast):
     result = grade(

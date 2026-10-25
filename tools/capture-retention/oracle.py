@@ -208,19 +208,49 @@ def evaluate(case, fields, *, patient_only=True):
                 not has(r"corrected|correction|definitive|confirmed as"),
             )
         elif check == "persons":
-            require("morgan-headache", together(r"morgan", r"headache", r"yesterday"))
+            # A self-introduction can precede the finding in the same complete
+            # source entry. Accept that scope only with exact original wording
+            # and the renderer's separate attribution/block boundary. Never
+            # associate a name in one block with a finding in the next block.
+            person_units = list(sentences)
+            original_reports = {
+                entry["content"]
+                for entry in case["entries"]
+                if entry["speaker"] == "Unknown"
+            }
+            for heading in clinical:
+                for block in fields[heading].split("\n\n"):
+                    prefix, marker, report = block.rpartition(
+                        "Transcript — Unidentified speaker:\n"
+                    )
+                    if (
+                        marker
+                        and prefix in {"", "Reported transcript history:\n"}
+                        and report in original_reports
+                    ):
+                        person_units.append(normalized(report))
+
+            def person_together(*patterns):
+                return any(
+                    all(re.search(pattern, unit) for pattern in patterns)
+                    for unit in person_units
+                )
+
+            require(
+                "morgan-headache", person_together(r"morgan", r"headache", r"yesterday")
+            )
             require(
                 "morgan-current-negative",
-                together(r"morgan|headache", r"today", r"none|no |resolved"),
+                person_together(r"morgan|headache", r"today", r"none|no |resolved"),
             )
             require(
                 "taylor-right-shoulder-pain",
-                together(r"taylor", r"right shoulder", r"2/10"),
+                person_together(r"taylor", r"right shoulder", r"2/10"),
             )
             require(
                 "no-person-swap",
-                not together(r"morgan", r"shoulder|2/10")
-                and not together(r"taylor", r"headache"),
+                not person_together(r"morgan", r"shoulder|2/10")
+                and not person_together(r"taylor", r"headache"),
             )
         elif check == "instruction":
             require(
