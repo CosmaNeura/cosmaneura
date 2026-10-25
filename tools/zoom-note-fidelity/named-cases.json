@@ -204,7 +204,7 @@
         "r2_numbers"
       ],
       "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio.",
-      "observedFinalPromptSHA256": "aec2e8124d6cc5f7903183d2ac6e043d2b2399ceebd6a32f8090b24f8a26bf96",
+      "observedFinalRequestArtifactSHA256": "aec2e8124d6cc5f7903183d2ac6e043d2b2399ceebd6a32f8090b24f8a26bf96",
       "baselineFields": {
         "Subjective": "The patient reports experiencing dizziness that began twelve days ago. The dizziness occurs when standing up quickly, lasts about thirty seconds per episode, and is described as mild (previously described as severe, but corrected to mild). The patient has not fainted and is able to walk and carry out normal routines. There were two episodes of dizziness yesterday (corrected from an earlier count of seven). The patient drinks about four glasses of water daily. The patient had a mild headache yesterday but does not have one today. The patient has not started, stopped, or changed any medications. The patient's home blood pressure reading was 118/72 (corrected from an earlier misstatement of 180/72).",
         "Objective": "No physical examination findings or vital signs were provided during this encounter. The only objective data is the patient's home blood pressure reading of 118/72.",
@@ -426,7 +426,7 @@
         "r3_numbers"
       ],
       "processing_scope": "Saved synthetic ASR text only; this diagnostic processes no recording or audio.",
-      "observedFinalPromptSHA256": "66f3894eb9fe8d40d6cb7f9cdc921d60fc5574bebe087f8dfdb59d889c19d588",
+      "observedFinalRequestArtifactSHA256": "66f3894eb9fe8d40d6cb7f9cdc921d60fc5574bebe087f8dfdb59d889c19d588",
       "baselineFields": {
         "Subjective": "The patient is Avery Stone. They report right shoulder soreness that began four days ago after moving boxes. The discomfort is mild at rest and increases when reaching overhead. Avery initially stated the left shoulder was affected but corrected this to the right. They deny any fall, numbness, weakness, or pain radiating down the arm. Avery is able to hold a cup and get dressed. Resting from heavy lifting has helped. They have not taken any new medicine. Current pain score is 2 out of 10.",
         "Objective": "No vital signs, physical examination findings, or diagnostic test results were provided during this encounter.",

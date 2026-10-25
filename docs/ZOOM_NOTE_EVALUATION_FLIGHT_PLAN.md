@@ -6,7 +6,9 @@ deployment, authentication or Session Prep change. GitHub Actions stays disabled
 The fixtures preserve synthetic named-participant model diagnostics using the
 actual A/B SOAP templates/examples. Those labels are classifier output, not proof
 of a live Recall participant identity. Original failed outputs are not repaired.
-Default prompt hashes bind pre-pilot source `624f0c98179405386e97a663013347f8194cdd9f`.
+`observedFinalRequestArtifactSHA256` hashes the whole retained `call-4.attempt.json`
+file (request plus attempt metadata), not its prompt string. Default prompt hashes
+bind pre-pilot source `624f0c98179405386e97a663013347f8194cdd9f`.
 
 The prose oracle detects listed known errors; it missed broad unsupported clinical
 exclusions during actual evaluation. A finite pass is never a clinical certificate.
