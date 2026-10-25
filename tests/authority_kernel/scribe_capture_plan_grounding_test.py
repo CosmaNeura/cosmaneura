@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from typeid import TypeID
 
+from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_plan_grounding as plans
 from app.services.scribe_capture_notebook import ScratchNotes
@@ -56,7 +57,22 @@ class Model:
     async def complete(self, prompt, *, json_output):
         self.calls.append(prompt)
         assert json_output
-        return json.dumps({"fields": FIELDS, "plan_source_refs": self.refs})
+        result = {"fields": FIELDS, "plan_source_refs": self.refs}
+        if history.CONTRACT_START in prompt:
+            contract = json.loads(
+                prompt.split(history.CONTRACT_START, 1)[1].split(
+                    history.CONTRACT_END, 1
+                )[0]
+            )
+            # This mock isolates plan behavior. An empty history selection is
+            # deliberately a review limitation, never actual-model evidence.
+            result[history.KEY] = {
+                field: {"current_list": [], "change_history": []}
+                if field in contract["medication_fields"]
+                else []
+                for field in contract["reported_history_fields"]
+            }
+        return json.dumps(result)
 
 
 async def physical_case(f, monkeypatch, contents=None, *, role="unknown", refs=None):
