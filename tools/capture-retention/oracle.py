@@ -51,6 +51,7 @@ def evaluate(case, fields, *, patient_only=True):
         )
 
     require("no-unvalidated-narrative-citations", not has(r"\bsource\s+\d+"))
+
     def canonical(value):
         return re.sub(r"\W+", " ", normalized(value)).strip()
 
@@ -136,8 +137,14 @@ def evaluate(case, fields, *, patient_only=True):
         elif check == "medications":
             require(
                 "medications-unchanged",
-                has(
-                    r"no (?:new |medication |medicine )?changes|not (?:started|changed)|unchanged|no[^.\n]{0,20}started[^.\n]{0,35}(?:stopped|changed)"
+                any(
+                    re.search(r"medicin|medication", s)
+                    and re.search(
+                        r"no (?:new |medication |medicine )?changes|not (?:started|changed)|unchanged|no[^.\n]{0,20}started[^.\n]{0,35}(?:stopped|changed)|absence of changes was reported",
+                        s,
+                    )
+                    and not re.search(r"planned|\bplan\b|\bwill\b|proposed|intended", s)
+                    for s in sentences
                 ),
             )
             require(
@@ -155,10 +162,10 @@ def evaluate(case, fields, *, patient_only=True):
         elif check == "conflict":
             require(
                 "unresolved-values-retained",
-                has(r"\b2\b")
-                and has(r"\b4\b")
-                and has(
-                    r"uncertain|unsure|not sure|might|possibly|unresolved|2.{0,8}4/10"
+                together(
+                    r"\b2\b",
+                    r"\b4\b",
+                    r"uncertain|unsure|not sure|might|possibly|unresolved|2.{0,8}4/10",
                 ),
             )
             require(
@@ -226,6 +233,16 @@ def evaluate(case, fields, *, patient_only=True):
                 "no-unanswered-other-injury-denial",
                 not has(
                     r"(?:no|denies|denied|without)[^.\n;]{0,35}(?:other|another|any) injur|no (?:injur|trauma)"
+                ),
+            )
+            require(
+                "new-medicine-history-retained",
+                any(
+                    re.search(r"new (?:medicine|medication)", s)
+                    and re.search(r"not (?:taken|started)|no new|never", s)
+                    and not re.search(r"prescrib|planned|\bplan\b|\bwill\b", s)
+                    and not re.search(r"(?:during|this|at the) (?:the )?visit|today", s)
+                    for s in sentences
                 ),
             )
         elif check == "known_role":

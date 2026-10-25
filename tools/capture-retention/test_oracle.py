@@ -76,6 +76,31 @@ def test_r2_earlier_negatives_and_fluid_measurement_cannot_be_lost_to_late_summa
     )
 
 
+def test_future_medication_decision_does_not_replace_reported_history():
+    future_only = "Unidentified speaker: no medication changes are planned. Current medication list not specified."
+    assert "medications-unchanged" in grade(5, future_only)["failures"]
+    assert grade(
+        5, future_only + " I have not started, stopped, or changed any medicine."
+    )["passed"]
+
+
+def test_new_medication_history_cannot_gain_a_visit_only_time_limit():
+    case = {**CASES["R3"], "checks": ["r3_numbers"]}
+    base = (
+        "Unidentified speaker: right shoulder pain for 4 days. No fever or chest pain. "
+    )
+    assert evaluate(case, {"O - OBJECTIVE": base + "No new medicine was started."})[
+        "passed"
+    ]
+    assert (
+        "new-medicine-history-retained"
+        in evaluate(
+            case,
+            {"O - OBJECTIVE": base + "No new medicine was started during this visit."},
+        )["failures"]
+    )
+
+
 BAD = [
     (2, GOOD[0] + " (source 99)"),
     (2, GOOD[0] + ' "I have no fever."'),
@@ -98,6 +123,10 @@ BAD = [
     (6, "Unidentified speaker: denies weakness or numbness."),
     (6, "Unidentified speaker: normal neurological findings."),
     (7, "Unidentified speaker: confirmed pain 2/10, corrected from 4/10."),
+    (
+        7,
+        "Unidentified speaker: pain is 2/10. Earlier it was 4/10. Weather is uncertain.",
+    ),
     (
         8,
         "Unidentified speakers: Taylor had a headache yesterday and none today. Morgan has right shoulder pain 2/10.",

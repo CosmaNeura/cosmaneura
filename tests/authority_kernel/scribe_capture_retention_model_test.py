@@ -7,7 +7,9 @@ requires a scoped staging model credential and the existing owned-DB guard.
 import importlib.util
 import json
 import os
+import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -69,36 +71,51 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
         api_key=key,
         azure_endpoint="https://openaitestvhs.openai.azure.com/",
     )
-    monkeypatch.setattr(notes, "openai", client)
+    outputs = []
 
-    class ActualModel:
-        def __init__(self):
-            self.outputs = []
+    class RecordingClient:
+        def with_options(self, **options):
+            configured = client.with_options(**options)
 
-        async def complete(self, prompt, *, json_output):
-            raw = await notes.ConfiguredNoteModel(
-                response_schema=notes.capture_response_schema(
-                    tuple(FIXTURE["schema"]),
-                    notes.plans.prospective_fields(FIXTURE["schema"]),
-                )
-            ).complete(prompt, json_output=json_output)
-            self.outputs.append(raw)
-            with output.with_suffix(".model.json").open("x") as stream:
-                os.chmod(stream.name, 0o600)
-                json.dump(
-                    {
-                        "raw_response": raw,
-                        "grounding": notes.GROUNDING,
-                        "prompt": prompt,
-                        "scope": "synthetic actual-model response before contract validation",
-                    },
-                    stream,
-                    indent=2,
-                )
-            return raw
+            def create(**request):
+                with output.with_suffix(".attempt.json").open("x") as stream:
+                    os.chmod(stream.name, 0o600)
+                    json.dump(
+                        {
+                            "scope": "Actual default capture model request",
+                            "request": request,
+                            "options": options,
+                        },
+                        stream,
+                        indent=2,
+                    )
+                started = time.monotonic_ns()
+                response = configured.chat.completions.create(**request)
+                raw = response.choices[0].message.content if response.choices else None
+                outputs.append(raw)
+                with output.with_suffix(".model.json").open("x") as stream:
+                    os.chmod(stream.name, 0o600)
+                    json.dump(
+                        {
+                            "raw_response": raw,
+                            "response": response.model_dump(mode="json"),
+                            "request": request,
+                            "duration_ms": (time.monotonic_ns() - started) / 1e6,
+                            "scope": "Synthetic actual default-model response before contract validation",
+                        },
+                        stream,
+                        indent=2,
+                    )
+                return response
 
-    model = ActualModel()
-    args["model"] = model
+            return SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+            )
+
+    monkeypatch.setattr(notes, "openai", RecordingClient())
+    # Let capture_note construct its real default model and schema. The only
+    # instrumentation records the real SDK request/response at the wire boundary.
+    args.pop("model")
     result = await notes.capture_note(**args)
     assert result.fields is not None
     spec = importlib.util.spec_from_file_location(
@@ -115,14 +132,14 @@ async def test_actual_model_retention_save_and_reopen(admission_case, monkeypatc
         "case_id": case_id,
         "oracle": evaluation,
         "resolved_fields": result.fields,
-        "raw_responses": model.outputs,
-        "model_call_count": len(model.outputs),
+        "raw_responses": outputs,
+        "model_call_count": len(outputs),
         "saved_row_count": len(rows(f, AIVisitNote)),
         "save_reopen_same": reopened == result == retry,
     }
     with output.open("x") as stream:
         os.chmod(output, 0o600)
         json.dump(evidence, stream, indent=2)
-    assert len(model.outputs) == len(rows(f, AIVisitNote)) == 1
+    assert len(outputs) == len(rows(f, AIVisitNote)) == 1
     assert reopened == result == retry
     assert evaluation["passed"], evaluation["failures"]
