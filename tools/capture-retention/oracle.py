@@ -206,6 +206,11 @@ def evaluate(case, fields, *, patient_only=True):
         elif check == "r3_numbers":
             require("right-shoulder", has(r"right shoulder"))
             require("onset-four-days", has(r"4 days"))
+            require("negative-fever", has(r"(?:no|denies|without)[^.\n;]{0,85}fever"))
+            require(
+                "negative-chest-pain",
+                has(r"(?:no|denies|without)[^.\n;]{0,85}chest pain"),
+            )
             require(
                 "no-unanswered-other-injury-denial",
                 not has(
