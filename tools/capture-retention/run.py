@@ -89,8 +89,23 @@ async def main(args):
             "Primary comparison retains observed Unknown roles and original schema"
         )
     if args.ros:
+        fixture["schema"] = {
+            key: fixture["schema"][key]
+            for key in (
+                "S - SUBJECTIVE",
+                "Medications",
+                "O - OBJECTIVE",
+                "A - ASSESSMENT",
+                "P - PLAN",
+                "Follow-ups",
+                "Return precautions",
+            )
+        }
         fixture["schema"]["ROS"] = (
             "Only explicit symptom responses, preserving source attribution and uncertainty."
+        )
+        fixture["schema_scope"] = (
+            "Constructed compact eight-field schema with explicit ROS"
         )
     notes, Transcript, Entry, Doctor, Schema, Customization = bootstrap()
     baseline, candidate = fixture["baseline_grounding"], notes.GROUNDING
@@ -254,6 +269,8 @@ async def main(args):
                     "identity": identity,
                     "at": datetime.now(UTC).isoformat(),
                     "source_sha256": digest(case["entries"]),
+                    "source_entries": case["entries"],
+                    "semantic_checks": case["checks"],
                     "prompt_sha256": digest(prompt),
                     "status": "FAIL",
                 }
@@ -267,6 +284,8 @@ async def main(args):
                         "at": item["at"],
                         "source_sha256": item["source_sha256"],
                         "prompt_sha256": item["prompt_sha256"],
+                        "source_entries": case["entries"],
+                        "semantic_checks": case["checks"],
                     },
                 )
                 try:

@@ -17,7 +17,7 @@ from app.services.scribe_workflow import CaptureTranscript
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.note_type_customization import NoteTypeCustomization
+from app.models.note_type_customization import NoteTypeCustomization, SubjectiveSource
 from sqlmodel import Session
 
 from tests.authority_kernel.scribe_capture_notes_test import (
@@ -59,7 +59,8 @@ def test_known_patient_and_provider_preferences_remain_distinct():
     )
     entries[0].speaker = "Unknown"
     assert "NO role-identified" not in notes.capture_retention_context(
-        entries, NoteTypeCustomization(subjective_source="patient_and_doctor")
+        entries,
+        NoteTypeCustomization(subjective_source=SubjectiveSource.patient_and_doctor),
     )
 
 

@@ -32,7 +32,7 @@ AZURE_OPENAI_ENDPOINT=https://openaitestvhs.openai.azure.com/ \
 AZURE_OPENAI_ENDPOINT=https://openaitestvhs.openai.azure.com/ \
   .venv/bin/python tools/capture-retention/run.py \
   --output /absolute/owned/known-role-results --batch edges --roles known
-# The same bounded edge cases with an explicit ROS field.
+# The same bounded edge cases with a compact eight-field schema including ROS.
 AZURE_OPENAI_ENDPOINT=https://openaitestvhs.openai.azure.com/ \
   .venv/bin/python tools/capture-retention/run.py \
   --output /absolute/owned/ros-results --batch edges --ros
@@ -48,7 +48,9 @@ receipts are reused only with identical source/diff, fixture, schema, customizat
 model, grounding and relevant code identities. A changed input needs a new directory.
 An exclusive process lock prevents competing runs. Each attempt is written before
 the request: an interrupted attempt with no result blocks automatic resubmission.
-The manifest preserves complete synthetic inputs and candidate grounding. Files are
+The manifest preserves complete synthetic inputs and candidate grounding. Each
+attempt also retains its actual source entries, including constructed role variants,
+before making a request. Files are
 created exclusively with mode 0600 and contain synthetic model output; do not
 substitute clinical transcripts. Console output contains metadata only. Cleanup
 requires no external action: this lane creates no visits, participants, service
