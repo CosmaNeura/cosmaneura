@@ -1,0 +1,227 @@
+{
+  "synthetic_only": true,
+  "claim": "Finite source-selection omission/context checks for these exact labeled fixtures, not clinical judgment or universal coverage. Any listed alternative source may satisfy a required fact; source selection says nothing about section correctness.",
+  "cases": {
+    "R2": {
+      "entriesSHA256": "9fc4e84762ce8f619f3521d976547ccb8ae1652ea0e91633fac705187bc879f2",
+      "requiredAny": {
+        "onset": [
+          5,
+          6,
+          11,
+          36
+        ],
+        "episode-duration": [
+          7,
+          11
+        ],
+        "episode-count": [
+          22,
+          27
+        ],
+        "severity": [
+          17,
+          27,
+          36
+        ],
+        "home-bp": [
+          26,
+          27
+        ],
+        "fluid-intake": [
+          23
+        ],
+        "fainting-denial": [
+          9,
+          11,
+          36
+        ],
+        "chest-pain-denial": [
+          14,
+          36
+        ],
+        "dyspnea-denial": [
+          14,
+          36
+        ],
+        "fever-denial": [
+          14
+        ],
+        "prior-current-headache": [
+          15
+        ],
+        "function": [
+          18
+        ],
+        "medication-history": [
+          24
+        ],
+        "rise-fluid-diary-plan": [
+          28
+        ],
+        "diary-timing-duration": [
+          32
+        ],
+        "no-new-medicine-plan": [
+          29,
+          37
+        ],
+        "followup": [
+          30,
+          38
+        ]
+      },
+      "ifAnyThenAny": [
+        [
+          [
+            16
+          ],
+          [
+            17
+          ]
+        ],
+        [
+          [
+            17
+          ],
+          [
+            16
+          ]
+        ],
+        [
+          [
+            6
+          ],
+          [
+            5,
+            11
+          ]
+        ],
+        [
+          [
+            8
+          ],
+          [
+            7,
+            11
+          ]
+        ],
+        [
+          [
+            33
+          ],
+          [
+            22,
+            27
+          ]
+        ],
+        [
+          [
+            33
+          ],
+          [
+            7,
+            11
+          ]
+        ]
+      ]
+    },
+    "R3": {
+      "entriesSHA256": "f0adff758700c7e0f7c07f6f6f1d5f19699794738f5a5bf2c1fa33b62fad00d8",
+      "requiredAny": {
+        "onset-and-trigger": [
+          6,
+          11
+        ],
+        "side-correction": [
+          7,
+          37
+        ],
+        "rest-overhead-symptoms": [
+          8
+        ],
+        "current-pain": [
+          25
+        ],
+        "fall-denial": [
+          15
+        ],
+        "unanswered-injury-question": [
+          13
+        ],
+        "numbness-weakness": [
+          16,
+          39
+        ],
+        "no-radiation": [
+          17
+        ],
+        "fever-chestpain": [
+          10,
+          39
+        ],
+        "function": [
+          18
+        ],
+        "prior-helpful-rest": [
+          27
+        ],
+        "new-medicine-history": [
+          28,
+          41
+        ],
+        "lifting-movement-plan": [
+          31,
+          36
+        ],
+        "no-new-prescription": [
+          32
+        ],
+        "overhead-monitoring": [
+          33
+        ],
+        "followup": [
+          34,
+          36
+        ]
+      },
+      "ifAnyThenAny": [
+        [
+          [
+            26
+          ],
+          [
+            25
+          ]
+        ],
+        [
+          [
+            35
+          ],
+          [
+            34,
+            36
+          ]
+        ],
+        [
+          [
+            7
+          ],
+          [
+            6,
+            11
+          ]
+        ],
+        [
+          [
+            30
+          ],
+          [
+            6,
+            11
+          ]
+        ]
+      ]
+    }
+  }
+}
