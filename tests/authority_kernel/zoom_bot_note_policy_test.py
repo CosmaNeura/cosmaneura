@@ -216,7 +216,7 @@ def test_real_task_wrapper_excludes_only_bot_contract_failure(
                 SimpleNamespace(
                     finish_reason="stop",
                     message=SimpleNamespace(
-                        content='{"fields":{"Plan":"Unchecked prose"},"plan_source_refs":{"Plan":[999]}}'
+                        content='{"fields":{"Plan":"Unchecked prose"},"plan_source_refs":{"Plan":[999]},"source_review":{"unresolved_questions":[],"medications":{"current_list_refs":[],"change_history_refs":[]}}}'
                     ),
                 )
             ]
@@ -286,6 +286,16 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
                 },
                 "plan_source_refs": {"Plan": [3]},
                 "reported_history_source_refs": {"Objective": [1, 2]},
+                "source_review": {
+                    "unresolved_questions": [
+                        {
+                            "question_ref": 1,
+                            "answer_refs": [2],
+                            "unanswered_parts": ["another injury"],
+                        }
+                    ],
+                    "medications": {"current_list_refs": [], "change_history_refs": []},
+                },
             }
         )
         return SimpleNamespace(
@@ -308,7 +318,8 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
             "Current medication list is unverified; review the source statements.\n\n"
             "Reported transcript history:\n"
             "Transcript — Unidentified speaker:\nHave you had a fall or another injury?\n\n"
-            "Transcript — Unidentified speaker:\nThere was no fall."
+            "Transcript — Unidentified speaker:\nThere was no fall.\n\n"
+            'Answer not established for: "another injury".'
         ),
         "Assessment": "Not mentioned in transcript",
         "Plan": (

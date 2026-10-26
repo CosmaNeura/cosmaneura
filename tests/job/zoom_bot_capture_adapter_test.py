@@ -17,6 +17,7 @@ from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_notes as capture
 from app.services import zoom_bot_note_grounding as bot
 from app.services import zoom_bot_note_policy as policy
+from app.services import zoom_bot_source_review as review
 
 from app.models.doctor import Terminology
 from app.models.note_type_customization import NoteTypeCustomization
@@ -62,8 +63,13 @@ def doctor():
 
 def value(grounding, fields=SOAP, *, plans=(), histories=(), generated=None):
     result = {key: "" for key in fields} if generated is None else generated
-    if grounding.plan.fields or grounding.history.fields:
-        result = {"fields": result}
+    result = {
+        "fields": result,
+        review.KEY: {
+            "unresolved_questions": [],
+            "medications": {"current_list_refs": [], "change_history_refs": []},
+        },
+    }
     if grounding.plan.fields:
         result["plan_source_refs"] = {key: list(plans) for key in grounding.plan.fields}
     if grounding.history.fields:
@@ -169,9 +175,10 @@ def test_real_configured_call_reuses_capture_composition_actual_template_and_pre
         )
         in user["content"]
     )
-    assert request["response_format"]["json_schema"][
-        "schema"
-    ] == capture.capture_response_schema(tuple(schema.fields), g.plan.fields, g.history)
+    assert request["response_format"]["json_schema"]["schema"] == review.schema(
+        capture.capture_response_schema(tuple(schema.fields), g.plan.fields, g.history),
+        protected=bool(g.plan.fields or g.history.fields),
+    )
     assert request["response_format"]["json_schema"]["strict"] is True
     assert c.model_dump() == before
 
@@ -256,7 +263,10 @@ def test_whole_source_corrections_negatives_and_same_words_are_retained():
     )
     # The unprotected model prose still needs semantic review; this is not a
     # whole-note truth guarantee or a blanket source-only renderer.
-    assert note["Assessment"] == "Fabricated field."
+    assert (
+        note["Assessment"]
+        == "Source: unidentified speech; speaker roles are not established.\n\nFabricated field."
+    )
 
 
 def test_prospective_plan_reuses_complete_sources_with_unverified_attribution():

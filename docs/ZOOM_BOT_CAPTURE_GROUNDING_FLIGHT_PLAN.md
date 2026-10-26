@@ -63,6 +63,29 @@ exception excluded from Celery autoretry; existing ordinary/network retry policy
 is unchanged. The normal UI may remain without a completed note on such a
 failure. No success or release-readiness claim follows from an HTTP 200 model call.
 
+## Transient source review after the first adapter evaluation
+
+The first two configured adapter calls saved and reopened, but omitted medication
+list uncertainty, an unanswered part of a question, and narrative role caveats.
+They remain unaccepted evidence. A transient `source_review` response now selects
+only unresolved question/reply context and current-list versus medicine-change
+evidence. No database, template, or persisted clinical fields are added.
+
+References must be unique, in range and actual speech, never recording boundaries.
+Unanswered wording must be copied from the selected question; replies must follow
+it. The renderer retains complete question/reply context and adds compact limits
+in an existing Objective/history field. No suitable field means refusal. Existing
+grounded history is retained without repeated quotes; Plan is not modified.
+Nonempty unprotected narratives receive one source-role qualification. Empty or
+Not-mentioned fields and already-grounded fields receive no extra prefix.
+
+The bot request replaces the exact legacy inferred-reason paragraph with a
+source-stated-or-unavailable rule; unexpected upstream wording fails closed.
+Preferences and default/capture prompt code remain unchanged. Structurally valid
+refs do not establish clinical relevance, an empty complete medication list or
+that every question was answered. False selection and omission still require
+independent semantic rejection; this audit is not an all-source classifier.
+
 ## Validation and release sequence
 
 1. Local socket-blocked request/resolver regressions, including the actual A/B

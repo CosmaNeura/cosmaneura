@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_plan_grounding as plans
+from app.services import zoom_bot_source_review as review
 
 if TYPE_CHECKING:
     from app.models.ai_visit_transcript import AIVisitTranscript
@@ -23,8 +24,8 @@ ROLE_AND_QUESTION_CONTRACT = (
     "\nBot source qualifications: Doctor, Patient and Other are stored model-classified "
     "roles, not independently verified identities. Preserve these labels for the "
     "saved source/section preference; never upgrade them through a spoken name, "
-    "first-person wording or the signed-in account. Mark each narrative section "
-    "using such speech as based on model-classified roles. Unknown speech remains "
+    "first-person wording or the signed-in account. The server qualifies each "
+    "nonempty unprotected narrative using actual source-role availability. Unknown speech remains "
     "unidentified in every field. A clinical question is not a finding: retain "
     "clinically relevant unanswered questions as questions in a permitted history "
     "or Objective field, explicitly saying the answer was not stated. For a "
@@ -53,6 +54,23 @@ _KEEP_QUESTIONS = (
     "as unresolved source context, never as an affirmative or negative finding. "
     "A question never supplies its answer."
 )
+
+
+def source_reason_prompt(prompt, customization, terms):
+    """Replace only the known contradictory instruction in this bot request."""
+    if not customization.require_plan_reason:
+        return prompt
+    legacy = f'Plan section bullets MUST include the reason for each action -- the "why" -- using "for X" or "to X" phrasing. For example: "Order MRI to rule out disc pathology" rather than "Order MRI"; "Continue metformin for ongoing diabetes management" rather than just "Continue metformin"; "Avoid heavy lifting to prevent re-injury" rather than just "Avoid heavy lifting"; "Follow up in two weeks to reassess back pain and review MRI results" rather than just "Follow up in two weeks" or "Follow up if symptoms worsen". This applies to EVERY Plan bullet, no exceptions -- including follow-up bullets, monitoring bullets, and continue-current-treatment bullets. A trigger condition (e.g. "if symptoms worsen") is NOT a reason; the bullet must state the PURPOSE of the action (e.g. "to monitor for new neurological symptoms"). When the transcript does not explicitly state the reason, infer it from the clinical context (the {terms.patient}\'s complaint, the assessment, the medication\'s indication). Do not invent reasons unrelated to the visit.'
+    if prompt.count(legacy) != 1:
+        raise BotNoteContractInvalid
+    return prompt.replace(
+        legacy,
+        "Plan reasons are required when the source supplies them. Preserve the "
+        "stated reason in the selected complete source. When no reason is stated, "
+        "an explicit unavailable-rationale limitation satisfies this preference; "
+        "never infer a reason. The server renders selected Plan sources and the "
+        "rationale limitation. Do not substitute invented prose for those sources.",
+    )
 
 
 class BotNoteContractInvalid(ValueError):
@@ -146,6 +164,12 @@ class BotGrounding:
         try:
             if not isinstance(raw, str) or len(raw.encode("utf-8")) > MAX_MODEL_BYTES:
                 raise BotNoteContractInvalid
+            raw, contexts, medication_unspecified = review.split(
+                raw,
+                self.plan.sources,
+                protected=bool(self.plan.fields or self.history.fields),
+                max_bytes=MAX_MODEL_BYTES,
+            )
             raw, grounded_history = self.history.resolve(raw, max_bytes=MAX_MODEL_BYTES)
             # The existing Plan resolver accepts whole sources of any kind. A
             # server merge boundary is structurally known not to be speech.
@@ -168,10 +192,19 @@ class BotGrounding:
                 }
             note.update(grounded_plans)
             note.update(grounded_history)
+            note = review.render(
+                note,
+                self.plan.sources,
+                protected=(*self.plan.fields, *self.history.fields),
+                plan_fields=self.plan.fields,
+                contexts=contexts,
+                medication_unspecified=medication_unspecified,
+            )
             return _validated_note(json.dumps(note, ensure_ascii=False), fields)
         except (
             plans.PlanGroundingInvalid,
             history.HistoryGroundingInvalid,
+            review.SourceReviewInvalid,
             CaptureNoteUnconfirmed,
             TypeError,
             KeyError,
@@ -207,14 +240,17 @@ def generate_grounded_note(
         patient_only=c.subjective_source == "patient_only",
         boundaries=boundaries,
     )
+    doctor = summarize.Doctor.one(transcript.doctor_id)
     prompt = summarize.build_structured_prompt(
         transcript,
         example_note,
         note_schema,
         c,
         action_items="",
-        source_indexes=bool(grounding.plan.fields or grounding.history.fields),
+        doctor=doctor,
+        source_indexes=True,
     )
+    prompt = source_reason_prompt(prompt, c, summarize.terminology_terms(doctor))
     speech = [
         entry
         for index, entry in enumerate(transcript.transcript_data, 1)
@@ -229,7 +265,7 @@ def generate_grounded_note(
             + json.dumps(boundaries)
             + " preserve sequence but are not clinical speech or plan/history sources.\n"
         )
-    prompt += grounding.plan.prompt() + grounding.history_prompt()
+    prompt += grounding.plan.prompt() + grounding.history_prompt() + review.prompt()
     response = summarize.openai.chat.completions.create(
         model=summarize.DEFAULT_MULTI_MODAL_MODEL,
         messages=[
@@ -241,8 +277,13 @@ def generate_grounded_note(
             "json_schema": {
                 "name": "zoom_capture_grounded_note",
                 "strict": True,
-                "schema": capture_response_schema(
-                    tuple(note_schema.fields), grounding.plan.fields, grounding.history
+                "schema": review.schema(
+                    capture_response_schema(
+                        tuple(note_schema.fields),
+                        grounding.plan.fields,
+                        grounding.history,
+                    ),
+                    protected=bool(grounding.plan.fields or grounding.history.fields),
                 ),
             },
         },
