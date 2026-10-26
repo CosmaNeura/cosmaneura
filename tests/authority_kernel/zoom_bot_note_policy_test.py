@@ -216,7 +216,7 @@ def test_real_task_wrapper_excludes_only_bot_contract_failure(
                 SimpleNamespace(
                     finish_reason="stop",
                     message=SimpleNamespace(
-                        content='{"source_dispositions":[{"source_index":999,"purpose":"care_plan","field":"Plan","answer_scope":"not_question","context_refs":[]}]}'
+                        content='{"source_dispositions":[{"source_index":999,"purpose":"care_plan","field":"Plan","answer_scope":"not_question","context":null}]}'
                     ),
                 )
             ]
@@ -290,14 +290,14 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
                         "purpose": "clinical_question",
                         "field": "Objective",
                         "answer_scope": "unanswered",
-                        "context_refs": [],
+                        "context": None,
                     },
                     {
                         "source_index": 2,
                         "purpose": "care_plan",
                         "field": "Plan",
                         "answer_scope": "not_question",
-                        "context_refs": [],
+                        "context": None,
                     },
                 ],
             }
