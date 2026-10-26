@@ -154,8 +154,8 @@ def test_v1_preserves_fail_closed_billing_incident_states() -> None:
 
 
 def test_v1_schema_and_fixture_are_byte_pinned() -> None:
-    # This frozen contract has no runtime producer yet. The generated browser
-    # API snapshot evolves independently and has its own equivalence check.
+    # The generated browser API snapshot evolves independently of these frozen
+    # artifacts and has its own equivalence check.
     assert hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest() == (
         "02f13fcf8226e6990389a085dfa3478ca4d7d4a8f9cc9f5ad3b3e676508fb865"
     )
