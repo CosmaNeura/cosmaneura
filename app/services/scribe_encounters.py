@@ -6,7 +6,12 @@ from uuid import uuid4
 
 from typeid import TypeID
 
-from app.services import authority, provider_record_authority, scribe_visit_extras
+from app.services import (
+    authority,
+    provider_record_authority,
+    scribe_catalog_rows,
+    scribe_visit_extras,
+)
 from app.services.companion_appointment_setup import _current_provider
 from app.services.companion_encounter_contract import digest
 from app.services.companion_encounters import _locked_provider
@@ -68,8 +73,13 @@ def _visit(
 ):
     if row.doctor_id != doctor_id or row.provider_link_id != link.id:
         raise authority.AuthorityRequestDeniedError
+    batch = scribe_catalog_rows.catalog_row(
+        session, row, doctor_id=doctor_id, subject=subject, link=link
+    )
     owned = lookup_owns_subject_rows(session, doctor_id, subject)
-    if owned:
+    if batch is not None:
+        appointment, patient, binding = batch.appointment, batch.patient, batch.binding
+    elif owned:
         appointment, patient, binding = _visit_input_rows(session, row)
     else:
         appointment = session.get(Appointment, row.appointment_id)
@@ -83,7 +93,7 @@ def _visit(
         or appointment.patient_id != patient.id
     ):
         raise authority.AuthorityRequestDeniedError
-    if not owned:
+    if not owned and batch is None:
         binding = session.exec(
             select(AuthorityPersonBinding).where(
                 AuthorityPersonBinding.binding_ref == str(appointment.id),
@@ -98,7 +108,11 @@ def _visit(
         or binding.verified_at is None
     ):
         raise authority.AuthorityRequestDeniedError
-    if (
+    if batch is not None:
+        scribe_catalog_rows.validate_record_row(
+            session, batch, doctor_id=doctor_id, subject=subject, link=link
+        )
+    elif (
         provider_record_authority.validate_provider_record_scope(
             session=session,
             binding=binding,
@@ -114,7 +128,11 @@ def _visit(
     )
     if expected_capture_binding_ref is not None:
         capture_query = capture_query.execution_options(populate_existing=True)
-    capture = session.exec(capture_query).one_or_none()
+    capture = (
+        batch.capture
+        if batch is not None
+        else session.exec(capture_query).one_or_none()
+    )
     if capture is not None and (
         capture.revoked_at is not None
         or capture.workspace_id != row.workspace_id
@@ -158,7 +176,9 @@ def _visit(
         else None,
         "title": appointment.appointment_name or "Visit",
         "appointment_at": appointment.appointment_date.replace(tzinfo=UTC).isoformat(),
-        "identity": scribe_visit_extras.identity_view(session, row, link, patient),
+        "identity": scribe_catalog_rows.identity_view(batch, row, link)
+        if batch is not None
+        else scribe_visit_extras.identity_view(session, row, link, patient),
         **({"status": status} if status else {}),
     }
 
@@ -460,17 +480,20 @@ def encounter_workflow(
                     statuses = saved_encounter_statuses(
                         session, doctor_id, [r.appointment_id for r in rows]
                     )
-                    result["encounters"] = [
-                        _visit(
-                            session,
-                            r,
-                            doctor_id=doctor_id,
-                            link=link,
-                            subject=subject,
-                            saved_statuses=statuses,
-                        )
-                        for r in rows
-                    ]
+                    with scribe_catalog_rows.catalog_rows(
+                        session, rows, doctor_id=doctor_id, subject=subject, link=link
+                    ):
+                        result["encounters"] = [
+                            _visit(
+                                session,
+                                r,
+                                doctor_id=doctor_id,
+                                link=link,
+                                subject=subject,
+                                saved_statuses=statuses,
+                            )
+                            for r in rows
+                        ]
                 elif isinstance(request, LookupRequest):
                     row = session.exec(
                         select(ScribeEncounterCreation).where(
