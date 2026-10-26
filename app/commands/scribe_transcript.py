@@ -45,7 +45,20 @@ class TranscriptImportResult:
 
 
 def _entry_data(entries: list[TranscriptEntry]) -> list[dict[str, object]]:
-    return [entry.model_dump() for entry in entries]
+    return [entry.legacy_data() for entry in entries]
+
+
+def _entries_match(left: list[TranscriptEntry], right: list[TranscriptEntry]) -> bool:
+    if _entry_data(left) != _entry_data(right):
+        return False
+    # Historical rows and the legacy delivery wire have no acoustic metadata.
+    # Replay retains those rows unchanged; two known identities must agree.
+    return all(
+        old.source_speaker_id is None
+        or new.source_speaker_id is None
+        or old.source_speaker_id == new.source_speaker_id
+        for old, new in zip(left, right, strict=True)
+    )
 
 
 def _matching_receipt(
@@ -90,11 +103,22 @@ def _replayed_result(
     session: Session,
     receipt: ScribeTranscriptDelivery,
     *,
+    duration: int,
+    transcript_data: list[TranscriptEntry],
     dispatch_pipeline: bool = True,
 ) -> TranscriptImportResult:
     transcript = session.get(AIVisitTranscript, receipt.transcript_id)
     if transcript is None:
         raise TranscriptPersistenceError("Transcript receipt is incomplete.")
+    if transcript.deleted_at is not None:
+        # The matching receipt already checked the original payload digest.
+        # Retention may have removed all source entries; never resurrect or
+        # redispatch a tombstoned transcript to check display metadata.
+        return TranscriptImportResult(transcript=transcript, disposition="replayed")
+    if transcript.duration != duration or not _entries_match(
+        transcript.transcript_data, transcript_data
+    ):
+        raise TranscriptConflictError("Transcript receipt content conflicts.")
     if dispatch_pipeline:
         _dispatch_pipeline_if_needed(session, receipt, transcript)
     return TranscriptImportResult(transcript=transcript, disposition="replayed")
@@ -158,7 +182,13 @@ def _perform(
         payload_sha256=payload_sha256,
     )
     if receipt is not None:
-        return _replayed_result(session, receipt, dispatch_pipeline=dispatch_pipeline)
+        return _replayed_result(
+            session,
+            receipt,
+            duration=duration,
+            transcript_data=transcript_data,
+            dispatch_pipeline=dispatch_pipeline,
+        )
 
     existing = (
         None
@@ -171,9 +201,9 @@ def _perform(
     )
     created = existing is None
     if existing is not None:
-        if existing.duration != duration or _entry_data(
-            existing.transcript_data
-        ) != _entry_data(transcript_data):
+        if existing.duration != duration or not _entries_match(
+            existing.transcript_data, transcript_data
+        ):
             raise TranscriptConflictError(
                 "This encounter already has a different transcript."
             )
@@ -229,7 +259,13 @@ def _perform(
         )
         if receipt is None:
             raise TranscriptPersistenceError from exc
-        return _replayed_result(session, receipt, dispatch_pipeline=dispatch_pipeline)
+        return _replayed_result(
+            session,
+            receipt,
+            duration=duration,
+            transcript_data=transcript_data,
+            dispatch_pipeline=dispatch_pipeline,
+        )
 
     if dispatch_pipeline:
         _dispatch_pipeline_if_needed(session, delivery, transcript)

@@ -251,7 +251,7 @@ def _content_digest(
             "appointment_id": appointment_id,
             "patient_id": patient_id,
             "duration": duration,
-            "entries": [entry.model_dump() for entry in entries],
+            "entries": [entry.legacy_data() for entry in entries],
         },
         sort_keys=True,
         separators=(",", ":"),
