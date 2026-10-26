@@ -43,6 +43,7 @@ def clean_redis():
         "participant_event_order",
         "patient_count",
         "capture_started",
+        "capture_terminal",
         "starting_lock",
         "merge_task_id",
         "paused_at",
@@ -55,6 +56,7 @@ def clean_redis():
     for s in suffixes:
         redis.delete(_key(s))
     for key in (
+        f"recall:bot:{BOT_ID}:zoom_capture",
         f"recall:bot:{BOT_ID}:doctor_id",
         f"recall:bot:{BOT_ID}:appointment_id",
         f"recall:bot:{BOT_ID}:patient_id",
@@ -69,6 +71,7 @@ def clean_redis():
     for s in suffixes:
         redis.delete(_key(s))
     for key in (
+        f"recall:bot:{BOT_ID}:zoom_capture",
         f"recall:bot:{BOT_ID}:doctor_id",
         f"recall:bot:{BOT_ID}:appointment_id",
         f"recall:bot:{BOT_ID}:patient_id",

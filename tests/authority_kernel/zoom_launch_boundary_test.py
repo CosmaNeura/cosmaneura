@@ -54,6 +54,7 @@ def fenced():
     finally:
         keys = list(redis.scan_iter(prefix + ":*"))
         keys += list(redis.scan_iter(f"recall:recording:{value.recording}:*"))
+        keys += list(redis.scan_iter(f"recall:bot:{value.bot}:*"))
         if keys:
             redis.delete(*keys)
         redis.close()

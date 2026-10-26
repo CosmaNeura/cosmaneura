@@ -8046,6 +8046,23 @@
           "capture_authorized": {
             "type": "boolean",
             "title": "Capture Authorized"
+          },
+          "capture_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "permission_denied",
+                  "ended",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Status",
+            "default": null
           }
         },
         "additionalProperties": false,
