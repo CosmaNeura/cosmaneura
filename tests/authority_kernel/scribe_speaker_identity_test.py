@@ -2,6 +2,7 @@
 
 import json
 from dataclasses import replace
+from typing import Any
 from uuid import UUID, uuid4, uuid5
 
 import pytest
@@ -21,7 +22,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 from app.models.doctor_note_schema import DoctorNoteSchema
 from sqlalchemy import inspect, select
-from sqlmodel import Session
+from sqlmodel import Session, SQLModel
 
 from tests.authority_kernel.scribe_capture_gateway_test import pair
 from tests.authority_kernel.scribe_capture_notes_test import (
@@ -79,7 +80,7 @@ def test_absent_identity_keeps_exact_legacy_json_and_known_uuid_roundtrips():
     assert TranscriptEntry.model_validate(wire) == known
     assert known.legacy_data() == old
     with pytest.raises(ValidationError):
-        TranscriptEntry(**old, source_speaker_id="Patient")
+        TranscriptEntry.model_validate({**old, "source_speaker_id": "Patient"})
 
 
 def test_raw_working_and_reviewed_preserve_identity_without_assigning_roles():
@@ -113,7 +114,7 @@ def test_raw_working_and_reviewed_preserve_identity_without_assigning_roles():
         document["working"]["segments"][0]["speaker_id"]
     )
     assert selected.entries[0].speaker == "Unknown"
-    old = [TranscriptEntry(**e.legacy_data()) for e in selected.entries]
+    old = [TranscriptEntry.model_validate(e.legacy_data()) for e in selected.entries]
     assert selected.payload_digest == reviewed.payload_digest(
         configured, selected.duration, old
     )
@@ -133,7 +134,7 @@ def test_recall_digest_keeps_the_exact_old_canonical_document(monkeypatch):
         "pseudonymous_digest",
         lambda value, *, context: captured.append((value, context)) or "digest",
     )
-    args = dict(
+    args: dict[str, Any] = dict(
         doctor_id="doctor_synthetic",
         appointment_id="appointment_synthetic",
         patient_id="patient_synthetic",
@@ -163,9 +164,9 @@ async def test_legacy_and_new_metadata_replay_one_row_without_rewriting(
     raw = two_voices(f.client.result)
     source = notes._source(raw, f.scope)
     known = source.entries
-    old = [TranscriptEntry(**e.legacy_data()) for e in known]
+    old = [TranscriptEntry.model_validate(e.legacy_data()) for e in known]
     initial, incoming = (old, known) if legacy_first else (known, old)
-    args = dict(
+    args: dict[str, Any] = dict(
         encounter_id=f.case.appointment.id,
         caller_client_id=f.caller.workload_client_id,
         idempotency_key="speaker-replay-" + uuid4().hex,
@@ -193,8 +194,10 @@ async def test_legacy_and_new_metadata_replay_one_row_without_rewriting(
         raw_before = (
             session.connection()
             .execute(
-                select(AIVisitTranscript.__table__.c.transcript_data).where(
-                    AIVisitTranscript.__table__.c.id == original_id
+                select(
+                    SQLModel.metadata.tables["ai_visit_transcript"].c.transcript_data
+                ).where(
+                    SQLModel.metadata.tables["ai_visit_transcript"].c.id == original_id
                 )
             )
             .scalar_one()
@@ -206,15 +209,20 @@ async def test_legacy_and_new_metadata_replay_one_row_without_rewriting(
             )
         session.expire_all()
         persisted = session.get(AIVisitTranscript, original_id)
+        assert persisted is not None
         assert persisted.transcript_data == initial
         session.refresh(persisted)
         assert persisted.transcript_data == initial
-        assert not inspect(persisted).attrs.transcript_data.history.has_changes()
+        state = inspect(persisted)
+        assert state is not None
+        assert not state.attrs.transcript_data.history.has_changes()
         assert (
             session.connection()
             .execute(
-                select(AIVisitTranscript.__table__.c.transcript_data).where(
-                    AIVisitTranscript.__table__.c.id == original_id
+                select(
+                    SQLModel.metadata.tables["ai_visit_transcript"].c.transcript_data
+                ).where(
+                    SQLModel.metadata.tables["ai_visit_transcript"].c.id == original_id
                 )
             )
             .scalar_one()
@@ -231,7 +239,7 @@ async def test_known_identity_swap_conflicts_before_dispatch(
     f = admission_case
     await setup(f, monkeypatch)
     source = notes._source(two_voices(f.client.result), f.scope)
-    args = dict(
+    args: dict[str, Any] = dict(
         encounter_id=f.case.appointment.id,
         caller_client_id=f.caller.workload_client_id,
         idempotency_key="speaker-conflict-" + uuid4().hex,
@@ -288,12 +296,13 @@ async def test_capture_metadata_persists_but_does_not_change_prompts_or_note_cal
     old = stored.model_copy(
         update={
             "transcript_data": [
-                TranscriptEntry(**e.legacy_data()) for e in stored.transcript_data
+                TranscriptEntry.model_validate(e.legacy_data())
+                for e in stored.transcript_data
             ]
         }
     )
     for indexed in (False, True):
-        args = dict(
+        args: dict[str, Any] = dict(
             example_note=None,
             note_schema=schema,
             action_items="",
@@ -309,6 +318,7 @@ async def test_capture_metadata_persists_but_does_not_change_prompts_or_note_cal
     )
     with Session(f.engine) as session:
         current = session.get(AIVisitTranscript, stored.id)
+        assert current is not None
         current.transcript_data = [
             e.model_copy(update={"source_speaker_id": uuid4()})
             for e in current.transcript_data
@@ -331,9 +341,9 @@ async def test_matching_receipt_survives_real_retention_without_resurrection_or_
     entries = (
         source.entries
         if known_identity
-        else [TranscriptEntry(**e.legacy_data()) for e in source.entries]
+        else [TranscriptEntry.model_validate(e.legacy_data()) for e in source.entries]
     )
-    args = dict(
+    args: dict[str, Any] = dict(
         encounter_id=f.case.appointment.id,
         caller_client_id=f.caller.workload_client_id,
         idempotency_key="speaker-retention-" + uuid4().hex,
@@ -353,6 +363,7 @@ async def test_matching_receipt_survives_real_retention_without_resurrection_or_
     anonymize.perform(identifier)
     with Session(f.engine) as session:
         retained = session.get(AIVisitTranscript, identifier)
+        assert retained is not None
         deleted_at = retained.deleted_at
         assert deleted_at is not None and retained.transcript_data == []
         for _ in range(2):
@@ -385,6 +396,7 @@ async def test_reviewed_source_cache_accepts_legacy_metadata_but_rejects_known_s
     assert stored.transcript_data[0].source_speaker_id == expected_id
     with Session(f.engine) as session:
         row = session.get(AIVisitTranscript, stored.id)
+        assert row is not None
         row.transcript_data = [
             e.model_copy(
                 update={"source_speaker_id": None if legacy_cache else uuid4()}

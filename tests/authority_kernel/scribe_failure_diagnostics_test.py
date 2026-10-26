@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from starlette.requests import Request
@@ -53,7 +54,10 @@ def test_sqlalchemy_chain_keeps_code_without_sql_parameters_or_messages(events):
 
 
 def test_only_allowlisted_sites_codes_and_operations_are_logged(events):
-    scope = {"__name__": "app.services.scribe_capture_gateway", "secret": SECRET}
+    scope: dict[str, Any] = {
+        "__name__": "app.services.scribe_capture_gateway",
+        "secret": SECRET,
+    }
     exec("def fail():\n    raise TypeError(secret)\n", scope)
     try:
         scope["fail"]()
@@ -140,17 +144,22 @@ def test_encounter_route_preserves_503_and_adds_no_error_values(
     result = asyncio.run(
         scribe_encounters.scribe_encounter_workflow(
             request,
-            SimpleNamespace(
-                issuer="synthetic", subject="synthetic", clerk_session_id="synthetic"
+            cast(
+                Any,
+                SimpleNamespace(
+                    issuer="synthetic",
+                    subject="synthetic",
+                    clerk_session_id="synthetic",
+                ),
             ),
-            SimpleNamespace(enabled=True),
-            SimpleNamespace(),
+            cast(Any, SimpleNamespace(enabled=True)),
+            cast(Any, SimpleNamespace()),
         )
     )
     assert result.status_code == 503
     assert result.body == scribe_encounters.problem(503).body
     assert len(events) == 1 and events[0][1]["boundary"] == "encounter"
-    assert SECRET not in result.body.decode() + json.dumps(events)
+    assert SECRET not in bytes(result.body).decode() + json.dumps(events)
 
 
 @pytest.mark.parametrize(
@@ -171,13 +180,16 @@ def test_capture_route_keeps_retryable_response_and_closes_client(
 
     async def body(*_):
         return (
-            SimpleNamespace(
-                expected_session_id=None,
-                binding_ref="synthetic",
-                workspace_id="synthetic",
-                operation=SimpleNamespace(kind="register_chunk"),
+            cast(
+                Any,
+                SimpleNamespace(
+                    expected_session_id=None,
+                    binding_ref="synthetic",
+                    workspace_id="synthetic",
+                    operation=SimpleNamespace(kind="register_chunk"),
+                ),
             ),
-            SimpleNamespace(model_dump=lambda: {}),
+            cast(Any, SimpleNamespace(model_dump=lambda: {})),
         )
 
     async def fail(**_):
@@ -196,10 +208,10 @@ def test_capture_route_keeps_retryable_response_and_closes_client(
                     "headers": [(b"idempotency-key", b"synthetic-fixed-key")],
                 }
             ),
-            SimpleNamespace(client_id="synthetic"),
-            SimpleNamespace(enabled=True, upload_origins=()),
-            SimpleNamespace(),
-            lambda: SimpleNamespace(close=close),
+            cast(Any, SimpleNamespace(client_id="synthetic")),
+            cast(Any, SimpleNamespace(enabled=True, upload_origins=())),
+            cast(Any, SimpleNamespace()),
+            lambda: cast(Any, SimpleNamespace(close=close)),
         )
     )
     expected = scribe_capture._admission_problem(
@@ -211,4 +223,4 @@ def test_capture_route_keeps_retryable_response_and_closes_client(
     assert dict(response.headers) == dict(expected.headers)
     assert closed == [True]
     assert len(events) == 1 and events[0][1]["boundary"] == "capture_operation"
-    assert SECRET not in response.body.decode() + json.dumps(events)
+    assert SECRET not in bytes(response.body).decode() + json.dumps(events)

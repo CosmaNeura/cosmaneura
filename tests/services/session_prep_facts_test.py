@@ -1,7 +1,6 @@
 """Synthetic exact spans, dated states, bounds and correction relationships."""
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -15,16 +14,24 @@ from app.services.session_prep_facts import (
     project_explicit_facts,
     validate_fact_candidates,
 )
+from app.services.session_prep_note_sources import (
+    ReviewedNoteSelection,
+    ReviewedNoteSource,
+)
 
 
-def _selection(*notes, truncated=False):
-    return SimpleNamespace(
+def _selection(
+    *notes: tuple[str, dict[str, str]], truncated: bool = False
+) -> ReviewedNoteSelection:
+    return ReviewedNoteSelection(
         sources=tuple(
-            SimpleNamespace(
+            ReviewedNoteSource(
                 source_ref=f"synthetic_reviewed_note_{index:04d}",
                 source_version=2,
                 source_at=datetime.fromisoformat(date).replace(tzinfo=UTC),
                 content=sections,
+                clinician_action_ref=f"synthetic_action_{index:04d}",
+                content_sha256="0" * 64,
             )
             for index, (date, sections) in enumerate(notes, 1)
         ),
@@ -76,7 +83,7 @@ def _candidate(selection, **updates):
         quote=source.content["Objective"],
     )
     fields.update(updates)
-    return FactCandidate(**fields)
+    return FactCandidate.model_validate(fields)
 
 
 def test_dated_office_and_home_measurements_retain_exact_values(selection):
@@ -117,6 +124,7 @@ def test_planned_dose_is_not_taking_and_explicit_correction_retains_both_dates(
     assert corrected.state == "documented_continued"
     assert corrected.evidence.source_at.date().isoformat() == "2026-10-08"
     assert planned.evidence.source_at.date().isoformat() == "2026-10-07"
+    assert corrected.correction_evidence is not None
     assert "supersedes" in corrected.correction_evidence.quote
     assert "50 mg" in corrected.correction_evidence.quote
     assert StructuredFactSet.model_validate_json(result.model_dump_json()) == result
@@ -139,6 +147,7 @@ def test_explicit_order_and_result_absence_are_separate_and_cancellation_is_date
     ordered = next(fact for fact in result.facts if fact.state == "ordered")
     cancelled = next(fact for fact in result.facts if fact.state == "cancelled")
     assert cancelled.supersedes == [ordered.fact_ref]
+    assert cancelled.correction_evidence is not None
     assert (
         cancelled.correction_evidence.quote == "CBC order cancelled. K/Cr not ordered."
     )
@@ -285,7 +294,7 @@ def test_bounds_are_explicit():
 
 def test_selected_source_order_does_not_change_fact_refs(selection):
     first = project_explicit_facts(selection)
-    reversed_selection = SimpleNamespace(
+    reversed_selection = ReviewedNoteSelection(
         sources=selection.sources[::-1], truncated=False
     )
     assert first == project_explicit_facts(reversed_selection)
@@ -309,15 +318,17 @@ def test_untrusted_instructions_stay_quoted_data_and_never_execute():
 
 def test_unknown_fields_and_cross_kind_states_are_closed():
     with pytest.raises(ValidationError):
-        FactCandidate(
-            kind="order",
-            subject="CBC",
-            state="documented_taking",
-            source_ref="synthetic_reviewed_note_0001",
-            source_version=1,
-            section="Plan",
-            quote="CBC ordered",
-            external_url="https://invalid",
+        FactCandidate.model_validate(
+            {
+                "kind": "order",
+                "subject": "CBC",
+                "state": "documented_taking",
+                "source_ref": "synthetic_reviewed_note_0001",
+                "source_version": 1,
+                "section": "Plan",
+                "quote": "CBC ordered",
+                "external_url": "https://invalid",
+            }
         )
 
 
@@ -366,16 +377,18 @@ def test_negative_or_ambiguous_exact_quotes_never_validate_positive_state(
     selection = _selection(("2026-10-01", {"Medications": quote}))
     result = project_explicit_facts(selection)
     assert not any(fact.state == false_state for fact in result.facts)
-    candidate = FactCandidate(
-        kind=kind,
-        subject={"medication": "losartan", "order": "CBC", "vital": "BP"}[kind],
-        value={"medication": "50 mg", "order": None, "vital": "148/92"}[kind],
-        state=false_state,
-        setting="unspecified" if kind == "vital" else None,
-        source_ref=selection.sources[0].source_ref,
-        source_version=2,
-        section="Medications",
-        quote=quote,
+    candidate = FactCandidate.model_validate(
+        {
+            "kind": kind,
+            "subject": {"medication": "losartan", "order": "CBC", "vital": "BP"}[kind],
+            "value": {"medication": "50 mg", "order": None, "vital": "148/92"}[kind],
+            "state": false_state,
+            "setting": "unspecified" if kind == "vital" else None,
+            "source_ref": selection.sources[0].source_ref,
+            "source_version": 2,
+            "section": "Medications",
+            "quote": quote,
+        }
     )
     with pytest.raises(FactEvidenceError, match="^fact_status_evidence_invalid$"):
         validate_fact_candidates([candidate], selection)
@@ -443,6 +456,7 @@ def test_same_note_corrections_link_only_earlier_exact_spans_in_same_section():
             assert prior.evidence.source_at == later.evidence.source_at
             assert prior.evidence.section == later.evidence.section
             assert prior.evidence.end <= later.evidence.start
+            assert later.correction_evidence is not None
             assert (
                 later.correction_evidence.quote
                 == selection.sources[0].content[later.evidence.section]
@@ -619,6 +633,7 @@ def test_explicit_named_same_drug_correction_is_supported():
         )
     )
     later = next(fact for fact in result.facts if fact.state == "documented_continued")
+    assert later.correction_evidence is not None
     assert (
         len(later.supersedes) == 1
         and "losartan 50 mg" in later.correction_evidence.quote
@@ -793,20 +808,26 @@ def test_overbound_unknown_context_cannot_disappear_before_authority_validation(
         kind = {"Medications": "medication", "Orders": "order", "Objective": "vital"}[
             section
         ]
-        candidate = FactCandidate(
-            kind=kind,
-            subject={"medication": "losartan", "order": "CBC", "vital": "BP"}[kind],
-            value={"medication": "25 mg", "order": None, "vital": "148/92"}[kind],
-            state={
-                "medication": "documented_taking",
-                "order": "ordered",
-                "vital": "measured",
-            }[kind],
-            setting="office" if kind == "vital" else None,
-            source_ref=selection.sources[0].source_ref,
-            source_version=2,
-            section=section,
-            quote=quote,
+        candidate = FactCandidate.model_validate(
+            {
+                "kind": kind,
+                "subject": {"medication": "losartan", "order": "CBC", "vital": "BP"}[
+                    kind
+                ],
+                "value": {"medication": "25 mg", "order": None, "vital": "148/92"}[
+                    kind
+                ],
+                "state": {
+                    "medication": "documented_taking",
+                    "order": "ordered",
+                    "vital": "measured",
+                }[kind],
+                "setting": "office" if kind == "vital" else None,
+                "source_ref": selection.sources[0].source_ref,
+                "source_version": 2,
+                "section": section,
+                "quote": quote,
+            }
         )
         with pytest.raises(FactEvidenceError, match="^fact_status_evidence_invalid$"):
             validate_fact_candidates([candidate], selection)

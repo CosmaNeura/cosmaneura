@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -669,7 +670,7 @@ def test_artifact_constructor_rejects_unsupported_injected_generator_output():
     rejected = _completion_brief(selection, "2026-09-22: CBC was not completed.")
     with pytest.raises(generator.SessionPrepGenerationError) as error:
         prepare_artifact_result(
-            artifact=artifact,
+            artifact=cast(Any, artifact),
             selection=selection,
             prepared=rejected,
             snapshot_at=selection.sources[0].source_at,
@@ -681,7 +682,7 @@ def test_artifact_constructor_rejects_unsupported_injected_generator_output():
         selection, "2026-09-22: No CBC completion or result was documented."
     )
     result = prepare_artifact_result(
-        artifact=artifact,
+        artifact=cast(Any, artifact),
         selection=selection,
         prepared=supported,
         snapshot_at=selection.sources[0].source_at,

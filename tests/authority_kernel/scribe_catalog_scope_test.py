@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from threading import Event
+from typing import Any
 
 import pytest
 
@@ -59,7 +60,7 @@ def test_reused_session_catalog_removes_only_its_transaction_listeners(
         baseline = {name: len(getattr(session.dispatch, name)) for name in names}
         try:
             for _ in range(3):
-                params = dict(
+                params: dict[str, Any] = dict(
                     issuer=SETTINGS.clerk_issuer,
                     subject=args["verified_clerk_subject"],
                     session_id="session_synthetic_catalog_reuse",
@@ -265,10 +266,10 @@ def test_catalog_blocks_concurrent_revocation_and_next_read_denies(
         try:
             assert reading.wait(5)
             with session_for(engine) as writer:
-                writer.exec(text("SET LOCAL lock_timeout = '150ms'"))
+                writer.execute(text("SET LOCAL lock_timeout = '150ms'"))
                 with pytest.raises(OperationalError) as blocked:
                     revoke(writer)
-                assert blocked.value.orig.sqlstate == "55P03"
+                assert getattr(blocked.value.orig, "sqlstate", None) == "55P03"
         finally:
             release.set()
         assert read.result(timeout=5)["encounters"] == [visit]

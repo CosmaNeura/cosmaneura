@@ -420,9 +420,11 @@ def test_opt_in_reviewed_sources_return_prior_measurements_and_correction_verbat
 ):
     doctor, target, baseline, token, record = scope
     patient = Patient.get(id=target.patient_id)
+    assert patient is not None
     baseline.note = {"Objective": "Office blood pressure: 148/92 mmHg"}
     baseline.save()
     visit = Appointment.get(id=baseline.appointment_id)
+    assert visit is not None
     visit.appointment_date = (NOW - timedelta(days=20)).replace(tzinfo=None)
     visit.save()
     followup = _note(
@@ -489,6 +491,7 @@ def test_reviewed_source_extension_excludes_drafts_and_foreign_notes(scope, vers
 
     doctor, target, baseline, token, _ = scope
     patient = Patient.get(id=target.patient_id)
+    assert patient is not None
     _note(doctor, patient, content={"Plan": "DRAFT-PRIVATE-SENTINEL"})
     unmatched_patient = PatientFactory.build(
         doctor_id=doctor.id, name=patient.name
@@ -584,11 +587,8 @@ def test_non_ready_v11_context_never_carries_reviewed_evidence(scope, state):
 @pytest.mark.parametrize("version", ["1.1.0", "1.2.0"])
 @pytest.mark.committed_database
 def test_explicit_scribe_patient_match_can_finalize_selected_prior_source(
-    scope, monkeypatch, association_change, version
+    scope, association_change, version
 ):
-    import app.services.session_prep_note_sources as source_service
-    from app.configuration.scribe_encounters import ScribeEncounterSettings
-
     from app.models.authority import AuthorityActorExternalIdentity
     from app.models.provider_record_authority import ProviderPracticeAuthority
     from app.models.scribe_capture_binding import ScribeCaptureProviderLink
@@ -648,9 +648,6 @@ def test_explicit_scribe_patient_match_can_finalize_selected_prior_source(
             observed_at=NOW - timedelta(hours=1),
         )
         session.commit()
-    monkeypatch.setattr(
-        source_service, "SCRIBE_ENCOUNTER_SETTINGS", ScribeEncounterSettings(True)
-    )
     read_prep(token, record, _action(token))
     assert _work() == "ready"
     client, turn = _client(), _chat(token)
@@ -787,6 +784,7 @@ def test_postgres_source_publication_and_final_acceptance_serialize(
     selected_note_ref = str(note.id)
     if latent_source:
         patient = Patient.get(id=target.patient_id)
+        assert patient is not None
         note = _note(
             doctor, patient, content={"Plan": "Previously reviewed fictional history."}
         )

@@ -11,6 +11,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -63,7 +64,9 @@ def owned_engine(monkeypatch):
     if not raw:
         pytest.skip("An explicitly owned synthetic Unix-only PostgreSQL is required")
     url = make_url(raw)
-    socket = Path(url.query["host"])
+    socket_name = url.query["host"]
+    assert isinstance(socket_name, str)
+    socket = Path(socket_name)
     assert url.host is None and str(socket).startswith("/private/tmp/")
     assert url.database == "private_note_scope_synthetic"
     marker = json.loads((socket.parent / "ownership.json").read_text())
@@ -106,12 +109,13 @@ def _provision(engine, monkeypatch, subjects=()):
     provisioned = apply(engine, args, plan(engine, args).plan_sha256)
     with get_session() as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         actor = str(link.actor_id)
     return args, provisioned, actor
 
 
 def _request(args, actor, action="create", **fields):
-    body = dict(
+    body: dict[str, Any] = dict(
         action=action,
         expected_actor_ref=actor,
         expected_tenant_ref=str(args["tenant_id"]),

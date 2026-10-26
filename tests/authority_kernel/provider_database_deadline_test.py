@@ -5,10 +5,13 @@ from dataclasses import replace
 from queue import Queue
 from time import monotonic
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from starlette.responses import JSONResponse
 
+from app.routes.dependencies.entra_service import EntraServicePrincipal
 from app.services import authority
 from app.services import provider_chat_admission as admission
 from app.services import provider_database_deadline as deadline
@@ -47,7 +50,7 @@ def dedicated_workload(monkeypatch):
     monkeypatch.setattr(admission, "SOVEREIGN_TOOL_AUTH_SETTINGS", settings)
 
 
-def arguments(f, *, phase="user_accepted"):
+def arguments(f, *, phase="user_accepted") -> dict[str, Any]:
     return dict(
         workload_client_id=WORKLOAD,
         mount_context_token=f.token,
@@ -139,7 +142,7 @@ def test_context_wait_times_out_without_new_lineage_and_valid_retry_still_resolv
     f = owned_record
     candidate = uuid4()
     pids = Queue()
-    call = dict(
+    call: dict[str, Any] = dict(
         workload_client_id=WORKLOAD,
         mount_context_token=f.token,
         settings=SETTINGS,
@@ -280,7 +283,7 @@ def test_disabled_authority_does_not_install_limits_or_acquire_connection():
 
     with pytest.raises(authority.AuthorityKernelDisabledError):
         authority.resolve_mount_context(
-            session=SessionMustNotConnect(),
+            session=cast(Session, SessionMustNotConnect()),
             workload_client_id=WORKLOAD,
             mount_context_token="synthetic-disabled-context",
             client_turn_id=uuid4(),
@@ -322,15 +325,16 @@ async def test_canonical_database_timeout_is_safe_nonretryable_without_receipt(
             receive,
         ),
         response=agent.Response(),
-        principal=SimpleNamespace(client_id=WORKLOAD),
+        principal=EntraServicePrincipal(client_id=WORKLOAD),
         mount_context_token="synthetic-timeout-context-only",
         interaction_ref="synthetic-timeout-interaction",
         client_turn_id=uuid4(),
         idempotency_key=uuid4().hex,
         settings=SETTINGS,
     )
-    body = json.loads(result.body)
+    assert isinstance(result, JSONResponse)
+    body = json.loads(bytes(result.body))
     assert result.status_code == 503 and body["code"] == "PLATFORM_UNAVAILABLE"
     assert body["retryable"] is False
     assert not {"phase", "state", "turn_ref"} & set(body)
-    assert "synthetic-timeout-context-only" not in result.body.decode()
+    assert "synthetic-timeout-context-only" not in bytes(result.body).decode()

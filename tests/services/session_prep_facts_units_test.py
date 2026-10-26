@@ -1,7 +1,6 @@
 """Realistic source units retain context, dated states and literal evidence."""
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +10,10 @@ from app.services.session_prep_facts import (
     FactEvidenceError,
     project_explicit_facts,
     validate_fact_candidates,
+)
+from app.services.session_prep_note_sources import (
+    ReviewedNoteSelection,
+    ReviewedNoteSource,
 )
 
 CORRECTION = (
@@ -28,14 +31,16 @@ FOOTER = (
 )
 
 
-def _selection(*notes):
-    return SimpleNamespace(
+def _selection(*notes: tuple[str, dict[str, str]]) -> ReviewedNoteSelection:
+    return ReviewedNoteSelection(
         sources=tuple(
-            SimpleNamespace(
+            ReviewedNoteSource(
                 source_ref=f"synthetic_units_note_{index:04d}",
                 source_version=4,
                 source_at=datetime.fromisoformat(date).replace(tzinfo=UTC),
                 content=sections,
+                clinician_action_ref=f"synthetic_action_{index:04d}",
+                content_sha256="0" * 64,
             )
             for index, (date, sections) in enumerate(notes, 1)
         ),
@@ -163,6 +168,7 @@ def test_two_dated_listed_doses_remain_unconfirmed_and_corrected_dose_binds_last
     ]
     later = result.facts[-1]
     assert later.supersedes == [result.facts[-2].fact_ref]
+    assert later.correction_evidence is not None
     assert later.correction_evidence.quote == CORRECTION
     assert later.correction_evidence.source_at.date().isoformat() == "2026-10-08"
     _verify_spans(result, selection)

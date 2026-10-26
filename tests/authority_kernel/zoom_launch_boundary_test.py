@@ -5,6 +5,7 @@ import time
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -455,7 +456,7 @@ def test_actual_start_job_passes_original_acquired_lock(fenced, monkeypatch):
         "_resume_or_start_recording_locked",
         lambda *args, **kwargs: calls.append((args, kwargs)),
     )
-    start_zoom_capture._perform_locked(meeting, f.redis, launch_lock=f.lock)
+    start_zoom_capture._perform_locked(cast(Any, meeting), f.redis, launch_lock=f.lock)
     assert len(calls) == 1 and calls[0][1]["launch_lock"] is f.lock
 
 

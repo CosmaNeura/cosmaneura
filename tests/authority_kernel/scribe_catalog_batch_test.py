@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from typing import cast
 
 import psycopg
 import pytest
@@ -12,6 +13,7 @@ from typeid import TypeID
 
 from app.services import authority, scribe_catalog_rows, scribe_encounters
 
+from activemodel.types import TypeIDType
 from app.models.authority import (
     AuthorityPerson,
     AuthorityPersonBinding,
@@ -26,7 +28,7 @@ from app.models.scribe_encounter_creation import ScribeEncounterCreation
 from app.models.scribe_patient_identity import ScribePatientIdentity
 from sqlalchemy import delete, text
 from sqlalchemy.exc import MultipleResultsFound, OperationalError
-from sqlmodel import select
+from sqlmodel import col, select
 
 from tests.authority_kernel.companion_provider_provisioning_test import session_for
 from tests.authority_kernel.scribe_encounters_test import count
@@ -64,7 +66,9 @@ def test_catalog_preserves_provisional_canonical_identity_and_order(
                 == TypeID.from_string(first["appointment_ref"])
             )
         ).one()
-        identity.canonical_patient_id = TypeID.from_string(second["patient_ref"])
+        identity.canonical_patient_id = cast(
+            TypeIDType, TypeID.from_string(second["patient_ref"])
+        )
         identity.state, identity.version = "matched", 1
         session.add(identity)
         session.commit()
@@ -114,6 +118,7 @@ def test_catalog_keeps_original_missing_foreign_revoked_and_duplicate_refusals(
             )
         ).one()
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         binding = session.exec(
             select(AuthorityPersonBinding).where(
                 AuthorityPersonBinding.binding_ref == first["appointment_ref"]
@@ -138,7 +143,9 @@ def test_catalog_keeps_original_missing_foreign_revoked_and_duplicate_refusals(
         if fault == "record_missing":
             session.delete(record)
         elif fault == "record_patient":
-            record.patient_id = TypeID.from_string(second["patient_ref"])
+            record.patient_id = cast(
+                TypeIDType, TypeID.from_string(second["patient_ref"])
+            )
             session.add(record)
         elif fault == "record_doctor":
             from uuid import uuid4
@@ -166,14 +173,15 @@ def test_catalog_keeps_original_missing_foreign_revoked_and_duplicate_refusals(
             session.add(binding)
         elif fault == "person_revoked":
             person = session.get(AuthorityPerson, binding.person_id)
+            assert person is not None
             person.status = "revoked"
             session.add(person)
         elif fault == "origin_missing":
             # Deliberately corrupt only this fresh synthetic schema; normal ORM
             # provenance is append-only and must retain its deletion guard.
-            session.exec(
+            session.execute(
                 delete(AuthorityPersonOrigin).where(
-                    AuthorityPersonOrigin.id == origin.id
+                    col(AuthorityPersonOrigin.id) == origin.id
                 )
             )
         elif fault == "origin_duplicate":
@@ -209,7 +217,9 @@ def test_catalog_keeps_original_missing_foreign_revoked_and_duplicate_refusals(
                 )
             )
         elif fault == "identity_source":
-            identity.source_patient_id = TypeID.from_string(second["patient_ref"])
+            identity.source_patient_id = cast(
+                TypeIDType, TypeID.from_string(second["patient_ref"])
+            )
             session.add(identity)
         else:
             from app.models.authority import AuthorityTenant
@@ -272,7 +282,7 @@ def test_all_identity_rows_are_locked_before_projection(engine, workflow, monkey
             assert reading.wait(5)
             for visit in visits:
                 with session_for(engine) as writer:
-                    writer.exec(text("SET LOCAL lock_timeout='100ms'"))
+                    writer.execute(text("SET LOCAL lock_timeout='100ms'"))
                     with pytest.raises(OperationalError) as blocked:
                         writer.exec(
                             select(ScribePatientIdentity)
@@ -282,7 +292,7 @@ def test_all_identity_rows_are_locked_before_projection(engine, workflow, monkey
                             )
                             .with_for_update()
                         ).one()
-                    assert blocked.value.orig.sqlstate == "55P03"
+                    assert getattr(blocked.value.orig, "sqlstate", None) == "55P03"
         finally:
             release.set()
         assert future.result(timeout=5)["encounters"] == expected
@@ -352,7 +362,7 @@ def test_eight_visit_catalog_reduces_wire_calls_and_preserves_concurrent_create(
                 if not batched:
                     with pytest.raises(OperationalError) as blocked:
                         invoke(value)
-                    assert blocked.value.orig.sqlstate == "55P03"
+                    assert getattr(blocked.value.orig, "sqlstate", None) == "55P03"
                 else:
                     answer = invoke(value)
                     assert answer["action"] == contender_action
@@ -397,7 +407,9 @@ def test_final_catalog_check_rejects_entitlement_expired_during_projection(
     now = datetime.now(UTC)
     with session_for(engine) as session:
         link = session.get(ScribeCaptureProviderLink, provisioned.provider_link_ref)
+        assert link is not None
         practice = session.get(Practice, link.practice_id)
+        assert practice is not None
         practice.billing_exempt_until = now + timedelta(minutes=1)
         practice.trial_ends_at = None
         session.add(practice)
