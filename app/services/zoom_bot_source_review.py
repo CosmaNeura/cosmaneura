@@ -112,7 +112,7 @@ def prompt():
         "The medications audit separates current_list_refs (actual current list "
         "reports, including an explicit no-current-medications statement) from "
         "change_history_refs (reported new/started/stopped/changed/unchanged "
-        "medicine history). Prospective prescribing decisions are neither. "
+        "medicine history). One source may supply both. Prospective prescribing decisions are neither. "
         "A no-new-medicine/no-change statement does not supply a current list. "
         "Denying one drug is not an explicit empty current list. "
         "When only changes are discussed, current_list_refs must be empty and "
@@ -226,8 +226,6 @@ def split(raw, sources, *, protected, max_bytes):
         indexes(medication["current_list_refs"]),
         indexes(medication["change_history_refs"]),
     )
-    if set(current) & set(changes):
-        raise SourceReviewInvalid
     if not protected:
         if set(value) != {"fields"}:
             raise SourceReviewInvalid

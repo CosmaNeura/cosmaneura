@@ -121,7 +121,7 @@ def test_medication_list_provided_differs_from_change_history(
 
 
 @pytest.mark.parametrize(
-    "current,changes", [([1], [1]), ([0], []), ([], [True]), ([], [1, 1]), ("1", [])]
+    "current,changes", [([1, 1], []), ([0], []), ([], [True]), ([], [1, 1]), ("1", [])]
 )
 def test_bad_medication_audit_refuses(current, changes):
     g, value = fixture(("Patient", "No new medicine."))
@@ -131,6 +131,25 @@ def test_bad_medication_audit_refuses(current, changes):
     }
     with pytest.raises(bot.BotNoteContractInvalid):
         resolve(g, value)
+
+
+@pytest.mark.parametrize(
+    "text,current,warning",
+    [
+        ("I take metformin 500 mg twice daily, and that has not changed.", [1], False),
+        ("I take no current medicines; that has not changed.", [1], False),
+        ("I have made no medicine changes.", [], True),
+    ],
+)
+def test_one_entry_can_supply_current_list_and_change_history(text, current, warning):
+    g, value = fixture(("Patient", text))
+    value[review.KEY]["medications"] = {
+        "current_list_refs": current,
+        "change_history_refs": [1],
+    }
+    note = resolve(g, value)
+    assert (review.MEDICATION_UNSPECIFIED in note["Objective"]) is warning
+    assert "review was not performed" not in str(note)
 
 
 def test_absent_and_extra_audit_contracts_refuse_old_response_without_repair():
