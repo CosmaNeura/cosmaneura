@@ -6,18 +6,27 @@ import type {
   Patient,
   ZoomMeetingResponse,
 } from "~/configuration/client"
+import type { MeetingNoteAvailability } from "~/lib/meeting-note-availability"
 
-import { MeetingDetail } from "./detail"
+import { MeetingDetail, clientLoader } from "./detail"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const authorizeZoomCapture = vi.fn()
 const cancelMeeting = vi.fn()
+const noteDetail = vi.fn()
+const scheduleList = vi.fn()
+const noteList = vi.fn()
+const patientList = vi.fn()
 const toast = vi.fn()
 
 vi.mock("~/configuration/client", () => ({
   authorizeZoomCapture: (...args: unknown[]) => authorizeZoomCapture(...args),
   cancelMeeting: (...args: unknown[]) => cancelMeeting(...args),
+  noteDetail: (...args: unknown[]) => noteDetail(...args),
+  scheduleList: (...args: unknown[]) => scheduleList(...args),
+  noteList: (...args: unknown[]) => noteList(...args),
+  patientList: (...args: unknown[]) => patientList(...args),
 }))
 
 vi.mock("~/hooks/use-toast", () => ({
@@ -74,6 +83,7 @@ function renderMeeting(
   appointments: Appointment[] = [appointment],
   patients: Patient[] = [patient],
   captureEnabled = true,
+  noteAvailability: MeetingNoteAvailability | null = null,
 ) {
   const loader = vi.fn(() => null)
   const router = createMemoryRouter(
@@ -88,6 +98,7 @@ function renderMeeting(
             appointments={appointments}
             captureEnabled={captureEnabled}
             patients={patients}
+            noteAvailability={noteAvailability}
           />
         ),
       },
@@ -111,6 +122,10 @@ function renderMeeting(
 beforeEach(() => {
   authorizeZoomCapture.mockReset()
   cancelMeeting.mockReset()
+  noteDetail.mockReset()
+  scheduleList.mockReset()
+  noteList.mockReset()
+  patientList.mockReset()
   toast.mockReset()
   settingsData.mockReset()
   settingsData.mockResolvedValue({ terminology: "doctor_patient" })
@@ -182,6 +197,61 @@ describe("meeting cancellation", () => {
 })
 
 describe("meeting bot copy", () => {
+  it("does not claim notes exist just because an ended meeting links a visit", async () => {
+    renderMeeting({
+      ...meeting,
+      status: "ended",
+      appointment_id: appointment.id,
+    })
+
+    await screen.findByText(meeting.topic)
+    expect(screen.queryByText(/AI notes are available/)).toBeNull()
+    expect(screen.getByRole("link", { name: "Open visit →" })).toHaveAttribute(
+      "href",
+      `/notes/${appointment.id}`,
+    )
+  })
+
+  it.each([
+    [
+      "missing",
+      "No note is available for the linked visit yet.",
+      "Open visit →",
+    ],
+    ["unavailable", "Note availability could not be checked.", "Open visit →"],
+    ["ready", "Notes are available for the linked visit.", "View notes →"],
+  ] as const)(
+    "shows %s from the checked visit without claiming Zoom recorded it",
+    async (availability, copy, link) => {
+      renderMeeting(
+        { ...meeting, status: "ended", appointment_id: appointment.id },
+        [appointment],
+        [patient],
+        false,
+        availability,
+      )
+      expect(
+        await screen.findByText(`This meeting has ended. ${copy}`),
+      ).toBeVisible()
+      expect(screen.getByRole("link", { name: link })).toHaveAttribute(
+        "href",
+        `/notes/${appointment.id}`,
+      )
+      expect(
+        screen.queryByText(/processing|AI notes|recording succeeded/i),
+      ).toBeNull()
+    },
+  )
+
+  it("does not promise notes for an unlinked ended meeting", async () => {
+    renderMeeting({ ...meeting, status: "ended" })
+    expect(
+      await screen.findByText("This meeting has ended. No visit is linked."),
+    ).toBeVisible()
+    expect(screen.queryByRole("link", { name: /notes|visit/ })).toBeNull()
+    expect(screen.queryByText(/Notes will appear/)).toBeNull()
+  })
+
   it("uses the doctor's terminology for consent copy", async () => {
     settingsData.mockResolvedValue({ terminology: "therapist_client" })
 
@@ -190,6 +260,80 @@ describe("meeting bot copy", () => {
     expect(
       await screen.findByText(/Your client will still be asked/),
     ).toBeInTheDocument()
+  })
+})
+
+describe("schedule loader note availability", () => {
+  function load() {
+    return clientLoader({
+      params: { zoom_meeting_id: meeting.zoom_meeting_id },
+      request: new Request(
+        `https://app.example/schedule/${meeting.zoom_meeting_id}`,
+      ),
+    } as Parameters<typeof clientLoader>[0])
+  }
+
+  it("checks exactly the ended linked visit and discards its content", async () => {
+    scheduleList.mockResolvedValue({
+      data: {
+        meetings: [
+          { ...meeting, status: "ended", appointment_id: appointment.id },
+        ],
+      },
+    })
+    noteDetail.mockResolvedValue({
+      data: { appointment, notes: [] },
+      response: new Response(null, { status: 200 }),
+    })
+    const data = await load()
+    expect(data.noteAvailability).toBe("missing")
+    expect(noteDetail).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        path: { appointment_id: appointment.id },
+        signal: expect.any(AbortSignal),
+      }),
+    )
+    expect(data).not.toHaveProperty("notes")
+    expect(data).not.toHaveProperty("transcript")
+    expect(noteList).not.toHaveBeenCalled()
+    expect(patientList).not.toHaveBeenCalled()
+  })
+
+  it.each(["scheduled", "started", "cancelled", "ended"] as const)(
+    "does not read a note for an unlinked %s meeting",
+    async (status) => {
+      scheduleList.mockResolvedValue({
+        data: { meetings: [{ ...meeting, status }] },
+      })
+      expect((await load()).noteAvailability).toBeNull()
+      expect(noteDetail).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(["scheduled", "started", "cancelled"] as const)(
+    "does not infer notes from a linked %s meeting",
+    async (status) => {
+      scheduleList.mockResolvedValue({
+        data: {
+          meetings: [{ ...meeting, status, appointment_id: appointment.id }],
+        },
+      })
+      expect((await load()).noteAvailability).toBeNull()
+      expect(noteDetail).not.toHaveBeenCalled()
+    },
+  )
+
+  it("preserves the ordinary active-meeting authorization options", async () => {
+    scheduleList.mockResolvedValue({
+      data: { capture_available: true, meetings: [meeting] },
+    })
+    noteList.mockResolvedValue({ data: { appointments: [appointment] } })
+    patientList.mockResolvedValue({ data: [patient] })
+    const data = await load()
+    expect(data.appointments).toEqual([appointment])
+    expect(data.patients).toEqual([patient])
+    expect(data.appointmentsUnavailable).toBe(false)
+    expect(noteDetail).not.toHaveBeenCalled()
   })
 })
 
