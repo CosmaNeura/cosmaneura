@@ -249,9 +249,6 @@ def test_real_task_wrapper_excludes_only_bot_contract_failure(
 def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
     candidate, monkeypatch
 ):
-    from app.services.zoom_bot_note_grounding import DRAFT_REVIEW, REASON_REVIEW
-    from app.services.zoom_bot_source_dispositions import CONTEXT_REVIEW
-
     from app.models.ai_visit_note import AIVisitNote
     from app.models.ai_visit_transcript import TranscriptEntry
 
@@ -314,16 +311,32 @@ def test_grounded_plan_persists_and_same_transcript_replay_has_no_model_call(
     summarize.perform(str(transcript.id), str(schema.id), note_policy=policy.POLICY)
     session.expire_all()
     note = AIVisitNote.get(appointment_id=transcript.appointment_id)
-    assert note and note.note == {
-        "Objective": DRAFT_REVIEW
-        + "\n\n"
-        + CONTEXT_REVIEW
-        + "\nTranscript — unidentified speaker [source 1]:\nCould we follow up next week?",
-        "Assessment": "Review the transcript before completing this section.",
-        "Plan": DRAFT_REVIEW
-        + "\n\nTranscript — unidentified speaker [source 2]:\nWe will follow up next week.\n\n"
-        + REASON_REVIEW
-        + "\n\nThis note was generated with AI assistance.",
+    # Hand-reviewed complete display contract, independent of renderer constants.
+    # The unresolved question stays context, the speaker stays unidentified, and
+    # an empty impression or missing rationale never becomes a clinical finding.
+    expected_note = {
+        "Objective": (
+            "Source draft; roles, links and section placement are unverified.\n"
+            "Source context only; no finding, diagnosis or care decision is inferred "
+            "from this selection. The relationship between these statements is not "
+            "independently verified.\n\n"
+            "[source 1] unidentified speaker — context only:\n"
+            "Could we follow up next week?"
+        ),
+        "Assessment": (
+            "Review required: no source-stated clinical impression was selected."
+        ),
+        "Plan": (
+            "Source draft; roles, links and section placement are unverified.\n\n"
+            "[source 2] unidentified speaker:\nWe will follow up next week.\n\n"
+            "Rationale: not established by this source selection; clinician review required."
+            "\n\nThis note was generated with AI assistance."
+        ),
     }
+    assert note and note.note == expected_note
+    note_id = note.id
     summarize.perform(str(transcript.id), str(schema.id), note_policy=policy.POLICY)
     assert len(calls) == 1
+    session.expire_all()
+    replayed = AIVisitNote.get(appointment_id=transcript.appointment_id)
+    assert replayed and replayed.id == note_id and replayed.note == expected_note
