@@ -1,0 +1,199 @@
+{
+  "synthetic_only": true,
+  "purpose": "Retained actual06 omission remains a failure; only explicit supplied-ref reconstruction demonstrates renderer behavior, never model completeness.",
+  "sourceFixtureSHA256": "d3ac0a4ca677f4dc33a9bf2540e6362bfdfb790ea86ab32344846044df18b3bd",
+  "responseArtifactSHA256": "8858a0ecdeeb524af899d8221e6689a350b8793a6617abbfb52f7e159be5472c",
+  "resultArtifactSHA256": "b068a2d9251960a09b6c91b8311c9b3cb0b2f1151bc9fdd0661d6313cca9907f",
+  "entries": [
+    {
+      "speaker": "Unknown",
+      "content": "This is a completely synthetic practice visit."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I am Dr."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Lane, speaking with Avery Stone about shoulder discomfort."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We will take one deliberate quiet pause in the middle and continue the same visit afterward."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Avery, tell me how the discomfort began and which side is affected."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I am Avery Stone."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My right shoulder became sore after moving boxes 4 days ago."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I first said left, but the correct side is right."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The discomfort is mild at rest and increases when I reach overhead."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The opening marker is marble kite."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have no fever or chest pain."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have right shoulder discomfort beginning 4 days ago after lifting boxes."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Is there numbness, weakness, or pain traveling down the arm?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Have you had a fall or another injury?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We are checking that the details before the pause remain part of the same conversation."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "There was no fall."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have no numbness and no weakness."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The pain does not travel down my arm."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I can hold a cup and get dressed."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The first half marker is golden acorn."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I will stop speaking now for the planned quiet pause, and then I will continue."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We have resumed the same synthetic visit after the quiet pause."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Avery, please continue."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I want to confirm that no earlier details disappeared and that new information is added only once."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "What is the current pain score, and what has helped the shoulder so far?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My current pain score is 2 out of 10."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I said 4 before thinking carefully."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "So please use 2."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Resting from heavy lifting has helped."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have not taken any new medicine."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The first marker after the cause is emerald bicycle."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The sore side is still the right shoulder."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "For this practice plan, avoid heavy lifting for 5 days and use comfortable gentle movement."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We are not prescribing a new medicine."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Please keep track of whether reaching overhead becomes easier."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Follow-up is in 7 days."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I almost said 17, but seven days is the correct interval."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I understand the plan."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Five days without heavy lifting, gentle comfortable movement, and follow up in seven days rather than 17."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My right shoulder is the affected side, not my left."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The late marker is purple windmill."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "There is still no numbness, weakness, fever, or chest pain."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The final summary should retain the history from before the pause and the corrected score and plan from after it no new medicine was started."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The final decisive marker is crystal badger."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "This ends the resumed portion and completes our entirely synthetic recording test."
+    }
+  ],
+  "actualRawResponse": "{\"fields\":{\"Subjective\":\"Source limitation: No Patient-labeled entries in transcript. Subjective section contains no symptom or history content.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39]},\"reported_history_source_refs\":{\"Objective\":{\"statements\":[6,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42,43],\"question_context\":[]}}}",
+  "actualRawResponseSHA256": "fb8994d75ed6300c85b153fc87185ee3181f233e760e08422feb25045ba2d1f1",
+  "actualFinalFieldSHA256": {
+    "Subjective": "ae0b711e21b03aeadf748acb4da4586bc572e77f449f6d1ff0faeda16be20a5c",
+    "Objective": "f02bda1a3827e31ce6555263a6a5eb2cb708fbe47e4e7bb4fa3c029ea093b027",
+    "Assessment": "d542d892ca6cf0cce2410052bc76e007ff34a124f87e91e7b105ef57645bf812",
+    "Plan": "78756fffbba59dfc950ba6ae1ea861b8d5d37f6d05de1d2e1e2175fc88bb9bb4"
+  },
+  "unretainedQuestionRef": 14,
+  "selectedPartialResponseRef": 16
+}

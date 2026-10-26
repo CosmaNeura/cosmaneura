@@ -40,7 +40,7 @@ class FakeModel:
     def __init__(self):
         self.calls = []
         self.after = None
-        self.output = '{"Plan":"Discuss sleep at follow-up.","CC":"Sleep"}'
+        self.output = '{"Plan":"","CC":"Sleep"}'
 
     async def complete(self, prompt, *, json_output):
         self.calls.append((prompt, json_output))
@@ -262,7 +262,7 @@ async def test_invalid_output_retains_source_and_retry_can_succeed(
         await notes.capture_note(**kwargs)
     assert not str(error.value)
     assert not rows(f, AIVisitNote)
-    f.model.output = '{"CC":"Sleep","Plan":"Discuss sleep at follow-up."}'
+    f.model.output = '{"CC":"Sleep","Plan":""}'
     assert (await notes.capture_note(**kwargs)).status == "draft"
     assert len(rows(f, AIVisitTranscript)) == len(rows(f, AIVisitNote)) == 1
 

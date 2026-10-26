@@ -1,0 +1,346 @@
+"""Neutral complete source context; no inferred answer state or model/network."""
+
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from app.services import scribe_capture_history_grounding as history
+from app.services import scribe_capture_notes as notes
+from app.services import scribe_capture_plan_grounding as plans
+
+FIELDS = ("Subjective", "Objective", "Assessment", "Plan")
+
+
+def contract(texts, fields=FIELDS):
+    return history.ReportedHistoryGrounding.for_capture(
+        fields,
+        ("Plan",),
+        tuple(plans.PlanSource.speech("Unknown", text) for text in texts),
+        patient_only=True,
+    )
+
+
+def envelope(g, refs=()):
+    return {
+        "fields": {
+            "Subjective": "Roles unidentified.",
+            "Objective": "",
+            "Assessment": "Not mentioned.",
+            "Plan": "",
+        },
+        "plan_source_refs": {"Plan": []},
+        history.KEY: {field: {"source_refs": list(refs)} for field in g.fields},
+    }
+
+
+def render(g, value):
+    raw, grounded = g.resolve(json.dumps(value), max_bytes=20000)
+    flat, prospective = plans.PlanGrounding(("Plan",), g.sources).resolve(
+        raw, max_bytes=20000
+    )
+    fields = notes._validated_note(flat, dict.fromkeys(FIELDS, "source only"))
+    fields.update(grounded)
+    fields.update(prospective)
+    return fields
+
+
+def test_partial_multipart_request_and_response_keep_exact_neutral_source():
+    texts = ["Did you fall or have another injury?", "I did not fall."]
+    g = contract(texts)
+    note = render(g, envelope(g, [1, 2]))
+    assert note["Objective"] == (
+        "Current medication list is unverified; review the source statements.\n\n"
+        "Selected transcript source context (questions are not findings):\n"
+        "Transcript — Unidentified speaker:\nDid you fall or have another injury?\n\n"
+        "Transcript — Unidentified speaker:\nI did not fall."
+    )
+    assert all(note["Objective"].count(text) == 1 for text in texts)
+    assert "no other injury" not in note["Objective"].lower()
+    assert "Source question context" not in note["Objective"]
+    assert "Selected later source context" not in note["Objective"]
+    assert note["Subjective"] == "Roles unidentified."
+    assert note["Plan"] == plans.REVIEW_REQUIRED
+
+
+@pytest.mark.parametrize("refs", [[1], [2], [1, 2]])
+def test_selected_answered_or_partial_context_never_claims_an_answer_is_missing(refs):
+    texts = [
+        "Have you started any new medication?",
+        "I have not taken any new medicine.",
+    ]
+    g = contract(texts)
+    out = render(g, envelope(g, refs))["Objective"]
+    for index, text in enumerate(texts, 1):
+        assert (text in out) == (index in refs)
+    assert not any(
+        term in out.lower()
+        for term in ["unanswered", "unresolved", "no answer", "not reviewed"]
+    )
+    # Selecting an incomplete set is still a semantic completeness failure, not
+    # repaired here and not rendered as proof that an answer does not exist.
+
+
+def test_delayed_answer_correction_and_intervening_history_keep_source_order():
+    texts = [
+        "Was there a fall or another injury?",
+        "My shoulder hurts.",
+        "I did not fall.",
+        "I did bruise the shoulder against a box.",
+    ]
+    g = contract(texts)
+    out = render(g, envelope(g, [4, 2, 1, 3]))["Objective"]
+    assert [out.index(t) for t in texts] == sorted(out.index(t) for t in texts)
+    assert all(out.count(t) == 1 for t in texts)
+    prompt = g.prompt(has_plans=True)
+    for required in [
+        "Keep complete multipart requests",
+        "delayed replies",
+        "corrections",
+        "A question never supplies its answer",
+        "Do not classify selected entries as questions or answers",
+        "editing requests",
+        "without copying the whole transcript",
+    ]:
+        assert required in prompt
+    assert "question_ref" not in prompt and "response_refs" not in prompt
+
+
+def retained(number):
+    data = json.loads(
+        (
+            Path(__file__).parent
+            / f"fixtures/capture_question_context_actual{number}.json"
+        ).read_text()
+    )
+    assert data["synthetic_only"] is True
+    assert (
+        hashlib.sha256(data["actualRawResponse"].encode()).hexdigest()
+        == data["actualRawResponseSHA256"]
+    )
+    return data, contract([e["content"] for e in data["entries"]])
+
+
+@pytest.mark.parametrize("number", ["06", "07"])
+def test_old_paired_responses_are_never_translated_or_salvaged(number):
+    data, g = retained(number)
+    original = data["actualRawResponse"]
+    with pytest.raises(history.HistoryGroundingInvalid):
+        g.resolve(original, max_bytes=20000)
+    assert data["actualRawResponse"] == original
+    if number == "07":
+        assert data["actualResult"]["status"] == "REJECTED_NO_NOTE"
+        assert data["actualFailurePersistence"]["noteCount"] == 0
+    # Actual saved06 hashes remain in the immutable fixture, not regenerated by
+    # a later response contract. Normal existing-note replay bypasses generation.
+
+
+def test_supplied_partial_context_is_explicit_reconstruction_not_model_evidence():
+    data, g = retained("07")
+    q, answer = (
+        data["correctPartialContext"]["question_ref"],
+        data["correctPartialContext"]["response_refs"][0],
+    )
+    out = render(g, envelope(g, [q, answer]))
+    for index in (q, answer):
+        assert out["Objective"].count(data["entries"][index - 1]["content"]) == 1
+    assert "no other injury" not in out["Objective"].lower()
+    assert "unanswered" not in out["Objective"].lower()
+    assert out["Assessment"] == "Not mentioned."
+
+
+def test_declarative_negative_remains_a_report_without_question_label():
+    text = "There is still no numbness, weakness, fever, or chest pain."
+    g = contract([text])
+    out = render(g, envelope(g, [1]))["Objective"]
+    assert out.count(text) == 1
+    assert (
+        "Source question context" not in out
+        and "Selected later source context" not in out
+    )
+    assert "unanswered" not in out.lower()
+
+
+def test_editorial_source_is_not_reclassified_as_a_question_or_silently_removed():
+    text = "Please put that corrected value into the summary."
+    g = contract([text])
+    out = render(g, envelope(g, [1]))["Objective"]
+    assert text in out and "Source question context" not in out
+    assert "editing requests" in g.prompt(has_plans=True)
+    # Such selection fails clinical usefulness; this structural renderer neither
+    # claims to classify it correctly nor drops the unwanted model selection.
+
+
+def test_imperative_request_without_question_mark_preserves_literal_context():
+    texts = ["Describe when the discomfort began.", "It began last evening."]
+    g = contract(texts)
+    out = render(g, envelope(g, [1, 2]))["Objective"]
+    assert all(out.count(text) == 1 for text in texts)
+    assert "unanswered" not in out.lower()
+
+
+def test_empty_context_keeps_review_limitation_and_existing_clinical_field_names():
+    g = contract(["Source."])
+    out = render(g, envelope(g))
+    assert (
+        out["Objective"]
+        == history.MEDICATION_LIST_UNVERIFIED + "\n\n" + history.REVIEW_REQUIRED
+    )
+    schema = notes.capture_response_schema(FIELDS, ("Plan",), g)
+    assert set(schema["properties"]["fields"]["properties"]) == set(FIELDS)
+    objective = schema["properties"][history.KEY]["properties"]["Objective"]
+    assert objective == {
+        "type": "object",
+        "properties": {
+            "source_refs": {
+                "type": "array",
+                "items": {"type": "integer"},
+                "maxItems": 1,
+            }
+        },
+        "required": ["source_refs"],
+        "additionalProperties": False,
+    }
+    assert schema["properties"]["fields"]["properties"]["Plan"] == {
+        "type": "string",
+        "enum": [""],
+    }
+
+
+@pytest.mark.parametrize(
+    "refs",
+    [
+        None,
+        "1",
+        [True],
+        [1.0],
+        [0],
+        [-1],
+        [4],
+        [1, 1],
+        [{"question_ref": 1, "response_refs": [1]}],
+    ],
+)
+def test_invalid_duplicate_foreign_and_old_pair_selections_refuse(refs):
+    g = contract(["Question?", "Source answer.", "Later source."])
+    value = envelope(g)
+    value[history.KEY]["Objective"]["source_refs"] = refs
+    with pytest.raises(history.HistoryGroundingInvalid):
+        render(g, value)
+
+
+def test_unknown_field_extra_pair_or_missing_refs_refuse():
+    g = contract(["Source."])
+    for kind in ("missing", "extra", "foreign"):
+        value = envelope(g)
+        if kind == "missing":
+            value[history.KEY]["Objective"].pop("source_refs")
+        elif kind == "extra":
+            value[history.KEY]["Objective"]["question_context"] = []
+        else:
+            value[history.KEY]["Plan"] = {"source_refs": []}
+        with pytest.raises(history.HistoryGroundingInvalid):
+            render(g, value)
+
+
+def test_recording_boundary_is_never_selectable_and_scratch_remains_typed():
+    g = contract(["Source."])
+    boundary = plans.PlanSource("recording_boundary", "Recording boundary", "Stopped.")
+    scratch = plans.PlanSource.scratch("Separate clinician observation.")
+    typed = history.ReportedHistoryGrounding(
+        g.fields, g.medication_fields, (*g.sources, boundary, scratch)
+    )
+    with pytest.raises(history.HistoryGroundingInvalid):
+        render(typed, envelope(typed, [2]))
+    out = render(typed, envelope(typed, [1, 3]))["Objective"]
+    assert "Clinician's saved scratch notes:\nSeparate clinician observation." in out
+    assert "Recording boundary" not in out
+
+
+def test_schema_size_does_not_expand_into_pairs_or_enums_with_source_count():
+    small = contract(["Source."] * 45).schema()
+    large = contract(["Source."] * 500).schema()
+    assert len(json.dumps(large)) - len(json.dumps(small)) == 1
+    assert "anyOf" not in json.dumps(large) and "enum" not in json.dumps(large)
+    assert (
+        large["properties"]["Objective"]["properties"]["source_refs"]["maxItems"] == 500
+    )
+    # Source identity/range/uniqueness remain server validations, not semantic
+    # guarantees or an assertion of tested Azure support for 500-source inputs.
+
+
+def test_byte_limit_and_duplicate_json_keys_still_refuse():
+    g = contract(["Source."])
+    raw = json.dumps(envelope(g, [1]))
+    with pytest.raises(history.HistoryGroundingInvalid):
+        g.resolve(raw, max_bytes=1)
+    duplicate = raw.replace(
+        '"source_refs": [1]', '"source_refs": [1], "source_refs": []'
+    )
+    with pytest.raises(history.HistoryGroundingInvalid):
+        g.resolve(duplicate, max_bytes=20000)
+
+
+def test_medication_context_is_neutral_and_union_preserves_complete_entry_once():
+    fields = (*FIELDS, "Medications")
+    g = contract(
+        ["Any new medicine?", "No new medicine.", "I take TestMed daily."], fields
+    )
+    value = envelope(g)
+    value[history.KEY]["Medications"] = {
+        "current_list": [3],
+        "change_history": [2],
+        "source_context": [1, 2],
+    }
+    out = render(g, value)["Medications"]
+    assert out.startswith(history.MEDICATION_LIST_UNVERIFIED)
+    assert all(out.count(s.text) == 1 for s in g.sources)
+    assert [out.index(s.text) for s in g.sources] == sorted(
+        out.index(s.text) for s in g.sources
+    )
+    assert "unanswered" not in out.lower() and "question context" not in out.lower()
+    value[history.KEY]["Medications"]["source_context"] = [1, 1]
+    with pytest.raises(history.HistoryGroundingInvalid):
+        render(g, value)
+
+
+@pytest.mark.parametrize("name", ["R2-candidate-1", "R3-candidate-1"])
+def test_actual08_strict_schema_failure_evidence_remains_unmodified(name):
+    data = json.loads(
+        (Path(__file__).parent / "fixtures/capture_context_actual08.json").read_text()
+    )
+    assert data["synthetic_only"] is True
+    item = data["items"][name]
+    assert hashlib.sha256(item["raw"].encode()).hexdigest() == item["rawSHA256"]
+    assert item["responseFormatType"] == "json_schema" and item["strict"] is True
+    old = item["historySchema"]["properties"]["Objective"]["properties"][
+        "question_context"
+    ]["items"]
+    assert old["properties"]["question_ref"] == {"type": "integer"}
+    assert old["properties"]["response_refs"]["items"] == {"type": "integer"}
+    g = contract(["Synthetic source."] * 45)
+    with pytest.raises(history.HistoryGroundingInvalid):
+        g.resolve(item["raw"], max_bytes=20000)
+    if name.startswith("R3"):
+        assert item["actualStatus"] == "REJECTED_NO_NOTE"
+        assert item["failurePersistence"]["noteCount"] == 0
+    else:
+        assert item["actualStatus"] == "SAVED_REOPENED"
+    # No conversion of old model output into new-format selections occurs.
+
+
+@pytest.mark.parametrize(
+    "speaker,patient_only",
+    [("Patient", True), ("Doctor", True), ("Other", True), ("Unknown", False)],
+)
+def test_disabled_path_keeps_raw_bytes_and_returns_no_new_source_context(
+    speaker, patient_only
+):
+    sources = (plans.PlanSource.speech(speaker, "Source."),)
+    g = history.ReportedHistoryGrounding.for_capture(
+        FIELDS, ("Plan",), sources, patient_only=patient_only
+    )
+    raw = '{  "existing": "unchanged" }'
+    assert g.fields == () and g.prompt(has_plans=True) == ""
+    assert g.resolve(raw, max_bytes=20000) == (raw, {})
