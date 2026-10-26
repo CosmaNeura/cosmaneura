@@ -113,6 +113,7 @@ def project(view: CreatorReviewView, scope: AdmittedCaptureScope) -> ReviewedSou
         entries.append(
             TranscriptEntry(
                 speaker=roles[segment.speaker_role],
+                source_speaker_id=segment.speaker_id,
                 content=segment.content,
                 startTime=segment.start_ms,
                 endTime=segment.end_ms,
@@ -207,6 +208,7 @@ def select_transcript(session, scope, source: ReviewedSource, transcripts, deliv
                 mapping.source_version != source.reference.source_version
                 or mapping.source_sha256 != source.digest
                 or mapping.payload_sha256 != source.payload_digest
+                or not ingest._entries_match(transcript.transcript_data, source.entries)
             ):
                 raise ReviewedSourceConflict
             selected = transcript

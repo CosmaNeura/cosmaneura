@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import orjson
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
@@ -450,6 +450,7 @@ def _source(
     entries = [
         TranscriptEntry(
             speaker=roles[part.speaker_role],
+            source_speaker_id=uuid5(receipt.id, f"speaker:{part.speaker_id}"),
             content=part.content,
             startTime=part.start_ms,
             endTime=part.end_ms,
@@ -491,6 +492,7 @@ def _source(
     entries = [
         TranscriptEntry(
             speaker=roles[part.speaker_role],
+            source_speaker_id=part.speaker_id,
             content=part.content,
             startTime=part.start_ms,
             endTime=part.end_ms,
@@ -665,8 +667,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(raw.doctor_id) != scope.session_request.practitioner_id
         or str(raw.patient_id) != scope.session_request.patient_id
         or raw.duration != original.duration
-        or ingest._entry_data(raw.transcript_data)
-        != ingest._entry_data(original.entries)
+        or not ingest._entries_match(raw.transcript_data, original.entries)
     ):
         raise CaptureNoteConflict
     if delivery is not None and (
@@ -727,8 +728,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(selected.doctor_id) != scope.session_request.practitioner_id
         or str(selected.patient_id) != scope.session_request.patient_id
         or selected.duration != source.duration
-        or ingest._entry_data(selected.transcript_data)
-        != ingest._entry_data(source.entries)
+        or not ingest._entries_match(selected.transcript_data, source.entries)
     ):
         raise CaptureNoteConflict
     # Unrelated later uploads remain stored, but never become capture sources.
