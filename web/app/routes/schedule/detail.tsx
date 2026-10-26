@@ -94,7 +94,7 @@ function CaptureAuthorization({
             ? "Zoom recording permission denied"
             : meeting.capture_status === "failed"
               ? "Meeting bot could not continue"
-              : "Meeting bot stopped recording"}
+              : "Meeting bot has left the meeting"}
         </p>
         <p className="text-foreground mt-1 text-sm">
           Do not rely on the bot to capture the rest of this meeting. Check the

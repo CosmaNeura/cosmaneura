@@ -426,7 +426,7 @@ describe("terminal meeting bot status", () => {
   it.each([
     ["permission_denied", "Zoom recording permission denied"],
     ["failed", "Meeting bot could not continue"],
-    ["ended", "Meeting bot stopped recording"],
+    ["ended", "Meeting bot has left the meeting"],
   ] as const)(
     "shows %s instead of a green enabled claim",
     async (capture_status, heading) => {
