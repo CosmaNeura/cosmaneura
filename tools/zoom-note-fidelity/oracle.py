@@ -12,6 +12,7 @@ from pathlib import Path
 
 _SOURCE = Path(__file__).resolve().parents[1] / "capture-retention/oracle.py"
 _SPEC = importlib.util.spec_from_file_location("retention_oracle_for_bot", _SOURCE)
+assert _SPEC is not None and _SPEC.loader is not None
 _CAPTURE = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_CAPTURE)
 
