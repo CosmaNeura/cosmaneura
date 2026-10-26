@@ -18,6 +18,9 @@ KEY = "reported_history_source_refs"
 CONTRACT_START = "\n<reported_history_contract>\n"
 CONTRACT_END = "\n</reported_history_contract>\n"
 REVIEW_REQUIRED = "No history source entries selected; review the transcript before completing this section."
+MEDICATION_LIST_UNVERIFIED = (
+    "Current medication list is unverified; review the source statements."
+)
 _HISTORY = re.compile(
     r"\b(?:objective|history|histories|ros|pmh|psh|medications?|medicines?|"
     r"allergies|immunizations?)\b|\b(?:family|social) hx\b|"
@@ -28,6 +31,7 @@ _EXCLUDED = re.compile(
     r"patient|date|dob|mrn|consent)\b"
 )
 _MEDICATION = re.compile(r"\b(?:medications?|medicines?)\b")
+_OBJECTIVE = re.compile(r"\bobjective\b")
 
 
 class HistoryGroundingInvalid(ValueError):
@@ -204,9 +208,7 @@ class ReportedHistoryGrounding:
                     # patient list when recorded speaker roles are unidentified.
                     # Retain named drugs and all temporal statements without
                     # presenting that untrusted classification as a clinical fact.
-                    resolved[heading] = (
-                        "Current medication list is unverified; review the source statements."
-                    )
+                    resolved[heading] = MEDICATION_LIST_UNVERIFIED
                     selected = sorted(current + changes)
                     if selected:
                         resolved[heading] += (
@@ -219,6 +221,18 @@ class ReportedHistoryGrounding:
                         "Reported transcript history:\n" + self._render(indexes)
                         if indexes
                         else REVIEW_REQUIRED
+                    )
+            if not self.medication_fields:
+                # SOAP has no medication field. Replacing generated Objective
+                # prose must not discard the same verification limitation used
+                # for medication selections; unchanged treatment is not a list.
+                objective = next(
+                    (h for h in self.fields if _OBJECTIVE.search(normalized(h))),
+                    None,
+                )
+                if objective is not None:
+                    resolved[objective] = (
+                        MEDICATION_LIST_UNVERIFIED + "\n\n" + resolved[objective]
                     )
             # Leave the ordinary flat/plan envelope contract to its existing
             # validator; this helper removes only its own extra property.
