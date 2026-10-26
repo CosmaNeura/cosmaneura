@@ -20,6 +20,7 @@ from app.services.terminology import (
     terminology_terms,
     transcript_label_note,
 )
+from app.services.zoom_bot_note_grounding import BotNoteContractInvalid
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -54,7 +55,12 @@ def _capture_owns_appointment(session: Session, appointment_id: TypeIDType) -> b
     )
 
 
-def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
+def perform(
+    transcript_id: str | TypeIDType,
+    schema_id: str | TypeIDType,
+    *,
+    note_policy: str | None = None,
+):
     log.info(
         "starting summarization",
         transcript_ref=provider_log_ref(str(transcript_id)),
@@ -149,11 +155,20 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         segment_count=len(all_transcripts),
         merged_duration=merged.duration,
     )
+    policy_args = {}
+    if note_policy is not None:
+        from app.services import zoom_bot_note_policy
+
+        if note_policy == zoom_bot_note_policy.POLICY and zoom_bot_note_policy.eligible(
+            trigger, doctor
+        ):
+            policy_args["bot_fidelity"] = True
     note = generate_clinical_note(
         transcript=merged,
         example_note=example,
         note_schema=schema,
         customization=customization,  # None -> platform defaults
+        **policy_args,
     )
 
     log.info("augmenting clinical note")
@@ -444,7 +459,7 @@ def _merge_transcripts(
     )
 
 
-perform_celery = celery_app.task(perform)
+perform_celery = celery_app.task(perform, dont_autoretry_for=(BotNoteContractInvalid,))
 
 
 def queue(*args, **kwargs):
@@ -698,7 +713,22 @@ def generate_clinical_note(
     example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
     customization: NoteTypeCustomization | None = None,
+    *,
+    bot_fidelity: bool = False,
 ) -> dict[str, str]:
+    if bot_fidelity:
+        from app.services.zoom_bot_note_grounding import generate_grounded_note
+
+        try:
+            return generate_grounded_note(
+                transcript, example_note, note_schema, customization
+            )
+        except BotNoteContractInvalid:
+            log.info(
+                "bot note unconfirmed",
+                event_code="zoom_bot_note_contract_unconfirmed",
+            )
+            raise
     prompt = build_structured_prompt(
         transcript, example_note, note_schema, customization
     )
