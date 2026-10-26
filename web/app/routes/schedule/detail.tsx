@@ -83,6 +83,28 @@ function CaptureAuthorization({
     if (!nextOpen) resetForm()
   }
 
+  if (meeting.capture_status) {
+    return (
+      <div
+        role="status"
+        className="border-warning/30 bg-warning/10 rounded-lg border p-4"
+      >
+        <p className="text-foreground font-medium">
+          {meeting.capture_status === "permission_denied"
+            ? "Zoom recording permission denied"
+            : meeting.capture_status === "failed"
+              ? "Meeting bot could not continue"
+              : "Meeting bot has left the meeting"}
+        </p>
+        <p className="text-foreground mt-1 text-sm">
+          Do not rely on the bot to capture the rest of this meeting. Check the
+          linked visit for any partial notes. You can continue with Scribe after
+          confirming consent. The bot will not restart automatically.
+        </p>
+      </div>
+    )
+  }
+
   if (meeting.capture_authorized) {
     return (
       <div className="border-success/30 bg-success/10 rounded-lg border p-4">
@@ -328,7 +350,7 @@ export function MeetingDetail({
         )}
       </div>
 
-      {captureEnabled && isActive && (
+      {captureEnabled && (isActive || meeting.capture_status) && (
         <div className="mt-6">
           <CaptureAuthorization
             meeting={meeting}

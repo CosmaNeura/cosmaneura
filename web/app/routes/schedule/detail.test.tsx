@@ -421,3 +421,41 @@ describe("meeting bot authorization", () => {
     ).not.toBeInTheDocument()
   })
 })
+
+describe("terminal meeting bot status", () => {
+  it.each([
+    ["permission_denied", "Zoom recording permission denied"],
+    ["failed", "Meeting bot could not continue"],
+    ["ended", "Meeting bot has left the meeting"],
+  ] as const)(
+    "shows %s instead of a green enabled claim",
+    async (capture_status, heading) => {
+      renderMeeting({
+        ...meeting,
+        status: "started",
+        capture_authorized: true,
+        capture_status,
+      })
+      expect(await screen.findByText(heading)).toBeInTheDocument()
+      expect(
+        screen.queryByText("Cosmas meeting bot enabled"),
+      ).not.toBeInTheDocument()
+      expect(
+        screen.getByText(/will not restart automatically/),
+      ).toBeInTheDocument()
+      expect(authorizeZoomCapture).not.toHaveBeenCalled()
+    },
+  )
+
+  it("retains the permission failure when the meeting has ended", async () => {
+    renderMeeting({
+      ...meeting,
+      status: "ended",
+      capture_authorized: true,
+      capture_status: "permission_denied",
+    })
+    expect(
+      await screen.findByText("Zoom recording permission denied"),
+    ).toBeInTheDocument()
+  })
+})

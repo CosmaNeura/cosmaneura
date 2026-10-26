@@ -1,5 +1,6 @@
 """Original lifecycle-token fencing for one already-authorized Zoom launch."""
 
+import json
 import time
 from datetime import UTC, datetime
 
@@ -18,7 +19,8 @@ LAUNCH_NETWORK_BUDGET_SECONDS = 30.0 + 45.0 + 5.0 + 30.0 + 15.0
 _TOKEN_TTL = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1]
  or redis.call('GET', KEYS[2]) ~= ARGV[2]
- or redis.call('GET', KEYS[3]) ~= ARGV[3] then return -1 end
+ or redis.call('GET', KEYS[3]) ~= ARGV[3]
+ or (ARGV[4] ~= '' and redis.call('EXISTS', KEYS[5]) ~= 0) then return -1 end
 if ARGV[4] == '' then
  if redis.call('EXISTS', KEYS[4]) ~= 0 then return -1 end
 elseif redis.call('GET', KEYS[4]) ~= ARGV[4] then return -1 end
@@ -29,8 +31,11 @@ if redis.call('GET', KEYS[1]) ~= ARGV[1]
  or redis.call('PTTL', KEYS[1]) < 1
  or redis.call('GET', KEYS[2]) ~= ARGV[2]
  or redis.call('GET', KEYS[3]) ~= ARGV[3]
- or redis.call('EXISTS', KEYS[4]) ~= 0 then return 0 end
+ or redis.call('EXISTS', KEYS[4]) ~= 0
+ or redis.call('EXISTS', KEYS[6]) ~= 0 then return 0 end
 redis.call('SET', KEYS[4], ARGV[4], 'EX', 86400)
+redis.call('SET', KEYS[6], ARGV[5], 'EX', 86400)
+redis.call('DEL', KEYS[5])
 return 1
 """
 _PUBLISH_RECORDING = """
@@ -38,15 +43,16 @@ if redis.call('GET', KEYS[1]) ~= ARGV[1]
  or redis.call('PTTL', KEYS[1]) < 1
  or redis.call('GET', KEYS[2]) ~= ARGV[2]
  or redis.call('GET', KEYS[3]) ~= ARGV[3]
- or redis.call('GET', KEYS[4]) ~= ARGV[4] then return 0 end
-for i=5,7 do
+ or redis.call('GET', KEYS[4]) ~= ARGV[4]
+ or redis.call('EXISTS', KEYS[5]) ~= 0 then return 0 end
+for i=6,8 do
  if redis.call('EXISTS', KEYS[i]) ~= 0 then return 0 end
 end
-redis.call('SET', KEYS[5], ARGV[3], 'EX', 86400)
-redis.call('SET', KEYS[6], ARGV[5], 'EX', 86400)
-redis.call('SET', KEYS[7], ARGV[6], 'EX', 86400)
-redis.call('SET', KEYS[8], '1', 'EX', 86400)
+redis.call('SET', KEYS[6], ARGV[3], 'EX', 86400)
+redis.call('SET', KEYS[7], ARGV[5], 'EX', 86400)
+redis.call('SET', KEYS[8], ARGV[6], 'EX', 86400)
 redis.call('SET', KEYS[9], '1', 'EX', 86400)
+redis.call('SET', KEYS[10], '1', 'EX', 86400)
 return 1
 """
 
@@ -54,6 +60,7 @@ return 1
 class ZoomLaunchBoundary:
     def __init__(self, redis, lock, meeting_id: str, occurrence: str, doctor_id: str):
         self.redis = redis
+        self.meeting_id = meeting_id
         self.prefix = f"recall:meeting:{meeting_id}"
         self.lock_key = self.prefix + ":lifecycle_lock"
         self.token = getattr(getattr(lock, "local", None), "token", None)
@@ -76,7 +83,7 @@ class ZoomLaunchBoundary:
     def _ttl(self):
         return self.redis.eval(
             _TOKEN_TTL,
-            4,
+            5,
             *self._keys(),
             self.token,
             self.occurrence,
@@ -103,6 +110,7 @@ class ZoomLaunchBoundary:
             self.prefix + ":occurrence_digest",
             self.prefix + ":doctor_id",
             self.prefix + ":bot_id",
+            self.prefix + ":capture_terminal",
         ]
 
     def publish_bot(self, bot_id: str) -> None:
@@ -110,12 +118,20 @@ class ZoomLaunchBoundary:
         if (
             self.redis.eval(
                 _PUBLISH_BOT,
-                4,
+                6,
                 *self._keys(),
+                f"recall:bot:{bot_id}:zoom_capture",
                 self.token,
                 self.occurrence,
                 self.doctor_id,
                 bot_id,
+                json.dumps(
+                    {
+                        "meeting_id": self.meeting_id,
+                        "doctor_id": self.doctor_id,
+                        "occurrence": self.occurrence,
+                    }
+                ),
             )
             != 1
         ):

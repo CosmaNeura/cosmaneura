@@ -35,6 +35,7 @@ import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
 import app.services.zoom_capture_authorization as zoom_capture_authorization
+import app.services.zoom_capture_status as zoom_capture_status
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
@@ -3055,6 +3056,7 @@ class ZoomMeetingResponse(BaseModel, extra="forbid"):
     status: ZoomMeetingStatus
     appointment_id: str | None
     capture_authorized: bool
+    capture_status: zoom_capture_status.CaptureStatus | None = None
 
 
 class ScheduleResponse(BaseModel, extra="forbid"):
@@ -3112,6 +3114,7 @@ def schedule_list(request: Request) -> ScheduleResponse:
                 status=m.status,
                 appointment_id=str(m.appointment_id) if m.appointment_id else None,
                 capture_authorized=zoom_capture_authorization.capture_is_authorized(m),
+                capture_status=zoom_capture_status.for_meeting(m),
             )
             for m in cast(list[ZoomMeeting], list(meetings))
         ],

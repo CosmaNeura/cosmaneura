@@ -6,7 +6,7 @@ import app.jobs.transcribe as transcribe_job
 from app import log
 from app.configuration.redis import get_redis
 from app.services import recall as recall_service
-from app.services import recall_webhook_operations
+from app.services import recall_webhook_operations, zoom_capture_status
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
@@ -247,6 +247,10 @@ def _compute_duration_seconds(entries: list[TranscriptEntry]) -> int:
 
 
 HANDLERS = {
+    **{
+        event: zoom_capture_status.handle_bot_terminal
+        for event in zoom_capture_status.EVENTS
+    },
     "recording.done": handle_recording_done,
     "transcript.done": handle_transcript_done,
     "transcript.failed": handle_transcript_failed,
