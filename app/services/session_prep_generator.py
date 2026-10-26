@@ -195,8 +195,8 @@ class SessionPrepGenerationError(SessionPrepInvariantError):
             or (safety_categories and code != "output_safety_rejected")
         ):
             raise ValueError("Invalid closed safety metadata")
-        self.code = code
-        self.safety_categories = tuple(
+        self.code: GenerationFailureCode = code
+        self.safety_categories: tuple[SafetyCategory, ...] = tuple(
             item for item in SAFETY_CATEGORIES if item in safety_categories
         )
         super().__init__(code)
