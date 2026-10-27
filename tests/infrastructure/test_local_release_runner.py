@@ -36,7 +36,10 @@ def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
                     if f".github/workflows/{path.name}" in runner.WORKFLOWS
                     else "cosmaneura-validation-local"
                 )
-                expected_labels = ["self-hosted", "Linux", "X64", expected]
+                architecture = (
+                    "ARM64" if expected == "cosmaneura-production-local" else "X64"
+                )
+                expected_labels = ["self-hosted", "Linux", architecture, expected]
                 if expected == "cosmaneura-production-local":
                     expected_labels.append(
                         "cosmaneura-production-local-${{ github.run_id }}"

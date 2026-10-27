@@ -20,7 +20,7 @@ concurrency:
 jobs:
   authorize-production:
     name: Authorize production infrastructure plan
-    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 5
     permissions: {}
     steps:
@@ -60,7 +60,7 @@ jobs:
         github.triggering_actor == 'JohnClem' &&
         needs.authorize-production.result == 'success'
       }}
-    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
+    runs-on: [self-hosted, Linux, ARM64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 15
     environment: production
     permissions:

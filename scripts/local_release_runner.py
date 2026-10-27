@@ -142,11 +142,16 @@ def main() -> None:
         raise SystemExit(
             "Only an active founder-authorized release run at exact current master is accepted."
         )
+    host_architecture = subprocess.check_output(
+        ["docker", "info", "--format", "{{.Architecture}}"], text=True
+    ).strip()
+    if host_architecture not in ("arm64", "aarch64"):
+        raise SystemExit("The release runner requires a native ARM64 Docker host.")
     metadata = json.loads(
         subprocess.check_output(["docker", "image", "inspect", args.image], text=True)
     )[0]
     if (
-        metadata["Architecture"] != "amd64"
+        metadata["Architecture"] != "arm64"
         or metadata["Config"]["User"] != "runner"
         or metadata["Config"]["Entrypoint"]
         != ["/usr/local/bin/local-runner-entrypoint"]
@@ -164,7 +169,7 @@ def main() -> None:
             "run",
             "--rm",
             "--platform",
-            "linux/amd64",
+            "linux/arm64",
             "--entrypoint",
             "sha256sum",
             args.image,
@@ -185,7 +190,13 @@ def main() -> None:
         {
             "name": name,
             "runner_group_id": 1,
-            "labels": ["self-hosted", "Linux", "X64", LABEL, f"{LABEL}-{args.run_id}"],
+            "labels": [
+                "self-hosted",
+                "Linux",
+                "ARM64",
+                LABEL,
+                f"{LABEL}-{args.run_id}",
+            ],
             "work_folder": "_work",
         },
     )
@@ -220,7 +231,7 @@ def main() -> None:
             "--label",
             "cosmaneura.local-release=true",
             "--platform",
-            "linux/amd64",
+            "linux/arm64",
             "--group-add",
             socket_group,
             "--volume",

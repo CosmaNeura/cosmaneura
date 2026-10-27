@@ -1,5 +1,5 @@
-# Official Ubuntu 24.04 AMD64 base; all execution remains on the operator's Docker host.
-FROM ubuntu:24.04@sha256:78d4744ead1f5b19b04d0df558ab182a5300903900755e515b2ca4d10eb2044d
+# Native ARM64 avoids unsupported .NET/QEMU execution on the Apple Silicon host.
+FROM ubuntu:24.04@sha256:19cad59657037cffa0ac9a48107019b768900ff1071140965827513ac866bd5e
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git jq sudo unzip zsh build-essential libpq-dev \
@@ -11,15 +11,15 @@ RUN python3 -m venv /opt/azure-cli && \
 # Procfile and deployment tests rely on the same yq CLI formerly preinstalled
 # on hosted Ubuntu. Pin the official asset before any credential is present.
 RUN curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-      https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_amd64 \
+      https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_arm64 \
       --output /usr/local/bin/yq && \
-    printf '%s  /usr/local/bin/yq\n' 99df6047f5b577a9d25f969f7c3823ada3488de2e2115b30a0abb10d9324fd9f | sha256sum --check --strict && \
+    printf '%s  /usr/local/bin/yq\n' 0e46b5b926a9e57c526fa2bd8f8e38b7e17fbf6e2403ff1741f3b268e3363a9e | sha256sum --check --strict && \
     chmod 0755 /usr/local/bin/yq
-ARG RUNNER_VERSION=2.338.0
-ARG RUNNER_SHA256=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
+ARG RUNNER_VERSION=2.338.2
+ARG RUNNER_SHA256=670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945
 RUN mkdir -p /opt/runner && \
     curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
-      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz" \
       --output /tmp/runner.tar.gz && \
     printf '%s  /tmp/runner.tar.gz\n' "$RUNNER_SHA256" | sha256sum --check --strict && \
     tar -xzf /tmp/runner.tar.gz -C /opt/runner && rm /tmp/runner.tar.gz

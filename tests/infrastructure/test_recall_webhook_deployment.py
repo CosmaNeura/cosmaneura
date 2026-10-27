@@ -827,6 +827,13 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
         "194bcad8c379f78a309eee1a88b2e6b2abc59f354efe7ecd7b4bbaf21de99a06" in installer
     )
     assert "releases/download/v${NIXPACKS_VERSION}" in installer
+    assert (
+        "NIXPACKS_ARM64_ARCHIVE_SHA256: "
+        "912bd02dd2bb6f9c3a9ed965fe8a68b4aa318dc7a2546e2eca6f2806a894ba39" in installer
+    )
+    assert 'NIXPACKS_ARCHIVE_SHA256="$NIXPACKS_ARM64_ARCHIVE_SHA256"' in installer
+    assert "x86_64) target=x86_64-unknown-linux-gnu" in installer
+    assert "target=aarch64-unknown-linux-musl" in installer
     assert "sha256sum --check --strict" in installer
     assert installer.index("curl \\") < installer.index("sha256sum --check --strict")
     assert installer.index("sha256sum --check --strict") < installer.index(
@@ -921,7 +928,14 @@ def test_onepassword_cli_installer_is_exact_and_checksum_verified(
     assert installer.index("dpkg-deb --field") < installer.index("dpkg-deb --extract")
     assert '"$package_name" != "1password-cli"' in installer
     assert '"$package_version" != "$OP_CLI_PACKAGE_VERSION"' in installer
-    assert '"$package_architecture" != "amd64"' in installer
+    assert '"$package_architecture" != "$expected_architecture"' in installer
+    assert "expected_architecture=amd64" in installer
+    assert "expected_architecture=arm64" in installer
+    assert (
+        "OP_CLI_ARM64_DEB_SHA256: "
+        "22b9317202772b3e63d3beb5cbd2e53f2a8b018d8e0bd85664108bc132432a58" in installer
+    )
+    assert 'OP_CLI_DEB_SHA256="$OP_CLI_ARM64_DEB_SHA256"' in installer
     assert '[[ ! -f "$op_binary" || -L "$op_binary" ]]' in installer
     assert '"$("$install_dir/op" --version)" != "$OP_CLI_VERSION"' in installer
 

@@ -9,19 +9,23 @@ runs:
       env:
         # Digest published for this exact GitHub release asset.
         NIXPACKS_ARCHIVE_SHA256: 194bcad8c379f78a309eee1a88b2e6b2abc59f354efe7ecd7b4bbaf21de99a06
+        NIXPACKS_ARM64_ARCHIVE_SHA256: 912bd02dd2bb6f9c3a9ed965fe8a68b4aa318dc7a2546e2eca6f2806a894ba39
         NIXPACKS_VERSION: 1.41.0
       run: |
         set -euo pipefail
         install_root=$(mktemp -d "$RUNNER_TEMP/nixpacks.XXXXXX")
         chmod 0700 "$install_root"
-        archive="$install_root/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
         bin_dir="$install_root/bin"
-        url="https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
-
-        if [[ "$(uname -m)" != "x86_64" ]]; then
-          echo "The pinned Nixpacks asset requires an x86_64 runner." >&2
-          exit 1
-        fi
+        case "$(uname -m)" in
+          x86_64) target=x86_64-unknown-linux-gnu ;;
+          aarch64)
+            target=aarch64-unknown-linux-musl
+            NIXPACKS_ARCHIVE_SHA256="$NIXPACKS_ARM64_ARCHIVE_SHA256"
+            ;;
+          *) echo "No pinned Nixpacks asset for this runner architecture." >&2; exit 1 ;;
+        esac
+        archive="$install_root/nixpacks-v${NIXPACKS_VERSION}-${target}.tar.gz"
+        url="https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-${target}.tar.gz"
 
         curl \
           --fail \
