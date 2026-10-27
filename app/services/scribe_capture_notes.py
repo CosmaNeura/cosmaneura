@@ -1415,6 +1415,9 @@ async def capture_note(
     note = _validated_note(raw_fields, inputs.schema.fields)
     note.update(grounded_plans)
     note.update(grounded_history)
+    note = history.with_medication_verification_limit(
+        note, plan_fields=plan_grounding.fields
+    )
     # The selected source text can be larger than the model's integer refs.
     # Apply the same complete-note bounds before any storage/finalization.
     note = _validated_note(orjson.dumps(note).decode(), inputs.schema.fields)

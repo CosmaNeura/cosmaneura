@@ -2,7 +2,8 @@
 
 The model selects relevant complete entries, not the words stored in grounded
 fields. This does not prove selection completeness or clinical classification.
-Saved notes, known-role captures, and prospective PlanGrounding are unchanged.
+Known-role captures keep narrative history and use the same medication-list
+verification limitation. Saved notes and prospective PlanGrounding are unchanged.
 """
 
 from __future__ import annotations
@@ -41,6 +42,41 @@ class HistoryGroundingInvalid(ValueError):
 
 def normalized(heading: str) -> str:
     return re.sub(r"[\W_]+", " ", unicodedata.normalize("NFKC", heading).casefold())
+
+
+def with_medication_verification_limit(
+    fields: dict[str, str], *, plan_fields: tuple[str, ...]
+) -> dict[str, str]:
+    """Retain the capture's verification limit independently of model prose.
+
+    Identifying a speaker does not independently verify a complete medication
+    list. This is a verification limitation, never an assertion that a list was
+    absent or that the person takes no medicines. Keep every generated/source
+    statement and use only an existing medication or Objective field.
+    """
+    medication_fields = [
+        heading
+        for heading in fields
+        if heading not in plan_fields
+        and _MEDICATION.search(normalized(heading))
+        and not _EXCLUDED.search(normalized(heading))
+    ]
+    objective_fields = [
+        heading
+        for heading in fields
+        if heading not in plan_fields
+        and _OBJECTIVE.search(normalized(heading))
+        and not _EXCLUDED.search(normalized(heading))
+    ]
+    targets = medication_fields + objective_fields
+    result = dict(fields)
+    if not targets or any(MEDICATION_LIST_UNVERIFIED in fields[h] for h in targets):
+        return result
+    target = targets[0]
+    result[target] = MEDICATION_LIST_UNVERIFIED + (
+        "\n\n" + fields[target] if fields[target] else ""
+    )
+    return result
 
 
 @dataclass(frozen=True, repr=False)
