@@ -42,7 +42,7 @@ def test_empty_placeholder_and_refs_keep_complete_qualifier_and_editorial_clause
         sources=sources,
     )
     assert json.loads(raw) == {"Assessment": "Review needed.", "Plan": ""}
-    assert rendered == {"Plan": "Transcript — Unidentified speaker:\n" + source}
+    assert rendered == {"Plan": "- Unidentified speaker: " + source}
     # Full extraction deliberately retains mixed-entry chatter/qualifiers. This
     # does not claim that exact wording is a polished or complete clinical note.
 

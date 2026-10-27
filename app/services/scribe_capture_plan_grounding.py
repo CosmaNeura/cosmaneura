@@ -166,8 +166,8 @@ class PlanGrounding:
                 # Original order retains chronology even if model indexes are
                 # reordered. Only complete, unchanged source text is emitted.
                 resolved[heading] = (
-                    "\n\n".join(
-                        f"{self.sources[index - 1].attribution}:\n{self.sources[index - 1].text}"
+                    "\n".join(
+                        f"- {self.sources[index - 1].attribution.removeprefix('Transcript — ')}: {self.sources[index - 1].text}"
                         for index in sorted(indexes)
                     )
                     # An empty model selection does not prove that the source

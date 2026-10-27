@@ -1,0 +1,269 @@
+{
+  "id": "R2",
+  "synthetic_only": true,
+  "provenance": "Actual invented Desktop13 successor case; roles corrected through normal UI and independently checked against selected saved PCM.",
+  "sourceContentSHA256": "5a13b7912f159f08983227f774827658ac35d5c96c70aeb02f192f33fd060c58",
+  "entries": [
+    {
+      "speaker": "Doctor",
+      "content": "This is a completely synthetic practice visit.",
+      "startTime": 5600,
+      "endTime": 8160
+    },
+    {
+      "speaker": "Doctor",
+      "content": "I am Doctor Lane, speaking with Casey Vale.",
+      "startTime": 8320,
+      "endTime": 11120
+    },
+    {
+      "speaker": "Doctor",
+      "content": "We will check several details carefully and correct anything that was misstated.",
+      "startTime": 11200,
+      "endTime": 15360
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Casey, please describe the dizziness you mentioned and give me the time course in your own words.",
+      "startTime": 15440,
+      "endTime": 20320
+    },
+    {
+      "speaker": "Patient",
+      "content": "The dizziness began 12 days ago.",
+      "startTime": 24670,
+      "endTime": 26830
+    },
+    {
+      "speaker": "Patient",
+      "content": "Earlier I said 20 days, but 12 is correct.",
+      "startTime": 26990,
+      "endTime": 30190
+    },
+    {
+      "speaker": "Patient",
+      "content": "It lasts about 30 seconds when I stand up quickly.",
+      "startTime": 30350,
+      "endTime": 33710
+    },
+    {
+      "speaker": "Patient",
+      "content": "It does not last 30 minutes.",
+      "startTime": 33870,
+      "endTime": 35790
+    },
+    {
+      "speaker": "Patient",
+      "content": "I have never fainted.",
+      "startTime": 35950,
+      "endTime": 37310
+    },
+    {
+      "speaker": "Patient",
+      "content": "The opening marker is orange telescope and this is invented test information.",
+      "startTime": 37390,
+      "endTime": 42030
+    },
+    {
+      "speaker": "Doctor",
+      "content": "To confirm, symptoms began 12 days ago, episodes last 30 seconds, and there has been no fainting.",
+      "startTime": 42700,
+      "endTime": 49260
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Have you noticed chest pain, shortness of breath, fever, or a headache?",
+      "startTime": 49420,
+      "endTime": 53980
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Please distinguish a symptom you actually have from one you are denying.",
+      "startTime": 54060,
+      "endTime": 57820
+    },
+    {
+      "speaker": "Patient",
+      "content": "I have no chest pain, no shortness of breath, and no fever.",
+      "startTime": 58380,
+      "endTime": 62540
+    },
+    {
+      "speaker": "Patient",
+      "content": "I did have a mild headache yesterday, but I do not have one today.",
+      "startTime": 62620,
+      "endTime": 66780
+    },
+    {
+      "speaker": "Patient",
+      "content": "I initially called the dizziness severe.",
+      "startTime": 66860,
+      "endTime": 69100
+    },
+    {
+      "speaker": "Patient",
+      "content": "I would correct that to mild.",
+      "startTime": 69180,
+      "endTime": 70860
+    },
+    {
+      "speaker": "Patient",
+      "content": "I can still walk and carry out my normal routine.",
+      "startTime": 71080,
+      "endTime": 74040
+    },
+    {
+      "speaker": "Doctor",
+      "content": "How many episodes occurred yesterday?",
+      "startTime": 74600,
+      "endTime": 76760
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Also tell me about fluid intake and whether you have started or stopped any medicines.",
+      "startTime": 76840,
+      "endTime": 81320
+    },
+    {
+      "speaker": "Doctor",
+      "content": "I want the corrected count to replace the earlier number rather than leave two competing versions in the final summary.",
+      "startTime": 81480,
+      "endTime": 87480
+    },
+    {
+      "speaker": "Patient",
+      "content": "There were two episodes yesterday, not seven.",
+      "startTime": 88130,
+      "endTime": 90930
+    },
+    {
+      "speaker": "Patient",
+      "content": "I drink about four glasses of water daily.",
+      "startTime": 91010,
+      "endTime": 93570
+    },
+    {
+      "speaker": "Patient",
+      "content": "I have not started, stopped, or changed any medicine.",
+      "startTime": 93730,
+      "endTime": 97410
+    },
+    {
+      "speaker": "Patient",
+      "content": "The middle marker is turquoise notebook.",
+      "startTime": 97490,
+      "endTime": 99730
+    },
+    {
+      "speaker": "Patient",
+      "content": "My blood pressure reading at home was 118/72, not 180/72.",
+      "startTime": 99890,
+      "endTime": 106450
+    },
+    {
+      "speaker": "Doctor",
+      "content": "The corrected home reading is 118 over 72, with 2 mild episodes yesterday.",
+      "startTime": 107120,
+      "endTime": 112680
+    },
+    {
+      "speaker": "Doctor",
+      "content": "For this practice plan, rise slowly, keep a brief symptom diary, and maintain regular fluids.",
+      "startTime": 112840,
+      "endTime": 118840
+    },
+    {
+      "speaker": "Doctor",
+      "content": "We are not starting a new medicine.",
+      "startTime": 118920,
+      "endTime": 120840
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Follow-up should be in 10 days, not 10 weeks.",
+      "startTime": 120920,
+      "endTime": 123960
+    },
+    {
+      "speaker": "Patient",
+      "content": "I understand.",
+      "startTime": 124520,
+      "endTime": 125640
+    },
+    {
+      "speaker": "Patient",
+      "content": "I will record when the dizziness happens and how long it lasts I will use the corrected count of two and the duration of 30 seconds I do not want the denied symptoms shown as present my late marker is indigo lantern.",
+      "startTime": 125790,
+      "endTime": 138750
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Final check.",
+      "startTime": 139410,
+      "endTime": 140210
+    },
+    {
+      "speaker": "Doctor",
+      "content": "12 days of brief mild dizziness on standing.",
+      "startTime": 140370,
+      "endTime": 143090
+    },
+    {
+      "speaker": "Doctor",
+      "content": "No fainting, no chest pain, no shortness of breath, and no current headache.",
+      "startTime": 143170,
+      "endTime": 148210
+    },
+    {
+      "speaker": "Doctor",
+      "content": "No medication changes planned.",
+      "startTime": 148370,
+      "endTime": 150290
+    },
+    {
+      "speaker": "Doctor",
+      "content": "Follow-up is 10 days.",
+      "startTime": 150450,
+      "endTime": 151970
+    },
+    {
+      "speaker": "Doctor",
+      "content": "The closing marker is cedar compass.",
+      "startTime": 152130,
+      "endTime": 154210
+    },
+    {
+      "speaker": "Doctor",
+      "content": "This concludes the synthetic corrections test.",
+      "startTime": 154370,
+      "endTime": 156850
+    }
+  ],
+  "schema": {
+    "Subjective": "Document the patient's reported symptoms, concerns, and relevant history, including any changes since the last visit and information provided by the patient or caregivers.",
+    "Objective": "Record measurable or observed findings from the physical exam, vital signs, laboratory results, imaging, and other diagnostic data.",
+    "Assessment": "Summarize your clinical impression, including diagnoses, differential diagnoses, and reasoning based on the subjective and objective information.",
+    "Plan": "Outline the next steps for management, including treatments, medications, follow-up recommendations, referrals, and patient education."
+  },
+  "note_type": "Telehealth SOAP Note",
+  "customization": {
+    "custom_instructions": null,
+    "flag_new_medications": true,
+    "plan_ordering": "patient_then_doctor",
+    "pronoun_style": "infer_from_transcript",
+    "require_plan_reason": true,
+    "ros_distinct_from_subjective": true,
+    "subjective_source": "patient_only"
+  },
+  "checks": [
+    "headache",
+    "medications",
+    "r2_numbers"
+  ],
+  "archived_faulty_fields": {
+    "Subjective": "- The dizziness began 12 days ago.\n- Earlier I said 20 days, but 12 is correct.\n- It lasts about 30 seconds when I stand up quickly.\n- It does not last 30 minutes.\n- I have never fainted.\n- I have no chest pain, no shortness of breath, and no fever.\n- I did have a mild headache yesterday, but I do not have one today.\n- I initially called the dizziness severe.\n- I would correct that to mild.\n- I can still walk and carry out my normal routine.\n- There were two episodes yesterday, not seven.\n- I drink about four glasses of water daily.\n- I have not started, stopped, or changed any medicine.\n- My blood pressure reading at home was 118/72, not 180/72.\n- I will record when the dizziness happens and how long it lasts. I will use the corrected count of two and the duration of 30 seconds. I do not want the denied symptoms shown as present.\n",
+    "Objective": "- Home blood pressure reading: 118/72 mmHg (corrected from earlier misstated value).\n",
+    "Assessment": "Not mentioned in transcript.",
+    "Plan": "Transcript \u2014 Clinician:\nFor this practice plan, rise slowly, keep a brief symptom diary, and maintain regular fluids.\n\nTranscript \u2014 Clinician:\nWe are not starting a new medicine.\n\nTranscript \u2014 Clinician:\nFollow-up should be in 10 days, not 10 weeks.\n\nTranscript \u2014 Patient:\nI will record when the dizziness happens and how long it lasts I will use the corrected count of two and the duration of 30 seconds I do not want the denied symptoms shown as present my late marker is indigo lantern."
+  }
+}

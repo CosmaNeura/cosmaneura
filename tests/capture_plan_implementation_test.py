@@ -52,9 +52,7 @@ def test_supplied_plan_keeps_split_conditions_and_cancellation_without_auto_prom
     )
     assert json.loads(raw) == {"Plan": ""}
     assert rendered == {
-        "Plan": "\n\n".join(
-            "Transcript — Unidentified speaker:\n" + texts[i] for i in expected
-        )
+        "Plan": "\n".join("- Unidentified speaker: " + texts[i] for i in expected)
         or plans.REVIEW_REQUIRED
     }
 
@@ -75,6 +73,6 @@ def test_one_mixed_entry_can_be_explicitly_selected_in_history_and_plan():
         remaining, max_bytes=262144
     )
     assert text in reported["Objective"]
-    assert prospective == {"Plan": "Transcript — Unidentified speaker:\n" + text}
+    assert prospective == {"Plan": "- Unidentified speaker: " + text}
     # This is allowed overlap chosen explicitly by the model. It is not a rule
     # that promotes history refs into Plan or trims away later qualifications.
