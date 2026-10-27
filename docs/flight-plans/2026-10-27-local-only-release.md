@@ -33,7 +33,12 @@ remain disabled; agents run acceptance locally before one final push.
 
 `scripts/local_release_runner.py` accepts only an active founder manual run at
 exact current master. Its root-owned pre-job hook runs before checkout and admits only those exact
-master workflow paths, founder actors, manual events and the pinned target SHA.
+master workflow paths, founder actors, manual events and the pinned target SHA, run ID and attempt.
+Run-specific runner labels prevent another queued release consuming the worker.
+Rejection kills the exact disposable container before an always()/failure() step
+can execute; API failure also terminates listener/worker processes in its private
+PID namespace. Cleanup validates the exact network and attached-project owners
+before deleting test resources.
 The target is stored in a root-owned0444 file before the runner starts; job
 environment values cannot replace it. Registration is repository-scoped and
 requires no expansion of the existing GitHub token scope. Each checksum-verified

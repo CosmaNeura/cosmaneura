@@ -60,16 +60,31 @@ def cleanup(name: str) -> None:
                 ["docker", "network", "inspect", network], text=True
             )
         )[0]
-        # Remove only containers on this uniquely owned test network.
-        for container in metadata.get("Containers") or {}:
+        project = "cosma-local-tests-" + hashlib.sha256(name.encode()).hexdigest()[:16]
+        if (
+            metadata["Name"] != project
+            or metadata.get("Labels", {}).get("cosmaneura.local-runner") != name
+        ):
+            raise SystemExit("Refusing cleanup of an unexpected network identity.")
+        containers = list(metadata.get("Containers") or {})
+        if containers:
+            attached = json.loads(
+                subprocess.check_output(["docker", "inspect", *containers], text=True)
+            )
+            if any(
+                item["Config"].get("Labels", {}).get("com.docker.compose.project")
+                != project
+                for item in attached
+            ):
+                raise SystemExit(
+                    "Refusing cleanup of another project's attached container."
+                )
+        for container in containers:
             subprocess.run(
                 ["docker", "rm", "--force", container],
                 check=True,
                 stdout=subprocess.DEVNULL,
             )
-        project = metadata["Name"]
-        if not project.startswith("cosma-local-tests-"):
-            raise SystemExit("Refusing cleanup of an unexpected network name.")
         volumes = subprocess.check_output(
             [
                 "docker",
@@ -170,7 +185,7 @@ def main() -> None:
         {
             "name": name,
             "runner_group_id": 1,
-            "labels": ["self-hosted", "Linux", "X64", LABEL],
+            "labels": ["self-hosted", "Linux", "X64", LABEL, f"{LABEL}-{args.run_id}"],
             "work_folder": "_work",
         },
     )
@@ -219,7 +234,7 @@ def main() -> None:
         # are removed even on interruption; no host home directory is mounted.
         result = subprocess.run(
             command,
-            input=master + "\n" + response["encoded_jit_config"] + "\n",
+            input=f"{master}\n{args.run_id}\n{run['run_attempt']}\n{response['encoded_jit_config']}\n",
             text=True,
         )
         if result.returncode:

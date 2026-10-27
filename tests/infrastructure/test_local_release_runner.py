@@ -1,4 +1,7 @@
+import hashlib
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,7 +29,12 @@ def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
                     if f".github/workflows/{path.name}" in runner.WORKFLOWS
                     else "cosmaneura-validation-local"
                 )
-                assert labels == ["self-hosted", "Linux", "X64", expected], path
+                expected_labels = ["self-hosted", "Linux", "X64", expected]
+                if expected == "cosmaneura-production-local":
+                    expected_labels.append(
+                        "cosmaneura-production-local-${{ github.run_id }}"
+                    )
+                assert labels == expected_labels, path
 
 
 @pytest.mark.parametrize(
@@ -75,3 +83,40 @@ def test_invalid_release_never_registers_or_starts_a_runner(
     )
     with pytest.raises(SystemExit, match="founder-authorized"):
         runner.main()
+
+
+@pytest.mark.parametrize("fault", ["network-name", "network-owner", "attached-project"])
+def test_cleanup_validates_ownership_before_removing_attached_resources(
+    monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    name = "cosma-local-runner-" + "a" * 16
+    project = "cosma-local-tests-" + hashlib.sha256(name.encode()).hexdigest()[:16]
+    metadata = {
+        "Name": "unrelated" if fault == "network-name" else project,
+        "Labels": {
+            "cosmaneura.local-runner": "other" if fault == "network-owner" else name
+        },
+        "Containers": {"attached": {}},
+    }
+    removed = []
+
+    def output(command: list[str], **kwargs: object) -> str:
+        if command[:3] == ["docker", "network", "ls"]:
+            return "network\n"
+        if command[:3] == ["docker", "network", "inspect"]:
+            return json.dumps([metadata])
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps(
+                [{"Config": {"Labels": {"com.docker.compose.project": "unrelated"}}}]
+            )
+        raise AssertionError(f"Cleanup proceeded beyond the ownership gate: {command}")
+
+    def mutation(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        removed.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner.subprocess, "check_output", output)
+    monkeypatch.setattr(runner.subprocess, "run", mutation)
+    with pytest.raises(SystemExit, match="Refusing cleanup"):
+        runner.cleanup(name)
+    assert removed == [["docker", "rm", "--force", name]]

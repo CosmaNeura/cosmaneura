@@ -120,7 +120,9 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     workflow = _read(".github/workflows/build_and_publish_local.yml")
     apply_workflow = _read(".github/workflows/infra_apply_local.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
-    production_plan_workflow = _read(".github/workflows/infra_production_plan_local.yml")
+    production_plan_workflow = _read(
+        ".github/workflows/infra_production_plan_local.yml"
+    )
 
     assert "production_infra_changed" in workflow
     protected_paths = (
@@ -142,7 +144,9 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     assert "actions: read" in workflow
     assert "gh api" in workflow
     assert "actions/workflows/infra_apply_local.yml/runs?" in workflow
-    assert '"${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml"' in workflow
+    assert (
+        '"${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml"' in workflow
+    )
     assert '"${apply_run[3]:-}" != "workflow_dispatch"' in workflow
     assert "The supplied run is not a successful Terraform Apply" in workflow
     assert 'git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"' in workflow
