@@ -1490,11 +1490,9 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     quality_commands = _run_commands(quality)
     test_commands = _run_commands(tests)
     for commands in (quality_commands, test_commands):
+        assert "just up --fast" in commands
         if path.name == "build_and_publish_local.yml":
-            assert "python3 scripts/local_ci_services.py start" in commands
-            assert "python3 scripts/local_ci_services.py stop" in commands
-        else:
-            assert "just up --fast" in commands
+            assert "if command -v just >/dev/null 2>&1; then just down; fi" in commands
         assert "just py_setup" in commands
         assert "just db_migrate" in commands
     assert "just py_lint" in quality_commands
@@ -1547,7 +1545,11 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
         else "Backend"
     )
     assert aggregator["needs"] == ["backend-quality", "backend-tests"]
-    assert aggregator["if"] == "${{ always() }}"
+    if path.name == "build_and_publish_local.yml":
+        assert "always()" in aggregator["if"]
+        assert "inputs.github_hosted_fallback_authorized" in aggregator["if"]
+    else:
+        assert aggregator["if"] == "${{ always() }}"
     assert aggregator["timeout-minutes"] == 5
     assert "continue-on-error" not in quality
     assert "continue-on-error" not in tests

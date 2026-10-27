@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import importlib.util
 import json
@@ -40,12 +41,19 @@ def test_admission_hook_uses_runner_supported_script_extension() -> None:
     )
 
 
-def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
+def test_every_tracked_workflow_requires_approved_compute() -> None:
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         workflow = yaml.safe_load(path.read_text())
         for job in workflow.get("jobs", {}).values():
             if "runs-on" in job:
                 labels = job["runs-on"]
+                if path.name == "build_and_publish_local.yml":
+                    assert labels == "ubuntu-24.04"
+                    assert set(workflow.get("on", workflow.get(True, {}))) == {
+                        "workflow_dispatch"
+                    }
+                    assert "inputs.github_hosted_fallback_authorized" in job["if"]
+                    continue
                 assert isinstance(labels, list), path
                 expected = (
                     "cosmaneura-production-local"
@@ -61,6 +69,61 @@ def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
                         "cosmaneura-production-local-${{ github.run_id }}"
                     )
                 assert labels == expected_labels, path
+
+
+@pytest.mark.parametrize(
+    "field,value,expected",
+    [
+        (None, None, True),
+        ("github.event_name", "push", False),
+        ("github.ref", "refs/heads/other", False),
+        ("github.actor", "other", False),
+        ("github.triggering_actor", "other", False),
+        ("inputs.github_hosted_fallback_authorized", False, False),
+    ],
+)
+def test_hosted_release_never_starts_without_full_owner_opt_in(
+    field, value, expected
+) -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/build_and_publish_local.yml").read_text()
+    )
+    context = {
+        "github.event_name": "workflow_dispatch",
+        "github.ref": "refs/heads/master",
+        "github.actor": "JohnClem",
+        "github.triggering_actor": "JohnClem",
+        "inputs.github_hosted_fallback_authorized": True,
+        "needs.authorize-production.result": "success",
+    }
+    if field is not None:
+        context[field] = value
+    inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
+    assert inputs["github_hosted_fallback_authorized"]["default"] is False
+    for job in workflow["jobs"].values():
+        expression = job["if"].strip().removeprefix("${{").removesuffix("}}")
+        for key, actual in context.items():
+            expression = expression.replace(key, repr(actual))
+        expression = expression.replace("always()", "True").replace("&&", " and ")
+        parsed = ast.parse("(" + expression.strip() + ")", mode="eval")
+        assert all(
+            isinstance(
+                node,
+                (
+                    ast.Expression,
+                    ast.BoolOp,
+                    ast.And,
+                    ast.Compare,
+                    ast.Eq,
+                    ast.Constant,
+                ),
+            )
+            for node in ast.walk(parsed)
+        )
+        assert (
+            eval(compile(parsed, "<hosted-admission>", "eval"), {"__builtins__": {}})
+            is expected
+        )
 
 
 def test_dependabot_schedule_is_preserved_but_cannot_start_hosted_jobs() -> None:

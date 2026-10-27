@@ -15,10 +15,12 @@ that work; it does not replace decomposition or deployed-state reconciliation.
   Production and staging run on Azure Container Apps.
 - Install: `just setup` (macOS local setup; creates local configuration).
 - Full test: `just py_test && just js_test`.
-- Acceptance runs locally with agents. GitHub-hosted jobs are prohibited, including
-  production plan/apply/build/deploy. PR validation registrations stay disabled;
-  every tracked workflow explicitly selects local self-hosted compute. Production
-  uses the new `*_local.yml` registrations and never reruns retired hosted snapshots.
+- Acceptance runs locally with agents; PR validation registrations stay disabled.
+  Production plan/apply use native local runners. On 2026-10-27 the owner authorized
+  a hosted release fallback after local Docker image-pull readiness failed.
+  `Build & Publish (manual)` may use hosted Ubuntu only with explicit founder
+  opt-in on exact master; its acceptance and promotion gates remain mandatory.
+  Other tracked workflows require local compute. Never rerun retired hosted snapshots.
 - Focused test: `uv run pytest <path>`.
 - Lint/typecheck: `just lint`.
 - Local development: `just dev`.
