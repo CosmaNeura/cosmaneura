@@ -1,5 +1,6 @@
 import copy
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -162,7 +163,10 @@ def test_existing_build_publish_and_deployment_steps_and_locks_are_preserved():
     after = release["jobs"]["deploy"]
     assert after["concurrency"] == before["concurrency"]
     assert after["environment"] == before["environment"]
-    assert after["permissions"] == before["permissions"]
+    assert after["permissions"] == before["permissions"] | {
+        "pull-requests": "read",
+        "issues": "read",
+    }
     assert after["env"] == before["env"]
     steps = [
         s
@@ -183,3 +187,45 @@ def test_existing_build_publish_and_deployment_steps_and_locks_are_preserved():
         if s.get("name") == "Resolve production frontend build configuration"
     )
     assert guard_index < credentials_index
+
+
+CLINICAL_REVIEW_BODY = "Reviewed exact head 08a5cdacc572530b1ad2cd5eb8908696a1f1b8d3. No blocking source findings. The medication verification limit is restricted to newly generated drafts and existing eligible fields; saved-note early returns and authorization/source checks remain intact. The compact renderer preserves complete selected text, speaker qualification and order.\n\nAll 15 changed files and 17 retained model/request/source binding chains were checked. Independent production tests passed 18/18; the exact 17-response replay reproduced the archived result byte-for-byte. The author’s separate focused suite reports 217 passes. The documented mmHg expansion, mixed editorial source text, duplicate follow-up and raw person-fixture parser limitation remain; this review does not claim live or universal clinical qualification.\n"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["valid", "head", "merge", "unmerged", "repository", "review_id", "author", "body"],
+)
+def test_separately_accepted_clinical_source_is_exactly_bound(mutation):
+    pr: dict[str, Any] = {
+        "number": 854,
+        "merged": True,
+        "merge_commit_sha": reuse.SOURCE_BASE_SHA,
+        "head": {"sha": reuse.CLINICAL_HEAD},
+        "base": {"ref": "master", "repo": {"full_name": reuse.REPOSITORY}},
+    }
+    review: dict[str, Any] = {
+        "id": reuse.CLINICAL_REVIEW_ID,
+        "issue_url": f"https://api.github.com/repos/{reuse.REPOSITORY}/issues/854",
+        "user": {"login": "JohnClem"},
+        "body": CLINICAL_REVIEW_BODY,
+    }
+    if mutation == "head":
+        pr["head"]["sha"] = "0" * 40
+    elif mutation == "merge":
+        pr["merge_commit_sha"] = "0" * 40
+    elif mutation == "unmerged":
+        pr["merged"] = False
+    elif mutation == "repository":
+        pr["base"]["repo"]["full_name"] = "other/repository"
+    elif mutation == "review_id":
+        review["id"] = 1
+    elif mutation == "author":
+        review["user"]["login"] = "other"
+    elif mutation == "body":
+        review["body"] += " Changed acceptance."
+    if mutation == "valid":
+        reuse.verify_clinical_review(pr, review)
+    else:
+        with pytest.raises(ValueError):
+            reuse.verify_clinical_review(pr, review)
