@@ -50,7 +50,10 @@ import {
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
-import { internalApiFetch } from "~/lib/billing-recovery"
+import {
+  billingRecoveryLocation,
+  internalApiFetch,
+} from "~/lib/billing-recovery"
 import { type Channel, resolveChannel } from "~/lib/channel"
 import {
   MCD_EMAIL_DOMAIN,
@@ -1418,6 +1421,7 @@ function ZoomStep({
 
 export function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
+  const accessReady = practice.entitled || practice.pilot_access_grant_active
 
   async function handleGoToCosmas() {
     setLoading(true)
@@ -1435,7 +1439,11 @@ export function AllSetStep({ practice }: { practice: PracticeStatus }) {
       setLoading(false)
       return
     }
-    window.location.href = href("/notes")
+    window.location.href = accessReady
+      ? href("/notes")
+      : billingRecoveryLocation(
+          new URL(href("/notes"), window.location.origin).href,
+        )
   }
 
   return (
@@ -1448,9 +1456,15 @@ export function AllSetStep({ practice }: { practice: PracticeStatus }) {
         transition={{ delay: 0.7, duration: 0.4 }}
         className="flex w-full flex-col items-center gap-3"
       >
-        <h2 className="text-3xl font-bold">You're all set!</h2>
+        <h2 className="text-3xl font-bold">
+          {accessReady ? "You're all set!" : "Your practice setup is saved"}
+        </h2>
         <p className="text-muted-foreground max-w-md text-base">
-          Your practice is on the Cosmaneura Inc BAA. Cosmas is ready.
+          {accessReady
+            ? "Your practice is on the Cosmaneura Inc BAA. Cosmas is ready."
+            : practice.role === "owner"
+              ? "Your practice is on the Cosmaneura Inc BAA. Billing needs attention before clinical tools can open."
+              : "Your practice setup is saved. Your practice owner needs to restore billing before clinical tools can open."}
         </p>
         <PracticeJoinPanel practice={practice} />
         <Button
@@ -1464,8 +1478,12 @@ export function AllSetStep({ practice }: { practice: PracticeStatus }) {
               <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
               Loading...
             </>
-          ) : (
+          ) : accessReady ? (
             "Go to Cosmas"
+          ) : practice.role === "owner" ? (
+            "Review billing"
+          ) : (
+            "Review practice access"
           )}
         </Button>
       </motion.div>
