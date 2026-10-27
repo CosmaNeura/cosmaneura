@@ -34,7 +34,7 @@ uncertain operations and successors retain their original template and text.
    opt-in in existing owner-scoped Settings; no account gets a default silently.
 4. Release the Scribe consumer afterward. Old Scribe versions keep the original
    template picker. The new consumer also keeps that picker on an older
-   receiver's 404/422; authorization, service errors and malformed receipts do
+   receiver's 422; authorization, service errors and malformed receipts do
    not become successful preference reads.
 5. On the selected synthetic account, create a custom preset, set/clear its
    default, reload Settings, then open a new eligible Scribe note. Verify the
