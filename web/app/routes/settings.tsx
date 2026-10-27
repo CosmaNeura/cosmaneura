@@ -11,6 +11,7 @@ import type { Route } from "./+types/settings"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { CreateNoteTemplate } from "~/components/CreateNoteTemplate"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
@@ -297,36 +298,42 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h3>Note Types</h3>
+      <h3>Note templates</h3>
       {noteSchemas.length > 0 ? (
-        <p>Below are the notes you've uploaded.</p>
+        <p>
+          Choose the sections used for future notes. Existing saved notes are
+          unchanged.
+        </p>
       ) : (
-        <p>Once you upload note types, they'll appear here.</p>
+        <p>
+          Start with SOAP, create your own sections, or upload an example below.
+        </p>
       )}
+      <CreateNoteTemplate onCreated={() => void revalidator.revalidate()} />
       {noteSchemas.map((schema) => (
         <div key={schema.id} className="flex flex-col rounded-lg border p-4">
-          <div
-            className="flex cursor-pointer items-center gap-4"
+          <button
+            type="button"
+            className="flex min-h-11 cursor-pointer items-center gap-4 text-left"
+            aria-expanded={expandedIds.includes(schema.id)}
             onClick={() => toggleExpand(schema.id)}
           >
-            <div className="font-medium">{schema.note_type}</div>
-            <div className="text-sm">
+            <span className="font-medium">{schema.note_type}</span>
+            <span className="text-sm">
               {schema.example_count}{" "}
               {pluralize("example", schema.example_count)}
-            </div>
-            <div className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
+            </span>
+            <span className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
               <ChevronDown
                 className={`h-4 w-4 transform transition-transform ${
                   expandedIds.includes(schema.id) ? "rotate-180" : ""
                 }`}
               />
-            </div>
-          </div>
+            </span>
+          </button>
           {expandedIds.includes(schema.id) && (
             <>
-              <p className="text-sm">
-                Here's the structure we've extracted from your note:
-              </p>
+              <p className="text-sm">Current sections and writing guidance:</p>
               <div className="mt-4 border-l-2 pl-4">
                 <div className="text-muted-foreground text-sm">
                   {Object.entries(schema.fields).map(([field, description]) => (
