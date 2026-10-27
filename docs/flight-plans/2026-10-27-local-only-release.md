@@ -1,7 +1,8 @@
 # Local-only acceptance and production execution
 
-Risk: Tier 2. Outcome: stop all GitHub-hosted compute, including production
-plan/apply/build/deploy, while preserving release authorization and evidence.
+Risk: Tier 2. Outcome: keep acceptance and PR validation local, with an explicit
+owner-authorized hosted release fallback after local execution failure. Preserve
+release authorization, validation prerequisites and evidence.
 
 ## Source and environment reconciliation
 
@@ -10,7 +11,10 @@ independently reviewed at 9b1a4c6e7136f3fcd9181987308e20e13314d95b and merged.
 Its full local backend acceptance passed 4,555 tests (1,626 existing skips);
 independent frontend acceptance passed 839 tests and all quality checks.
 Hosted CI was cancelled at the owner's request and is not described as passing.
-The owner explicitly requires zero hosted jobs, including release.
+The owner initially required zero hosted jobs, including release. After local
+plan/apply succeeded, the owner authorized hosted execution if the next local
+release step failed. The Docker image-pull readiness check failed on the shared
+daemon DNS on 2026-10-27, so the final manual release uses that fallback.
 
 Keep production data, selected database and credentials. Replace the three
 core workload images only through the existing founder manual promotion.
@@ -21,18 +25,20 @@ refresh it immediately before execution if production has changed.
 
 ## Execution controls
 
-All tracked workflows explicitly require self-hosted Linux runners. Production
-uses native ARM64 on the operator's Apple Silicon host; disabled validation
+Plan/apply and disabled validation workflows require self-hosted Linux runners.
+The final Build & Publish fallback uses hosted Ubuntu only when every job
+receives explicit founder opt-in on exact master; its input defaults false.
+Local production uses native ARM64 on the operator's Apple Silicon host; disabled validation
 registrations retain their separate X64 label. The .NET runner cannot execute
 reliably under QEMU, as confirmed by the first local connection attempt and
 official actions/runner issue 4778. Native runner 2.338.2 and yq are checksum-pinned;
 the same Nixpacks and 1Password versions select pinned ARM64 packages. Production
 image recipes retain their explicit linux/amd64 target. The
-three production workflows have new local-only registration paths; the old
+three production workflows have new registration paths; the old
 registrations remain permanently disabled so rerunning a historical hosted
 snapshot cannot incur charges. The old files are removed; Git and disabled
 workflow registrations retain the audit history.
-Only the three existing production workflows use `cosmaneura-production-local`.
+Local production plan/apply use `cosmaneura-production-local`.
 The other workflows use a separate validation label; do not register that label
 on a machine with production-capable Docker access. PR validation workflows
 remain disabled; agents run acceptance locally before one final push.
@@ -56,7 +62,7 @@ GitHub credential store or production configuration is mounted. The Docker
 socket is privileged access to the local Docker daemon: never admit PR or
 unmerged-branch code to this runner.
 
-Backend jobs use private per-runner Compose projects and internal networks,
+Local backend jobs use private per-runner Compose projects and internal networks,
 with no published service ports. Cleanup removes only that project's resources.
 Runner-only loopback forwarders preserve the database replay's existing local
 endpoint guard; they never bind a host interface. Cleanup verifies each
@@ -71,9 +77,12 @@ current-master rechecks and production concurrency controls.
 
 ## Repository settings and security
 
-Repository Actions stays disabled until source review, runner admission and
-security runner settings are verified. Disable all legacy/nonproduction workflow
-registrations before enabling only the three local manual production workflows.
+Actions is enabled only for the three reviewed manual production registrations.
+Source review, local admission and security controls were verified before activation.
+The hosted Build & Publish fallback requires a false-by-default opt-in and both
+founder actors on exact master before any job starts. Its matrix and backend
+aggregate checks remain mandatory; test services stay on disposable hosted VMs. Disable all legacy/nonproduction workflow
+registrations before enabling only the three reviewed manual production workflows.
 Do not rerun historical hosted snapshots.
 
 Preserve secret scanning, push protection, dependency records and existing
@@ -93,8 +102,8 @@ GitHub reads only the canonical `.github/dependabot.yml` filename. Preserve all
 alerts and dependency records. Restore that filename and enable automated jobs
 only after their isolated local runner selection is verified; the preserved
 ecosystem/grouping policy is unchanged. Do not weaken secret scanning or push
-protection. Actions remains disabled until this final source change is reviewed
-and merged and all compute controls are verified.
+protection. The owner-authorized hosted fallback leaves these generated-job controls paused.
+Restore automated jobs only after their compute routing is verified.
 
 ## Acceptance and promotion sequence
 
@@ -110,8 +119,9 @@ and merged and all compute controls are verified.
    and digest. Use neither stale preliminary-plan evidence nor fabricated run IDs.
 7. Replay the owner-confirmed synthetic Recall `recording.done` event immediately
    before release; require a fresh real provider-signed HTTP200 receipt.
-8. Dispatch the existing Build & Publish manual workflow. All jobs execute locally;
-   its full acceptance prerequisites and production gates remain mandatory.
+8. Dispatch Build & Publish manually with `github_hosted_fallback_authorized=true`
+   only for the owner-authorized fallback. Its full acceptance prerequisites and
+   production gates remain mandatory; automatic PR workflows stay disabled.
 9. Verify running revision/image digest, schema and availability; refresh the
    reconciliation evidence. Remove ephemeral registrations and owned test services.
 
@@ -119,7 +129,7 @@ and merged and all compute controls are verified.
 
 Keep Actions disabled if runner/security isolation cannot be established. A
 reviewed forward revert can restore workflow source, but never re-enable hosted
-execution without the owner's new authorization. Preserve production data and
+execution beyond the explicit manual release fallback without the owner's new authorization. Preserve production data and
 additive schema structures; recover workloads using the previously verified
 image digest through the existing manual controls. Runner interruption removes
 only uniquely owned local resources and its own JIT registration.
