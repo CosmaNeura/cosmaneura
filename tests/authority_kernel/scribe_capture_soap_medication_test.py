@@ -49,7 +49,7 @@ def test_soap_keeps_medication_uncertainty_when_generated_objective_is_replaced(
     remaining, rendered = grounding.resolve(raw, max_bytes=10000)
     assert rendered == {
         "Objective": LIMITATION
-        + "\n\nSelected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\n"
+        + "\n\nSelected transcript source context (questions are not findings):\n- Unidentified speaker: "
         + text
     }
     assert "Takes no medications" not in rendered["Objective"]
@@ -83,7 +83,7 @@ def test_soap_named_past_and_future_source_words_keep_order_without_list_verific
         rendered["Objective"]
         == LIMITATION
         + "\n\nSelected transcript source context (questions are not findings):\n"
-        + "\n\n".join("Transcript — Unidentified speaker:\n" + text for text in texts)
+        + "\n".join("- Unidentified speaker: " + text for text in texts)
     )
 
 
@@ -104,12 +104,12 @@ def test_only_first_eligible_objective_receives_fallback_limitation():
     assert sum(value.count(LIMITATION) for value in rendered.values()) == 1
 
 
-def test_dedicated_medication_field_preserves_existing_bytes_without_objective_duplicate():
+def test_dedicated_medication_field_preserves_complete_source_without_objective_duplicate():
     fields = (*SOAP, "Medications")
     text = "I have not taken any new medicine."
     grounding, raw = response(fields, [text], selected=[1])
     _, rendered = grounding.resolve(raw, max_bytes=10000)
-    source = "Transcript — Unidentified speaker:\n" + text
+    source = "- Unidentified speaker: " + text
     assert (
         rendered["Objective"]
         == "Selected transcript source context (questions are not findings):\n" + source
@@ -127,7 +127,7 @@ def test_no_objective_does_not_place_medication_limitation_in_other_history_fiel
     assert set(rendered) == {"ROS", "Allergies"}
     assert all(
         value
-        == "Selected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\nUnidentified source."
+        == "Selected transcript source context (questions are not findings):\n- Unidentified speaker: Unidentified source."
         for value in rendered.values()
     )
 

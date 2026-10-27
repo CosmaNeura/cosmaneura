@@ -232,8 +232,9 @@ class ReportedHistoryGrounding:
         return sorted(value)
 
     def _render(self, indexes):
-        return "\n\n".join(
-            f"{self.sources[index - 1].attribution}:\n{self.sources[index - 1].text}"
+        return "\n".join(
+            f"- {self.sources[index - 1].attribution.removeprefix('Transcript — ')}: "
+            f"{self.sources[index - 1].text}"
             for index in indexes
         )
 

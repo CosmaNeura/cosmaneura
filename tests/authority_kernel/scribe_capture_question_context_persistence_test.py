@@ -65,7 +65,7 @@ async def test_actual_capture_saves_question_context_once_and_replays_without_mo
     assert "no other injury" not in objective.lower()
     assert "unanswered" not in objective.lower()
     assert result.fields["P - PLAN"] == (
-        "Transcript — Unidentified speaker:\nAvoid heavy lifting for five days."
+        "- Unidentified speaker: Avoid heavy lifting for five days."
     )
     assert len(rows(f, AIVisitNote)) == len(rows(f, AIVisitTranscript)) == 1
     assert await notes.capture_note(**{**args, "prepare": False}) == result
