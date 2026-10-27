@@ -268,14 +268,17 @@ def capture_response_schema(
     )
     if not plan_fields and not (history_grounding and history_grounding.fields):
         return fields
-    properties = {"fields": fields}
+    properties = {}
     if plan_fields:
+        # Request source selection before narrative generation. The same
+        # source-extractive contract and independent resolver still apply.
         properties["plan_source_refs"] = closed(
             {
                 name: {"type": "array", "items": {"type": "integer"}}
                 for name in plan_fields
             }
         )
+    properties["fields"] = fields
     if history_grounding and history_grounding.fields:
         properties[history.KEY] = history_grounding.schema()
     return closed(properties)
