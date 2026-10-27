@@ -7,7 +7,7 @@ capture_started fence survives every event, including a permission denial.
 import json
 import re
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from redis.exceptions import RedisError
 
@@ -80,7 +80,7 @@ def handle_bot_terminal(payload: dict) -> None:
 
     redis = get_redis()
     binding_key = f"recall:bot:{bot_id}:zoom_capture"
-    raw = redis.get(binding_key)
+    raw = cast(str | bytes | None, redis.get(binding_key))
     if not raw:
         # A callback can precede Create Bot's response/publication. Never infer
         # the doctor, meeting or occurrence from provider-supplied metadata.
@@ -114,7 +114,7 @@ def handle_bot_terminal(payload: dict) -> None:
         prefix + ":bot_id",
         prefix + ":recording_active",
         prefix + ":capture_terminal",
-        raw,
+        cast(str, raw),
         binding["occurrence"],
         binding["doctor_id"],
         bot_id,
@@ -134,8 +134,11 @@ def for_meeting(meeting) -> CaptureStatus | None:
     if not meeting.capture_authorization_consumed_at:
         return None
     try:
-        raw = get_redis().get(
-            f"recall:meeting:{meeting.zoom_meeting_id}:capture_terminal"
+        raw = cast(
+            str | bytes | None,
+            get_redis().get(
+                f"recall:meeting:{meeting.zoom_meeting_id}:capture_terminal"
+            ),
         )
         value = json.loads(raw) if raw else {}
         if (

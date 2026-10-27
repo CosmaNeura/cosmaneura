@@ -57,6 +57,7 @@ async def test_actual_capture_saves_question_context_once_and_replays_without_mo
     f = admission_case
     args, model = await case(f, monkeypatch)
     result = await notes.capture_note(**args)
+    assert result.fields is not None
     objective = result.fields["O - OBJECTIVE"]
     assert "Selected transcript source context" in objective
     assert "Did you fall or have another injury?" in objective

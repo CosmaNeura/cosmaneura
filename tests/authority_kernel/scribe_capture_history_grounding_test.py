@@ -29,7 +29,9 @@ def contract(texts, *, plan_fields=("P - PLAN",)):
 def response(
     grounding, *, objective=(), current=(), changes=(), extra=None, has_plans=True
 ):
-    refs: dict[str, object] = {field: {"source_refs": []} for field in grounding.fields}
+    refs: dict[str, dict[str, list[int]]] = {
+        field: {"source_refs": []} for field in grounding.fields
+    }
     refs["O - OBJECTIVE"]["source_refs"] = list(objective)
     refs["Medications"] = {
         "current_list": list(current),

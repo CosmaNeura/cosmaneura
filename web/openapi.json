@@ -8061,8 +8061,7 @@
                 "type": "null"
               }
             ],
-            "title": "Capture Status",
-            "default": null
+            "title": "Capture Status"
           }
         },
         "additionalProperties": false,
