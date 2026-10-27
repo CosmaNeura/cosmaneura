@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+from click import unstyle
 from typeid import TypeID
 from typer.testing import CliRunner
 
@@ -85,7 +86,7 @@ def test_cli_orphan_apply_still_requires_reviewed_hash_before_any_prompt(command
     result = CliRunner().invoke(cli.app, [*args, "--recover-orphaned-owner", "--apply"])
     assert result.exit_code == 2 and calls == []
     assert (
-        "--confirm-plan-sha256" in result.output
+        "--confirm-plan-sha256" in unstyle(result.output)
         and "primary email" not in result.output
     )
 
@@ -94,7 +95,7 @@ def test_cli_apply_without_hash_does_not_prompt_or_call_service(command):
     args, calls = command
     result = CliRunner().invoke(cli.app, [*args, "--apply"])
     assert result.exit_code == 2
-    assert "--confirm-plan-sha256" in result.output
+    assert "--confirm-plan-sha256" in unstyle(result.output)
     assert "primary email" not in result.output and calls == []
 
 

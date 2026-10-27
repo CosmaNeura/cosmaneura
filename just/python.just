@@ -156,6 +156,11 @@ py_test-ci-application:
 [script]
 py_test-ci-infrastructure-general:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-general is CI-only" >&2; exit 1; }
+	# Synthetic native-path fixtures exercise the reviewed /private/tmp guards.
+	if [[ "$(uname -s)" == "Linux" && ! -d /private/tmp ]]; then
+		sudo install -d -m 1777 /private/tmp
+	fi
+	export TMPDIR=/private/tmp
 	uv run pytest tests/infrastructure --verbosity=2 \
 		--ignore-glob='tests/infrastructure/test_staging_controller_receipt_v2*.py' \
 		--ignore-glob='tests/infrastructure/test_staging_restore_*.py' \

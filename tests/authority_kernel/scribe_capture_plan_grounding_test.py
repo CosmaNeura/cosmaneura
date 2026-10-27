@@ -140,7 +140,10 @@ async def test_actual_iphone55_shape_unspoken_plan_cannot_be_saved(
     assert result.fields is not None
     assert result.fields["Patient"] == "Avery Morgan"
     assert len(model.calls) == 1
-    assert "complaint, symptom, question, current medication/history" in model.calls[0]
+    assert (
+        "Select history, symptoms, measurements, function, explicit negatives, "
+        "medication reports and relevant clinical requests" in model.calls[0]
+    )
     assert "no plan was discussed, use an empty array" in model.calls[0]
     assert len(rows(f, AIVisitNote)) == len(rows(f, AIVisitTranscript)) == 1
     assert (await notes.capture_note(**{**args, "prepare": False})) == result
@@ -375,6 +378,7 @@ async def test_nonempty_plan_is_rejected_before_note_and_empty_channel_can_retry
     assert len(rows(f, AIVisitTranscript)) == 1
     f.model.output = '{"CC":"Sleep","Plan":""}'
     saved = await notes.capture_note(**args)
+    assert saved.fields is not None
     assert saved.fields["Plan"] == plans.REVIEW_REQUIRED
     assert (await notes.capture_note(**{**args, "prepare": False})) == saved
     assert (await notes.capture_note(**args)) == saved
