@@ -15,6 +15,56 @@ def docker(*args: str) -> str:
     return subprocess.check_output(["docker", *args], text=True).strip()
 
 
+def create_network(project: str, runner: str) -> None:
+    # Different ephemeral workers allocate through the same local daemon.
+    # A failed overlap claim creates nothing; rescan instead of failing a job.
+    for _ in range(8):
+        network_ids = docker("network", "ls", "-q").split()
+        networks = json.loads(docker("network", "inspect", *network_ids))
+        occupied = [
+            ipaddress.ip_network(config["Subnet"])
+            for network in networks
+            for config in (network.get("IPAM", {}).get("Config") or [])
+            if config.get("Subnet")
+        ]
+        subnet = next(
+            (
+                f"10.252.{index}.0/24"
+                for index in range(1, 255)
+                if not any(
+                    ipaddress.ip_network(f"10.252.{index}.0/24").overlaps(other)
+                    for other in occupied
+                    if other.version == 4
+                )
+            ),
+            None,
+        )
+        if subnet is None:
+            raise SystemExit("No isolated local test subnet is available.")
+        result = subprocess.run(
+            [
+                "docker",
+                "network",
+                "create",
+                "--internal",
+                "--subnet",
+                subnet,
+                "--label",
+                f"cosmaneura.local-runner={runner}",
+                project,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            return
+        if "Pool overlaps with other one on this address space" not in result.stderr:
+            raise SystemExit(
+                "Local test network creation failed; no retry for non-overlap errors."
+            )
+    raise SystemExit("Concurrent local test subnet allocation did not settle.")
+
+
 def main() -> None:
     runner = os.environ.get("LOCAL_RUNNER_CONTAINER", "")
     if not re.fullmatch(r"cosma-local-runner-[a-f0-9]{16}", runner):
@@ -58,28 +108,6 @@ def main() -> None:
     if sys.argv[1:] != ["start"] or state_path.exists():
         raise SystemExit("Expected start or stop for one local job.")
     project = "cosma-local-tests-" + hashlib.sha256(runner.encode()).hexdigest()[:16]
-    network_ids = docker("network", "ls", "-q").split()
-    networks = json.loads(docker("network", "inspect", *network_ids))
-    occupied = [
-        ipaddress.ip_network(config["Subnet"])
-        for network in networks
-        for config in (network.get("IPAM", {}).get("Config") or [])
-        if config.get("Subnet")
-    ]
-    subnet = next(
-        (
-            f"10.252.{index}.0/24"
-            for index in range(1, 255)
-            if not any(
-                ipaddress.ip_network(f"10.252.{index}.0/24").overlaps(other)
-                for other in occupied
-                if other.version == 4
-            )
-        ),
-        None,
-    )
-    if subnet is None:
-        raise SystemExit("No isolated local test subnet is available.")
     source = str(Path("docker-compose.yml").resolve())
     override = Path(os.environ["RUNNER_TEMP"]) / "local-compose.yml"
     override.write_text(
@@ -90,16 +118,7 @@ def main() -> None:
         )
         + f"networks:\n  default:\n    external: true\n    name: {project}\n"
     )
-    docker(
-        "network",
-        "create",
-        "--internal",
-        "--subnet",
-        subnet,
-        "--label",
-        f"cosmaneura.local-runner={runner}",
-        project,
-    )
+    create_network(project, runner)
     state_path.write_text(
         json.dumps({"project": project, "source": source, "override": str(override)})
     )

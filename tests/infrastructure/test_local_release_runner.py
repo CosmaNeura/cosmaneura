@@ -15,6 +15,12 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+services_spec = importlib.util.spec_from_file_location(
+    "local_ci_services", ROOT / "scripts/local_ci_services.py"
+)
+assert services_spec is not None and services_spec.loader is not None
+services = importlib.util.module_from_spec(services_spec)
+services_spec.loader.exec_module(services)
 
 
 def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
@@ -120,3 +126,51 @@ def test_cleanup_validates_ownership_before_removing_attached_resources(
     with pytest.raises(SystemExit, match="Refusing cleanup"):
         runner.cleanup(name)
     assert removed == [["docker", "rm", "--force", name]]
+
+
+def test_concurrent_network_claim_rescans_after_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claims = []
+
+    def inventory(*args: str) -> str:
+        if args == ("network", "ls", "-q"):
+            return "network"
+        configs = [{"Subnet": "10.252.1.0/24"}] if claims else []
+        return json.dumps([{"IPAM": {"Config": configs}}])
+
+    def claim(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        claims.append(command[command.index("--subnet") + 1])
+        if len(claims) == 1:
+            return subprocess.CompletedProcess(
+                command, 1, stderr="Pool overlaps with other one on this address space"
+            )
+        return subprocess.CompletedProcess(command, 0, stderr="")
+
+    monkeypatch.setattr(services, "docker", inventory)
+    monkeypatch.setattr(services.subprocess, "run", claim)
+    services.create_network("project", "runner")
+    assert claims == ["10.252.1.0/24", "10.252.2.0/24"]
+
+
+def test_network_creation_does_not_retry_other_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def inventory(*args: str) -> str:
+        return (
+            "network"
+            if args == ("network", "ls", "-q")
+            else '[{"IPAM":{"Config":null}}]'
+        )
+
+    def claim(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1, stderr="permission denied")
+
+    monkeypatch.setattr(services, "docker", inventory)
+    monkeypatch.setattr(services.subprocess, "run", claim)
+    with pytest.raises(SystemExit, match="non-overlap"):
+        services.create_network("project", "runner")
+    assert len(calls) == 1

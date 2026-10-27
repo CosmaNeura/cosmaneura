@@ -24,22 +24,23 @@ refresh it immediately before execution if production has changed.
 All tracked workflows explicitly require self-hosted Linux X64 runners. The
 three production workflows have new local-only registration paths; the old
 registrations remain permanently disabled so rerunning a historical hosted
-snapshot cannot incur charges. The old files are removed; Git and disabled workflow registrations retain the
-audit history.
+snapshot cannot incur charges. The old files are removed; Git and disabled
+workflow registrations retain the audit history.
 Only the three existing production workflows use `cosmaneura-production-local`.
 The other workflows use a separate validation label; do not register that label
 on a machine with production-capable Docker access. PR validation workflows
 remain disabled; agents run acceptance locally before one final push.
 
 `scripts/local_release_runner.py` accepts only an active founder manual run at
-exact current master. Its root-owned pre-job hook runs before checkout and admits only those exact
-master workflow paths, founder actors, manual events and the pinned target SHA, run ID and attempt.
+exact current master. Its root-owned pre-job hook runs before checkout and admits
+only those exact master workflow paths, founder actors, manual events and the
+pinned target SHA, run ID and attempt.
 Run-specific runner labels prevent another queued release consuming the worker.
 Rejection kills the exact disposable container before an always()/failure() step
 can execute; API failure also terminates listener/worker processes in its private
 PID namespace. Cleanup validates the exact network and attached-project owners
 before deleting test resources.
-The target is stored in a root-owned0444 file before the runner starts; job
+The target is stored in a root-owned mode-0444 file before the runner starts; job
 environment values cannot replace it. Registration is repository-scoped and
 requires no expansion of the existing GitHub token scope. Each checksum-verified
 official runner accepts one job, then exits. JIT credentials arrive through
@@ -50,6 +51,8 @@ unmerged-branch code to this runner.
 
 Backend jobs use private per-runner Compose projects and internal networks,
 with no published service ports. Cleanup removes only that project's resources.
+Subnet claims rescan after a concurrent overlap and fail on unrelated errors.
+The runner includes checksum-pinned yq for the existing deployment tests.
 Local CI disables secret discovery through 1Password while retaining the normal
 synthetic test configuration and existing assertions. Protected production jobs
 remain separate, bind credentials at their existing steps, and retain the
@@ -63,14 +66,17 @@ security runner settings are verified. Disable all legacy/nonproduction workflow
 registrations before enabling only the three local manual production workflows.
 Do not rerun historical hosted snapshots.
 
-Preserve secret scanning, push protection, dependency graph, Dependabot alerts
-and security updates. GitHub supports labeled self-hosted Dependabot runners;
-configure that supported option before Actions is re-enabled. Default CodeQL is
-currently not configured and automatic dependency submission is disabled.
-Generated workflow names in the historical inventory do not prove active
-scanning. Do not disable security features to get around the hosted-compute ban.
-If a security runner setting is unavailable, leave Actions disabled and resolve
-the exact control with the owner before release.
+Preserve secret scanning, push protection, dependency records and existing
+alerts. Generated CodeQL, Dependabot Updates and Dependency Graph jobs require
+separate compute controls: recent CodeQL runs succeeded even though the default
+setup API now reports not-configured while Actions is disabled. That API response
+does not establish inactivity. GitHub supports labeled self-hosted Dependabot
+runners; verify supported local routing before enabling an automated job.
+Automatic approval review rejected pausing the three generated registrations
+without explicit owner acceptance of the scan/update/submission gap. Leave
+Actions disabled while that exact decision is pending. An approved temporary
+pause must be recorded, and local replacements must be verified before any
+generated job is enabled again. Do not weaken secret scanning or push protection.
 
 ## Acceptance and promotion sequence
 
