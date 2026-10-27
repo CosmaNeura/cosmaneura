@@ -159,6 +159,7 @@ def test_schedule_list_redacts_target_join_url_during_view_as(
             "status": "scheduled",
             "appointment_id": None,
             "capture_authorized": False,
+            "capture_status": None,
         }
     ]
     mock_sync.queue.assert_not_called()

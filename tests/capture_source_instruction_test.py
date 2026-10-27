@@ -50,6 +50,7 @@ def test_actual_instruction_leakage_is_still_reproduced_and_failed_by_oracle():
     spec = importlib.util.spec_from_file_location(
         "instruction_regression_oracle", root / "tools/capture-retention/oracle.py"
     )
+    assert spec is not None and spec.loader is not None
     oracle = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(oracle)
     result = oracle.evaluate(retained, output)
