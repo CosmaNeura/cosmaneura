@@ -148,7 +148,10 @@ def verify_validation(run: dict, job_response: dict, log: str) -> None:
         "Acceptance totals differ or logs are incomplete.",
     )
     require(
-        not re.search(r"(?m)^(ERROR |SUBFAIL |.* errors? during collection)", plain),
+        not re.search(
+            r"(?m)^(ERROR (?:tests/|collecting\b|\S+::)|SUBFAIL |.* errors? during collection)",
+            plain,
+        ),
         "Additional collection/subtest error.",
     )
     require(

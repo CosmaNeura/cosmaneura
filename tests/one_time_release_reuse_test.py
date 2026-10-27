@@ -64,6 +64,26 @@ def test_exact_completed_acceptance_is_reusable():
 
 
 @pytest.mark.parametrize(
+    "line,accepted",
+    [
+        ("ERROR [celery.redirected] task framework event", True),
+        ("ERROR [kombu.connection] task framework event", True),
+        ("ERROR tests/other.py - ImportError: broken collection", False),
+        ("ERROR collecting tests/other.py", False),
+        ("ERROR other.py::test_setup - RuntimeError: broken fixture", False),
+        ("SUBFAIL tests/other.py::test_subcase", False),
+    ],
+)
+def test_real_logger_lines_are_distinct_from_pytest_errors(line, accepted):
+    run, jobs, log = evidence()
+    if accepted:
+        reuse.verify_validation(run, jobs, line + "\n" + log)
+    else:
+        with pytest.raises(ValueError):
+            reuse.verify_validation(run, jobs, line + "\n" + log)
+
+
+@pytest.mark.parametrize(
     "key,value",
     [
         ("id", 1),
