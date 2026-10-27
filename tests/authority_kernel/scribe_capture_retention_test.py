@@ -109,7 +109,8 @@ async def test_actual_template_shape_reaches_single_model_request(
     assert fields["required"] == list(headings)
     assert fields["additionalProperties"] is False
     if plan_fields:
-        assert actual["required"] == ["fields", "plan_source_refs"]
+        assert list(actual["properties"]) == ["plan_source_refs", "fields"]
+        assert actual["required"] == ["plan_source_refs", "fields"]
         refs = actual["properties"]["plan_source_refs"]
         assert refs["required"] == ["P - PLAN"]
         assert refs["properties"]["P - PLAN"] == {

@@ -59,7 +59,7 @@ def test_fabricated_model_words_roles_numbers_and_split_quotes_are_not_published
     _, rendered = g.resolve(response(g, objective=[1]), max_bytes=10000)
     assert (
         rendered["O - OBJECTIVE"]
-        == "Selected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\n"
+        == "Selected transcript source context (questions are not findings):\n- Unidentified speaker: "
         + source
     )
     assert "9/10" not in rendered["O - OBJECTIVE"]
@@ -240,7 +240,7 @@ def test_typed_scratch_source_retains_its_distinct_attribution():
     )
     _, rendered = g.resolve(response(g, objective=[1, 2]), max_bytes=10000)
     assert (
-        "Clinician's saved scratch notes:\nClinician's separately saved observation."
+        "- Clinician's saved scratch notes: Clinician's separately saved observation."
         in rendered["O - OBJECTIVE"]
     )
 
@@ -273,5 +273,5 @@ def test_strict_saved_shape_and_existing_plan_resolver_are_preserved(has_plans):
     if has_plans:
         assert (
             fields["P - PLAN"]
-            == "Transcript — Unidentified speaker:\nWe will follow up in seven days."
+            == "- Unidentified speaker: We will follow up in seven days."
         )

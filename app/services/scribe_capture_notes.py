@@ -268,14 +268,17 @@ def capture_response_schema(
     )
     if not plan_fields and not (history_grounding and history_grounding.fields):
         return fields
-    properties = {"fields": fields}
+    properties = {}
     if plan_fields:
+        # Request source selection before narrative generation. The same
+        # source-extractive contract and independent resolver still apply.
         properties["plan_source_refs"] = closed(
             {
                 name: {"type": "array", "items": {"type": "integer"}}
                 for name in plan_fields
             }
         )
+    properties["fields"] = fields
     if history_grounding and history_grounding.fields:
         properties[history.KEY] = history_grounding.schema()
     return closed(properties)
@@ -1447,6 +1450,9 @@ async def capture_note(
     note = _validated_note(raw_fields, inputs.schema.fields)
     note.update(grounded_plans)
     note.update(grounded_history)
+    note = history.with_medication_verification_limit(
+        note, plan_fields=plan_grounding.fields
+    )
     # The selected source text can be larger than the model's integer refs.
     # Apply the same complete-note bounds before any storage/finalization.
     note = _validated_note(orjson.dumps(note).decode(), inputs.schema.fields)

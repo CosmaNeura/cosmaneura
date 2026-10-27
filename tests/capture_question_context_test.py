@@ -53,8 +53,8 @@ def test_partial_multipart_request_and_response_keep_exact_neutral_source():
     assert note["Objective"] == (
         "Current medication list is unverified; review the source statements.\n\n"
         "Selected transcript source context (questions are not findings):\n"
-        "Transcript — Unidentified speaker:\nDid you fall or have another injury?\n\n"
-        "Transcript — Unidentified speaker:\nI did not fall."
+        "- Unidentified speaker: Did you fall or have another injury?\n"
+        "- Unidentified speaker: I did not fall."
     )
     assert all(note["Objective"].count(text) == 1 for text in texts)
     assert "no other injury" not in note["Objective"].lower()
@@ -254,7 +254,7 @@ def test_recording_boundary_is_never_selectable_and_scratch_remains_typed():
     with pytest.raises(history.HistoryGroundingInvalid):
         render(typed, envelope(typed, [2]))
     out = render(typed, envelope(typed, [1, 3]))["Objective"]
-    assert "Clinician's saved scratch notes:\nSeparate clinician observation." in out
+    assert "- Clinician's saved scratch notes: Separate clinician observation." in out
     assert "Recording boundary" not in out
 
 

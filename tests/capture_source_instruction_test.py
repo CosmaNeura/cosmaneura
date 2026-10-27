@@ -45,17 +45,26 @@ def test_actual_instruction_leakage_is_still_reproduced_and_failed_by_oracle():
         hashlib.sha256(raw.encode()).hexdigest() == retained["actualRawResponseSHA256"]
     )
     g = grounding([e["content"] for e in retained["entries"]])
+    # Diagnose the retained selection through the current renderer without
+    # rewriting the historical saved output or representing this as a new call.
+    archived = retained["actualSavedFields"]
     output = render(g, raw)
-    assert output == retained["actualSavedFields"]
+    assert output["Subjective"] == archived["Subjective"]
+    assert output["Assessment"] == archived["Assessment"]
+    assert output["Plan"] == archived["Plan"]
+    for entry in retained["entries"]:
+        if entry["content"] in archived["Objective"]:
+            assert entry["content"] in output["Objective"]
     spec = importlib.util.spec_from_file_location(
         "instruction_regression_oracle", root / "tools/capture-retention/oracle.py"
     )
     assert spec is not None and spec.loader is not None
     oracle = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(oracle)
-    result = oracle.evaluate(retained, output)
-    assert not result["passed"]
-    assert "no-source-instruction-compliance" in result["failures"]
+    for fields in (archived, output):
+        result = oracle.evaluate(retained, fields)
+        assert not result["passed"]
+        assert "no-source-instruction-compliance" in result["failures"]
     # The prompt cannot repair this already-received selection. No substring
     # filter or oracle calibration is allowed to convert the old leak to PASS.
 

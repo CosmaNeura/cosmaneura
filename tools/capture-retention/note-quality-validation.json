@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "riskTier": 2,
+  "sourceCommits": {
+    "planFirst": "660ea461c3aee811aa09dccaf6a139e1507d8d53",
+    "medicationVerification": "174216c0a4449aabdd6fb2984bbdc93824cf59d4",
+    "compactRendering": "b870bbe6449ac44a11d96f01164c2cbc6a5ec2b1"
+  },
+  "runtimeFilesSHA256": {
+    "app/services/scribe_capture_notes.py": "6154c22719f6da98f42c8f402db67fd312ce98df092266d75d5ad63d44f2c8ab",
+    "app/services/scribe_capture_history_grounding.py": "ef1ae31c27df7f96f598dd57fb9a8313628623bda68d998817e8334e8b9103b7",
+    "app/services/scribe_capture_plan_grounding.py": "a9e8f81231e4f59d9ec79c0cec942d652a967858f58a4b21505ee7a445e6661e"
+  },
+  "focusedTests": {
+    "passed": 217,
+    "failures": 0,
+    "providerCalls": 0,
+    "ownedSchemaDropped": true,
+    "ruff": "PASS"
+  },
+  "relatedBaselineTests": {
+    "passed": 79,
+    "failed": 2,
+    "reason": "Existing pre848 Plan-attribution string expectations; retained baseline result before rendering edits. Expectations updated to the already existing Plan bullet output."
+  },
+  "actualModelQualification": {
+    "configuredModel": "gpt-4.1-2025-04-14",
+    "calls": 17,
+    "timeoutSeconds": 30,
+    "sdkRetries": 0,
+    "minimumInterCallSeconds": 65,
+    "databaseConnections": 0,
+    "savedNoteRegenerations": 0,
+    "matrixManifestSHA256": "b71adc67e3fd9389e7222750d306aff81c3b0a53ad9a1f5d2be8144e32bae44f",
+    "matrixRootSelectionSHA256": "c75111a8a391dad31101cc102872cc98ed71dabbe24db84af1060ad0f546c8b2",
+    "matrixSummarySHA256": "783905222be93c9630c939fece286d298e090509dedae3ca9d994d285e2e26ba",
+    "rawAndStrengthenedMatrixPass": 15,
+    "calibratedMatrixPass": 16,
+    "requiredPlanMatrixPass": 16,
+    "matrixCalls": 16,
+    "initialKnownRoleCasePass": true,
+    "localPacingGuardStopsBeforeProvider": 1,
+    "minimumMeasuredRequestGapMinusPriorSDKSeconds": 75.256,
+    "archivedDecodedResponsesAndSourceBindingsVerified": true
+  },
+  "offlineRenderingReplay": {
+    "calls": 0,
+    "cases": 17,
+    "exactPreFormatFieldsReproduced": true,
+    "allCompleteEntryBytesRolesAndOrderPreserved": true,
+    "allOtherFieldsAndPlanUnchanged": true,
+    "knownRoleNotesEntirelyUnchanged": true,
+    "promptAndSchemaInputsUnchanged": true,
+    "onlyChangedProductionMethod": "ReportedHistoryGrounding._render",
+    "reportSHA256": "fd95becdcfc39aeef67803668ae9c31dca0e1e01f44bf84243fc8b8e41f193d7",
+    "allOriginalOracleFilesUnchanged": true,
+    "priorGradesNotRecomputed": true
+  },
+  "rows": [
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 27,
+      "afterSerializedLines": 27
+    },
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 2
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 25,
+      "afterSerializedLines": 25
+    },
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 3
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 25,
+      "afterSerializedLines": 25
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 64,
+      "afterSerializedLines": 29
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 67,
+      "afterSerializedLines": 30
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 2
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 67,
+      "afterSerializedLines": 30
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 2
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 67,
+      "afterSerializedLines": 30
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 3
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 67,
+      "afterSerializedLines": 30
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 3
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 67,
+      "afterSerializedLines": 30
+    },
+    {
+      "item": {
+        "case": "RET-01-corrected-pain",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 14,
+      "afterSerializedLines": 9
+    },
+    {
+      "item": {
+        "case": "RET-02-prior-current-headache",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 8,
+      "afterSerializedLines": 7
+    },
+    {
+      "item": {
+        "case": "RET-03-explicit-negative-history",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 14,
+      "afterSerializedLines": 9
+    },
+    {
+      "item": {
+        "case": "RET-04-medication-unknown-vs-unchanged",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 8,
+      "afterSerializedLines": 7
+    },
+    {
+      "item": {
+        "case": "RET-05-question-without-answer",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 8,
+      "afterSerializedLines": 7
+    },
+    {
+      "item": {
+        "case": "RET-06-unresolved-number-conflict",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 8,
+      "afterSerializedLines": 7
+    },
+    {
+      "item": {
+        "case": "RET-07-person-and-role-boundary",
+        "repetition": 1
+      },
+      "rawFinitePass": false,
+      "rawFailures": [
+        "morgan-headache"
+      ],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 11,
+      "afterSerializedLines": 8
+    },
+    {
+      "item": {
+        "case": "RET-08-source-instructions-and-plan-guard",
+        "repetition": 1
+      },
+      "rawFinitePass": true,
+      "rawFailures": [],
+      "calibratedFinitePass": true,
+      "requiredPlanPass": true,
+      "completeTextRoleOrderReplayPass": true,
+      "otherFieldsAndPlanUnchanged": true,
+      "beforeSerializedLines": 8,
+      "afterSerializedLines": 7
+    }
+  ],
+  "limitations": [
+    "Finite samples do not establish universal clinical completeness, usability, native capture continuity or deployment readiness.",
+    "Editorial text sharing a required complete source entry remains; source32 chatter and duplicate follow-up are not removed.",
+    "One known-role output adds conventional mmHg units absent from source; the strict source-fidelity finding remains recorded, distinct from clinically material lost negation or medication scope.",
+    "RET07 raw and strengthened morgan-headache failure remains: the original parser misses the first neutral context header. The preselected unchanged calibrationV2 accepts that exact frame; actual complete source units retain each person correctly.",
+    "R3 omits optional literal question14 but preserves the no-fall reply without inventing no other injury.",
+    "No new field is created when a schema lacks a recognized nonexcluded Medication or Objective destination.",
+    "Serialized line counts measure stored formatting, not visual UI height."
+  ],
+  "fullClinicalAcceptance": false,
+  "fullUsabilityAcceptance": false
+}
