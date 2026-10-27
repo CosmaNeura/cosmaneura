@@ -247,7 +247,8 @@ async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
         sdk,
         downstream,
         outer=outer,
-        seconds=0.05,
+        # Exercise in-flight token cancellation, not a race with SDK entry.
+        seconds=1,
         pool_enabled=pool_enabled,
     )
     async with app.router.lifespan_context(app):
@@ -255,14 +256,18 @@ async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
-            first = await client.post(PATH)
-            assert first.status_code == 504
-            await cleanup.wait()
-            assert sdk.closed == 0 and len(owner._operations) == 1
-            second = await client.post(PATH)
-            assert second.status_code == 503 and sdk.calls == 1
-            assert not slots.acquire(blocking=False)
-            release.set()
+            try:
+                first = await client.post(PATH)
+                assert first.status_code == 504 and entered.is_set()
+                await until(cleanup.is_set)
+                assert sdk.closed == 0 and len(owner._operations) == 1
+                second = await client.post(PATH)
+                assert second.status_code == 503 and sdk.calls == 1
+                assert not slots.acquire(blocking=False)
+            finally:
+                # A failed admission/cleanup assertion must not hang lifespan
+                # shutdown on the deliberately resistant synthetic token.
+                release.set()
             await until(lambda: not owner._operations)
             # The operation join precedes request-client/private-loop cleanup.
             expires = time.monotonic() + 2
