@@ -62,10 +62,11 @@ dependencies = [
 
 [tool.uv]
 constraint-dependencies = [
+    "certifi>=2026.10.19",
     "black>=26.10.1,<27",
     "filelock>=4.2.1,<5",
     "setuptools>=84.1.0,<85",
-    "virtualenv>=21.14.9,<22",
+    "virtualenv>=21.14.13,<22",
 ]
 dev-dependencies = [
     "covdefaults>=2.3.0",
