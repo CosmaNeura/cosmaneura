@@ -29,7 +29,11 @@ from app.configuration.sentry import scrub_event, sentry_enabled
 from app.environments import is_staging
 
 _CATEGORIES = frozenset(
-    {"SessionPrepQueueStalled", "SessionPrepRecentBuildFailures", "SessionPrepMaintenanceUnavailable"}
+    {
+        "SessionPrepQueueStalled",
+        "SessionPrepRecentBuildFailures",
+        "SessionPrepMaintenanceUnavailable",
+    }
 )
 _MODULE = "app.services.session_prep_alerts"
 _FIELDS = frozenset({"event_id", "platform", "level", "exception"})
@@ -37,13 +41,25 @@ _SDK_FIELDS = frozenset({"timestamp", "release", "environment", "server_name", "
 _IDENTITY = "session-prep-health"
 _HEARTBEAT_SLUG = "session-prep-staging-worker"
 _HEARTBEAT_FIELDS = frozenset(
-    {"type", "event_id", "check_in_id", "monitor_slug", "status", "duration",
-     "environment", "release", "monitor_config"}
+    {
+        "type",
+        "event_id",
+        "check_in_id",
+        "monitor_slug",
+        "status",
+        "duration",
+        "environment",
+        "release",
+        "monitor_config",
+    }
 )
 _HEARTBEAT_CONFIG = {
     "schedule": {"type": "interval", "value": 1, "unit": "minute"},
-    "timezone": "UTC", "checkin_margin": 2, "max_runtime": 1,
-    "failure_issue_threshold": 1, "recovery_threshold": 1,
+    "timezone": "UTC",
+    "checkin_margin": 2,
+    "max_runtime": 1,
+    "failure_issue_threshold": 1,
+    "recovery_threshold": 1,
 }
 _client: Any = None
 _client_pid = os.getpid()
@@ -52,9 +68,11 @@ _client_lock = Lock()
 
 def health_alerts_enabled() -> bool:
     """A missing, malformed or non-staging setting grants no new transport."""
-    return is_staging() and config(
-        "SESSION_PREP_HEALTH_ALERTS_ENABLED", default="false", cast=str
-    ) == "true"
+    return (
+        is_staging()
+        and config("SESSION_PREP_HEALTH_ALERTS_ENABLED", default="false", cast=str)
+        == "true"
+    )
 
 
 def _canonical_event(event: Any) -> bool:
@@ -89,17 +107,25 @@ def _before_send(event: Any, hint: Any) -> Any:
         return None
     if set(event) - (_FIELDS | _SDK_FIELDS):
         return None
-    for field, expected in (("release", _IDENTITY), ("environment", "staging"), ("server_name", _IDENTITY)):
+    for field, expected in (
+        ("release", _IDENTITY),
+        ("environment", "staging"),
+        ("server_name", _IDENTITY),
+    ):
         if field in event and event[field] != expected:
             return None
     if "timestamp" in event:
         try:
-            if type(event["timestamp"]) is not str or datetime.fromisoformat(event["timestamp"]).tzinfo is None:
+            if (
+                type(event["timestamp"]) is not str
+                or datetime.fromisoformat(event["timestamp"]).tzinfo is None
+            ):
                 return None
         except ValueError:
             return None
     if "sdk" in event and event["sdk"] != {
-        "name": "sentry.python", "version": VERSION,
+        "name": "sentry.python",
+        "version": VERSION,
         "packages": [{"name": "pypi:sentry-sdk", "version": VERSION}],
         "integrations": [],
     }:
@@ -129,9 +155,17 @@ def _canonical_heartbeat(value: Any) -> bool:
         return False
     schedule = config_value.get("schedule")
     if (
-        type(schedule) is not dict or type(schedule.get("value")) is not int
-        or any(type(config_value.get(field)) is not int for field in
-               ("checkin_margin", "max_runtime", "failure_issue_threshold", "recovery_threshold"))
+        type(schedule) is not dict
+        or type(schedule.get("value")) is not int
+        or any(
+            type(config_value.get(field)) is not int
+            for field in (
+                "checkin_margin",
+                "max_runtime",
+                "failure_issue_threshold",
+                "recovery_threshold",
+            )
+        )
     ):
         return False
     return (
@@ -142,7 +176,8 @@ def _canonical_heartbeat(value: Any) -> bool:
         and value["type"] == "check_in"
         and value["monitor_slug"] == _HEARTBEAT_SLUG
         and value["status"] == "ok"
-        and type(value["duration"]) is float and value["duration"] == 0.0
+        and type(value["duration"]) is float
+        and value["duration"] == 0.0
         and value["environment"] == "staging"
         and value["release"] == _IDENTITY
     )
@@ -154,7 +189,9 @@ def _closed_envelope(envelope: Any) -> bool:
         if set(envelope.headers) != {"event_id", "sent_at"} or len(envelope.items) != 1:
             return False
         sent_at = envelope.headers["sent_at"]
-        if type(sent_at) is not str or datetime.fromisoformat(sent_at).utcoffset() != UTC.utcoffset(None):
+        if type(sent_at) is not str or datetime.fromisoformat(
+            sent_at
+        ).utcoffset() != UTC.utcoffset(None):
             return False
         item = envelope.items[0]
         if (
@@ -167,7 +204,11 @@ def _closed_envelope(envelope: Any) -> bool:
         if type(raw) is not bytes or not 0 < len(raw) <= 1024:
             return False
         event = json.loads(raw, object_pairs_hook=_unique)
-        canonical = _canonical_heartbeat if item.headers["type"] == "check_in" else _canonical_event
+        canonical = (
+            _canonical_heartbeat
+            if item.headers["type"] == "check_in"
+            else _canonical_event
+        )
         return canonical(event) and envelope.headers["event_id"] == event["event_id"]
     except Exception:
         return False
@@ -191,7 +232,9 @@ class _HealthTransport(HttpTransport):
         # items after this gate, and never invoke its raw-response log path.
         if not _closed_envelope(envelope):
             return
-        category = "monitor" if envelope.items[0].headers["type"] == "check_in" else "error"
+        category = (
+            "monitor" if envelope.items[0].headers["type"] == "check_in" else "error"
+        )
         if self._check_disabled(category):
             return
         try:
@@ -206,8 +249,12 @@ class _HealthTransport(HttpTransport):
             if encoding:
                 headers["Content-Encoding"] = encoding
             response = self._pool.request(
-                "POST", self._auth.get_api_url(), body=body.getvalue(), headers=headers,
-                redirect=False, retries=False,
+                "POST",
+                self._auth.get_api_url(),
+                body=body.getvalue(),
+                headers=headers,
+                redirect=False,
+                retries=False,
             )
             try:
                 self._update_rate_limits(response)
@@ -227,16 +274,35 @@ def _make_client(dsn: str):
     except Exception:
         raise ValueError("Session Prep health DSN unavailable") from None
     return sentry_sdk.Client(
-        dsn=dsn, transport=_HealthTransport,
-        release=_IDENTITY, environment="staging", server_name=_IDENTITY, project_root="/",
-        integrations=[], default_integrations=False, auto_enabling_integrations=False,
-        enable_tracing=False, traces_sample_rate=None, profiles_sample_rate=0,
-        profile_session_sample_rate=0, auto_session_tracking=False, send_client_reports=False,
-        enable_backpressure_handling=False, attach_stacktrace=False, include_local_variables=False,
-        send_default_pii=False, spotlight=False, debug=False, transport_queue_size=4, shutdown_timeout=1,
-        before_send=_before_send, before_send_transaction=lambda _event, _hint: None,
+        dsn=dsn,
+        transport=_HealthTransport,
+        release=_IDENTITY,
+        environment="staging",
+        server_name=_IDENTITY,
+        project_root="/",
+        integrations=[],
+        default_integrations=False,
+        auto_enabling_integrations=False,
+        enable_tracing=False,
+        traces_sample_rate=None,
+        profiles_sample_rate=0,
+        profile_session_sample_rate=0,
+        auto_session_tracking=False,
+        send_client_reports=False,
+        enable_backpressure_handling=False,
+        attach_stacktrace=False,
+        include_local_variables=False,
+        send_default_pii=False,
+        spotlight=False,
+        debug=False,
+        transport_queue_size=4,
+        shutdown_timeout=1,
+        before_send=_before_send,
+        before_send_transaction=lambda _event, _hint: None,
         _experiments={
-            "enable_metrics": False, "enable_logs": False, "continuous_profiling_auto_start": False,
+            "enable_metrics": False,
+            "enable_logs": False,
+            "continuous_profiling_auto_start": False,
             "transport_compression_level": 0,
         },
     )
@@ -265,15 +331,22 @@ def capture_health_category(category: str) -> None:
     """No arbitrary event, exception, count, job identifier or context input."""
     try:
         if (
-            type(category) is not str or category not in _CATEGORIES
-            or not health_alerts_enabled() or sentry_enabled()
+            type(category) is not str
+            or category not in _CATEGORIES
+            or not health_alerts_enabled()
+            or sentry_enabled()
         ):
             return
         client = _health_client()
         client.capture_event(
-            {"event_id": uuid4().hex, "platform": "python", "level": "error",
-             "exception": {"values": [{"type": category, "module": _MODULE}]}},
-            hint={}, scope=None,
+            {
+                "event_id": uuid4().hex,
+                "platform": "python",
+                "level": "error",
+                "exception": {"values": [{"type": category, "module": _MODULE}]},
+            },
+            hint={},
+            scope=None,
         )
     except Exception:
         return
@@ -291,12 +364,19 @@ def capture_worker_heartbeat() -> None:
             return
         reference = uuid4().hex
         value = {
-            "type": "check_in", "event_id": reference, "check_in_id": reference,
-            "monitor_slug": _HEARTBEAT_SLUG, "status": "ok", "duration": 0.0,
-            "environment": "staging", "release": _IDENTITY,
+            "type": "check_in",
+            "event_id": reference,
+            "check_in_id": reference,
+            "monitor_slug": _HEARTBEAT_SLUG,
+            "status": "ok",
+            "duration": 0.0,
+            "environment": "staging",
+            "release": _IDENTITY,
             "monitor_config": deepcopy(_HEARTBEAT_CONFIG),
         }
-        envelope = Envelope(headers={"event_id": reference, "sent_at": datetime.now(UTC).isoformat()})
+        envelope = Envelope(
+            headers={"event_id": reference, "sent_at": datetime.now(UTC).isoformat()}
+        )
         envelope.add_checkin(value)
         if not _closed_envelope(envelope):
             return

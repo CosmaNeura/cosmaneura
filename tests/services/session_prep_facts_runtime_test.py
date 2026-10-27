@@ -196,7 +196,9 @@ def test_real_receiver_version_is_explicit_and_commits_before_egress(
         assert SessionPrepReadReceipt.count() == 0
 
 
-def test_old_unsafe_classification_receipt_cannot_survive_current_context_validation(scope, monkeypatch):
+def test_old_unsafe_classification_receipt_cannot_survive_current_context_validation(
+    scope, monkeypatch
+):
     import app.services.session_prep_runtime as runtime
     from app.services.session_prep_facts import (
         DocumentedFact,
@@ -204,30 +206,52 @@ def test_old_unsafe_classification_receipt_cannot_survive_current_context_valida
         SourceEvidence,
         StructuredFactSet,
     )
-    _review(scope, {'Medications': 'Taking losartan 25 mg; for a neighbor.'})
+
+    _review(scope, {"Medications": "Taking losartan 25 mg; for a neighbor."})
     _doctor, _target, _note, token, record = scope
     action = _action(token)
+
     def older_projection(selection):
         source = selection.sources[0]
-        lineage = dict(source_ref=source.source_ref, source_version=source.source_version,
-                       source_at=source.source_at)
-        quote = 'Taking losartan 25 mg'
-        return StructuredFactSet(
-            source_count=1, selection_limited=False, facts_limited=False,
-            sources=[FactSource(**lineage)], facts=[DocumentedFact(
-                fact_ref='fact_unsafe_prior_parser_0001', kind='medication',
-                subject='losartan', value='25 mg', state='documented_taking', setting=None,
-                evidence=SourceEvidence(**lineage, section='Medications', quote=quote,
-                                        start=0, end=len(quote)),
-            )],
+        lineage = dict(
+            source_ref=source.source_ref,
+            source_version=source.source_version,
+            source_at=source.source_at,
         )
+        quote = "Taking losartan 25 mg"
+        return StructuredFactSet(
+            source_count=1,
+            selection_limited=False,
+            facts_limited=False,
+            sources=[FactSource(**lineage)],
+            facts=[
+                DocumentedFact(
+                    fact_ref="fact_unsafe_prior_parser_0001",
+                    kind="medication",
+                    subject="losartan",
+                    value="25 mg",
+                    state="documented_taking",
+                    setting=None,
+                    evidence=SourceEvidence(
+                        **lineage,
+                        section="Medications",
+                        quote=quote,
+                        start=0,
+                        end=len(quote),
+                    ),
+                )
+            ],
+        )
+
     with monkeypatch.context() as patch:
-        patch.setattr(runtime, 'project_explicit_facts', older_projection)
+        patch.setattr(runtime, "project_explicit_facts", older_projection)
         old = _facts_read(token, record, action)
     before = dict(SessionPrepReadReceipt.first().response_payload)
-    assert old.response.result.structured_facts.facts[0].state == 'documented_taking'
+    assert old.response.result.structured_facts.facts[0].state == "documented_taking"
     with pytest.raises(SessionPrepScopeDenied):
         _facts_read(token, record, action)
     assert SessionPrepReadReceipt.first().response_payload == before
-    current = _facts_read(token, record, _action(token), key='current-context-read-0001')
+    current = _facts_read(
+        token, record, _action(token), key="current-context-read-0001"
+    )
     assert current.response.result.structured_facts.facts == []

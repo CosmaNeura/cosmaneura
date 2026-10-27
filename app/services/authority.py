@@ -1163,7 +1163,9 @@ def resolve_mount_context(
     except IntegrityError:
         db.rollback()
         install_provider_database_limits(
-            session=db, workload_client_id=workload_client_id, settings=settings,
+            session=db,
+            workload_client_id=workload_client_id,
+            settings=settings,
         )
         raced = _existing_lineage(db, client_turn_id)
         if raced is None:
