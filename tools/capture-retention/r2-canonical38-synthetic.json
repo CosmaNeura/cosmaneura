@@ -1,0 +1,297 @@
+{
+  "id": "R2",
+  "synthetic_only": true,
+  "entries": [
+    {
+      "speaker": "Unknown",
+      "content": "This is a completely synthetic practice visit.",
+      "startTime": 7070,
+      "endTime": 9710,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I am Doctor Lane, speaking with Casey Vale.",
+      "startTime": 9790,
+      "endTime": 12590,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We will check several details carefully and correct anything that was misstated.",
+      "startTime": 12750,
+      "endTime": 16830,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Casey, please describe the dizziness you mentioned and give me the time course in your own words.",
+      "startTime": 16990,
+      "endTime": 21870,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The dizziness began 12 days ago.",
+      "startTime": 22430,
+      "endTime": 24590,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Earlier I said 20 days, but 12 is correct.",
+      "startTime": 24750,
+      "endTime": 27950,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "It lasts about 30 seconds when I stand up quickly.",
+      "startTime": 28110,
+      "endTime": 31470,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "It does not last 30 minutes.",
+      "startTime": 31630,
+      "endTime": 33630,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have never fainted.",
+      "startTime": 33710,
+      "endTime": 35070,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The opening marker is orange telescope and this is invented test information.",
+      "startTime": 35150,
+      "endTime": 39790,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "To confirm, symptoms began 12 days ago.",
+      "startTime": 40510,
+      "endTime": 43390,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Episodes last 30 seconds, and there has been no fainting.",
+      "startTime": 43550,
+      "endTime": 47070,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Have you noticed chest pain, shortness of breath, fever, or a headache?",
+      "startTime": 47230,
+      "endTime": 51790,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Please distinguish a symptom you actually have from one you are denying.",
+      "startTime": 51950,
+      "endTime": 55630,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have no chest pain, no shortness of breath, and no fever.",
+      "startTime": 56190,
+      "endTime": 60350,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I did have a mild headache yesterday, but I do not have one today.",
+      "startTime": 60510,
+      "endTime": 64590,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I initially called the dizziness severe.",
+      "startTime": 64670,
+      "endTime": 66910,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I would correct that to mild.",
+      "startTime": 67070,
+      "endTime": 68750,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I can still walk and carry out my normal routine.",
+      "startTime": 68910,
+      "endTime": 71870,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "How many episodes occurred yesterday?",
+      "startTime": 72430,
+      "endTime": 74590,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Also tell me about fluid intake and whether you have started or stopped any medicines.",
+      "startTime": 74670,
+      "endTime": 79150,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I want the corrected count to replace the earlier number rather than leave two competing versions in the final summary.",
+      "startTime": 79310,
+      "endTime": 85310,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "There were two episodes yesterday, not 7.",
+      "startTime": 85870,
+      "endTime": 88750,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I drink about four glasses of water daily I have not started, stopped, or changed any medicine the middle marker is turquoise notebook.",
+      "startTime": 88910,
+      "endTime": 97550,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My blood pressure reading at home was 118/72, not 180/72.",
+      "startTime": 97710,
+      "endTime": 104270,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The corrected home reading is 118 over 72, with two mild episodes yesterday.",
+      "startTime": 104870,
+      "endTime": 110510,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "For this practice plan, rise slowly, keep a brief symptom diary, and maintain regular fluids.",
+      "startTime": 110670,
+      "endTime": 116670,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We are not starting a new medicine.",
+      "startTime": 116750,
+      "endTime": 118590,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Follow-up should be in 10 days, not 10 weeks.",
+      "startTime": 118750,
+      "endTime": 121790,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I understand.",
+      "startTime": 122350,
+      "endTime": 123470,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I will record when the dizziness happens and how long it lasts I will use the corrected count of two and the duration of 30 seconds I do not want the denied symptoms shown as present my late marker is indigo lantern.",
+      "startTime": 123550,
+      "endTime": 136510,
+      "source_speaker_id": "fd535af0-5ab4-4f12-9c85-192965f9f35e"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Final check.",
+      "startTime": 137230,
+      "endTime": 138030,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "12 days of brief mild dizziness on standing.",
+      "startTime": 138190,
+      "endTime": 140910,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "No fainting, no chest pain, no shortness of breath, and no current headache.",
+      "startTime": 140990,
+      "endTime": 146030,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "No medication change is planned.",
+      "startTime": 146110,
+      "endTime": 148110,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Follow-up is 10 days.",
+      "startTime": 148270,
+      "endTime": 149790,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The closing marker is cedar compass.",
+      "startTime": 149870,
+      "endTime": 152030,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "This concludes the synthetic corrections test.",
+      "startTime": 152110,
+      "endTime": 154670,
+      "source_speaker_id": "126379e1-669f-43df-b6f5-74670991ae8b"
+    }
+  ],
+  "checks": [
+    "headache",
+    "medications",
+    "r2_numbers"
+  ],
+  "required_plan_refs": [
+    27,
+    28,
+    29,
+    31,
+    35,
+    36
+  ],
+  "forbidden_plan_refs": [
+    10,
+    14,
+    18,
+    25,
+    30,
+    33,
+    34,
+    37,
+    38
+  ],
+  "source_profile": "Retained canonical38 R2 used in actual fixed-matrix qualification; not the earlier repository R2 transcription."
+}

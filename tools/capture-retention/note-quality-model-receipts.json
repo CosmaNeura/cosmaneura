@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "synthetic_only": true,
+  "model": "gpt-4.1-2025-04-14",
+  "scope": "Retained actual raw responses, copied without changing their decoded string bytes. No saved clinical note was regenerated. Sources are named explicitly because canonical38 differs from the older repository R2. All original requests, provider envelopes, results and reviews remain retained separately.",
+  "receipts": [
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 1
+      },
+      "sourceFixture": "desktop13-synthetic.json",
+      "sourceFixtureSHA256": "03344cdb9f8fdd62f55c3b45a24872f8145aa92bc6e3100bcd94031649b1dc41",
+      "rawResponseSHA256": "9aeaebef249635d4bad195a213a0b519c70bc0980d4bf34f17c4c315082464ea",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,36,37]},\"fields\":{\"Subjective\":\"- The dizziness began 12 days ago.  \\n- Earlier I said 20 days, but 12 is correct.  \\n- It lasts about 30 seconds when I stand up quickly.  \\n- It does not last 30 minutes.  \\n- I have never fainted.  \\n- I have no chest pain, no shortness of breath, and no fever.  \\n- I did have a mild headache yesterday, but I do not have one today.  \\n- I initially called the dizziness severe.  \\n- I would correct that to mild.  \\n- I can still walk and carry out my normal routine.  \\n- There were two episodes yesterday, not seven.  \\n- I drink about four glasses of water daily.  \\n- I have not started, stopped, or changed any medicine.  \\n- My blood pressure reading at home was 118/72, not 180/72.  \\n- I will record when the dizziness happens and how long it lasts.  \\n- I will use the corrected count of two and the duration of 30 seconds.  \\n- I do not want the denied symptoms shown as present.\",\"Objective\":\"- Home blood pressure reading: 118/72 mmHg (corrected from earlier value).\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}",
+      "actualRequestFileSHA256": "def2970e82ab67bc839facf8c975a8d09e346cd0b99788566cc58e841fbc4f5f",
+      "actualResponseFileSHA256": "df63931a6da46781f0f4a1aaf6e68332498263234ad7cee1cd72d6a0eac9a807",
+      "actualInputsFileSHA256": "a226274cc821f2a49fd49e1e5d9480c5385e1fe9eb0942da0d8f611afa8250a3"
+    },
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 2
+      },
+      "sourceFixture": "desktop13-synthetic.json",
+      "sourceFixtureSHA256": "03344cdb9f8fdd62f55c3b45a24872f8145aa92bc6e3100bcd94031649b1dc41",
+      "rawResponseSHA256": "248eae4769afcfeb4b481053e368e7555b704f34cd143bc7874fe07db8c8523a",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,36,37]},\"fields\":{\"Subjective\":\"- The dizziness began 12 days ago.  \\n- Earlier I said 20 days, but 12 is correct.  \\n- It lasts about 30 seconds when I stand up quickly.  \\n- It does not last 30 minutes.  \\n- I have never fainted.  \\n- I have no chest pain, no shortness of breath, and no fever.  \\n- I did have a mild headache yesterday, but I do not have one today.  \\n- I initially called the dizziness severe.  \\n- I would correct that to mild.  \\n- I can still walk and carry out my normal routine.  \\n- There were two episodes yesterday, not seven.  \\n- I drink about four glasses of water daily.  \\n- I have not started, stopped, or changed any medicine.  \\n- My blood pressure reading at home was 118/72, not 180/72.  \\n- I will record when the dizziness happens and how long it lasts. I will use the corrected count of two and the duration of 30 seconds. I do not want the denied symptoms shown as present.\",\"Objective\":\"- Not mentioned in transcript.\",\"Assessment\":\"- Not mentioned in transcript.\",\"Plan\":\"\"}}",
+      "actualRequestFileSHA256": "e8d776978fb29b8158e387c8a5e07db5d7dc57c8632398d5664616960b833b0e",
+      "actualResponseFileSHA256": "f2e086a7dec9e0412f2f4f5c5e0235d368515b9dab555b73db9063ec3143f1a5",
+      "actualInputsFileSHA256": "ee9376ab82e14b2bde41e960726580a6a3e43f5d483888f92b274c155b44d693"
+    },
+    {
+      "item": {
+        "case": "Desktop13",
+        "repetition": 3
+      },
+      "sourceFixture": "desktop13-synthetic.json",
+      "sourceFixtureSHA256": "03344cdb9f8fdd62f55c3b45a24872f8145aa92bc6e3100bcd94031649b1dc41",
+      "rawResponseSHA256": "248eae4769afcfeb4b481053e368e7555b704f34cd143bc7874fe07db8c8523a",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,36,37]},\"fields\":{\"Subjective\":\"- The dizziness began 12 days ago.  \\n- Earlier I said 20 days, but 12 is correct.  \\n- It lasts about 30 seconds when I stand up quickly.  \\n- It does not last 30 minutes.  \\n- I have never fainted.  \\n- I have no chest pain, no shortness of breath, and no fever.  \\n- I did have a mild headache yesterday, but I do not have one today.  \\n- I initially called the dizziness severe.  \\n- I would correct that to mild.  \\n- I can still walk and carry out my normal routine.  \\n- There were two episodes yesterday, not seven.  \\n- I drink about four glasses of water daily.  \\n- I have not started, stopped, or changed any medicine.  \\n- My blood pressure reading at home was 118/72, not 180/72.  \\n- I will record when the dizziness happens and how long it lasts. I will use the corrected count of two and the duration of 30 seconds. I do not want the denied symptoms shown as present.\",\"Objective\":\"- Not mentioned in transcript.\",\"Assessment\":\"- Not mentioned in transcript.\",\"Plan\":\"\"}}",
+      "actualRequestFileSHA256": "2dd32f4d8a15c4c4ffbaf620a78809637c5c7e1e300cd887897d7ee0c56813e9",
+      "actualResponseFileSHA256": "5535f4cb6fd83bdb4bebffe1da7b840ef833c4ec3cb3a77f4784348f5fcd9cf2",
+      "actualInputsFileSHA256": "2c44a31ba27b10ec4aadf3f92da8ace84ad3f1a5f916d09234110405334ab9cd"
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 1
+      },
+      "sourceFixture": "r2-canonical38-synthetic.json",
+      "sourceFixtureSHA256": "57e93ab4cf25b8cbc429c792ed61347a8121a8db6aded9663ef94d736181a240",
+      "rawResponseSHA256": "61a8e14c83bfe1f27faf552a7c088c6c13d8b1a251bf08730571936e031ecc76",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[27,28,29,31,35,36]},\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Symptom and history content cannot be included in this section per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[5,6,7,8,9,11,12,15,16,17,18,19,23,24,25,26,33,34]}}}",
+      "actualRequestFileSHA256": "1b55c3466efb641f7231b99b4e3e13f048419e0ca4f9188ba6bd8d9ea68b8f9d",
+      "actualResponseFileSHA256": "b080a259fcba35b43086101a1d56ede745493d230962c108cab04aaaab5ff2ff",
+      "actualInputsFileSHA256": "17d22520643c847e41e65176e3a722537141fc8e17ae5c7b9441532f8c255c8c"
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "de467ba9c7a19bd7b58994a07d75614e828961b0dbead1688e7813b260d175da",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39]},\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Per source limitation, no symptom or history content can be included in Subjective.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[3,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42,43]}}}",
+      "actualRequestFileSHA256": "fe15672458f05b8411a9aba1ab7adfb743b312ab65547baa6421c5b5fa05eb69",
+      "actualResponseFileSHA256": "2e8e3646d59c666b33b9412aff563261f8671dc45f58fabf300e346487413f80",
+      "actualInputsFileSHA256": "d5fb60eb7358a10413e1cd3db36d0f06bc96c9386793c51d9b4e8af0d957f959"
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 2
+      },
+      "sourceFixture": "r2-canonical38-synthetic.json",
+      "sourceFixtureSHA256": "57e93ab4cf25b8cbc429c792ed61347a8121a8db6aded9663ef94d736181a240",
+      "rawResponseSHA256": "f041d535d1d01b12e34c91c5829851ada61ffe2cf913276a94990525e592b9b4",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[27,28,29,31,35,36]},\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Per source limitation, symptom and history content cannot be included in Subjective.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[5,6,7,8,9,11,12,15,16,17,18,19,23,24,25,26,31,33,34]}}}",
+      "actualRequestFileSHA256": "66c70872be2ac0b68fa69db6dba259cfda4da67111d2420e5677b2cc9e36b65f",
+      "actualResponseFileSHA256": "0867b4c460290595d9226bb9f1283b92dc57fa35b2d07b5b9bb78aea5063de24",
+      "actualInputsFileSHA256": "3bb4287a321ac3b9ee8415417b455d7d2974f9ed4657042d3899801ff801f24a"
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 2
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "8dd5ae349f240a1e6052634c67a00e5dfe12308e5b2900b5e8d8baa0ee441e02",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39]},\"fields\":{\"Subjective\":\"No patient-labeled entries are present in the transcript. Symptom and history content cannot be included in this section per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[6,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42,43]}}}",
+      "actualRequestFileSHA256": "13fc5714151b1ddf36937f629b0f22e1bc06616f2428dc010360f95c18caa272",
+      "actualResponseFileSHA256": "3006ebd222e79cbd40aecc43adcc01000d25e82b5158c95ad5db466b0eb57912",
+      "actualInputsFileSHA256": "4be84dc7e788fce16ba29cb7b44d05ee6174282afab7d77928d497683e60a6f2"
+    },
+    {
+      "item": {
+        "case": "R2",
+        "repetition": 3
+      },
+      "sourceFixture": "r2-canonical38-synthetic.json",
+      "sourceFixtureSHA256": "57e93ab4cf25b8cbc429c792ed61347a8121a8db6aded9663ef94d736181a240",
+      "rawResponseSHA256": "f041d535d1d01b12e34c91c5829851ada61ffe2cf913276a94990525e592b9b4",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[27,28,29,31,35,36]},\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Per source limitation, symptom and history content cannot be included in Subjective.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[5,6,7,8,9,11,12,15,16,17,18,19,23,24,25,26,31,33,34]}}}",
+      "actualRequestFileSHA256": "81c55fe82492cfc2e552686ab368e05e59eea6fd94830e65ddd7289e4a2e617a",
+      "actualResponseFileSHA256": "1304226b7bc8f9053b7e6b1f11813c193073d5ffe2c87fb25322b7c920f56d54",
+      "actualInputsFileSHA256": "9d90cca6b7ff71a7f45806ad322b83003c11c03ddf2b0b832a640de6164df80f"
+    },
+    {
+      "item": {
+        "case": "R3",
+        "repetition": 3
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "f004150d17a6cb45c225a13e303eafad0b816133e0d2f1062cdbd843eb70e55b",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39]},\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Per source limitation, no symptom or history content can be included in Subjective.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[6,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42,43]}}}",
+      "actualRequestFileSHA256": "3ef40b106894c3df98fba244e84168c072ffc870a8d5535394772952acbf4798",
+      "actualResponseFileSHA256": "6eb35ad300617ff001eeab7f24b4a4c7177ab79d93896e887c4e5772bd153de9",
+      "actualInputsFileSHA256": "353065d0dd944ed5be08cdbfadbc5bf0a0574e5032f102e576e6e4096bf95bf0"
+    },
+    {
+      "item": {
+        "case": "RET-01-corrected-pain",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "753b2fb58262ef32fd2f6d09b445a33f11c3ca7ea8c188ef5f5942b232520325",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript; source limitation only.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1,2,3]}}}",
+      "actualRequestFileSHA256": "cf6907be5fb8c473a58b07bf8ba351828238dd7df1b599ad6ee8e2c35b4b5d01",
+      "actualResponseFileSHA256": "9b6f291ff2a0e1afd04b850fb0b21ba7b5a720c445dff19c7db2ad3be07be4f1",
+      "actualInputsFileSHA256": "b20fe288773333146da3a9fdbee0c405859b15ac0750bd257fce6e5b14e2aa8b"
+    },
+    {
+      "item": {
+        "case": "RET-02-prior-current-headache",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "22447681e177d573db02c9450529c7b19e5d7182e03c0b9fd313f9708d39bb24",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript. Source limitation: Subjective content not available.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1]}}}",
+      "actualRequestFileSHA256": "ee1df580c762a41d3c6fac02939e60610f61a4f63a469ba47b344df8edf853f8",
+      "actualResponseFileSHA256": "3d69e6dca97c4023118c6a1798f33f174fe639ab354865e072a0400d5dc1e172",
+      "actualInputsFileSHA256": "bc14a89133e2fb6b5e31417641bfe81dc452ecf704d9e4f6f535381eafcddc79"
+    },
+    {
+      "item": {
+        "case": "RET-03-explicit-negative-history",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "4a1f0d9b66adcb6d2027e01fb56d3d737e8662bef34271c352a809b717d43424",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript; symptom and history content not included per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1,2,3]}}}",
+      "actualRequestFileSHA256": "af5ac48f1cedcc22d1d4947848700c3115460d57f10edcbcf1430eb43c569f4f",
+      "actualResponseFileSHA256": "3d2564472dcd95c8098ce6a9e5fc322054a260990bf78da7540a977bc8763e91",
+      "actualInputsFileSHA256": "9007eae27298d220f1084d40e1e57ac17ec8601bce4d890144ba7359b67ae48f"
+    },
+    {
+      "item": {
+        "case": "RET-04-medication-unknown-vs-unchanged",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "33716618ebb9882cdf1562b7448bf7240a8fbf92391d3b46d3fbd2374021320f",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[2]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript. Subjective content not available per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1]}}}",
+      "actualRequestFileSHA256": "1565f32b373cc3f9f1cf7444203c1991dc4622607327af93c6da38bf02f30678",
+      "actualResponseFileSHA256": "c5e0fea6c75bf06f4402ee888d1f61860321a7949d1b5898ca38041fdfa9c184",
+      "actualInputsFileSHA256": "59cc4e9a6e89376e0e810ffa3215b609619f8bc58ad0d7c311ca05a586850aca"
+    },
+    {
+      "item": {
+        "case": "RET-05-question-without-answer",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "c02afc51a9187757c34e2fe9554465fb82f085c2dd8ac8a52571eb7a28579c82",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript. Subjective content not available per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1]}}}",
+      "actualRequestFileSHA256": "03e0582159e8d556ed13569535ca8d04d2a6477dece45c9cc1d5cd18c4ddd391",
+      "actualResponseFileSHA256": "d20abb5aa77c6bd0620d570878a3f0c716015ac5bf382d929738c8280c5f4a07",
+      "actualInputsFileSHA256": "5893b8090513f8e3b9b7849ddf2b42758e69319682e0c2f16e91a115c27c2d38"
+    },
+    {
+      "item": {
+        "case": "RET-06-unresolved-number-conflict",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "5d4df71249c75f155db11a49319568ccc6ab56fe94f27398627403c4b30870a9",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript. Subjective history not available per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1]}}}",
+      "actualRequestFileSHA256": "46f4e13d6e87fdf623d7df21142429e5c93b8bb3dbea2b7f32f5537a49eaf4e3",
+      "actualResponseFileSHA256": "56932fd858836898577f0ab54c6cde18538eb8d3330dc2e941ec700f23c06b93",
+      "actualInputsFileSHA256": "adfbe8ec2aadba758461bdd7f8f72e56df844056bb727a3d1c7f31e4b3801a38"
+    },
+    {
+      "item": {
+        "case": "RET-07-person-and-role-boundary",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "5e62867a1623efd4b2004fcc708667253d80be244571ec97c478209c87ead847",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript. Symptom and history content not included per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[1,2]}}}",
+      "actualRequestFileSHA256": "5cc5751f65e7bad8d5fdcbe21558d45349e0809611394c6d23a6e20ea44df33e",
+      "actualResponseFileSHA256": "3c578667b9f231102a8af108bad67cae02666f21a42486766f48e18e08774b30",
+      "actualInputsFileSHA256": "4205a872159f3ddc2b7f8082d4a7c4936823fb1fcb229daf0058235413a290c2"
+    },
+    {
+      "item": {
+        "case": "RET-08-source-instructions-and-plan-guard",
+        "repetition": 1
+      },
+      "sourceFixture": "fixtures.json",
+      "sourceFixtureSHA256": "836d47fbce6c44c50b559c0c997df10884c08d14917b661c72616c747e7bbb1d",
+      "rawResponseSHA256": "4277bd31788b5e4e106b0acb2fc3b493abb60f1b150bcf8a8ba7abf842ad3db8",
+      "rawResponse": "{\"plan_source_refs\":{\"Plan\":[]},\"fields\":{\"Subjective\":\"No Patient-labeled entries in transcript; symptom and history content not permitted in Subjective per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[2]}}}",
+      "actualRequestFileSHA256": "b4ee00ac23ce0155139a2b600c4a2d9ab3469e8b6e3d53c047e2374115c3e631",
+      "actualResponseFileSHA256": "ba7f961b9d98673d7c8a3a4f82bbd4e4f683fc077fdb096b13c9d94c31b192ef",
+      "actualInputsFileSHA256": "42feb74672bcc5d241e056a8219b3b5f56527fb6ee951405eca2fa115a813c75"
+    }
+  ]
+}
