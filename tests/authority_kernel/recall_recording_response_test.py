@@ -242,7 +242,9 @@ def test_poll_body_size_is_bounded_without_following_redirects(monkeypatch):
     with pytest.raises(ValueError, match="response_too_large"):
         recall._read_recording_bot(BOT, 1)
     assert len(requests) == 1
-    assert requests[0].url.path == f"/bot/{BOT}/"
+    assert requests[0].url == httpx.URL(
+        f"{recall.RECALL_API_BASE.rstrip('/')}/bot/{BOT}/"
+    )
 
 
 def test_recording_get_never_follows_a_redirect(monkeypatch):
