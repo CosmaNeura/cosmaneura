@@ -21,7 +21,13 @@ refresh it immediately before execution if production has changed.
 
 ## Execution controls
 
-All tracked workflows explicitly require self-hosted Linux X64 runners. The
+All tracked workflows explicitly require self-hosted Linux runners. Production
+uses native ARM64 on the operator's Apple Silicon host; disabled validation
+registrations retain their separate X64 label. The .NET runner cannot execute
+reliably under QEMU, as confirmed by the first local connection attempt and
+official actions/runner issue 4778. Native runner 2.338.2 and yq are checksum-pinned;
+the same Nixpacks and 1Password versions select pinned ARM64 packages. Production
+image recipes retain their explicit linux/amd64 target. The
 three production workflows have new local-only registration paths; the old
 registrations remain permanently disabled so rerunning a historical hosted
 snapshot cannot incur charges. The old files are removed; Git and disabled
