@@ -634,6 +634,53 @@
         }
       }
     },
+    "/internal/v1/note-schemas": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Note Template",
+        "description": "A name is unique for this owner; identical retries never create duplicates.",
+        "operationId": "create_note_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNoteTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedNoteTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/notes/{appointment_id}/private-note": {
       "get": {
         "tags": [
@@ -4333,6 +4380,32 @@
         ],
         "title": "CreateMedication"
       },
+      "CreateNoteTemplate": {
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Fields"
+          },
+          "note_type": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fields",
+          "note_type"
+        ],
+        "title": "CreateNoteTemplate"
+      },
       "CreatePracticeBody": {
         "properties": {
           "legal_name": {
@@ -4403,6 +4476,38 @@
           "email"
         ],
         "title": "CreatePracticeInvitationBody"
+      },
+      "CreatedNoteTemplate": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "schema_id": {
+            "type": "string",
+            "title": "Schema Id"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "fields",
+          "schema_id",
+          "note_type"
+        ],
+        "title": "CreatedNoteTemplate"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -7614,11 +7719,6 @@
       },
       "UpdateTemplateFields": {
         "properties": {
-          "expected_revision": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$",
-            "title": "Expected Revision"
-          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/TemplateField"
@@ -7627,13 +7727,18 @@
             "maxItems": 100,
             "minItems": 1,
             "title": "Fields"
+          },
+          "expected_revision": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Revision"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "expected_revision",
-          "fields"
+          "fields",
+          "expected_revision"
         ],
         "title": "UpdateTemplateFields"
       },

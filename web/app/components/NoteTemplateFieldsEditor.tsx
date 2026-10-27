@@ -1,7 +1,7 @@
 import { useState } from "react"
 
+import { TemplateSectionFields } from "~/components/TemplateSectionFields"
 import { Button } from "~/components/ui/button"
-import { Input } from "~/components/ui/input"
 import {
   type TemplateField,
   type TemplateFields,
@@ -79,20 +79,11 @@ export function NoteTemplateFieldsEditor({
     }
   }
 
-  function change(index: number, key: keyof TemplateField, value: string) {
-    setSaved(false)
-    setFields((current) =>
-      current.map((field, i) =>
-        i === index ? { ...field, [key]: value } : field,
-      ),
-    )
-  }
-
   return (
     <div className="not-prose mt-4 space-y-3">
       {!baseline ? (
         <Button type="button" variant="outline" disabled={busy} onClick={load}>
-          {busy ? "Loading template…" : "Edit headings and guidance"}
+          {busy ? "Loading template…" : "Edit sections and guidance"}
         </Button>
       ) : (
         <form onSubmit={save} className="space-y-4">
@@ -102,33 +93,13 @@ export function NoteTemplateFieldsEditor({
             dates, findings and attestations in the note itself.
           </p>
           <fieldset disabled={busy} className="space-y-4">
-            {fields.map((field, index) => (
-              <div key={index} className="space-y-2 rounded-md border p-3">
-                <label className="block text-sm font-medium">
-                  Heading {index + 1}
-                  <Input
-                    value={field.heading}
-                    required
-                    maxLength={200}
-                    onChange={(event) =>
-                      change(index, "heading", event.target.value)
-                    }
-                  />
-                </label>
-                <label className="block text-sm font-medium">
-                  Guidance {index + 1}
-                  <textarea
-                    className="w-full rounded-md border p-2"
-                    rows={3}
-                    value={field.guidance}
-                    maxLength={4000}
-                    onChange={(event) =>
-                      change(index, "guidance", event.target.value)
-                    }
-                  />
-                </label>
-              </div>
-            ))}
+            <TemplateSectionFields
+              fields={fields}
+              onChange={(next) => {
+                setSaved(false)
+                setFields(next)
+              }}
+            />
             <div className="flex flex-wrap gap-2">
               <Button
                 type="submit"

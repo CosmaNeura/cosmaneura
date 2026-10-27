@@ -567,6 +567,41 @@ async def test_existing_core_content_is_linked_once_without_regeneration(
 
 
 @pytest.mark.asyncio
+async def test_template_section_changes_preserve_the_actual_existing_note(
+    admission_case, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.routes import note_template_fields as templates
+
+    f = admission_case
+    kwargs = await setup(f, monkeypatch)
+    first = await notes.capture_note(**kwargs)
+    monkeypatch.setattr(templates, "get_session", lambda: Session(f.engine))
+    request = SimpleNamespace(state=SimpleNamespace(doctor=f.case.doctor))
+    before = templates.get_note_template_fields(request, f.schema_ref)
+    templates.update_note_template_fields(
+        request,
+        f.schema_ref,
+        templates.UpdateTemplateFields(
+            expected_revision=before.revision,
+            fields=[
+                templates.TemplateField(
+                    heading="Custom follow-up", guidance="Only discussed follow-up"
+                )
+            ],
+        ),
+    )
+    current = await notes.capture_note(**{**kwargs, "prepare": False})
+    assert current.note_ref == first.note_ref
+    assert current.note_sha256 == first.note_sha256
+    assert current.field_order == first.field_order
+    assert current.fields == first.fields
+    assert len(f.model.calls) == 1
+    assert len(rows(f, AIVisitNote)) == 1
+
+
+@pytest.mark.asyncio
 async def test_legacy_delivery_keeps_default_pipeline_dispatch_on_replay(
     admission_case, monkeypatch
 ):
