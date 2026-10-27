@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "synthetic_only": true,
+  "source_fixture": "desktop13-synthetic.json",
+  "source_fixture_sha256": "03344cdb9f8fdd62f55c3b45a24872f8145aa92bc6e3100bcd94031649b1dc41",
+  "required_plan_source_refs": [
+    29,
+    36
+  ],
+  "rationale": {
+    "24": "Retrospective patient report: no medicine was started, stopped, or changed. Checked independently as history.",
+    "29": "Prospective clinician decision: no new medicine will be started.",
+    "36": "Separate prospective clinician decision: no medication changes planned; includes stopping and dose changes as well as starting."
+  },
+  "scope": "Supplemental finite expectation only. Never added to model prompts or runtime source; original fixture and historical results remain unchanged.",
+  "limitation": "Requires independently identified source-extractive statements; does not infer all clinical propositions or prove complete note quality."
+}

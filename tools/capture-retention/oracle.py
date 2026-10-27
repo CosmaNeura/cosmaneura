@@ -5,6 +5,18 @@ does not prove the absence of every possible hallucination; review remains requi
 """
 
 import re
+import unicodedata
+
+
+def prospective_heading(heading):
+    text = re.sub(r"[\W_]+", " ", unicodedata.normalize("NFKC", heading).casefold())
+    return bool(
+        re.search(
+            r"\b(?:plans?|follow\s*ups?|return precautions?|recommendations?|"
+            r"patient instructions?|next steps?|recomendaciones|seguimiento)\b",
+            text,
+        )
+    )
 
 
 def normalized(text):
@@ -15,13 +27,14 @@ def normalized(text):
     return re.sub(r"[*_`]+", "", text)
 
 
-def evaluate(case, fields, *, patient_only=True):
+def evaluate(case, fields, *, patient_only=True, required_plan_source_refs=()):
     # Prospective quotations, identity headings and metadata cannot satisfy a
     # missing narrative fact, even if the same token appears there.
     clinical = {
         k: normalized(v)
         for k, v in fields.items()
-        if any(
+        if not prospective_heading(k)
+        and any(
             label in k.casefold()
             for label in (
                 "subjective",
@@ -87,6 +100,34 @@ def evaluate(case, fields, *, patient_only=True):
             "medication-list-unknown",
             has(
                 r"(?:current |existing )?medication(?:s| list)?[^.\n]{0,45}(?:unknown|unspecified|unverified|not (?:discussed|listed|mentioned|provided|specified|verified))|unknown[^.\n]{0,20}medication"
+            ),
+        )
+
+    # Independently reviewed fixture expectations, not inferred from vocabulary
+    # or injected into the runtime prompt. Exact source-extractive Plan output
+    # must retain each required prospective statement in a prospective field.
+    # A past no-change report or a narrower no-new-medicine decision cannot
+    # replace a separately stated decision covering all medication changes.
+    if len(set(required_plan_source_refs)) != len(required_plan_source_refs) or any(
+        type(index) is not int or not 1 <= index <= len(case["entries"])
+        for index in required_plan_source_refs
+    ):
+        raise ValueError("invalid required plan source references")
+    prospective_values = [v for k, v in fields.items() if prospective_heading(k)]
+    for index in required_plan_source_refs:
+        entry = case["entries"][index - 1]
+        role = {
+            "Doctor": "Clinician",
+            "Patient": "Patient",
+            "Other": "Other speaker",
+        }.get(entry["speaker"], "Unidentified speaker")
+        complete_source = entry["content"]
+        require(
+            f"planned-source-{index}",
+            any(
+                f"- {role}: {complete_source}" in value
+                or f"Transcript — {role}:\n{complete_source}" in value
+                for value in prospective_values
             ),
         )
 
