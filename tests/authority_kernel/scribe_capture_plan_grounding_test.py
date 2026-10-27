@@ -57,7 +57,13 @@ class Model:
     async def complete(self, prompt, *, json_output):
         self.calls.append(prompt)
         assert json_output
-        result = {"fields": FIELDS, "plan_source_refs": self.refs}
+        result = {
+            "fields": {
+                heading: "" if heading in PROSPECTIVE else value
+                for heading, value in FIELDS.items()
+            },
+            "plan_source_refs": self.refs,
+        }
         if history.CONTRACT_START in prompt:
             contract = json.loads(
                 prompt.split(history.CONTRACT_START, 1)[1].split(
@@ -67,9 +73,13 @@ class Model:
             # This mock isolates plan behavior. An empty history selection is
             # deliberately a review limitation, never actual-model evidence.
             result[history.KEY] = {
-                field: {"current_list": [], "change_history": []}
+                field: {
+                    "current_list": [],
+                    "change_history": [],
+                    "source_context": [],
+                }
                 if field in contract["medication_fields"]
-                else []
+                else {"source_refs": []}
                 for field in contract["reported_history_fields"]
             }
         return json.dumps(result)
@@ -340,7 +350,7 @@ def test_complete_entries_preserve_chronology_and_conflicting_decisions():
     _, resolved = grounding.resolve(
         json.dumps(
             {
-                "fields": {"Plan": "Start medication."},
+                "fields": {"Plan": ""},
                 "plan_source_refs": {"Plan": [2, 1]},
             }
         ),
@@ -350,6 +360,25 @@ def test_complete_entries_preserve_chronology_and_conflicting_decisions():
         sources[1].text
     )
     assert "Correction: do not start it." in resolved["Plan"]
+
+
+@pytest.mark.asyncio
+async def test_nonempty_plan_is_rejected_before_note_and_empty_channel_can_retry(
+    admission_case, monkeypatch
+):
+    f = admission_case
+    args = await setup(f, monkeypatch)
+    f.model.output = '{"CC":"Sleep","Plan":"Discuss sleep at follow-up."}'
+    with pytest.raises(notes.CaptureNoteUnconfirmed):
+        await notes.capture_note(**args)
+    assert not rows(f, AIVisitNote)
+    assert len(rows(f, AIVisitTranscript)) == 1
+    f.model.output = '{"CC":"Sleep","Plan":""}'
+    saved = await notes.capture_note(**args)
+    assert saved.fields["Plan"] == plans.REVIEW_REQUIRED
+    assert (await notes.capture_note(**{**args, "prepare": False})) == saved
+    assert (await notes.capture_note(**args)) == saved
+    assert len(f.model.calls) == 2  # Explicit retry only; both replays use saved data.
 
 
 @pytest.mark.asyncio

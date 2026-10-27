@@ -20,9 +20,13 @@ def response(fields, sources, *, selected=(), speaker="Unknown", patient_only=Tr
     )
     refs = {
         field: (
-            {"current_list": [], "change_history": list(selected)}
+            {
+                "current_list": [],
+                "change_history": list(selected),
+                "source_context": [],
+            }
             if field in grounding.medication_fields
-            else list(selected)
+            else {"source_refs": list(selected)}
         )
         for field in grounding.fields
     }
@@ -45,7 +49,7 @@ def test_soap_keeps_medication_uncertainty_when_generated_objective_is_replaced(
     remaining, rendered = grounding.resolve(raw, max_bytes=10000)
     assert rendered == {
         "Objective": LIMITATION
-        + "\n\nReported transcript history:\nTranscript — Unidentified speaker:\n"
+        + "\n\nSelected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\n"
         + text
     }
     assert "Takes no medications" not in rendered["Objective"]
@@ -75,10 +79,11 @@ def test_soap_named_past_and_future_source_words_keep_order_without_list_verific
     ]
     grounding, raw = response(SOAP, texts, selected=[3, 1, 2])
     _, rendered = grounding.resolve(raw, max_bytes=10000)
-    assert rendered[
-        "Objective"
-    ] == LIMITATION + "\n\nReported transcript history:\n" + "\n\n".join(
-        "Transcript — Unidentified speaker:\n" + text for text in texts
+    assert (
+        rendered["Objective"]
+        == LIMITATION
+        + "\n\nSelected transcript source context (questions are not findings):\n"
+        + "\n\n".join("Transcript — Unidentified speaker:\n" + text for text in texts)
     )
 
 
@@ -105,10 +110,13 @@ def test_dedicated_medication_field_preserves_existing_bytes_without_objective_d
     grounding, raw = response(fields, [text], selected=[1])
     _, rendered = grounding.resolve(raw, max_bytes=10000)
     source = "Transcript — Unidentified speaker:\n" + text
-    assert rendered["Objective"] == "Reported transcript history:\n" + source
+    assert (
+        rendered["Objective"]
+        == "Selected transcript source context (questions are not findings):\n" + source
+    )
     assert (
         rendered["Medications"]
-        == LIMITATION + "\n\nSelected medication source statements:\n" + source
+        == LIMITATION + "\n\nSelected medication source context:\n" + source
     )
 
 
@@ -119,7 +127,7 @@ def test_no_objective_does_not_place_medication_limitation_in_other_history_fiel
     assert set(rendered) == {"ROS", "Allergies"}
     assert all(
         value
-        == "Reported transcript history:\nTranscript — Unidentified speaker:\nUnidentified source."
+        == "Selected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\nUnidentified source."
         for value in rendered.values()
     )
 

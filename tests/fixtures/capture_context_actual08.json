@@ -1,0 +1,129 @@
+{
+  "synthetic_only": true,
+  "evidenceOnly": true,
+  "run": "/private/tmp/capture-plan-evaluation-20261026-08/run-5582df17ebb940fc9404ed0f3f095fad",
+  "items": {
+    "R2-candidate-1": {
+      "raw": "{\"fields\":{\"Subjective\":\"No Patient-labeled entries are present in the transcript. Per source preference, Subjective contains only this source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"plan_source_refs\":{\"Plan\":[27,28,29,31,35,36]},\"reported_history_source_refs\":{\"Objective\":{\"statements\":[5,6,7,8,9,11,12,15,16,17,18,19,23,24,25,26,33,34],\"question_context\":[{\"question_ref\":13,\"response_refs\":[15,16]},{\"question_ref\":20,\"response_refs\":[23]},{\"question_ref\":21,\"response_refs\":[24]},{\"question_ref\":22,\"response_refs\":[23]}]}}}",
+      "rawSHA256": "703cfcd2ee7bd915b4e8ce3ffc786be8a8d34a2b9d0c0810190febcaa0cb21c6",
+      "responseArtifactSHA256": "cd9a926881aebe0a54834b93ab727e74ea00ac5eb4fc031a7b49d92dc8b8bcee",
+      "requestArtifactSHA256": "f36d3100794e185f39fe6bd236857e52d0fc863c21b4096c11cbee1a9d17442a",
+      "actualStatus": "SAVED_REOPENED",
+      "responseFormatType": "json_schema",
+      "strict": true,
+      "historySchema": {
+        "type": "object",
+        "properties": {
+          "Objective": {
+            "type": "object",
+            "properties": {
+              "statements": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "question_context": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "question_ref": {
+                      "type": "integer"
+                    },
+                    "response_refs": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "maxItems": 16
+                    }
+                  },
+                  "required": [
+                    "question_ref",
+                    "response_refs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "statements",
+              "question_context"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "Objective"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "R3-candidate-1": {
+      "raw": "{\"fields\":{\"Subjective\":\"Only patient-labeled entries may be included in Subjective. No patient-labeled entries were present in the transcript.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39]},\"reported_history_source_refs\":{\"Objective\":{\"statements\":[6,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42,43],\"question_context\":[{\"question_ref\":5,\"response_refs\":[6,7,8,32,40]},{\"question_ref\":13,\"response_refs\":[17,18]},{\"question_ref\":14,\"response_refs\":[16]},{\"question_ref\":25,\"response_refs\":[26,27,28,29,30]},{\"question_ref\":42,\"response_refs\":[42]}]}}}",
+      "rawSHA256": "68a4c6b7df2c099bcf14cee13956eba8aa032654fa1ee65724c3b0d308aa44d4",
+      "responseArtifactSHA256": "eeac702da63d764987ab9e57007abcf9733e46f12106f43370647b5660fbe279",
+      "requestArtifactSHA256": "bb1b4099872655033b881d46e79be0c89a44b333249748f6a34263507007c158",
+      "actualStatus": "REJECTED_NO_NOTE",
+      "responseFormatType": "json_schema",
+      "strict": true,
+      "historySchema": {
+        "type": "object",
+        "properties": {
+          "Objective": {
+            "type": "object",
+            "properties": {
+              "statements": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "question_context": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "question_ref": {
+                      "type": "integer"
+                    },
+                    "response_refs": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      },
+                      "maxItems": 16
+                    }
+                  },
+                  "required": [
+                    "question_ref",
+                    "response_refs"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "statements",
+              "question_context"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "Objective"
+        ],
+        "additionalProperties": false
+      },
+      "failurePersistence": {
+        "status": "FRESH_NOTE_COUNT_OBSERVED",
+        "noteCount": 0,
+        "validRawResponses": 1
+      }
+    }
+  },
+  "manualFinding": "R2 editorial request22 mislabeled clinical question; R3 includes correct14/16 but also declarative42 self-pair42\u219242, rejected. Neutral-list proposal does not retroactively convert these responses."
+}

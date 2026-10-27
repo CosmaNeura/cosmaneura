@@ -1,4 +1,15 @@
-# Capture note retention candidate
+# Capture note retention
+
+Current candidate: runtime `8793cd2d59f51fcd6f8d6b0fd67918ad6727f52d` on
+trunk `1715c1c33108da0e2335049db6b00f69afc7bb81`. Its fixed-profile synthetic
+retention qualification is independently accepted; it is not deployed. The final
+implementation, evidence limits and promotion requirements are below. Earlier
+failed candidates and their unchanged outputs remain in the private lab record.
+
+## Inherited implementation history
+
+The following pre-existing sections describe the original grounding and SOAP
+medication correction. They are historical context, not new release authority.
 
 Tier 2: clinical draft generation. Owner: Scribe/Core engineering; initial scope
 is disposable synthetic evaluation only. The candidate is not qualified for
@@ -102,3 +113,67 @@ source revert of this small renderer delta, never old-image rollback or regenera
 A fresh native capture and normal save/reopen/dashboard content comparison remain
 required after a reviewed staging release. No paid model call or live regeneration
 is part of this correction.
+
+## Qualified capture contract and release preparation (2026-10-26)
+
+Tier 2, one deployable outcome: retain source-backed clinical context and complete
+prospective care details in newly generated capture notes. Three runtime modules
+change; the other changed files are synthetic regressions and this flight plan.
+There is no database/template migration, new dependency, authority or ingest
+change. Ordinary summarization and existing saved-note replay remain unchanged.
+
+Prospective fields now have one substantive output channel: source references.
+The transient schema and parser reject nonempty free-text Plan strings. Selection
+includes explicit future care commitments and their distributed timing, duration,
+conditions and corrections. Final Plan still contains complete attributed source
+entries; no excerpt, generated paraphrase or inferred advice is substituted.
+
+For the existing all-unidentified-role, patient-only history path, ordinary fields
+select neutral source-context indexes, without question/answer pairing or a claim
+that an answer is missing. Medication fields preserve separate current/change
+selections plus neutral context, original attribution and current-list uncertainty.
+The prompt excludes standalone instructions to the model or note writer even
+when quoting them, while allowing independently meaningful clinical content in
+mixed entries. The server rejects invalid references; it does not repair or
+filter a model response. Known-role history paths and other Subjective preferences
+retain their prior behavior. Selection completeness remains model-dependent.
+
+The actual configured model was called once per fresh case, with retries zero,
+unchanged request options, and at least 65 seconds between SDK completions and
+subsequent calls. Qualification Q03 contains 14 fresh candidate cases: three
+R2/R3 repetitions and eight original retention cases. Six complete matching
+`9761404` baseline requests/results are explicitly reused archival comparisons;
+there were no fresh baseline calls in Q03. All 14 candidate V2 retention and Plan
+checks passed, with save/reopen and zero replay calls. Five batch cleanups settled.
+The actual PostgreSQL gate passed ten positive, four malformed-envelope and two
+context cases. Source checks passed 160 offline tests; evaluator controls passed
+205. Raw responses and every final field received independent semantic review.
+
+Durable private evidence: `integration-20261025/reviews/capture-final-qualification-matrix-03`.
+Matrix receipt SHA256 `537a22415039be3b1e4fa4c6ace62c2ff0a91d76483350d86ea4d350b5cfb00f`;
+independent acceptance `d95d42186be93d5e512c3f9ec22cabd8208dcf1b5e130996fa5cb03c7d06915c`.
+The earlier Q02 20-call matrix remains FAILED for literal source-instruction
+leakage. Q03 RET08 excludes that instruction while retaining its source transcript.
+RET07's original raw flag remains FAIL; its accepted, predeclared neutral-header
+calibration is independently corroborated by both people's exact source text.
+R3's optional full-question copying metric remains FAIL in all three repetitions,
+without an invented answer or denial under the original RET05 gate. No stricter
+prior experiment is silently regraded.
+
+Qualification is limited to the observed four-field SOAP, unidentified-role,
+patient-only profile, effective example None and Plan-reason preference false.
+Repeated source labels and mixed editorial wording remain presentation limits.
+This does not qualify arbitrary templates, long sessions, acoustic identities,
+a fresh native UI journey, or the full system. It adds no model retry or call.
+
+Before release: obtain independent review of the final substantive pushed head,
+reconcile exact current trunk/image/configuration/schema and preserve unrelated
+Zoom changes, workers and scheduler. The last reconciled web72/image80f1/source976
+is baseline evidence, not perpetual deployment authorization. Build and verify
+an exact merged candidate through the separately reviewed release path; no
+staging mutation or production promotion is part of this source PR. Require a
+fresh synthetic native capture and normal save/reopen/content comparison after
+deployment before claiming that journey passes. GitHub Actions stays disabled.
+Recovery is a separately reviewed forward source revert on current trunk, with
+no old-image rollback, database downgrade, deleted notes or regeneration of saved
+visits. Preserve all qualification and prior failure artifacts.

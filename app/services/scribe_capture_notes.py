@@ -258,7 +258,14 @@ def capture_response_schema(
             "additionalProperties": False,
         }
 
-    fields = closed({name: {"type": "string"} for name in field_names})
+    fields = closed(
+        {
+            name: {"type": "string", "enum": [""]}
+            if name in plan_fields
+            else {"type": "string"}
+            for name in field_names
+        }
+    )
     if not plan_fields and not (history_grounding and history_grounding.fields):
         return fields
     properties = {"fields": fields}

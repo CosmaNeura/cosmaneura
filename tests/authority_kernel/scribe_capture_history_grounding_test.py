@@ -29,11 +29,12 @@ def contract(texts, *, plan_fields=("P - PLAN",)):
 def response(
     grounding, *, objective=(), current=(), changes=(), extra=None, has_plans=True
 ):
-    refs: dict[str, object] = {field: [] for field in grounding.fields}
-    refs["O - OBJECTIVE"] = list(objective)
+    refs: dict[str, object] = {field: {"source_refs": []} for field in grounding.fields}
+    refs["O - OBJECTIVE"]["source_refs"] = list(objective)
     refs["Medications"] = {
         "current_list": list(current),
         "change_history": list(changes),
+        "source_context": [],
     }
     result = {
         "fields": {
@@ -43,6 +44,7 @@ def response(
         history.KEY: refs,
     }
     if has_plans:
+        result["fields"]["P - PLAN"] = ""
         result["plan_source_refs"] = {"P - PLAN": []}
     if extra:
         result.update(extra)
@@ -55,7 +57,8 @@ def test_fabricated_model_words_roles_numbers_and_split_quotes_are_not_published
     _, rendered = g.resolve(response(g, objective=[1]), max_bytes=10000)
     assert (
         rendered["O - OBJECTIVE"]
-        == "Reported transcript history:\nTranscript — Unidentified speaker:\n" + source
+        == "Selected transcript source context (questions are not findings):\nTranscript — Unidentified speaker:\n"
+        + source
     )
     assert "9/10" not in rendered["O - OBJECTIVE"]
     assert "the patient" not in rendered["O - OBJECTIVE"].lower()
@@ -86,7 +89,7 @@ def test_unanswered_question_is_never_turned_into_a_denial():
     assert question in rendered["O - OBJECTIVE"]
     assert "no fall" not in rendered["O - OBJECTIVE"].lower()
     # Clinical selection remains an actual-model/content-review concern.
-    assert "unanswered questions" in g.prompt(has_plans=True)
+    assert "A question never supplies its answer" in g.prompt(has_plans=True)
 
 
 def test_empty_selection_is_review_limitation_not_normal_or_absent_history():
@@ -124,7 +127,7 @@ def test_medication_group_heading_never_recasts_a_selected_future_decision_as_pa
     _, rendered = g.resolve(response(g, current=[1], changes=[2, 3]), max_bytes=10000)
     medication = rendered["Medications"]
     assert all(text in medication for text in texts)
-    assert "Selected medication source statements:" in medication
+    assert "Selected medication source context:" in medication
     assert "Reported medication change history:" not in medication
     assert "was prescribed" not in medication
     _, rendered = g.resolve(response(g, changes=[2, 3]), max_bytes=10000)
@@ -156,7 +159,7 @@ def test_model_category_cannot_establish_current_list_and_union_keeps_source_ord
 def test_invalid_source_index_contract_fails_closed(indexes):
     g = contract(["Source."])
     value = json.loads(response(g))
-    value[history.KEY]["O - OBJECTIVE"] = indexes
+    value[history.KEY]["O - OBJECTIVE"]["source_refs"] = indexes
     with pytest.raises(history.HistoryGroundingInvalid):
         g.resolve(json.dumps(value), max_bytes=10000)
 
@@ -188,7 +191,11 @@ def test_foreign_or_ambiguous_reference_shapes_fail_closed(mutation):
     elif mutation == "extra_envelope":
         value["unexpected"] = True
     elif mutation == "duplicate_medication":
-        refs["Medications"] = {"current_list": [1], "change_history": [1]}
+        refs["Medications"] = {
+            "current_list": [1],
+            "change_history": [1],
+            "source_context": [],
+        }
     elif mutation == "extra_medication_key":
         refs["Medications"]["new_plan"] = [1]
     else:
@@ -200,7 +207,7 @@ def test_foreign_or_ambiguous_reference_shapes_fail_closed(mutation):
 def test_duplicate_json_properties_are_rejected():
     g = contract(["Source."])
     raw = response(g).replace(
-        '"O - OBJECTIVE": []', '"O - OBJECTIVE": [], "O - OBJECTIVE": [1]'
+        '"source_refs": []', '"source_refs": [], "source_refs": [1]'
     )
     with pytest.raises(history.HistoryGroundingInvalid):
         g.resolve(raw, max_bytes=10000)
