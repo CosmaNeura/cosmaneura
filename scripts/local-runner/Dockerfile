@@ -30,9 +30,9 @@ RUN useradd --create-home --uid 1001 --shell /bin/bash runner && \
 RUN apt-get update && apt-get install -y --no-install-recommends socat && \
     rm -rf /var/lib/apt/lists/*
 COPY entrypoint.sh /usr/local/bin/local-runner-entrypoint
-COPY job-started.sh /usr/local/bin/local-release-job-started
-RUN chmod 0755 /usr/local/bin/local-runner-entrypoint /usr/local/bin/local-release-job-started
-ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/local-release-job-started
+COPY job-started.sh /usr/local/bin/local-release-job-started.sh
+RUN chmod 0755 /usr/local/bin/local-runner-entrypoint /usr/local/bin/local-release-job-started.sh
+ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/local-release-job-started.sh
 USER runner
 WORKDIR /opt/runner
 ENTRYPOINT ["/usr/local/bin/local-runner-entrypoint"]

@@ -155,12 +155,12 @@ def main() -> None:
         or metadata["Config"]["User"] != "runner"
         or metadata["Config"]["Entrypoint"]
         != ["/usr/local/bin/local-runner-entrypoint"]
-        or "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/local-release-job-started"
+        or "ACTIONS_RUNNER_HOOK_JOB_STARTED=/usr/local/bin/local-release-job-started.sh"
         not in metadata["Config"]["Env"]
     ):
         raise SystemExit("The image is not the reviewed local release runner.")
     files = {
-        "/usr/local/bin/local-release-job-started": "job-started.sh",
+        "/usr/local/bin/local-release-job-started.sh": "job-started.sh",
         "/usr/local/bin/local-runner-entrypoint": "entrypoint.sh",
     }
     actual_hashes = subprocess.check_output(
