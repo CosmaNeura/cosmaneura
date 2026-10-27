@@ -170,7 +170,7 @@ def _offline_files() -> dict[str, bytes]:
 def _runtime_verifier_arguments() -> tuple[str, ...]:
     identity = (
         "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
-        "build_and_publish_manual.yml@refs/heads/master"
+        "build_and_publish_local.yml@refs/heads/master"
     )
     dynamic = {7: identity, 24: "a" * 40, 26: "a" * 40}
     return tuple(

@@ -12,7 +12,7 @@ def _read(path: str) -> str:
 
 
 def test_staging_pilot_zoom_skip_build_control_is_default_off() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
     # Only the canonical candidate workflow deploys staging, so only it may

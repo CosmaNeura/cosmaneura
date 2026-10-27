@@ -2,7 +2,7 @@ name: Terraform Apply
 
 # Production apply is deliberately manual. Pull requests receive secretless
 # validation and a provider-mocked static plan. The founder must then
-# run infra_production_plan.yml on the exact current master commit and supply
+# run infra_production_plan_local.yml on the exact current master commit and supply
 # that successful run ID and immutable attestation digest here. Only the
 # founder account may start or rerun either production workflow. This workflow
 # independently recomputes a saved plan and applies it only when its canonical
@@ -39,7 +39,7 @@ concurrency:
 jobs:
   authorize-production:
     name: Authorize production infrastructure apply
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 5
     permissions: {}
     steps:
@@ -79,7 +79,7 @@ jobs:
         github.triggering_actor == 'JohnClem' &&
         needs.authorize-production.result == 'success'
       }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 30
     environment: production
     permissions:
@@ -88,7 +88,7 @@ jobs:
       id-token: write
     env:
       # Activation is source-reviewed. Keep this identical to
-      # infra_production_plan.yml; a protected environment variable cannot
+      # infra_production_plan_local.yml; a protected environment variable cannot
       # pre-arm the cutover.
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       ARM_USE_OIDC: "true"
@@ -143,7 +143,7 @@ jobs:
               --jq '[.name, .path, .event, .status, .conclusion, .head_branch, .head_sha, .run_attempt] | .[]'
           )
           if [[ "${plan_run[0]:-}" != "Terraform Production Plan" || \
-                "${plan_run[1]:-}" != ".github/workflows/infra_production_plan.yml" || \
+                "${plan_run[1]:-}" != ".github/workflows/infra_production_plan_local.yml" || \
                 "${plan_run[2]:-}" != "workflow_dispatch" || \
                 "${plan_run[3]:-}" != "completed" || \
                 "${plan_run[4]:-}" != "success" || \
@@ -211,7 +211,7 @@ jobs:
             --arg run_id "$PRODUCTION_PLAN_RUN_ID" \
             '(.schema_version == 1) and
              (.workflow_name == "Terraform Production Plan") and
-             (.workflow_path == ".github/workflows/infra_production_plan.yml") and
+             (.workflow_path == ".github/workflows/infra_production_plan_local.yml") and
              (.artifact_name == $artifact_name) and
              (.run_id == $run_id) and
              (.run_attempt == $run_attempt) and
@@ -281,10 +281,13 @@ jobs:
             git -C .. ls-files -z -- \
               infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
               Justfile just Procfile .github/actions \
-              .github/workflows/infra_production_plan.yml \
-              .github/workflows/infra_apply.yml \
+              .github/workflows/infra_production_plan_local.yml \
+              .github/workflows/infra_apply_local.yml \
               .github/workflows/build_and_publish.yml \
-              .github/workflows/build_and_publish_manual.yml |
+              .github/workflows/build_and_publish_local.yml \
+              .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
+              .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+              scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner |
               LC_ALL=C sort -z |
               xargs -0 -I{} sha256sum "../{}" |
               sha256sum |

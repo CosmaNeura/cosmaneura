@@ -77,7 +77,7 @@ def _configured_policy() -> dict[str, Any]:
         elif placeholder.endswith("_SIGNER_IDENTITY"):
             replacements[placeholder] = (
                 "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
-                "build_and_publish_manual.yml@refs/heads/master"
+                "build_and_publish_local.yml@refs/heads/master"
             )
         elif "LAUNCH_MAILBOX_STORAGE_ACCOUNT_HOST" in placeholder:
             replacements[placeholder] = "restorelaunch.blob.core.windows.net"
@@ -676,7 +676,7 @@ def test_policy_rejects_noncanonical_runtime_record_signer_workflow_path() -> No
     policy = _configured_policy()
     policy["external_runtime_record"]["signature"]["certificate_identity"] = (
         "https://github.com/CosmaNeura/cosmaneura/attacker/.github/workflows/"
-        "build_and_publish_manual.yml@refs/heads/master"
+        "build_and_publish_local.yml@refs/heads/master"
     )
 
     with pytest.raises(

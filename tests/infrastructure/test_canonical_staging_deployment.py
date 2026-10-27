@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
-LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
+LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_local.yml"
 COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
 LOCAL_PUBLISHER = ROOT / "infra-staging" / "publish-local.sh"
 UNTAGGED_UPLOADER = ROOT / "scripts" / "staging_acr_untagged_upload.py"

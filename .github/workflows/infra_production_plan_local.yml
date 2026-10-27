@@ -20,7 +20,7 @@ concurrency:
 jobs:
   authorize-production:
     name: Authorize production infrastructure plan
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 5
     permissions: {}
     steps:
@@ -60,7 +60,7 @@ jobs:
         github.triggering_actor == 'JohnClem' &&
         needs.authorize-production.result == 'success'
       }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local, "cosmaneura-production-local-${{ github.run_id }}"]
     timeout-minutes: 15
     environment: production
     permissions:
@@ -201,10 +201,13 @@ jobs:
             git -C .. ls-files -z -- \
               infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
               Justfile just Procfile .github/actions \
-              .github/workflows/infra_production_plan.yml \
-              .github/workflows/infra_apply.yml \
+              .github/workflows/infra_production_plan_local.yml \
+              .github/workflows/infra_apply_local.yml \
               .github/workflows/build_and_publish.yml \
-              .github/workflows/build_and_publish_manual.yml |
+              .github/workflows/build_and_publish_local.yml \
+              .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
+              .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+              scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner |
               LC_ALL=C sort -z |
               xargs -0 -I{} sha256sum "../{}" |
               sha256sum |
@@ -229,7 +232,7 @@ jobs:
             '{
               schema_version: 1,
               workflow_name: "Terraform Production Plan",
-              workflow_path: ".github/workflows/infra_production_plan.yml",
+              workflow_path: ".github/workflows/infra_production_plan_local.yml",
               artifact_name: $artifact_name,
               run_id: $run_id,
               run_attempt: $run_attempt,

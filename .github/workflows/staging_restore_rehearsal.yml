@@ -25,7 +25,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' &&
        (inputs.action == 'cleanup' || inputs.action == 'provision')) ||
       (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 5
     steps:
       - name: Require protected repository, ref, and action
@@ -84,7 +84,7 @@ jobs:
   provision:
     needs: [authorize]
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'provision'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 1
     permissions: {}
     steps:
@@ -99,7 +99,7 @@ jobs:
       needs.authorize.result == 'success' &&
       ((github.event_name == 'workflow_dispatch' && inputs.action == 'cleanup') ||
        (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 15
     environment: staging-restore-cleanup
     permissions:

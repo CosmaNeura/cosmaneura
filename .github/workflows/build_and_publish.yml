@@ -2,7 +2,7 @@ name: Build & Publish (retired legacy path)
 
 # This path is intentionally retained so workflow ID 132737823 and its history
 # remain auditable. The active workflow lives at
-# .github/workflows/build_and_publish_manual.yml. The GitHub registration for
+# .github/workflows/build_and_publish_local.yml. The GitHub registration for
 # this legacy path is disabled after the replacement is registered.
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ permissions: {}
 jobs:
   retired:
     name: Legacy workflow is retired
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 1
     permissions: {}
     steps:

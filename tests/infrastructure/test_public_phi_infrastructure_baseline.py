@@ -79,8 +79,8 @@ def test_production_database_source_cannot_reintroduce_allow_all() -> None:
     assert "default     = true" in adoption_variable
 
     for workflow in (
-        ".github/workflows/infra_production_plan.yml",
-        ".github/workflows/infra_apply.yml",
+        ".github/workflows/infra_production_plan_local.yml",
+        ".github/workflows/infra_apply_local.yml",
     ):
         workflow_source = _read(workflow)
         assert "Resolve exact production Container Apps egress" in workflow_source
