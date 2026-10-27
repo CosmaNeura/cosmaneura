@@ -196,7 +196,7 @@ async def test_explicit_negated_conditional_and_translated_plans_keep_complete_s
     )
     result = await notes.capture_note(**args)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == f"Transcript — {label}:\n{utterance}"
+    assert result.fields["P - PLAN"] == f"- {label}: {utterance}"
     assert result.fields is not None
     assert "Seek medical attention" not in result.fields["P - PLAN"]
     assert len(model.calls) == 1
@@ -278,7 +278,7 @@ async def test_wrongly_selected_complaint_cannot_become_invented_advice(
     # Classification can still be wrong; source attribution makes that visible.
     # A model cannot transform this reference into an unspoken recommendation.
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == "Transcript — Patient:\nI have a cough."
+    assert result.fields["P - PLAN"] == "- Patient: I have a cough."
 
 
 @pytest.mark.asyncio
@@ -300,7 +300,7 @@ async def test_saved_scratch_decision_is_not_labeled_as_recorded_speech(
     )
     result = await notes.capture_note(**args, scratch_notes=scratch)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == "Clinician's saved scratch notes:\n" + content
+    assert result.fields["P - PLAN"] == "- Clinician's saved scratch notes: " + content
     assert result.notebook_source == scratch.reference()
     assert model.calls[0].count(json.dumps(content)[1:-1]) == 1
     assert "[source 2] Separate source:" in model.calls[0]
