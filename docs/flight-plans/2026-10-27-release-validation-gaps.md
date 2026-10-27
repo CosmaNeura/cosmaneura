@@ -7,6 +7,12 @@ assert successful test results and local oracle loaders before using them.
 Keep optional schema-generator imports behind their existing qualification
 gate, and update a stale prompt assertion to the current source-selection rule.
 Regenerate the browser OpenAPI snapshot with the locked server dependencies.
+Live CI also exposed a stale recovery-validator bootstrap digest left by the
+already merged runtime-pin refresh and one ESLint configuration indent. Bind
+the state-refresh validator and its consumer to the exact current source hashes,
+retaining all owner, mode, link, and digest checks; format the ESLint entry.
+Scope the descriptor-redirection test mocks to the tested call so pytest can
+restore its capture descriptors with the real operating-system functions.
 No launch policy, clinical generation, authorization, billing, configuration,
 schema, or dependency changes are included.
 

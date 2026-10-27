@@ -310,21 +310,22 @@ def test_redirect_standard_streams_uses_character_sink_and_protected_log(
     )
     duplicates: list[tuple[int, int, bool]] = []
     closed: list[int] = []
-    monkeypatch.setattr(os, "open", lambda *_args, **_kwargs: 9)
-    monkeypatch.setattr(
-        os,
-        "fstat",
-        lambda descriptor: log_metadata if descriptor == 8 else null_metadata,
-    )
-    monkeypatch.setattr(
-        os,
-        "dup2",
-        lambda source, target, *, inheritable: duplicates.append(
-            (source, target, inheritable)
-        ),
-    )
-    monkeypatch.setattr(os, "close", closed.append)
-    consumer._redirect_standard_streams(8)
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", lambda *_args, **_kwargs: 9)
+        patch.setattr(
+            os,
+            "fstat",
+            lambda descriptor: log_metadata if descriptor == 8 else null_metadata,
+        )
+        patch.setattr(
+            os,
+            "dup2",
+            lambda source, target, *, inheritable: duplicates.append(
+                (source, target, inheritable)
+            ),
+        )
+        patch.setattr(os, "close", closed.append)
+        consumer._redirect_standard_streams(8)
     assert duplicates == [(9, 0, True), (8, 1, True), (8, 2, True)]
     assert closed == [9]
 
