@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,9 +24,19 @@ import app.services.provider_thread_admission as admission
 
 from sqlalchemy import create_engine
 
+PROVIDER_CLIENT_ID = "11111111-1111-4111-8111-111111111111"
+
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
+    monkeypatch.setattr(
+        connection,
+        "SOVEREIGN_TOOL_AUTH_SETTINGS",
+        replace(
+            connection.SOVEREIGN_TOOL_AUTH_SETTINGS,
+            sovereign_client_ids=frozenset({PROVIDER_CLIENT_ID}),
+        ),
+    )
     admission._after_fork()
     monkeypatch.setattr(admission, "ADMISSION_SECONDS", 0.035)
     token = connection._work.set(None)
@@ -87,7 +98,7 @@ async def occupying(run):
         return index
 
     tasks = [
-        asyncio.create_task(run(body, index, receiver_workload="provider"))
+        asyncio.create_task(run(body, index, receiver_workload=PROVIDER_CLIENT_ID))
         for index in range(2)
     ]
     await until(lambda: all(event.is_set() for event in entered))
@@ -105,18 +116,22 @@ def test_real_shared_default_40_saturation_does_not_block_provider():
         ordinary = asyncio.create_task(
             run(lambda: "original", receiver_workload="scribe")
         )
+        provider = asyncio.create_task(
+            run(lambda: "provider", receiver_workload=PROVIDER_CLIENT_ID)
+        )
         try:
-            async with asyncio.timeout(1):
-                assert (
-                    await run(lambda: "provider", receiver_workload="provider")
-                    == "provider"
-                )
+            # Do not cancel work queued behind the saturated shared pool:
+            # route cancellation retains its worker until that pool is freed.
+            done, _ = await asyncio.wait({provider}, timeout=1)
+            assert provider in done, "provider work waited behind the shared pool"
+            assert await provider == "provider"
             assert shared.borrowed_tokens == 40 and not ordinary.done()
             shared.release_on_behalf_of(borrowers.pop())
             assert await ordinary == "original"
         finally:
             for borrower in borrowers:
                 shared.release_on_behalf_of(borrower)
+            await asyncio.gather(provider, ordinary, return_exceptions=True)
         assert shared.total_tokens == 40 and shared.borrowed_tokens == 0
 
     asyncio.run(scenario())
@@ -130,7 +145,9 @@ def test_two_active_slots_timeout_has_no_late_body_dispatch():
         started = time.monotonic()
         try:
             with pytest.raises(connection.ProviderDatabaseDeadlineExceeded):
-                await run(lambda: calls.append("late"), receiver_workload="provider")
+                await run(
+                    lambda: calls.append("late"), receiver_workload=PROVIDER_CLIENT_ID
+                )
             assert 0.02 <= time.monotonic() - started < 0.5
             assert admission._lane().slots.statistics().tasks_waiting == 0
             assert admission._lane().slots.borrowed_tokens == 2 and not calls
@@ -139,7 +156,7 @@ def test_two_active_slots_timeout_has_no_late_body_dispatch():
             assert await asyncio.gather(*tasks) == [0, 1]
         await asyncio.sleep(0.01)
         assert not calls and admission._lane().slots.borrowed_tokens == 0
-        assert await run(lambda: "next", receiver_workload="provider") == "next"
+        assert await run(lambda: "next", receiver_workload=PROVIDER_CLIENT_ID) == "next"
 
     asyncio.run(scenario())
 
@@ -157,10 +174,13 @@ def test_queued_cancellation_removes_waiter_without_late_work(level_cancel):
                 with CancelScope() as scope:
                     scopes.append(scope)
                     await run(
-                        lambda: calls.append("late"), receiver_workload="provider"
+                        lambda: calls.append("late"),
+                        receiver_workload=PROVIDER_CLIENT_ID,
                     )
             else:
-                await run(lambda: calls.append("late"), receiver_workload="provider")
+                await run(
+                    lambda: calls.append("late"), receiver_workload=PROVIDER_CLIENT_ID
+                )
 
         pending = asyncio.create_task(queued())
         try:
@@ -189,7 +209,9 @@ def test_already_cancelled_scope_never_dispatches_or_leaks_reservation():
         run = handler()
         with CancelScope() as scope:
             scope.cancel()
-            await run(lambda: calls.append("late"), receiver_workload="provider")
+            await run(
+                lambda: calls.append("late"), receiver_workload=PROVIDER_CLIENT_ID
+            )
         assert scope.cancelled_caught and not calls
         assert admission._lane().slots.borrowed_tokens == 0
 
@@ -222,7 +244,7 @@ def test_cancellation_at_thread_start_vetoes_session_and_body():
     async def scenario():
         run = handler(scope, SimpleNamespace(run_sync=delayed_dispatch))
         task = asyncio.create_task(
-            run(lambda: bodies.append("late"), receiver_workload="provider")
+            run(lambda: bodies.append("late"), receiver_workload=PROVIDER_CLIENT_ID)
         )
         try:
             await until(entered.is_set)
@@ -235,7 +257,10 @@ def test_cancellation_at_thread_start_vetoes_session_and_body():
             release.set()
             await until(finished.is_set)
         assert not sessions and not bodies
-        assert await handler()(lambda: "new", receiver_workload="provider") == "new"
+        assert (
+            await handler()(lambda: "new", receiver_workload=PROVIDER_CLIENT_ID)
+            == "new"
+        )
 
     asyncio.run(scenario())
 
@@ -270,9 +295,9 @@ def test_active_cancellation_holds_slot_until_session_cleanup(level_cancel):
             if level_cancel:
                 with CancelScope() as scope:
                     scopes.append(scope)
-                    await run(body, receiver_workload="provider")
+                    await run(body, receiver_workload=PROVIDER_CLIENT_ID)
             else:
-                await run(body, receiver_workload="provider")
+                await run(body, receiver_workload=PROVIDER_CLIENT_ID)
 
         task = asyncio.create_task(invoke())
         try:
@@ -331,7 +356,7 @@ def test_active_real_connection_checkpoint_cancellation_preserves_context(monkey
         try:
             task = asyncio.create_task(
                 handler(connection.provider_receiver_session)(
-                    body, receiver_workload="provider"
+                    body, receiver_workload=PROVIDER_CLIENT_ID
                 )
             )
             await until(entered.is_set)
@@ -362,7 +387,7 @@ def test_work_exception_is_preserved_and_not_classified_as_queue_timeout(error):
 
     async def scenario():
         with pytest.raises(type(error)) as raised:
-            await handler()(body, receiver_workload="provider")
+            await handler()(body, receiver_workload=PROVIDER_CLIENT_ID)
         assert raised.value is error and admission._lane().slots.borrowed_tokens == 0
 
     asyncio.run(scenario())
@@ -378,7 +403,7 @@ def test_active_work_longer_than_admission_timeout_is_not_abandoned():
         timer = asyncio.create_task(release_after(release))
         try:
             assert await handler()(
-                lambda: release.wait(1), receiver_workload="provider"
+                lambda: release.wait(1), receiver_workload=PROVIDER_CLIENT_ID
             )
             assert admission._lane().slots.borrowed_tokens == 0
         finally:
@@ -388,7 +413,7 @@ def test_active_work_longer_than_admission_timeout_is_not_abandoned():
 
 
 @pytest.mark.parametrize(
-    "workload,enabled", [(None, True), ("scribe", True), ("provider", False)]
+    "workload,enabled", [(None, True), ("scribe", True), (PROVIDER_CLIENT_ID, False)]
 )
 def test_nonprovider_or_disabled_lane_uses_original_thread_admission(
     monkeypatch, workload, enabled
