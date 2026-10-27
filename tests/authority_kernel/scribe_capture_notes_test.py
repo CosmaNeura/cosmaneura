@@ -570,7 +570,7 @@ async def test_existing_core_content_is_linked_once_without_regeneration(
 async def test_template_section_changes_preserve_the_actual_existing_note(
     admission_case, monkeypatch
 ):
-    from types import SimpleNamespace
+    from fastapi import Request
 
     from app.routes import note_template_fields as templates
 
@@ -578,7 +578,7 @@ async def test_template_section_changes_preserve_the_actual_existing_note(
     kwargs = await setup(f, monkeypatch)
     first = await notes.capture_note(**kwargs)
     monkeypatch.setattr(templates, "get_session", lambda: Session(f.engine))
-    request = SimpleNamespace(state=SimpleNamespace(doctor=f.case.doctor))
+    request = Request({"type": "http", "state": {"doctor": f.case.doctor}})
     before = templates.get_note_template_fields(request, f.schema_ref)
     templates.update_note_template_fields(
         request,

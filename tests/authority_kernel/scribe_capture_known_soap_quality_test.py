@@ -22,6 +22,7 @@ def test_actual_known_role_soap_omission_is_rejected_by_fixed_oracle():
     spec = importlib.util.spec_from_file_location(
         "capture_finite_oracle", ROOT / "tools/capture-retention/oracle.py"
     )
+    assert spec is not None and spec.loader is not None
     oracle = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(oracle)
     assert CASE["synthetic_only"] and len(CASE["entries"]) == 39

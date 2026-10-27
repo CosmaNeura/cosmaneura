@@ -190,6 +190,17 @@ it("keeps continuation opt-in absent for old async clients and capabilities", as
   ).not.toHaveProperty("continuationConsent")
 })
 
+async function settleNativeReact(check: () => boolean) {
+  const deadline = performance.now() + 2000
+  while (!check()) {
+    if (performance.now() >= deadline)
+      throw new Error("Native asynchronous React state did not settle")
+    await act(async () => {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    })
+  }
+}
+
 async function delayedStatusFixture() {
   vi.stubGlobal("crypto", webcrypto)
   let id = "",
@@ -259,17 +270,24 @@ async function delayedStatusFixture() {
   )
   await act(async () => {
     fireEvent.click(generate)
-    await new Promise(setImmediate)
   })
-  await act(async () => {
-    await new Promise(setImmediate)
-  })
+  // Real WebCrypto completion can require more than a fixed number of turns.
+  // Wait for readiness without moving the virtual generation clock.
+  await settleNativeReact(
+    () =>
+      screen.queryByRole("button", {
+        name: "Stop renewing generation authorization",
+      }) !== null,
+  )
   expect(
     screen.getByRole("button", {
       name: "Stop renewing generation authorization",
     }),
   ).toBeVisible()
   await act(async () => vi.advanceTimersByTimeAsync(2000))
+  expect(
+    request.mock.calls.filter(([action]) => action === "generation-status"),
+  ).toHaveLength(1)
   return {
     request,
     continuing,
@@ -296,8 +314,12 @@ it("renews independently while a status request waits through a simulated70-seco
     ).toHaveLength(1)
     await act(async () => {
       f.finish()
-      await new Promise(setImmediate)
     })
+    await settleNativeReact(
+      () =>
+        screen.queryByRole<HTMLButtonElement>("button", { name: "Edit header" })
+          ?.disabled === false,
+    )
     expect(screen.getByRole("button", { name: "Edit header" })).toBeEnabled()
     expect(
       f.request.mock.calls.filter(([action]) => action === "generate"),

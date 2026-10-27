@@ -168,6 +168,7 @@ def test_create_named_template_is_owner_scoped_and_retries_without_duplicates(en
     payload = {"note_type": "My synthetic preset", "fields": fields}
     with Session(engine) as session:
         original = session.get(DoctorNoteSchema, schema_id)
+        assert original is not None
         owner_id = original.doctor_id
         other = Doctor(
             clerk_id=f"user_synthetic-template-other-{uuid4()}", biography=None
@@ -207,9 +208,11 @@ def test_create_named_template_is_owner_scoped_and_retries_without_duplicates(en
     )
     with Session(engine) as session:
         new = session.get(DoctorNoteSchema, created["schema_id"])
+        assert new is not None
         assert new.doctor_id == owner_id
         assert list(new.fields) == ["Plan", "10"]
         original = session.get(DoctorNoteSchema, schema_id)
+        assert original is not None
         assert list(original.fields) == ["Labs - 02/12/2026", "Plan"]
 
 
@@ -218,6 +221,7 @@ def test_create_does_not_revive_a_deleted_template(endpoint):
     fields = client.get(path).json()["fields"]
     with Session(engine) as session:
         schema = session.get(DoctorNoteSchema, schema_id)
+        assert schema is not None
         schema.deleted_at = datetime.now(UTC)
         session.add(schema)
         session.commit()
@@ -234,7 +238,7 @@ def test_create_does_not_revive_a_deleted_template(endpoint):
 def test_invalid_preset_names_are_rejected(name):
     with pytest.raises(ValidationError):
         routes.CreateNoteTemplate(
-            note_type=name, fields=[{"heading": "Plan", "guidance": ""}]
+            note_type=name, fields=[routes.TemplateField(heading="Plan", guidance="")]
         )
 
 
