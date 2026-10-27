@@ -73,10 +73,18 @@ setup API now reports not-configured while Actions is disabled. That API respons
 does not establish inactivity. GitHub supports labeled self-hosted Dependabot
 runners; verify supported local routing before enabling an automated job.
 Automatic approval review rejected pausing the three generated registrations
-without explicit owner acceptance of the scan/update/submission gap. Leave
-Actions disabled while that exact decision is pending. An approved temporary
-pause must be recorded, and local replacements must be verified before any
-generated job is enabled again. Do not weaken secret scanning or push protection.
+without explicit owner acceptance of the scan/update/submission gap. The owner
+then approved that exact temporary pause on 2026-10-27. GitHub refuses to disable
+dynamic registrations directly, so their underlying controls are paused instead:
+CodeQL default setup and Code Quality are not-configured, automatic security
+fixes are disabled, automatic dependency submission is saved as Disabled, and
+the version-update schedule is retained at `.github/dependabot.paused.yml`.
+GitHub reads only the canonical `.github/dependabot.yml` filename. Preserve all
+alerts and dependency records. Restore that filename and enable automated jobs
+only after their isolated local runner selection is verified; the preserved
+ecosystem/grouping policy is unchanged. Do not weaken secret scanning or push
+protection. Actions remains disabled until this final source change is reviewed
+and merged and all compute controls are verified.
 
 ## Acceptance and promotion sequence
 

@@ -43,6 +43,16 @@ def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
                 assert labels == expected_labels, path
 
 
+def test_dependabot_schedule_is_preserved_but_cannot_start_hosted_jobs() -> None:
+    assert not (ROOT / ".github/dependabot.yml").exists()
+    paused = yaml.safe_load((ROOT / ".github/dependabot.paused.yml").read_text())
+    assert paused["version"] == 2
+    assert {
+        (update["package-ecosystem"], update["directory"])
+        for update in paused["updates"]
+    } == {("github-actions", "/"), ("pip", "/"), ("npm", "/web")}
+
+
 @pytest.mark.parametrize(
     "field,value",
     [
