@@ -1,7 +1,8 @@
 name: Release verified production
 
 # One-time release after an exact stale test assertion repair. Reuse only the
-# immutable run named by the guard; every production source byte must match it.
+# immutable original run plus the exact separately accepted clinical delta.
+# Every production byte must match that reviewed source composition.
 on:
   workflow_dispatch:
     inputs:
@@ -59,6 +60,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+      pull-requests: read
+      issues: read
       # TODO why exactly do we need id-token here?
       id-token: write
     steps:

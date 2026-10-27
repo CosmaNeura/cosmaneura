@@ -17,9 +17,16 @@ the single known failure and unchanged completion totals. Missing, duplicate,
 rerun, incomplete or additional failed jobs are rejected. The original deploy
 must have been skipped without executing a step.
 
-The full Git tree must equal the validated tree except the hash-bound equality
-repair and these new reviewed release-control/test/document files. The repair
-reviewed commit must be an ancestor of master with an identical tree. Existing
+The full Git tree must equal clinical merge 4ff9318298e332f67b18117ccbabfd3764f569d7
+except the four new reviewed release-control/test/document files. Clinical PR #854
+already includes the exact equality repair and separately accepted 15-file delta.
+Every delta file is SHA-256 bound; its exact reviewed head, merged PR metadata,
+comment ID/author and accepted review-body hash are required before credentials.
+The original run covers unchanged source; it does not cover the clinical delta.
+That delta retains its 217 focused author tests, 18 independent production tests
+and exact 17-response replay. No successful acceptance or model call is repeated. The repair
+reviewed commit must be an ancestor of master with an identical tree. Two additional read-only token permissions allow the gate to inspect the pinned
+PR and review comment; production credential scopes are unchanged. Existing
 manual founder, Apply ancestry/configuration, callback, dark inbox, current-master,
 credential scoping and shared deployment concurrency controls remain in force.
 Build, publish, migration preflight and ordered Azure deployment steps are copied
