@@ -281,6 +281,29 @@ def capture_response_schema(
     return closed(properties)
 
 
+def _has_ros_field(field_names: tuple[str, ...]) -> bool:
+    return any(
+        re.search(
+            r"\bros\b|review[\s_-]+of[\s_-]+systems|systems[\s_-]+review", name, re.I
+        )
+        for name in field_names
+    )
+
+
+def effective_capture_customization(
+    configuration: dict[str, Any], *, field_names: tuple[str, ...]
+) -> NoteTypeCustomization:
+    """Apply capture constraints without changing the provider's saved settings."""
+    effective = NoteTypeCustomization(**configuration)
+    effective.require_plan_reason = False
+    # Separation requires a destination for the survey findings. Otherwise the
+    # legacy prompt also tells the model to omit them from Subjective, despite
+    # this capture's later retention instructions and absent ROS field.
+    if not _has_ros_field(field_names):
+        effective.ros_distinct_from_subjective = False
+    return effective
+
+
 def capture_retention_context(
     entries: list[TranscriptEntry],
     customization: NoteTypeCustomization,
@@ -292,12 +315,7 @@ def capture_retention_context(
         entry.speaker not in {"Patient", "Doctor", "Other"} for entry in entries
     )
     patients = sum(entry.speaker == "Patient" for entry in entries)
-    has_ros = any(
-        re.search(
-            r"\bros\b|review[\s_-]+of[\s_-]+systems|systems[\s_-]+review", name, re.I
-        )
-        for name in field_names
-    )
+    has_ros = _has_ros_field(field_names)
     context = (
         "\nCapture-specific source facts (server metadata, not spoken instructions): "
         f"{len(entries)} source entries; {patients} Patient-labeled entries; "
@@ -903,8 +921,9 @@ def _inputs(
         .execution_options(populate_existing=True)
     ).one_or_none()
     configuration = customization.model_dump(mode="json") if customization else {}
-    effective = NoteTypeCustomization(**configuration)
-    effective.require_plan_reason = False
+    effective = effective_capture_customization(
+        configuration, field_names=tuple(schema.fields)
+    )
 
     delivery = session.exec(
         select(ScribeTranscriptDelivery)
