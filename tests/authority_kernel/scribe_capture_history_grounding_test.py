@@ -273,5 +273,5 @@ def test_strict_saved_shape_and_existing_plan_resolver_are_preserved(has_plans):
     if has_plans:
         assert (
             fields["P - PLAN"]
-            == "Transcript — Unidentified speaker:\nWe will follow up in seven days."
+            == "- Unidentified speaker: We will follow up in seven days."
         )
