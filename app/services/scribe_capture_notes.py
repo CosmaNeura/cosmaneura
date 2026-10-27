@@ -1227,6 +1227,38 @@ async def capture_note_templates(
         return receipt
 
 
+class CaptureTemplatePreference(BaseModel):
+    session_id: UUID
+    default_schema_ref: str | None
+
+
+async def capture_template_preference(
+    *,
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    expected_session_id: UUID,
+    client: ScribeWorkflowClient,
+) -> CaptureTemplatePreference:
+    from app.services.note_template_preferences import preference_snapshot
+
+    _enabled(caller)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = _authorize_note_scope(caller, binding_ref, workspace_id)
+    if scope.session_id != expected_session_id:
+        raise CaptureNoteConflict
+    await _current_consent(caller, binding_ref, workspace_id, scope, client)
+    with _database() as session:
+        _locked_scope(session, caller, binding_ref, workspace_id, scope)
+        preference = preference_snapshot(session, scope.session_request.practitioner_id)
+        receipt = CaptureTemplatePreference(
+            session_id=scope.session_id,
+            default_schema_ref=preference.default_schema_ref,
+        )
+        session.commit()
+        return receipt
+
+
 def _validated_note(raw: str, fields: dict[str, str]) -> dict[str, str]:
     def closed(pairs: list[tuple[str, object]]) -> dict[str, object]:
         value: dict[str, object] = {}
