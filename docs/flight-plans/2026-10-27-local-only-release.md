@@ -43,7 +43,8 @@ before deleting test resources.
 The target is stored in a root-owned mode-0444 file before the runner starts; job
 environment values cannot replace it. Registration is repository-scoped and
 requires no expansion of the existing GitHub token scope. Each checksum-verified
-official runner accepts one job, then exits. JIT credentials arrive through
+official runner accepts one job, then exits. Docker's init process reaps adopted
+test descendants in the private process namespace. JIT credentials arrive through
 stdin and the runner's consumed input environment variable. No operator home,
 GitHub credential store or production configuration is mounted. The Docker
 socket is privileged access to the local Docker daemon: never admit PR or

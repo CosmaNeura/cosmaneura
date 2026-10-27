@@ -213,6 +213,7 @@ def main() -> None:
             "docker",
             "run",
             "--rm",
+            "--init",
             "--interactive",
             "--name",
             name,
