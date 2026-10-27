@@ -117,10 +117,10 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
 
 
 def test_production_application_requires_manual_plan_and_apply() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
-    apply_workflow = _read(".github/workflows/infra_apply.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
+    apply_workflow = _read(".github/workflows/infra_apply_local.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
-    production_plan_workflow = _read(".github/workflows/infra_production_plan.yml")
+    production_plan_workflow = _read(".github/workflows/infra_production_plan_local.yml")
 
     assert "production_infra_changed" in workflow
     protected_paths = (
@@ -129,9 +129,9 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     )
     assert workflow.count(protected_paths) == 2
     assert workflow.count("Justfile just Procfile .github/actions") == 2
-    assert workflow.count(".github/workflows/infra_apply.yml") >= 2
-    assert workflow.count(".github/workflows/infra_production_plan.yml") >= 2
-    assert workflow.count(".github/workflows/build_and_publish_manual.yml") >= 2
+    assert workflow.count(".github/workflows/infra_apply_local.yml") >= 2
+    assert workflow.count(".github/workflows/infra_production_plan_local.yml") >= 2
+    assert workflow.count(".github/workflows/build_and_publish_local.yml") >= 2
     assert "needs: [web, app, deployment-scope, authorize-production]" in workflow
     assert "needs.deployment-scope.outputs.production_infra_changed" not in workflow
     assert "github.event_name == 'workflow_dispatch'" in workflow
@@ -141,8 +141,8 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     assert "real provider-signed non-PHI Recall callback" in workflow
     assert "actions: read" in workflow
     assert "gh api" in workflow
-    assert "actions/workflows/infra_apply.yml/runs?" in workflow
-    assert '"${apply_run[1]:-}" != ".github/workflows/infra_apply.yml"' in workflow
+    assert "actions/workflows/infra_apply_local.yml/runs?" in workflow
+    assert '"${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml"' in workflow
     assert '"${apply_run[3]:-}" != "workflow_dispatch"' in workflow
     assert "The supplied run is not a successful Terraform Apply" in workflow
     assert 'git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"' in workflow
@@ -185,7 +185,7 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
 
 
 def test_production_promotion_requires_founder_manual_dispatch() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
 
     authorization_start = workflow.index("\n  authorize-production:")
     deployment_scope_start = workflow.index("\n  deployment-scope:")
@@ -214,7 +214,7 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
 
 
 def test_legacy_staging_branch_deployment_path_is_absent() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
 
     # The founder-only, dispatch-only staging guarantees belong to
@@ -229,8 +229,8 @@ def test_legacy_staging_branch_deployment_path_is_absent() -> None:
 
 def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
     for path, protected_job_name, prefix in (
-        (".github/workflows/infra_production_plan.yml", "plan", "PLAN"),
-        (".github/workflows/infra_apply.yml", "apply", "APPLY"),
+        (".github/workflows/infra_production_plan_local.yml", "plan", "PLAN"),
+        (".github/workflows/infra_apply_local.yml", "apply", "APPLY"),
     ):
         workflow = _read(path)
         authorization_start = workflow.index("\n  authorize-production:")
@@ -260,7 +260,7 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
 
 
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     production_job = workflow[workflow.index("\n  deploy:") :]
 
     assert "cancel-in-progress: false" in workflow[: workflow.index("jobs:\n")]

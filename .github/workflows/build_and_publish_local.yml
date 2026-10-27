@@ -65,7 +65,7 @@ jobs:
         github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master'
       }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 5
     permissions: {}
     steps:
@@ -96,7 +96,7 @@ jobs:
 
   deployment-scope:
     name: Release scope
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 5
     outputs:
       production_infra_changed: ${{ steps.classify.outputs.production_infra_changed }}
@@ -120,10 +120,13 @@ jobs:
             elif ! git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- \
               infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
               Justfile just Procfile .github/actions \
-              .github/workflows/infra_apply.yml \
-              .github/workflows/infra_production_plan.yml \
+              .github/workflows/infra_apply_local.yml \
+              .github/workflows/infra_production_plan_local.yml \
               .github/workflows/build_and_publish.yml \
-              .github/workflows/build_and_publish_manual.yml; then
+              .github/workflows/build_and_publish_local.yml \
+            .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
+            .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
               production_infra_changed=true
             fi
           fi
@@ -136,7 +139,7 @@ jobs:
 
   backend-quality:
     name: Backend quality
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 20
     steps:
       # fetch-depth: 0 so `db_lint` can diff new migrations against origin/master
@@ -144,13 +147,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Start isolated local test services
+        run: python3 scripts/local_ci_services.py start
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
           # Quality recipes require only zsh. The test matrix adds
           # libnss3-tools only for the Localias-backed integration shard.
           apt-packages: zsh
-      - run: just up --fast
       - run: just py_setup
       - run: just py_lint
 
@@ -171,9 +175,13 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
         with: { detached: true }
 
+      - name: Remove isolated local test services
+        if: always()
+        run: python3 scripts/local_ci_services.py stop
+
   backend-tests:
     name: Backend tests (${{ matrix.shard }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -246,6 +254,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Start isolated local test services
+        run: python3 scripts/local_ci_services.py start
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
@@ -253,7 +263,6 @@ jobs:
       - name: Install SHA-verified Localias
         if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
-      - run: just up --fast
       - run: just py_setup
       - name: Install integration Chromium headless shell
         if: ${{ matrix.shard == 'integration' }}
@@ -276,11 +285,15 @@ jobs:
             ${{ env.TEST_RESULTS_DIRECTORY }}
             ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
 
+      - name: Remove isolated local test services
+        if: always()
+        run: python3 scripts/local_ci_services.py stop
+
   app:
     name: Backend
     needs: [backend-quality, backend-tests]
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 5
     steps:
       - name: Require every backend prerequisite to succeed
@@ -295,7 +308,7 @@ jobs:
 
   web:
     name: Frontend
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -311,7 +324,7 @@ jobs:
 
   deploy:
     name: 🚀 Deploy
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-production-local]
     timeout-minutes: 60
     concurrency:
       group: cosmaneura-production-container-apps
@@ -366,7 +379,7 @@ jobs:
           if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
             TERRAFORM_APPLY_RUN_ID=$(
               gh api \
-                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply.yml/runs?branch=master&event=workflow_dispatch&status=success&per_page=1" \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply_local.yml/runs?branch=master&event=workflow_dispatch&status=success&per_page=1" \
                 --jq '.workflow_runs[0].id // empty'
             )
           fi
@@ -379,7 +392,7 @@ jobs:
               --jq '[.name, .path, .conclusion, .event, .head_branch, .head_sha] | .[]'
           )
           if [[ "${apply_run[0]:-}" != "Terraform Apply" || \
-                "${apply_run[1]:-}" != ".github/workflows/infra_apply.yml" || \
+                "${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml" || \
                 "${apply_run[2]:-}" != "success" || \
                 "${apply_run[4]:-}" != "master" ]]; then
             echo "The supplied run is not a successful Terraform Apply on master." >&2
@@ -398,10 +411,13 @@ jobs:
           if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
             infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
             Justfile just Procfile .github/actions \
-            .github/workflows/infra_apply.yml \
-            .github/workflows/infra_production_plan.yml \
+            .github/workflows/infra_apply_local.yml \
+            .github/workflows/infra_production_plan_local.yml \
             .github/workflows/build_and_publish.yml \
-            .github/workflows/build_and_publish_manual.yml; then
+            .github/workflows/build_and_publish_local.yml \
+            .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
+            .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
           fi

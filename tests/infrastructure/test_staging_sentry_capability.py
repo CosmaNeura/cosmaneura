@@ -58,7 +58,7 @@ def test_staging_sentry_control_is_default_off_and_staging_only() -> None:
     staging_environment = _read(".env.staging.backend")
     production_environment = _read(".env.production.backend")
     direnv = _read("just/direnv.just")
-    legacy_workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    legacy_workflow = _read(".github/workflows/build_and_publish_local.yml")
     legacy_production = legacy_workflow[legacy_workflow.index("\n  deploy:\n") :]
     canonical_workflow = _read(".github/workflows/deploy_staging_candidate.yml")
 

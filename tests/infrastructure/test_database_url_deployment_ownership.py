@@ -85,7 +85,7 @@ def test_live_guard_makes_selector_adoption_only() -> None:
 
 
 def test_terraform_plan_uses_only_required_host_package() -> None:
-    workflow = _read(".github/workflows/infra_production_plan.yml")
+    workflow = _read(".github/workflows/infra_production_plan_local.yml")
     setup = workflow[
         workflow.index("      - uses: ./.github/actions/common-setup") : workflow.index(
             "      - uses: azure/login@"
@@ -121,7 +121,7 @@ def test_deploy_adopts_selection_and_never_recreates_migration_job() -> None:
     assert '"database-url": .DATABASE_URL' not in migrations
     assert '"database-url-v2": .DATABASE_URL_V2' in migrations
 
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     production_deploy = workflow[workflow.index("  deploy:\n") :]
     assert "AZURE_SUBSCRIPTION_ID:" in production_deploy
     assert "vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID" in (

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PYTHON_JUST = ROOT / "just" / "python.just"
 WORKFLOWS = (
     ROOT / ".github/workflows/pull_request_checks.yml",
-    ROOT / ".github/workflows/build_and_publish_manual.yml",
+    ROOT / ".github/workflows/build_and_publish_local.yml",
     ROOT / ".github/workflows/deploy_staging_candidate.yml",
 )
 SHARDS = (
@@ -1490,7 +1490,11 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     quality_commands = _run_commands(quality)
     test_commands = _run_commands(tests)
     for commands in (quality_commands, test_commands):
-        assert "just up --fast" in commands
+        if path.name == "build_and_publish_local.yml":
+            assert "python3 scripts/local_ci_services.py start" in commands
+            assert "python3 scripts/local_ci_services.py stop" in commands
+        else:
+            assert "just up --fast" in commands
         assert "just py_setup" in commands
         assert "just db_migrate" in commands
     assert "just py_lint" in quality_commands

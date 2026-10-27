@@ -79,7 +79,7 @@ def test_provision_is_one_unconditional_credentialless_refusal() -> None:
     assert provision == {
         "needs": ["authorize"],
         "if": "github.event_name == 'workflow_dispatch' && inputs.action == 'provision'",
-        "runs-on": "ubuntu-latest",
+        "runs-on": ["self-hosted", "Linux", "X64", "cosmaneura-validation-local"],
         "timeout-minutes": "1",
         "permissions": {},
         "steps": [

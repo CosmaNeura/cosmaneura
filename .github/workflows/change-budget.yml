@@ -10,7 +10,7 @@ permissions: {}
 jobs:
   change-budget:
     name: change-budget
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 5
     env:
       ADDITIONS: ${{ github.event.pull_request.additions }}

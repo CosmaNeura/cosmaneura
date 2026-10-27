@@ -2,7 +2,7 @@ name: Terraform Plan
 
 # Pull requests get format, validation, and a provider-mocked static plan only.
 # This workflow is intentionally credential-free. The protected production
-# plan lives in infra_production_plan.yml, which has no pull-request trigger.
+# plan lives in infra_production_plan_local.yml, which has no pull-request trigger.
 on:
   pull_request:
     paths:
@@ -27,7 +27,7 @@ jobs:
   pr-static-plan:
     name: Terraform PR checks (secretless)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -77,7 +77,7 @@ jobs:
   staging-rehearsal-static-plan:
     name: Staging rehearsal Terraform PR checks (secretless)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 15
     permissions:
       contents: read
@@ -116,7 +116,7 @@ jobs:
   staging-sanitizer-bootstrap-identity-static-plan:
     name: Staging sanitizer bootstrap identity Terraform checks (secretless)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, cosmaneura-validation-local]
     timeout-minutes: 10
     permissions:
       contents: read
