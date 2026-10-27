@@ -24,6 +24,22 @@ services = importlib.util.module_from_spec(services_spec)
 services_spec.loader.exec_module(services)
 
 
+def test_admission_hook_uses_runner_supported_script_extension() -> None:
+    # Runner JobHookProvider refuses extensionless files before executing them.
+    dockerfile = (ROOT / "scripts/local-runner/Dockerfile").read_text()
+    hook = next(
+        line.split("=", 1)[1]
+        for line in dockerfile.splitlines()
+        if line.startswith("ENV ACTIONS_RUNNER_HOOK_JOB_STARTED=")
+    )
+    assert hook.endswith(".sh")
+    assert f"COPY job-started.sh {hook}" in dockerfile
+    assert (
+        f'"{hook}": "job-started.sh"'
+        in (ROOT / "scripts/local_release_runner.py").read_text()
+    )
+
+
 def test_every_tracked_workflow_requires_explicit_local_compute() -> None:
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         workflow = yaml.safe_load(path.read_text())
