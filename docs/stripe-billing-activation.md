@@ -22,8 +22,8 @@ only Core-created sessions. Stripe still applies the account-default
 configuration to portal entry points Core does not control: the no-code
 customer portal login link and portal links in Stripe's customer emails. A
 Dashboard edit that let customers change their seat quantity or plan there
-would bypass Core's seat billing, where an added seat is charged part-month
-immediately and a removed seat earns no credit.
+would bypass Core's seat billing, where an added seat creates a part-month
+proration for the next invoice and a removed seat earns no credit.
 
 Before each portal session, the backend retrieves the configuration and
 refuses to open the portal unless:
