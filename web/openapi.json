@@ -532,6 +532,76 @@
         }
       }
     },
+    "/internal/v1/note-template-preference": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Get Note Template Preference",
+        "operationId": "get_note_template_preference",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreference"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Note Template Preference",
+        "operationId": "update_note_template_preference",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplatePreference"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreference"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/note-schemas/{schema_id}/fields": {
       "get": {
         "tags": [
@@ -7380,6 +7450,33 @@
         ],
         "title": "TemplateFields"
       },
+      "TemplatePreference": {
+        "properties": {
+          "default_schema_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Schema Ref"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "default_schema_ref",
+          "revision"
+        ],
+        "title": "TemplatePreference"
+      },
       "Terminology": {
         "type": "string",
         "enum": [
@@ -7741,6 +7838,34 @@
           "expected_revision"
         ],
         "title": "UpdateTemplateFields"
+      },
+      "UpdateTemplatePreference": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          },
+          "default_schema_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Schema Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "default_schema_ref"
+        ],
+        "title": "UpdateTemplatePreference"
       },
       "UsageResponse": {
         "properties": {

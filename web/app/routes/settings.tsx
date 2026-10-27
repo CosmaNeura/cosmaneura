@@ -12,6 +12,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { CreateNoteTemplate } from "~/components/CreateNoteTemplate"
+import { DefaultNoteTemplate } from "~/components/DefaultNoteTemplate"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
@@ -310,6 +311,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
         </p>
       )}
       <CreateNoteTemplate onCreated={() => void revalidator.revalidate()} />
+      <DefaultNoteTemplate schemas={noteSchemas} />
       {noteSchemas.map((schema) => (
         <div key={schema.id} className="flex flex-col rounded-lg border p-4">
           <button
