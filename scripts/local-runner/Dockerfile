@@ -27,6 +27,8 @@ RUN useradd --create-home --uid 1001 --shell /bin/bash runner && \
     printf 'runner ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/runner && \
     chmod 0440 /etc/sudoers.d/runner && chown -R runner:runner /opt/runner && \
     mkdir -p /private/tmp && chmod 1777 /private/tmp
+RUN apt-get update && apt-get install -y --no-install-recommends socat && \
+    rm -rf /var/lib/apt/lists/*
 COPY entrypoint.sh /usr/local/bin/local-runner-entrypoint
 COPY job-started.sh /usr/local/bin/local-release-job-started
 RUN chmod 0755 /usr/local/bin/local-runner-entrypoint /usr/local/bin/local-release-job-started

@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -184,3 +185,44 @@ def test_network_creation_does_not_retry_other_failures(
     with pytest.raises(SystemExit, match="non-overlap"):
         services.create_network("project", "runner")
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "mutation", ["uid", "session", "command", "wrapper", "emulated", "none"]
+)
+def test_forwarder_cleanup_never_signals_an_unowned_process(
+    monkeypatch: pytest.MonkeyPatch, mutation: str
+) -> None:
+    command = (
+        b"socat\0TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork\0TCP:postgres:5432\0"
+    )
+    if mutation == "emulated":
+        command = b"/usr/bin/qemu-x86_64\0/usr/bin/socat\0" + command
+    elif mutation == "wrapper":
+        command = b"another-wrapper\0" + command
+    process = SimpleNamespace(
+        exists=lambda: True,
+        stat=lambda: SimpleNamespace(st_uid=999 if mutation == "uid" else 1001),
+        joinpath=lambda _: SimpleNamespace(
+            read_bytes=lambda: b"another-command\0"
+            if mutation == "command"
+            else command
+        ),
+    )
+    killed = []
+    monkeypatch.setattr(services, "Path", lambda _: process)
+    monkeypatch.setattr(services.os, "getuid", lambda: 1001)
+    monkeypatch.setattr(
+        services.os, "getsid", lambda _: 999 if mutation == "session" else 42
+    )
+    monkeypatch.setattr(
+        services.os, "killpg", lambda pid, sig: killed.append((pid, sig))
+    )
+    forwards = [{"pid": 42, "service": "postgres", "port": 5432}]
+    if mutation in {"none", "emulated"}:
+        services.stop_forwarders(forwards)
+        assert killed == [(42, services.signal.SIGTERM)]
+    else:
+        with pytest.raises(SystemExit, match="Refusing cleanup"):
+            services.stop_forwarders(forwards)
+        assert not killed

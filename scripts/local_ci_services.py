@@ -6,13 +6,48 @@ import ipaddress
 import json
 import os
 import re
+import signal
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
 def docker(*args: str) -> str:
     return subprocess.check_output(["docker", *args], text=True).strip()
+
+
+def forward_command(service: str, port: int) -> list[str]:
+    return [
+        "socat",
+        f"TCP-LISTEN:{port},bind=127.0.0.1,reuseaddr,fork",
+        f"TCP:{service}:{port}",
+    ]
+
+
+def stop_forwarders(forwards: list[dict]) -> None:
+    for forward in forwards:
+        pid = forward["pid"]
+        process = Path(f"/proc/{pid}")
+        if not process.exists():
+            continue
+        command = process.joinpath("cmdline").read_bytes().split(b"\0")[:-1]
+        expected = forward_command(forward["service"], forward["port"])
+        native = [item.encode() for item in expected]
+        # Colima's registered AMD64 interpreter retains the exact guest argv
+        # behind this fixed wrapper. Do not accept arbitrary command prefixes.
+        emulated = [b"/usr/bin/qemu-x86_64", b"/usr/bin/socat", *native]
+        if (
+            process.stat().st_uid != os.getuid()
+            or os.getsid(pid) != pid
+            or command not in (native, emulated)
+        ):
+            raise SystemExit("Refusing cleanup of an unexpected local forwarder.")
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
 
 
 def create_network(project: str, runner: str) -> None:
@@ -86,6 +121,7 @@ def main() -> None:
         )
         if owner != runner:
             raise SystemExit("Refusing cleanup of another runner's resources.")
+        stop_forwarders(state.get("forwards", []))
         subprocess.run(
             [
                 "docker",
@@ -119,9 +155,13 @@ def main() -> None:
         + f"networks:\n  default:\n    external: true\n    name: {project}\n"
     )
     create_network(project, runner)
-    state_path.write_text(
-        json.dumps({"project": project, "source": source, "override": str(override)})
-    )
+    state = {
+        "project": project,
+        "source": source,
+        "override": str(override),
+        "forwards": [],
+    }
+    state_path.write_text(json.dumps(state))
     state_path.chmod(0o600)
     docker("network", "connect", project, runner)
     # These credentials are exclusively synthetic test values from .env.shared.
@@ -152,11 +192,33 @@ def main() -> None:
         env=environment,
         check=True,
     )
+    # Existing destructive-replay guards deliberately require loopback /test.
+    # Keep those endpoints inside this disposable runner's private namespace;
+    # sidecars remain on the internal network with no host publication.
+    for service, port in (("postgres", 5432), ("redis", 6379), ("mailpit", 1025)):
+        process = subprocess.Popen(
+            forward_command(service, port),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        state["forwards"].append({"pid": process.pid, "service": service, "port": port})
+        state_path.write_text(json.dumps(state))
+        for _ in range(20):
+            if process.poll() is not None:
+                raise SystemExit("The isolated loopback forwarder did not start.")
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                    break
+            except ConnectionRefusedError:
+                time.sleep(0.05)
+        else:
+            raise SystemExit("The isolated loopback forwarder did not become ready.")
     with open(os.environ["GITHUB_ENV"], "a") as target:
         for key, value in {
-            "DATABASE_HOST": "postgres",
-            "REDIS_HOST": "redis",
-            "SMTP_HOST": "mailpit",
+            "DATABASE_HOST": "localhost",
+            "REDIS_HOST": "localhost",
+            "SMTP_HOST": "localhost",
             "COMPOSE_PROJECT_NAME": project,
             "COMPOSE_FILE": f"{source}:{override}",
             "COSMANEURA_LOCAL_ACCEPTANCE": "1",

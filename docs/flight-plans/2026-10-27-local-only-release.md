@@ -51,6 +51,9 @@ unmerged-branch code to this runner.
 
 Backend jobs use private per-runner Compose projects and internal networks,
 with no published service ports. Cleanup removes only that project's resources.
+Runner-only loopback forwarders preserve the database replay's existing local
+endpoint guard; they never bind a host interface. Cleanup verifies each
+forwarder's UID, session and exact command before terminating its process group.
 Subnet claims rescan after a concurrent overlap and fail on unrelated errors.
 The runner includes checksum-pinned yq for the existing deployment tests.
 Local CI disables secret discovery through 1Password while retaining the normal
