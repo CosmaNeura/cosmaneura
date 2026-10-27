@@ -30,7 +30,9 @@ def test_missing_preference_read_does_not_write_and_set_clear_survive_fresh_requ
     initial = client.get(PATH).json()
     assert initial == {"default_schema_ref": None, "revision": 0}
     with Session(engine) as session:
-        owner = session.get(DoctorNoteSchema, schema_id).doctor_id
+        schema = session.get(DoctorNoteSchema, schema_id)
+        assert schema is not None
+        owner = schema.doctor_id
         assert (
             session.exec(
                 select(NoteTemplatePreference).where(
@@ -64,6 +66,7 @@ def test_unavailable_templates_cannot_become_defaults(endpoint, state):
     target = str(schema_id)
     with Session(engine) as session:
         schema = session.get(DoctorNoteSchema, schema_id)
+        assert schema is not None
         if state == "foreign":
             other = Doctor(
                 clerk_id=f"user_synthetic-default-other-{uuid4()}", biography=None
@@ -99,6 +102,7 @@ def test_existing_default_is_not_exposed_after_template_becomes_unavailable(
     )
     with Session(engine) as session:
         schema = session.get(DoctorNoteSchema, schema_id)
+        assert schema is not None
         if state == "foreign":
             other = Doctor(
                 clerk_id=f"user_synthetic-default-moved-{uuid4()}", biography=None

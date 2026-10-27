@@ -14,6 +14,8 @@ const client = vi.hoisted(() => ({
   updateSettingsData: vi.fn(),
   zoomAuthUrl: vi.fn(),
   zoomDisconnect: vi.fn(),
+  getNoteTemplatePreference: vi.fn(),
+  updateNoteTemplatePreference: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => client)
 
@@ -129,6 +131,10 @@ function openSettings() {
 beforeEach(() => {
   vi.clearAllMocks()
   supportView.active = false
+  client.getNoteTemplatePreference.mockResolvedValue({
+    data: { default_schema_ref: null, revision: 0 },
+    response: new Response(null, { status: 200 }),
+  })
   client.settingsData.mockResolvedValue({
     data: {
       biography: "",
