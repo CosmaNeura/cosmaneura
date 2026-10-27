@@ -61,3 +61,13 @@ downgrade as immediate deployed rollback. Clearing a default through Settings is
 also an explicit supported action. Existing templates, drafts and saved notes
 are never rewritten or deleted by changing a preference. Any later table removal
 requires a separate approved contract-cleanup change.
+# Release validation repair
+
+Normalize the already authorized practitioner reference with the existing
+`TypeID.from_string`/`TypeIDType` conversion before reading the preference.
+The database binder already performs the same conversion; owner, session,
+consent and locked-scope checks remain mandatory. Add fixture presence checks
+and the new preference API to the existing Settings client mock. Rehearse the
+actual expand on the owned synthetic database before receiver tests. This
+repair does not change the migration sequence or permit activation of an
+unqualified Scribe consumer; recovery retains the additive table.

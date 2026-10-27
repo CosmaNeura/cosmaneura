@@ -1250,7 +1250,10 @@ async def capture_template_preference(
     await _current_consent(caller, binding_ref, workspace_id, scope, client)
     with _database() as session:
         _locked_scope(session, caller, binding_ref, workspace_id, scope)
-        preference = preference_snapshot(session, scope.session_request.practitioner_id)
+        doctor_id = cast(
+            TypeIDType, TypeID.from_string(scope.session_request.practitioner_id)
+        )
+        preference = preference_snapshot(session, doctor_id)
         receipt = CaptureTemplatePreference(
             session_id=scope.session_id,
             default_schema_ref=preference.default_schema_ref,
