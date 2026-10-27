@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "bot_fidelity_oracle", ROOT / "tools/zoom-note-fidelity/oracle.py"
 )
+assert SPEC is not None and SPEC.loader is not None
 ORACLE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ORACLE)
 CASES = {

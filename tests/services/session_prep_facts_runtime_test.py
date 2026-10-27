@@ -1,5 +1,7 @@
 """New facts reads retain v1 artifacts and enforce current source authority."""
 
+from typing import Protocol, cast
+
 import pytest
 
 import app.configuration.session_prep as configuration
@@ -13,7 +15,10 @@ from app.services.session_prep_note_sources import (
     finalize_note_for_session_prep,
     note_content_sha256,
 )
-from app.services.session_prep_runtime import invoke_provider_session_prep
+from app.services.session_prep_runtime import (
+    SessionPrepFactsToolResponse,
+    invoke_provider_session_prep,
+)
 
 from activemodel.session_manager import get_session
 from app.models.session_prep_runtime import SessionPrepArtifact, SessionPrepReadReceipt
@@ -34,6 +39,23 @@ from tests.services.session_prep_runtime_test import (
 scope = _base_scope
 
 
+class _FactsInvocation(Protocol):
+    response: SessionPrepFactsToolResponse
+    replayed: bool
+
+
+def _artifact() -> SessionPrepArtifact:
+    value = SessionPrepArtifact.first()
+    assert value is not None
+    return value
+
+
+def _receipt() -> SessionPrepReadReceipt:
+    value = SessionPrepReadReceipt.first()
+    assert value is not None
+    return value
+
+
 def _review(scope, content):
     doctor, _target, note, _token, _record = scope
     note.note = content
@@ -49,7 +71,9 @@ def _review(scope, content):
         session.commit()
 
 
-def _facts_read(token, record, action, *, key="facts-read-key-000001", context=None):
+def _facts_read(
+    token, record, action, *, key="facts-read-key-000001", context=None
+) -> _FactsInvocation:
     client_turn_id, interaction_ref, turn_ref = action
     with get_session() as session:
         authorized = authorize_session_prep_read(
@@ -74,7 +98,8 @@ def _facts_read(token, record, action, *, key="facts-read-key-000001", context=N
             settings=AUTHORITY_SETTINGS,
         )
         session.commit()
-        return result
+        assert isinstance(result.response, SessionPrepFactsToolResponse)
+        return cast(_FactsInvocation, result)
 
 
 def test_facts_are_available_while_brief_is_pending_without_a_model_call(scope):
@@ -87,6 +112,7 @@ def test_facts_are_available_while_brief_is_pending_without_a_model_call(scope):
     assert result.schema_version == "1.1.0"
     assert result.preparation.state == "pending"
     assert result.facts_state == "ready"
+    assert result.structured_facts is not None
     assert result.structured_facts.facts[0].value == "148/92 mmHg"
     assert SessionPrepArtifact.count() == 0
     assert SessionPrepReadReceipt.count() == 1
@@ -100,15 +126,16 @@ def test_v1_artifact_and_response_shape_are_not_extended_or_replaced(scope):
     action = _action(token)
     _read(token, record, action)
     assert _work() == "ready"
-    artifact = SessionPrepArtifact.first()
+    artifact = _artifact()
     before = dict(artifact.result_payload)
     original = _read(token, record, action, key="v1-read-after-build-0001")
     facts = _facts_read(token, record, action)
     assert facts.response.result.preparation == original.response.result
     assert original.response.result.schema_version == "1.0.0"
     assert "structured_facts" not in original.response.model_dump_json()
-    assert SessionPrepArtifact.first().result_payload == before
+    assert _artifact().result_payload == before
     assert SessionPrepArtifact.count() == 1
+    assert facts.response.result.structured_facts is not None
     assert facts.response.result.structured_facts.facts[0].state == "documented_taking"
 
 
@@ -129,6 +156,7 @@ def test_pending_receipt_cannot_replay_facts_after_same_note_correction(scope):
     corrected = _facts_read(
         token, record, _action(token), key="corrected-facts-read-00001"
     )
+    assert corrected.response.result.structured_facts is not None
     assert corrected.response.result.structured_facts.facts[0].value == "126/80 mmHg"
     assert (
         corrected.response.result.structured_facts.facts[0].evidence.source_version == 3
@@ -246,12 +274,14 @@ def test_old_unsafe_classification_receipt_cannot_survive_current_context_valida
     with monkeypatch.context() as patch:
         patch.setattr(runtime, "project_explicit_facts", older_projection)
         old = _facts_read(token, record, action)
-    before = dict(SessionPrepReadReceipt.first().response_payload)
+    before = dict(_receipt().response_payload)
+    assert old.response.result.structured_facts is not None
     assert old.response.result.structured_facts.facts[0].state == "documented_taking"
     with pytest.raises(SessionPrepScopeDenied):
         _facts_read(token, record, action)
-    assert SessionPrepReadReceipt.first().response_payload == before
+    assert _receipt().response_payload == before
     current = _facts_read(
         token, record, _action(token), key="current-context-read-0001"
     )
+    assert current.response.result.structured_facts is not None
     assert current.response.result.structured_facts.facts == []

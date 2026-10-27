@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -53,7 +54,7 @@ from app.models.scribe_capture_note_context import ScribeCaptureNoteContext
 from app.models.session_prep_note_finalization import SessionPrepNoteFinalization
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
-from sqlmodel import Session, create_engine, select
+from sqlmodel import Session, col, create_engine, select
 
 from tests.authority_kernel.scribe_capture_admission_test import (
     admission_case as _admission_case,
@@ -79,6 +80,7 @@ def capture_engine(monkeypatch):
     assert (
         url.host is None
         and url.username == "session_prep_freshness_owner"
+        and isinstance(url.database, str)
         and url.database.startswith("session_prep_native_freshness_20261021_")
         and url.query.get("host") == str(lab / "socket")
         and url.query.get("port") == "55460"
@@ -406,6 +408,7 @@ async def test_unconfirmed_invalid_or_foreign_ack_never_creates_marker(
         def revoke():
             with Session(f.engine) as session:
                 row = session.get(AuthorityActorExternalIdentity, f.case.identity.id)
+                assert row is not None
                 row.revoked_at = datetime.now(UTC)
                 session.add(row)
                 session.commit()
@@ -552,7 +555,7 @@ async def test_wrong_scope_cannot_invalidate_an_owned_note(
     f = admission_case
     await case(f, monkeypatch)
     saved = receipt(f)
-    args = dict(
+    args: dict[str, Any] = dict(
         caller=f.caller,
         binding_ref=f.binding.binding_ref,
         workspace_id=f.binding.workspace_id,
@@ -733,12 +736,9 @@ async def test_ordinary_unrelated_note_keeps_review_and_selection(
     await acknowledge(f, receipt(f))
     assert not freshness.note_has_saved_capture_correction(f.session, ordinary)
     assert [s.source_ref for s in sources(f).sources] == [str(ordinary.id)]
-    assert (
-        review_route.note_review_statuses(f.case.doctor, [ordinary])[
-            str(ordinary.id)
-        ].reviewed_at
-        is not None
-    )
+    statuses = review_route.note_review_statuses(f.case.doctor, [ordinary])
+    assert statuses is not None
+    assert statuses[str(ordinary.id)].reviewed_at is not None
     finalize_note_for_session_prep(
         session=f.session,
         doctor_id=ordinary.doctor_id,
@@ -812,7 +812,7 @@ def prep_context(f):
     if build is not None:
         earliest = f.session.exec(
             select(SessionPrepBuild.requested_at)
-            .order_by(SessionPrepBuild.requested_at)
+            .order_by(col(SessionPrepBuild.requested_at))
             .limit(1)
         ).one()
         build.requested_at = earliest - timedelta(seconds=1)
@@ -1222,9 +1222,11 @@ async def test_full_canonical_receipt_commit_serializes_saved_correction(
                 )
             )
             result = read.response.result
-            assert (
-                result.preparation.state if kind == "facts" else result.state
-            ) == "ready"
+            if kind == "facts":
+                assert isinstance(result, runtime.SessionPrepFactsResult)
+                assert result.preparation.state == "ready"
+            else:
+                assert result.state == "ready"
             f.session.commit()
             futures[0].result(timeout=5)
             assert frontier(f).minimum_working_version == 2

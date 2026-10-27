@@ -14,7 +14,7 @@ OLD = "d7066c49-4c4e-4795-a4eb-2e59c48b08f5"
 AT = "2026-10-25T10:00:00Z"
 
 
-def recording(key=RECORDING, *, started=AT, completed=None):
+def recording(key=RECORDING, *, started: str | None = AT, completed=None):
     return {
         "id": key,
         "created_at": AT,
