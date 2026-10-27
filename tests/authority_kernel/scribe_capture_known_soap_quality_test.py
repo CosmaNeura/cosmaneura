@@ -49,6 +49,41 @@ def test_known_roles_without_medication_heading_keep_list_uncertainty_instructio
     )  # No fixture facts are inserted into runtime instructions.
 
 
+def test_effective_capture_preferences_do_not_exclude_findings_from_a_no_ros_schema():
+    saved = NoteTypeCustomization(**CASE["customization"])
+    configuration = saved.model_dump(mode="json")
+    effective = notes.effective_capture_customization(
+        configuration, field_names=tuple(CASE["schema"])
+    )
+    instructions = notes.summarize._instruction_block(effective)
+
+    assert "Subjective should not list the ROS pertinent negatives" not in instructions
+    assert "Plan section bullets MUST include the reason" not in instructions
+    assert saved.ros_distinct_from_subjective is True
+    assert configuration == saved.model_dump(mode="json")
+    assert effective.subjective_source == saved.subjective_source
+    assert effective.plan_ordering == saved.plan_ordering
+    assert effective.flag_new_medications == saved.flag_new_medications
+    assert effective.pronoun_style == saved.pronoun_style
+
+
+@pytest.mark.parametrize("heading", ["ROS:", "Review of Systems", "Systems review"])
+@pytest.mark.parametrize("separate", [True, False])
+def test_effective_capture_preserves_ros_preference_when_the_field_exists(
+    heading, separate
+):
+    effective = notes.effective_capture_customization(
+        {"ros_distinct_from_subjective": separate},
+        field_names=("Subjective", heading, "Plan"),
+    )
+    assert effective.ros_distinct_from_subjective is separate
+    assert effective.require_plan_reason is False
+    assert (
+        "Subjective should not list the ROS pertinent negatives"
+        in notes.summarize._instruction_block(effective)
+    ) is separate
+
+
 @pytest.mark.parametrize(
     "text,clipped",
     [

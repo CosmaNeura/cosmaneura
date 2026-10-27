@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "scope": "Three matched candidate and current-trunk baseline calls on one retained synthetic39entry case; no real clinical data or live persistence.",
+  "candidateRuntimeCommit": "80fac5eaf92b81327971cd242718ec83670424ca",
+  "baseRuntimeCommit": "6ba5874f908ea95c8f4c396fb9c0a12c2a4984de",
+  "currentTrunkAtIntegration": "64a336281db647592ca2cbb62accf40d8c4ca3fc",
+  "currentTrunkDelta": "PR849 only changes CI/local release files; capture model inputs unchanged.",
+  "candidateNotesSourceSHA256": "dc8dcb7bd99304a2d5bcad88a3a3db6416689453fb7f0dcbd11bae2f8b21d451",
+  "fixtureSHA256": "03344cdb9f8fdd62f55c3b45a24872f8145aa92bc6e3100bcd94031649b1dc41",
+  "expectationsSHA256": "0bb6028b2486dd9723ae0285debffafd1edd8142c7a4919c7b58923d0f53d2b3",
+  "supplementalOracleSHA256": "69639f5803b055097e1bd279870f341d0fd1958a960ae658a89b2e4e015f9fbe",
+  "sameRequestsWithinEachGroup": true,
+  "sameSourceSystemAndSchemaAcrossGroups": true,
+  "effectivePreferenceDelta": {
+    "ros_distinct_from_subjective": [
+      true,
+      false
+    ]
+  },
+  "model": "gpt-4.1-2025-04-14",
+  "options": {
+    "timeoutSeconds": 30,
+    "maxRetries": 0,
+    "maxTokens": 16384
+  },
+  "tests": {
+    "tests": 118,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "rows": [
+    {
+      "kind": "candidate",
+      "repetition": 1,
+      "inputsSHA256": "d0d5eacb243af5fffe19483002aa37e37be5d8f0390a741e632420d8ab0b1494",
+      "responseSHA256": "c9a5a57e66acca8f3860bf1f8802319ce82124d30f5747bcf9211f45bf0aa8f2",
+      "resultSHA256": "043a6e4608cd3655d75a1989759b2f2ac9afba500fb2d17342215221eac1b66b",
+      "originalFiniteOracle": {
+        "passed": true,
+        "failures": [],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32
+      ],
+      "unstatedUnitMMHg": false,
+      "elapsedSeconds": 3.894838041975163,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-schema-preferences-qualification-20261027-01/candidate-01"
+    },
+    {
+      "kind": "candidate",
+      "repetition": 2,
+      "inputsSHA256": "2814903d7431bf20f121b82343bdd1706e8ec15c15d27069df8c8ef7ea25eb87",
+      "responseSHA256": "2c2d0090c150f96df8dd4adf9bcaad768c97fe8ac3b80bc3836c2a798f3aeb92",
+      "resultSHA256": "638474c62f33517e40189ac1d308b1a9fd6144ed26dcd4774ee4733d3fcd1564",
+      "originalFiniteOracle": {
+        "passed": true,
+        "failures": [],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32
+      ],
+      "unstatedUnitMMHg": true,
+      "elapsedSeconds": 13.698089334007818,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-schema-preferences-repetitions-20261027-01/candidate-02"
+    },
+    {
+      "kind": "candidate",
+      "repetition": 3,
+      "inputsSHA256": "2814903d7431bf20f121b82343bdd1706e8ec15c15d27069df8c8ef7ea25eb87",
+      "responseSHA256": "ac5ed12a36ebff322d5a42ea62e96ee6b393e89e073b32b1c9bccfcd81aea50d",
+      "resultSHA256": "0d8b3ec510f9330361f311ad8fdd10b96e54187ddfb5049261c1be2b128ecb33",
+      "originalFiniteOracle": {
+        "passed": true,
+        "failures": [],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32
+      ],
+      "unstatedUnitMMHg": true,
+      "elapsedSeconds": 3.217543375038076,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-schema-preferences-repetitions-20261027-01/candidate-03"
+    },
+    {
+      "kind": "baseline",
+      "repetition": 1,
+      "inputsSHA256": "43c768957be96808535697748ce1745536fee114731a857b5651607bbcabc30d",
+      "responseSHA256": "453c180966013c4adb1af8394ee8a207269d44bc902d0e86578ed82af70b81bb",
+      "resultSHA256": "02c2744bc6f8029b5c550e9def13ed8daf945473609d2fe07e48f4bc41911a33",
+      "originalFiniteOracle": {
+        "passed": false,
+        "failures": [
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36",
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32,
+        37
+      ],
+      "unstatedUnitMMHg": false,
+      "elapsedSeconds": 2.2229512910125777,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-plan-dedup-baseline-20261027-01/baseline-01"
+    },
+    {
+      "kind": "baseline",
+      "repetition": 2,
+      "inputsSHA256": "9a5a838ae72d26697d29e2c43d8cade67fa13cc05a78823d4a11e9a7bc004d1e",
+      "responseSHA256": "ad2cb4f75c10571b4ff6dee9d494e229bc741a03cee00163ddee406e874b3fae",
+      "resultSHA256": "5dfa742058bd4df82a6a778140a6000b27c3cde4f05840abdc5382a805fb0311",
+      "originalFiniteOracle": {
+        "passed": false,
+        "failures": [
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36",
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32,
+        37
+      ],
+      "unstatedUnitMMHg": false,
+      "elapsedSeconds": 2.3376727079739794,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-plan-baseline-repetitions-20261027-01/baseline-02"
+    },
+    {
+      "kind": "baseline",
+      "repetition": 3,
+      "inputsSHA256": "9a5a838ae72d26697d29e2c43d8cade67fa13cc05a78823d4a11e9a7bc004d1e",
+      "responseSHA256": "d06d1badef4d925ea2c807792cab9381c658833b2e4c0494bbedb2074a31df7d",
+      "resultSHA256": "88c35cf9f4ee3acaf5425d39a25f3e71a5a2b2e76565dd011843d169c6a79339",
+      "originalFiniteOracle": {
+        "passed": false,
+        "failures": [
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "medicationScopeOracle": {
+        "passed": false,
+        "failures": [
+          "planned-source-36",
+          "medication-list-unknown"
+        ],
+        "independent_content_review_required": true
+      },
+      "planSourceRefs": [
+        28,
+        29,
+        30,
+        32,
+        37
+      ],
+      "unstatedUnitMMHg": false,
+      "elapsedSeconds": 2.2318035830394365,
+      "modelCalls": 1,
+      "childReaped": true,
+      "savedNoteRegenerations": 0,
+      "databaseConnections": 0,
+      "privateEvidenceDirectory": "/private/tmp/capture-plan-baseline-repetitions-20261027-01/baseline-03"
+    }
+  ],
+  "interpretation": {
+    "originalFiniteChecks": "Candidate3/3 passed; baseline0/3 failed current-medication-list uncertainty.",
+    "prospectiveCompleteness": "All6 fail required source36: no planned medication changes is broader than no new medicine; history cannot substitute.",
+    "semanticAndUsability": "Candidate2/3 add conventional but unspoken mmHg units. All retain mixed care/editorial chatter; candidate repeats it in Subjective and Plan. Long paraphrase-plus-quote bullets remain.",
+    "acceptance": "The narrow schema correction fixes an inapplicable prompt instruction. These results do not establish full clinical completeness, note usability, live workflow success, or population-level performance."
+  }
+}
