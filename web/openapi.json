@@ -7316,6 +7316,26 @@
         ],
         "title": "SessionPrepNoteReview"
       },
+      "SessionPrepSettingsData": {
+        "properties": {
+          "eligible": {
+            "type": "boolean",
+            "title": "Eligible"
+          },
+          "can_review_sources": {
+            "type": "boolean",
+            "title": "Can Review Sources"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "eligible",
+          "can_review_sources"
+        ],
+        "title": "SessionPrepSettingsData",
+        "description": "PHI-free discovery state for the current provider context.\n\nThis is intentionally narrower than an execution authorization.\n``can_review_sources`` reflects the same current provider/practice/BAA/\nentitlement gate as review execution. Session Prep read and review routes\nstill re-resolve record and note ownership at request time."
+      },
       "SettingsData": {
         "properties": {
           "doctor_id": {
@@ -7391,6 +7411,9 @@
           },
           "visit_prep": {
             "$ref": "#/components/schemas/VisitPrepSettingsData"
+          },
+          "session_prep": {
+            "$ref": "#/components/schemas/SessionPrepSettingsData"
           }
         },
         "additionalProperties": false,
