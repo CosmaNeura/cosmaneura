@@ -6127,6 +6127,17 @@
             "title": "Private Note Available",
             "default": false
           },
+          "note_status": {
+            "type": "string",
+            "enum": [
+              "not-started",
+              "in-progress",
+              "taking-longer",
+              "completed"
+            ],
+            "title": "Note Status",
+            "default": "not-started"
+          },
           "patient": {
             "$ref": "#/components/schemas/Patient",
             "readOnly": true
@@ -6216,6 +6227,8 @@
               "type": "string",
               "enum": [
                 "not-started",
+                "in-progress",
+                "taking-longer",
                 "completed"
               ]
             },

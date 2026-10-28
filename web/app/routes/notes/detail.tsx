@@ -70,11 +70,17 @@ export function EmptyNotes({
 
 export const NOTE_PROCESSING_POLL_MS = 15_000
 
-// Shown only for a visit this session just uploaded. While the page is open
-// and visible it checks the visit's own record, and refreshes the page only
-// once a note exists, so polling never reloads the whole notes tree. The
-// store expires the visit after its timeout.
-export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
+// A recent durable upload is visible across browsers. While the page is open
+// and visible it checks only this visit, then revalidates when the note arrives
+// or the server moves it to the honest "taking longer" state. Browser-local
+// tracking remains a compatibility bridge for an older receiver response.
+export function NoteProcessing({
+  appointmentId,
+  phase,
+}: {
+  appointmentId: string
+  phase: "in-progress" | "taking-longer"
+}) {
   const revalidator = useRevalidator()
   const revalidate = useRef(revalidator.revalidate)
   revalidate.current = revalidator.revalidate
@@ -82,6 +88,7 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
   const startedAt = uploads.startedAt.get(appointmentId)
 
   useEffect(() => {
+    if (phase !== "in-progress") return
     let checking = false
     let active = true
     let pending: AbortController | undefined
@@ -104,7 +111,13 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
             }),
           { signal: controller.signal },
         )
-        if (active && !controller.signal.aborted && data?.notes?.length)
+        if (
+          active &&
+          !controller.signal.aborted &&
+          (data?.notes?.length ||
+            (data?.note_status !== undefined &&
+              data.note_status !== "in-progress"))
+        )
           await revalidate.current()
       } catch {
         // SDK/auth/network failures may reject even with throwOnError false.
@@ -120,7 +133,7 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
       clearInterval(poll)
       pending?.abort()
     }
-  }, [appointmentId])
+  }, [appointmentId, phase])
 
   useEffect(() => {
     if (startedAt === undefined) return
@@ -131,6 +144,29 @@ export function NoteProcessing({ appointmentId }: { appointmentId: string }) {
     )
     return () => clearTimeout(giveUp)
   }, [appointmentId, startedAt])
+
+  if (phase === "taking-longer") {
+    return (
+      <div role="status" className="mb-4">
+        <div className="text-xl font-semibold">
+          Your recording was received, but the note is taking longer than
+          expected.
+        </div>
+        <p className="text-muted-foreground mt-1 text-sm">
+          No note is ready yet. Check again when you are ready; this does not
+          mean the upload failed.
+        </p>
+        <button
+          type="button"
+          className="mt-3 text-sm font-medium underline underline-offset-4"
+          onClick={() => revalidator.revalidate()}
+          disabled={revalidator.state !== "idle"}
+        >
+          {revalidator.state === "idle" ? "Check again" : "Checking…"}
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div role="status" className="mb-4 flex items-start gap-3">
@@ -191,11 +227,13 @@ export const meta: MetaFunction = () => {
 
 function NoteHeader({
   status,
+  statusLabel,
   title,
   dataFields,
   engagementRole,
 }: {
   status: Status
+  statusLabel?: string
   title: string
   dataFields: Record<string, string>
   engagementRole?: EngagementRole | null
@@ -211,7 +249,10 @@ function NoteHeader({
           >
             {title}
           </h1>
-          <StatusBadge status={status} label={NOTE_STATUS_LABELS[status]} />
+          <StatusBadge
+            status={status}
+            label={statusLabel ?? NOTE_STATUS_LABELS[status]}
+          />
         </div>
         {engagementRole ? (
           <div className="mt-2">
@@ -247,7 +288,14 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const hasNotes = notes && notes.length > 0
   const appointmentId = loaderData.appointment.id
   const uploads = useRecentUploads()
-  const awaitingNote = !hasNotes && isProcessing(uploads, appointmentId)
+  const noteProgress = hasNotes
+    ? null
+    : isProcessing(uploads, appointmentId) ||
+        loaderData.note_status === "in-progress"
+      ? "in-progress"
+      : loaderData.note_status === "taking-longer"
+        ? "taking-longer"
+        : null
 
   useEffect(() => {
     // markReady reports whether this visit was being tracked, so the toast
@@ -288,9 +336,12 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           status={
             hasNotes
               ? "completed"
-              : awaitingNote
+              : noteProgress === "in-progress"
                 ? "in-progress"
                 : "not-started"
+          }
+          statusLabel={
+            noteProgress === "taking-longer" ? "Taking longer" : undefined
           }
           engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
@@ -344,8 +395,8 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
               }
             />
           ))
-        ) : awaitingNote ? (
-          <NoteProcessing appointmentId={appointmentId} />
+        ) : noteProgress ? (
+          <NoteProcessing appointmentId={appointmentId} phase={noteProgress} />
         ) : loaderData.capture_workflow_required && transcript ? (
           <CaptureNoteReadiness key={loaderData.appointment.id} />
         ) : (

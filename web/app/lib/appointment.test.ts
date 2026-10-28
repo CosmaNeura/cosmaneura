@@ -77,6 +77,17 @@ describe("note sidebar labels", () => {
       relativeDayLabel(new Date("2026-09-24T12:00:00Z"), now),
     )
   })
+
+  it("labels a delayed admitted upload without presenting it as a failure", () => {
+    const [entry] = appointmentsToSidebarEntries(
+      appointments.slice(0, 1),
+      linkTarget,
+      { named_capture: "taking-longer" },
+    )
+
+    expect(entry.status).toBe("not-started")
+    expect(entry.statusLabel).toBe("Taking longer")
+  })
 })
 
 describe("defensive note status lookup", () => {

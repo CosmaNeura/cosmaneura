@@ -5,7 +5,7 @@ only the route/model AST so no Core bootstrap, Clerk or external DB runs.
 """
 
 import ast
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, cast
@@ -63,28 +63,49 @@ class SidebarNote(SQLModel, table=True):
     note: str = "Synthetic note body must not be selected for sidebar status"
 
 
+class SidebarAudio(SQLModel, table=True):
+    id: str = SqlField(primary_key=True)
+    doctor_id: str = "doctor_a"
+    patient_id: str = "patient_a"
+    appointment_id: str
+    created_at: datetime = SqlField(default_factory=lambda: datetime.now(UTC))
+
+
 def load_route(session_factory):
     root = Path(__file__).resolve().parents[2]
     tree = ast.parse((root / "app/routes/internal.py").read_text())
-    selected = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef))
-        and node.name in {"NotetakingData", "note_list"}
-    ]
-    assert len(selected) == 2
+    selected = []
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in {
+            "_uploaded_note_status",
+            "NotetakingData",
+            "note_list",
+        }:
+            selected.append(node)
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name)
+            and target.id in {"NoteStatus", "NOTE_PROCESSING_EXPECTED_WINDOW"}
+            for target in node.targets
+        ):
+            selected.append(node)
+    assert len(selected) == 5
     for node in selected:
-        node.decorator_list = []
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+            node.decorator_list = []
     namespace = {
         "Any": Any,
         "Literal": Literal,
         "cast": cast,
+        "datetime": datetime,
+        "timedelta": timedelta,
+        "timezone": timezone,
         "Request": Request,
         "BaseModel": BaseModel,
         "Field": Field,
         "Doctor": SimpleNamespace,
         "Appointment": SidebarAppointment,
         "AIVisitNote": SidebarNote,
+        "VisitAudioFile": SidebarAudio,
         "selectinload": selectinload,
         "select": select,
         "get_session": session_factory,
@@ -113,6 +134,7 @@ def sidebar(monkeypatch):
                 SidebarAppointment,
                 SidebarIntake,
                 SidebarNote,
+                SidebarAudio,
             )
         ],
     )
@@ -262,6 +284,80 @@ def test_supersession_and_replacement_change_status_without_title_changes(sideba
     assert sidebar.read()["note_statuses"] == {"visit": "not-started"}
     sidebar.insert(SidebarNote(id="replacement", appointment_id="visit"))
     assert sidebar.read()["note_statuses"] == {"visit": "completed"}
+
+
+def test_server_upload_state_crosses_browsers_and_ages_without_claiming_failure(
+    sidebar,
+):
+    sidebar.insert(
+        SidebarAppointment(id="recent_upload"),
+        SidebarAppointment(id="slow_upload"),
+        SidebarAppointment(id="scheduled_only"),
+        SidebarAppointment(id="completed_upload"),
+        SidebarAudio(
+            id="recent_audio",
+            appointment_id="recent_upload",
+            created_at=datetime.now(UTC) - timedelta(minutes=2),
+        ),
+        SidebarAudio(
+            id="slow_audio",
+            appointment_id="slow_upload",
+            created_at=datetime.now(UTC) - timedelta(minutes=20),
+        ),
+        SidebarAudio(
+            id="completed_audio",
+            appointment_id="completed_upload",
+            created_at=datetime.now(UTC) - timedelta(minutes=20),
+        ),
+        SidebarNote(id="completed_note", appointment_id="completed_upload"),
+    )
+
+    assert sidebar.read()["note_statuses"] == {
+        "recent_upload": "in-progress",
+        "slow_upload": "taking-longer",
+        "scheduled_only": "not-started",
+        "completed_upload": "completed",
+    }
+
+
+def test_newest_upload_controls_progress_when_a_visit_has_multiple_rows(sidebar):
+    sidebar.insert(
+        SidebarAppointment(id="retried_upload"),
+        SidebarAudio(
+            id="older_audio",
+            appointment_id="retried_upload",
+            created_at=datetime.now(UTC) - timedelta(minutes=20),
+        ),
+        SidebarAudio(
+            id="newer_audio",
+            appointment_id="retried_upload",
+            created_at=datetime.now(UTC) - timedelta(minutes=2),
+        ),
+    )
+
+    assert sidebar.read()["note_statuses"] == {"retried_upload": "in-progress"}
+
+
+def test_foreign_upload_never_changes_an_owned_visit_status(sidebar):
+    sidebar.insert(
+        SidebarAppointment(id="owned"),
+        SidebarAppointment(id="foreign", doctor_id="doctor_b"),
+        SidebarAudio(
+            id="foreign_audio",
+            doctor_id="doctor_b",
+            appointment_id="owned",
+        ),
+        SidebarAudio(
+            id="crossed_audio",
+            appointment_id="foreign",
+        ),
+        SidebarAudio(
+            id="wrong_patient_audio",
+            patient_id="patient_b",
+            appointment_id="owned",
+        ),
+    )
+    assert sidebar.read()["note_statuses"] == {"owned": "not-started"}
 
 
 def test_status_keys_exclude_an_appointment_added_between_reads(sidebar, monkeypatch):
