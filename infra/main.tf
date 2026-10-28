@@ -648,6 +648,14 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
+        for_each = local.scribe_native_api_public_values
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
         for_each = local.core_cab_secret_values
         content {
           name        = env.key
@@ -746,6 +754,11 @@ resource "azurerm_container_app" "app" {
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
     precondition {
+      condition     = length(local.scribe_native_api_env_name_collisions) == 0
+      error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic API environment-name sets"
+    }
+
+    precondition {
       condition     = local.core_cab_configuration_valid
       error_message = "Core CAB runtime flags and dedicated workload configuration are inconsistent"
     }
@@ -838,6 +851,15 @@ resource "azurerm_container_app" "scheduler" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.zoom_durable_public_values
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # Beat is lightweight: it polls Redis every few seconds and enqueues
       # the occasional task. Half a CPU and 512Mi is generous.
       cpu    = 0.25
@@ -880,6 +902,11 @@ resource "azurerm_container_app" "scheduler" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = length(local.scribe_native_scheduler_env_name_collisions) == 0
+      error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic scheduler environment-name sets"
+    }
+
     precondition {
       condition     = local.database_url_configuration_valid
       error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
@@ -998,6 +1025,15 @@ resource "azurerm_container_app" "worker" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.zoom_durable_public_values
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       env {
         name  = "AZURE_DEID_AUTH_MODE"
         value = var.enable_deid_managed_identity ? "managed_identity" : "client_secret"
@@ -1069,6 +1105,11 @@ resource "azurerm_container_app" "worker" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = length(local.scribe_native_worker_env_name_collisions) == 0
+      error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic worker environment-name sets"
+    }
+
     precondition {
       condition     = local.deid_managed_identity_live_guard_valid
       error_message = "managed-identity activation requires the exact production worker identity, AnonymizerAPI resource, and realtime-only role assignment to exist first"
