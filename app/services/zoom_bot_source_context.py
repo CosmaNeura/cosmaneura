@@ -166,7 +166,7 @@ class SourceContext:
             "items": {"type": "integer"},
             "maxItems": min(64, len(self.sources)),
         }
-        question_ref = {"type": "integer"}
+        question_ref: dict[str, object] = {"type": "integer"}
         if self.questions:
             question_ref["enum"] = list(self.questions)
         context = {

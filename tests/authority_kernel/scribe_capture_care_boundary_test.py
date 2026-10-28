@@ -33,25 +33,38 @@ def test_complete_clinical_requests_and_prospective_eligibility_are_explicit(
         "questions and requests are relevant source context independently of whether a reply was recorded"
         in prompt
     )
-    assert "Select each complete relevant request and all its actual later responses" in prompt
+    assert (
+        "Select each complete relevant request and all its actual later responses"
+        in prompt
+    )
     assert "Do not drop a request after selecting a narrower reply" in prompt
     assert "or expand that reply to cover the other requested information" in prompt
     assert "A question never supplies its answer" in prompt
     assert "Do not classify selected entries as questions or answers" in prompt
-    boundary = "Apply the existing Plan eligibility boundary before any history omission rule"
+    boundary = (
+        "Apply the existing Plan eligibility boundary before any history omission rule"
+    )
     assert boundary in prompt
     assert (
         "A prospective source must contain an explicit future care decision or its implementation"
         in prompt
     )
-    assert "a report of past or current medication behavior are not prospective care by themselves" in prompt
-    assert "Future tense addressed to a note writer or software" in prompt
-    assert "only if it also contains a separate explicit future care decision or implementation" in prompt
     assert (
-        prompt.index(boundary)
-        < prompt.index("omission rules never remove those eligible prospective sources")
+        "a report of past or current medication behavior are not prospective care by themselves"
+        in prompt
     )
-    assert "negated, conditional, corrected or repeated decisions and care commitments" in prompt
+    assert "Future tense addressed to a note writer or software" in prompt
+    assert (
+        "only if it also contains a separate explicit future care decision or implementation"
+        in prompt
+    )
+    assert prompt.index(boundary) < prompt.index(
+        "omission rules never remove those eligible prospective sources"
+    )
+    assert (
+        "negated, conditional, corrected or repeated decisions and care commitments"
+        in prompt
+    )
     assert "Independent source content." not in prompt
 
 
@@ -90,7 +103,10 @@ def test_genuine_mixed_care_decisions_and_commitments_keep_complete_sources(
     }
     raw, grounded = g.resolve(json.dumps(value), max_bytes=20000)
     _, care = plans.PlanGrounding(("Plan",), sources).resolve(raw, max_bytes=20000)
-    assert care["Plan"] == f"- {sources[0].attribution.removeprefix('Transcript — ')}: {text}"
+    assert (
+        care["Plan"]
+        == f"- {sources[0].attribution.removeprefix('Transcript — ')}: {text}"
+    )
     assert text not in grounded["Objective"]
 
 
