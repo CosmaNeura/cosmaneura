@@ -112,9 +112,27 @@ def test_genuine_context_and_mixed_entries_are_not_removed_by_word_filters(text)
 @pytest.mark.parametrize(
     "speaker,patient_only", [("Patient", True), ("Unknown", False)]
 )
-def test_disabled_paths_have_no_new_history_selection_instruction(
+def test_objective_has_selection_contract_but_other_history_remains_narrative(
     speaker, patient_only
 ):
     g = grounding(["Source."], speaker=speaker, patient_only=patient_only)
-    assert g.fields == () and g.prompt(has_plans=True) == ""
-    assert g.resolve("unchanged", max_bytes=20000) == ("unchanged", {})
+    assert g.fields == ("Objective",)
+    assert '"reported_history_fields": ["Objective"]' in g.prompt(has_plans=True)
+    raw = json.dumps(
+        {
+            "fields": dict.fromkeys(FIELDS, ""),
+            "plan_source_refs": {"Plan": []},
+            history.KEY: {"Objective": {"source_refs": []}},
+        }
+    )
+    output = render(g, raw)
+    assert output["Objective"] == history.REVIEW_REQUIRED
+    assert output["Subjective"] == output["Assessment"] == ""
+    inactive = history.ReportedHistoryGrounding.for_capture(
+        ("Subjective", "Assessment", "Plan"),
+        ("Plan",),
+        g.sources,
+        patient_only=patient_only,
+    )
+    assert inactive.fields == () and inactive.prompt(has_plans=True) == ""
+    assert inactive.resolve("unchanged", max_bytes=20000) == ("unchanged", {})

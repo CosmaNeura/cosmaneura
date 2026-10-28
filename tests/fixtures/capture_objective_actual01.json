@@ -1,0 +1,9 @@
+{
+  "synthetic_only": true,
+  "provenance": "Original retained actual configured-model response; no new model call and no acceptance inferred. Complete source case is the tracked desktop13-synthetic.json.",
+  "original_inputs_sha256": "a226274cc821f2a49fd49e1e5d9480c5385e1fe9eb0942da0d8f611afa8250a3",
+  "original_response_sha256": "df63931a6da46781f0f4a1aaf6e68332498263234ad7cee1cd72d6a0eac9a807",
+  "original_attempt_sha256": "def2970e82ab67bc839facf8c975a8d09e346cd0b99788566cc58e841fbc4f5f",
+  "raw_sha256": "9aeaebef249635d4bad195a213a0b519c70bc0980d4bf34f17c4c315082464ea",
+  "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,36,37]},\"fields\":{\"Subjective\":\"- The dizziness began 12 days ago.  \\n- Earlier I said 20 days, but 12 is correct.  \\n- It lasts about 30 seconds when I stand up quickly.  \\n- It does not last 30 minutes.  \\n- I have never fainted.  \\n- I have no chest pain, no shortness of breath, and no fever.  \\n- I did have a mild headache yesterday, but I do not have one today.  \\n- I initially called the dizziness severe.  \\n- I would correct that to mild.  \\n- I can still walk and carry out my normal routine.  \\n- There were two episodes yesterday, not seven.  \\n- I drink about four glasses of water daily.  \\n- I have not started, stopped, or changed any medicine.  \\n- My blood pressure reading at home was 118/72, not 180/72.  \\n- I will record when the dizziness happens and how long it lasts.  \\n- I will use the corrected count of two and the duration of 30 seconds.  \\n- I do not want the denied symptoms shown as present.\",\"Objective\":\"- Home blood pressure reading: 118/72 mmHg (corrected from earlier value).\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}"
+}

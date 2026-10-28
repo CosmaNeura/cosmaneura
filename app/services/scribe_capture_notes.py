@@ -262,6 +262,7 @@ def capture_response_schema(
         {
             name: {"type": "string", "enum": [""]}
             if name in plan_fields
+            or (history_grounding is not None and name in history_grounding.fields)
             else {"type": "string"}
             for name in field_names
         }
@@ -1404,11 +1405,6 @@ async def capture_note(
         plan_grounding.sources,
         patient_only=inputs.customization.subjective_source == "patient_only",
     )
-    generator = model or ConfiguredNoteModel(
-        response_schema=capture_response_schema(
-            tuple(inputs.schema.fields), plan_grounding.fields, history_grounding
-        )
-    )
     prompt = summarize.build_structured_prompt(
         inputs.transcript,
         None,
@@ -1421,8 +1417,7 @@ async def capture_note(
     scratch_prompt = scratch_notes.grounding() if scratch_notes else ""
     if scratch_notes and (plan_grounding.fields or history_grounding.fields):
         scratch_prompt = f"[source {len(plan_grounding.sources)}] " + scratch_prompt
-    raw = await _model_call(
-        generator,
+    model_prompt = (
         scratch_prompt
         + gaps.gap_grounding(source.qualified)
         + continuity_grounding(
@@ -1434,8 +1429,31 @@ async def capture_note(
             inputs.customization,
             field_names=tuple(inputs.schema.fields),
         )
-        + plan_grounding.prompt()
-        + history_grounding.prompt(has_plans=bool(plan_grounding.fields)),
+    )
+    shape = capture_response_schema(
+        tuple(inputs.schema.fields), plan_grounding.fields, history_grounding
+    )
+    if model is not None:
+        generator = model
+        model_prompt += plan_grounding.prompt() + history_grounding.prompt(
+            has_plans=bool(plan_grounding.fields)
+        )
+    elif plan_grounding.fields or history_grounding.fields:
+        from app.services.scribe_capture_note_stages import CaptureNoteStages
+
+        generator = CaptureNoteStages(
+            response_schema=shape,
+            plan=plan_grounding,
+            history=history_grounding,
+            model_factory=ConfiguredNoteModel,
+            max_bytes=MAX_MODEL_BYTES,
+            checkpoint=checkpoint,
+        )
+    else:
+        generator = ConfiguredNoteModel(response_schema=shape)
+    raw = await _model_call(
+        generator,
+        model_prompt,
         json_output=True,
     )
     try:

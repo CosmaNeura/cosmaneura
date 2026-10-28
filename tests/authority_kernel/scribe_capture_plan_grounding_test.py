@@ -70,6 +70,9 @@ class Model:
                     history.CONTRACT_END, 1
                 )[0]
             )
+            assert not set(contract["reported_history_fields"]) & set(PROSPECTIVE)
+            for field in contract["reported_history_fields"]:
+                result["fields"][field] = ""
             # This mock isolates plan behavior. An empty history selection is
             # deliberately a review limitation, never actual-model evidence.
             result[history.KEY] = {
@@ -318,8 +321,20 @@ async def test_invalid_reference_retains_source_but_never_publishes_unchecked_pl
         heading: invalid if heading == "P - PLAN" else [] for heading in PROSPECTIVE
     }
     args, _ = await physical_case(f, monkeypatch, refs=refs)
+    reached = []
+    production_resolve = plans.PlanGrounding.resolve
+
+    def inspect_then_resolve(grounding, raw, *, max_bytes):
+        value = json.loads(raw)
+        assert history.KEY not in value
+        assert value["plan_source_refs"]["P - PLAN"] == invalid
+        reached.append(True)
+        return production_resolve(grounding, raw, max_bytes=max_bytes)
+
+    monkeypatch.setattr(plans.PlanGrounding, "resolve", inspect_then_resolve)
     with pytest.raises(notes.CaptureNoteUnconfirmed) as error:
         await notes.capture_note(**args)
+    assert reached == [True]  # A history-envelope failure must not mask this guard.
     assert not str(error.value)
     assert not rows(f, AIVisitNote) and len(rows(f, AIVisitTranscript)) == 1
 

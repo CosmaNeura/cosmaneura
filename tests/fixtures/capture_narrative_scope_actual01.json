@@ -1,0 +1,212 @@
+{
+  "synthetic_only": true,
+  "provenance": "Three original actual configured-model failures, retained unchanged; this is not a new-source success or rewritten clinical acceptance.",
+  "source": "1f355e583fa306626bc86e29069363c2ce573a1e",
+  "stopReportSHA256": "0361c4327dac6a1e504e0f21087286e23ee0cbc24e894d76461ec3b3e1e322f3",
+  "providerCalls": 3,
+  "databaseConnections": 0,
+  "fullClinicalAcceptance": false,
+  "rows": [
+    {
+      "case": "desktop13-01",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32]},\"fields\":{\"Subjective\":\"\",\"Objective\":\"\",\"Assessment\":\"\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[26]}}}",
+      "rawSHA256": "ce7212b84e696c15af08d7a0d1ecbd7c40087d0dc3f683451430058bc9f0d312",
+      "bindings": {
+        "inputs.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-01/inputs.json",
+          "sha256": "857bbc3a3d4f5125ce59c9239abd94cb888f45c98546510cb2b2976cd177ca2d"
+        },
+        "attempt.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-01/attempt.json",
+          "sha256": "582e1334ea38ad3ffbf506a11eda5c0be8cfd73d95129640cbefe059736d04b1"
+        },
+        "response.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-01/response.json",
+          "sha256": "9cb24f4a8381d787140bb91ccc7ba8106310db4447b1e0b0a001a1508906d8e9"
+        },
+        "result.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-01/result.json",
+          "sha256": "e70111478cbe77bd32fcd464322aab0aecd3c0a165cfa24c0c118be97df8f569"
+        },
+        "cleanup.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-01/cleanup.json",
+          "sha256": "86a056f8da44a19097eb4d1259c2b28b09369c85136d1928a2f93f12343e086f"
+        }
+      },
+      "subjectiveSchema": {
+        "type": "string"
+      },
+      "objectiveSchema": {
+        "type": "string",
+        "enum": [
+          ""
+        ]
+      },
+      "originalOracle": {
+        "passed": false,
+        "failures": [
+          "prior-mild-headache",
+          "no-current-headache",
+          "medications-unchanged",
+          "onset-12-days",
+          "duration-30-seconds",
+          "two-episodes",
+          "daily-fluid-intake",
+          "negative-fainting",
+          "negative-chest-pain",
+          "negative-dyspnea",
+          "negative-fever"
+        ],
+        "independent_content_review_required": true
+      },
+      "originalPlanInclusion": {
+        "passed": false,
+        "missingWholeSourceRefs": [
+          36
+        ],
+        "unexpectedSourceRefs": [],
+        "selectedPlanRefs": [
+          28,
+          29,
+          30,
+          32
+        ]
+      },
+      "modelCalls": 1
+    },
+    {
+      "case": "desktop13-02",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32]},\"fields\":{\"Subjective\":\"\",\"Objective\":\"\",\"Assessment\":\"\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[26]}}}",
+      "rawSHA256": "ce7212b84e696c15af08d7a0d1ecbd7c40087d0dc3f683451430058bc9f0d312",
+      "bindings": {
+        "inputs.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-02/inputs.json",
+          "sha256": "0940dee02d2191c3651c1588be89f2d736b1fe56829266031b16c2dc7a47fae5"
+        },
+        "attempt.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-02/attempt.json",
+          "sha256": "ddcaf58b96dd4601ae3cc0fc615c88414128b5a87a24fc911c1dcd53bb04a50a"
+        },
+        "response.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-02/response.json",
+          "sha256": "2cdd03d50bbe27950d8710005ba02fa875b37d9b9724aa77e6131abeaf4f10a2"
+        },
+        "result.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-02/result.json",
+          "sha256": "6bc1606faa27302e9de23d9b54ae6eebeccb06455b654359f13dca5dbbbd8c23"
+        },
+        "cleanup.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-02/cleanup.json",
+          "sha256": "8000abd71ccd10f5de21f18c886093d91a843e39a84c6be392db3e80528e783f"
+        }
+      },
+      "subjectiveSchema": {
+        "type": "string"
+      },
+      "objectiveSchema": {
+        "type": "string",
+        "enum": [
+          ""
+        ]
+      },
+      "originalOracle": {
+        "passed": false,
+        "failures": [
+          "prior-mild-headache",
+          "no-current-headache",
+          "medications-unchanged",
+          "onset-12-days",
+          "duration-30-seconds",
+          "two-episodes",
+          "daily-fluid-intake",
+          "negative-fainting",
+          "negative-chest-pain",
+          "negative-dyspnea",
+          "negative-fever"
+        ],
+        "independent_content_review_required": true
+      },
+      "originalPlanInclusion": {
+        "passed": false,
+        "missingWholeSourceRefs": [
+          36
+        ],
+        "unexpectedSourceRefs": [],
+        "selectedPlanRefs": [
+          28,
+          29,
+          30,
+          32
+        ]
+      },
+      "modelCalls": 1
+    },
+    {
+      "case": "desktop13-03",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32]},\"fields\":{\"Subjective\":\"\",\"Objective\":\"\",\"Assessment\":\"\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[26]}}}",
+      "rawSHA256": "ce7212b84e696c15af08d7a0d1ecbd7c40087d0dc3f683451430058bc9f0d312",
+      "bindings": {
+        "inputs.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-03/inputs.json",
+          "sha256": "2f1e4b097f3fdfb0419b95136a05350af3fb05bb5f3845b9386904dff0ffa764"
+        },
+        "attempt.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-03/attempt.json",
+          "sha256": "8a770ee8e788346a4fb16ae61f51e1aeeafcf347e4a425902a5e20b04fb9ef71"
+        },
+        "response.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-03/response.json",
+          "sha256": "73285130ca5c565c786e244747737f86a59bebd5b7d71c322e4089dd58b6cb42"
+        },
+        "result.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-03/result.json",
+          "sha256": "c44b92e84e39b6b552a87eb7ef6e08c89c73891759c2d0f3363d46cee7759eb3"
+        },
+        "cleanup.json": {
+          "path": "/private/tmp/capture-objective-model-validation-20261027-02/desktop13-03/cleanup.json",
+          "sha256": "28189e4f55dc854ea879bb91e94b078afbc2b4861b11db3f158b4e3c3076e2d1"
+        }
+      },
+      "subjectiveSchema": {
+        "type": "string"
+      },
+      "objectiveSchema": {
+        "type": "string",
+        "enum": [
+          ""
+        ]
+      },
+      "originalOracle": {
+        "passed": false,
+        "failures": [
+          "prior-mild-headache",
+          "no-current-headache",
+          "medications-unchanged",
+          "onset-12-days",
+          "duration-30-seconds",
+          "two-episodes",
+          "daily-fluid-intake",
+          "negative-fainting",
+          "negative-chest-pain",
+          "negative-dyspnea",
+          "negative-fever"
+        ],
+        "independent_content_review_required": true
+      },
+      "originalPlanInclusion": {
+        "passed": false,
+        "missingWholeSourceRefs": [
+          36
+        ],
+        "unexpectedSourceRefs": [],
+        "selectedPlanRefs": [
+          28,
+          29,
+          30,
+          32
+        ]
+      },
+      "modelCalls": 1
+    }
+  ]
+}

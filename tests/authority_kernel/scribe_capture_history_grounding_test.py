@@ -216,18 +216,18 @@ def test_duplicate_json_properties_are_rejected():
 
 
 @pytest.mark.parametrize("speaker", ["Patient", "Doctor", "Other"])
-def test_known_roles_and_non_patient_only_preferences_keep_existing_path(speaker):
+def test_known_roles_ground_only_objective_and_keep_other_history_narrative(speaker):
     known = (plans.PlanSource.speech(speaker, "My own report."),)
-    assert not history.ReportedHistoryGrounding.for_capture(
+    assert history.ReportedHistoryGrounding.for_capture(
         FIELDS, (), known, patient_only=True
-    ).fields
+    ).fields == ("O - OBJECTIVE",)
     g = contract(["Unidentified report."])
-    assert not history.ReportedHistoryGrounding.for_capture(
+    assert history.ReportedHistoryGrounding.for_capture(
         FIELDS, (), g.sources, patient_only=False
-    ).fields
+    ).fields == ("O - OBJECTIVE",)
     forged = history.ReportedHistoryGrounding(g.fields, g.medication_fields, known)
     with pytest.raises(history.HistoryGroundingInvalid):
-        forged.resolve(response(forged, objective=[1]), max_bytes=10000)
+        forged.resolve(response(forged, current=[1]), max_bytes=10000)
 
 
 def test_typed_scratch_source_retains_its_distinct_attribution():
@@ -256,6 +256,10 @@ def test_strict_saved_shape_and_existing_plan_resolver_are_preserved(has_plans):
     )
     assert set(schema["properties"]["fields"]["properties"]) == set(FIELDS)
     assert history.KEY in schema["required"]
+    assert schema["properties"]["fields"]["properties"]["O - OBJECTIVE"] == {
+        "type": "string",
+        "enum": [""],
+    }
     assert not {"S - SUBJECTIVE", "P - PLAN", "Patient", "A - ASSESSMENT"} & set(
         g.fields
     )

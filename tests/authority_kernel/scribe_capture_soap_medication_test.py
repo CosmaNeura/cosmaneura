@@ -136,9 +136,25 @@ def test_no_objective_does_not_place_medication_limitation_in_other_history_fiel
     "speaker,patient_only",
     [("Doctor", True), ("Patient", True), ("Other", True), ("Unknown", False)],
 )
-def test_non_enabled_paths_return_identical_input(speaker, patient_only):
+def test_objective_activates_without_other_history_and_absent_objective_keeps_input(
+    speaker, patient_only
+):
     grounding, raw = response(
         SOAP, ["A report."], speaker=speaker, patient_only=patient_only
     )
-    assert not grounding.fields
-    assert grounding.resolve(raw, max_bytes=10000) == (raw, {})
+    assert grounding.fields == ("Objective",)
+    value = json.loads(raw)
+    value["fields"]["Objective"] = ""
+    remaining, rendered = grounding.resolve(json.dumps(value), max_bytes=10000)
+    expected = dict(value)
+    expected.pop(history.KEY)
+    assert json.loads(remaining) == expected
+    assert rendered == {"Objective": history.REVIEW_REQUIRED}
+    inactive, original = response(
+        ("Subjective", "Assessment", "Plan"),
+        ["A report."],
+        speaker=speaker,
+        patient_only=patient_only,
+    )
+    assert not inactive.fields
+    assert inactive.resolve(original, max_bytes=10000) == (original, {})
