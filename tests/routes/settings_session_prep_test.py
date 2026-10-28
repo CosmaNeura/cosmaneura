@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -5,7 +7,9 @@ from fastapi.testclient import TestClient
 from app.configuration import session_prep as session_prep_configuration
 from app.configuration.session_prep import SessionPrepProviderSettings
 from app.server import api_app
-from app.services.doctor_access import DoctorAccessDecision
+from app.services.session_prep_provider_access import (
+    SessionPrepProviderAccessDecision,
+)
 
 from app.models.doctor import Doctor
 from app.models.superadmin_capability import (
@@ -28,11 +32,17 @@ def _dev_doctor() -> Doctor:
     return doctor
 
 
-def _settings(*subjects: str) -> SessionPrepProviderSettings:
-    return SessionPrepProviderSettings(
-        enabled=bool(subjects),
-        clerk_subjects=frozenset(subjects),
-    )
+def _settings(*, enabled: bool) -> SessionPrepProviderSettings:
+    return SessionPrepProviderSettings(enabled=enabled)
+
+
+def test_provider_rollout_is_global_and_has_no_manual_account_cohort() -> None:
+    enabled = _settings(enabled=True)
+
+    assert enabled.allows("user_existing_provider")
+    assert enabled.allows("user_newly_onboarded_provider")
+    assert not enabled.allows("")
+    assert not _settings(enabled=False).allows("user_existing_provider")
 
 
 def _enable_staging_view_as(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,7 +74,7 @@ def test_settings_session_prep_defaults_to_ineligible(
     monkeypatch.setattr(
         session_prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        _settings(),
+        _settings(enabled=False),
     )
 
     response = authenticated_client.get(api_app.url_path_for("settings_data"))
@@ -76,15 +86,17 @@ def test_settings_session_prep_defaults_to_ineligible(
     }
 
 
-def test_settings_session_prep_discovers_selected_provider_without_granting_more(
+def test_settings_session_prep_discovers_every_current_provider_when_globally_enabled(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     doctor = _dev_doctor()
+    doctor.onboarding_completed_at = datetime.now(UTC)
+    doctor.save()
     monkeypatch.setattr(
         session_prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        _settings(doctor.clerk_id),
+        _settings(enabled=True),
     )
 
     response = authenticated_client.get(api_app.url_path_for("settings_data"))
@@ -96,48 +108,75 @@ def test_settings_session_prep_discovers_selected_provider_without_granting_more
     }
 
 
-def test_settings_selected_provider_without_current_access_cannot_review(
+def test_settings_incomplete_or_unentitled_provider_is_not_eligible(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    doctor = _dev_doctor()
     monkeypatch.setattr(
         session_prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        _settings(doctor.clerk_id),
+        _settings(enabled=True),
     )
 
-    def access_decision(
-        _doctor: Doctor, *, require_entitlement: bool = True
-    ) -> DoctorAccessDecision:
-        if not require_entitlement:
-            return DoctorAccessDecision(
-                allowed=True,
-                authorization_basis="organization_roster",
-                denial_reason=None,
-                baa_in_force=True,
-                entitlement_in_force=False,
-            )
-        return DoctorAccessDecision(
+    def access_decision(_doctor: Doctor) -> SessionPrepProviderAccessDecision:
+        return SessionPrepProviderAccessDecision(
             allowed=False,
-            authorization_basis=None,
             denial_reason="entitlement_not_in_force",
-            baa_in_force=True,
-            entitlement_in_force=False,
         )
 
-    monkeypatch.setattr("app.routes.internal.resolve_doctor_access", access_decision)
+    monkeypatch.setattr(
+        "app.services.session_prep_provider_access.resolve_session_prep_provider_access",
+        access_decision,
+    )
 
     response = authenticated_client.get(api_app.url_path_for("settings_data"))
 
     assert response.status_code == status.HTTP_200_OK, response.text
     assert response.json()["session_prep"] == {
-        "eligible": True,
+        "eligible": False,
         "can_review_sources": False,
     }
 
 
-def test_settings_session_prep_view_as_is_discovery_only(
+def test_settings_new_provider_becomes_eligible_when_onboarding_access_is_ready(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        session_prep_configuration,
+        "SESSION_PREP_PROVIDER_SETTINGS",
+        _settings(enabled=True),
+    )
+    ready = False
+
+    def access_decision(_doctor: Doctor) -> SessionPrepProviderAccessDecision:
+        return SessionPrepProviderAccessDecision(
+            allowed=ready,
+            denial_reason=None if ready else "practice_membership_required",
+        )
+
+    monkeypatch.setattr(
+        "app.services.session_prep_provider_access.resolve_session_prep_provider_access",
+        access_decision,
+    )
+
+    before = authenticated_client.get(api_app.url_path_for("settings_data"))
+    assert before.status_code == status.HTTP_200_OK, before.text
+    assert before.json()["session_prep"] == {
+        "eligible": False,
+        "can_review_sources": False,
+    }
+
+    ready = True
+    after = authenticated_client.get(api_app.url_path_for("settings_data"))
+    assert after.status_code == status.HTTP_200_OK, after.text
+    assert after.json()["session_prep"] == {
+        "eligible": True,
+        "can_review_sources": True,
+    }
+
+
+def test_settings_session_prep_view_as_is_ineligible(
     authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -154,7 +193,7 @@ def test_settings_session_prep_view_as_is_discovery_only(
     monkeypatch.setattr(
         session_prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        _settings(target.clerk_id),
+        _settings(enabled=True),
     )
 
     began = authenticated_client.post(
@@ -171,8 +210,6 @@ def test_settings_session_prep_view_as_is_discovery_only(
     assert response.status_code == status.HTTP_200_OK, response.text
     assert response.json()["doctor_id"] == str(target.id)
     assert response.json()["session_prep"] == {
-        "eligible": True,
+        "eligible": False,
         "can_review_sources": False,
     }
-    # The actor's own Clerk subject never becomes the target's review authority.
-    assert actor.clerk_id not in _settings(target.clerk_id).clerk_subjects

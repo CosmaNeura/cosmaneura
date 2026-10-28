@@ -434,9 +434,19 @@ def exchange_context_token(
     if clerk_issuer != settings.clerk_issuer:
         raise AuthorityRequestDeniedError
     provider_scope = None
+    synthetic_scope = (
+        session_prep_scope.synthetic_session_prep_context_ref(
+            clerk_subject=clerk_subject,
+            record_ref=record_ref,
+            session=db,
+        )
+        if requested_surface == "provider_assistant" and record_ref is not None
+        else None
+    )
     if (
         requested_surface == "provider_assistant"
         and record_ref is not None
+        and synthetic_scope is None
         and session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
             clerk_subject
         )

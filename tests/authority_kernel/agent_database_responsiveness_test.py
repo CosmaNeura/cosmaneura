@@ -173,7 +173,7 @@ def test_doctor_lock_wait_keeps_health_responsive_and_cleans_request(
     monkeypatch.setattr(
         prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset()),
+        SessionPrepProviderSettings(True),
     )
 
     def contend(**kwargs):
@@ -315,7 +315,7 @@ def test_cancelled_request_waits_for_database_worker_before_session_cleanup(
     monkeypatch.setattr(
         prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset()),
+        SessionPrepProviderSettings(True),
     )
 
     def blocked_service(**kwargs):

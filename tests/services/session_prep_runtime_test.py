@@ -93,7 +93,7 @@ def scope(monkeypatch, request):
     # The exchange schedules using the authority clock. Keep it aligned with
     # the injected worker clock instead of depending on the wall time of day.
     monkeypatch.setattr(authority, "datetime", _AuthorityClock)
-    doctor = DoctorFactory.build().save()
+    doctor = DoctorFactory.build(onboarding_completed_at=NOW).save()
     provision_practice_in_force(doctor)
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     target = AppointmentFactory.build(
@@ -112,7 +112,7 @@ def scope(monkeypatch, request):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     token = authority.exchange_context_token(
         clerk_issuer=ISSUER,

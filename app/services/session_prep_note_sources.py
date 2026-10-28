@@ -278,7 +278,7 @@ def prior_note_overview(
 
     This read never reviews a note, starts generation, or returns note content.
     Include all selected sources even if they precede the recent-note preview.
-    Callers must enforce the current provider cohort and prohibit view-as.
+    Callers must enforce the current provider access gate and prohibit view-as.
     """
     selection = load_reviewed_note_sources(
         session=session,

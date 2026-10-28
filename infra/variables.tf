@@ -181,41 +181,27 @@ variable "python_public_vars" {
 }
 
 variable "session_prep_production_rollout" {
-  description = "Source-controlled production rollout for provider Session Prep. Defaults are dark; activation requires a reviewed Tier-2 production plan and a separately built provider frontend/Sovereign pair."
+  description = "Source-controlled global production rollout for provider Session Prep. Defaults are dark; activation requires a reviewed Tier-2 production plan and a separately built provider frontend/Sovereign pair. Current provider/practice/BAA/entitlement access controls eligibility."
   type = object({
-    enabled                 = bool
-    provider_clerk_subjects = set(string)
-    sovereign_client_id     = string
-    agent_api_audience      = string
+    enabled             = bool
+    sovereign_client_id = string
+    agent_api_audience  = string
   })
   nullable = false
   default = {
-    enabled                 = false
-    provider_clerk_subjects = []
-    sovereign_client_id     = ""
-    agent_api_audience      = ""
-  }
-
-  validation {
-    condition = (
-      length(var.session_prep_production_rollout.provider_clerk_subjects) <= 20 &&
-      alltrue([
-        for subject in var.session_prep_production_rollout.provider_clerk_subjects :
-        can(regex("^user_[A-Za-z0-9]{10,64}$", subject))
-      ])
-    )
-    error_message = "Session Prep production subjects must be at most 20 exact Clerk user IDs; wildcards, email addresses, and empty entries are not accepted"
+    enabled             = false
+    sovereign_client_id = ""
+    agent_api_audience  = ""
   }
 
   validation {
     condition = !var.session_prep_production_rollout.enabled || (
-      length(var.session_prep_production_rollout.provider_clerk_subjects) > 0 &&
       can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.session_prep_production_rollout.sovereign_client_id)) &&
       var.session_prep_production_rollout.sovereign_client_id != "00000000-0000-0000-0000-000000000000" &&
       can(regex("^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$", var.session_prep_production_rollout.agent_api_audience)) &&
       var.session_prep_production_rollout.agent_api_audience != "00000000-0000-0000-0000-000000000000"
     )
-    error_message = "Session Prep production activation requires a nonempty exact provider cohort and nonzero canonical Entra audience and Sovereign client UUIDs"
+    error_message = "Session Prep production activation requires nonzero canonical Entra audience and Sovereign client UUIDs"
   }
 }
 

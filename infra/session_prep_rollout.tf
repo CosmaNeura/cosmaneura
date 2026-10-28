@@ -3,8 +3,7 @@ locals {
   # The provider frontend and Sovereign deployment remain separate release
   # artifacts and cannot be enabled by this object.
   session_prep_shared_public_values = {
-    SESSION_PREP_PROVIDER_ENABLED        = tostring(var.session_prep_production_rollout.enabled)
-    SESSION_PREP_PROVIDER_CLERK_SUBJECTS = join(",", sort(tolist(var.session_prep_production_rollout.provider_clerk_subjects)))
+    SESSION_PREP_PROVIDER_ENABLED = tostring(var.session_prep_production_rollout.enabled)
   }
 
   # The worker calls current_source_state(), which enforces the same Authority
