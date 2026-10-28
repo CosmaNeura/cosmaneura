@@ -52,9 +52,7 @@ def test_scope_names_only_grounded_fields_and_keeps_remaining_narrative_duties(
         in prompt
     )
     assert "if none was stated, mark it not mentioned" in prompt
-    assert (
-        "omission rules never remove those eligible prospective sources" in prompt
-    )
+    assert "omission rules never remove those eligible prospective sources" in prompt
     assert "A decision with a different scope remains separate" in prompt
     assert "Do not apply history recap omissions to plan_source_refs" in prompt
     assert "Separate synthetic source text." not in prompt

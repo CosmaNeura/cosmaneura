@@ -5,11 +5,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from app.services import zoom_bot_note_policy as policy
 from typeid import TypeID
 
+from app.services import zoom_bot_note_policy as policy
+
 from activemodel.session_manager import _session_context
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.external_webhook_operation import ExternalWebhookOperation
 from app.models.zoom_meeting import ZoomMeeting
 from sqlmodel import Session
@@ -56,12 +57,12 @@ def candidate(engine, monkeypatch, request):
             patient_id=appointment.patient_id,
             duration=1,
             transcript_data=[
-                {
-                    "speaker": "Patient",
-                    "content": "Synthetic wrist pain.",
-                    "startTime": 0,
-                    "endTime": 1000,
-                }
+                TranscriptEntry(
+                    speaker="Patient",
+                    content="Synthetic wrist pain.",
+                    startTime=0,
+                    endTime=1000,
+                )
             ],
         ).save()
         at = datetime.now(UTC)

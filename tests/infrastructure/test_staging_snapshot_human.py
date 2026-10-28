@@ -328,6 +328,30 @@ class HumanEntryTests(unittest.TestCase):
         self.assertEqual(str(caught.exception), expected)
         self.assertNotIn("INVENTED_SECRET_CANARY", str(caught.exception))
 
+    def use_clock_origin(self, origin):
+        native_origin = self.clock
+        self.clock = self.started = origin
+        native_deadline = human.capture_deadline
+        self.stack.enter_context(
+            patch.object(
+                human,
+                "capture_deadline",
+                lambda deadline: native_deadline(native_origin + (deadline - origin)),
+            )
+        )
+
+    def test_fractional_clock_does_not_exceed_the_server_read_timeout(self):
+        self.use_clock_origin(31.7)
+        self.assertGreater((self.clock + 30) - self.clock, 30)
+        self.assertIs(self.run_fixture(), self.metadata)
+        self.assertIn("capture", self.events)
+
+    def test_fractional_clock_does_not_exceed_the_confirmation_timeout(self):
+        self.use_clock_origin(15.3)
+        self.assertGreater((self.clock + 120) - self.clock, 120)
+        self.assertIs(self.run_fixture(), self.metadata)
+        self.assertIn("capture", self.events)
+
     def test_complete_mocked_sequence_preserves_order_and_closes_after_capture(self):
         self.assertIs(self.run_fixture(), self.metadata)
         for earlier, later in (
