@@ -152,6 +152,7 @@ override_data {
       SCRIBE_CALLER_CLIENT_ID            = ""
       SCRIBE_HANDOFF_ENABLED             = "false"
       SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
+      SCRIBE_CAPTURE_ENABLED             = "forbidden-generic-override"
       SENTRY_DSN                         = ""
       SESSION_SECRET_KEY                 = "not-a-secret"
       SMTP_URL                           = "smtp://placeholder.invalid:1025"
@@ -228,6 +229,195 @@ run "secretless_static_plan" {
     ])
     error_message = "No dormant source policy or non-API CAB capability may be exposed"
   }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.scribe_native_api_public_values :
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value
+    ]) && alltrue([for value in values(local.scribe_native_api_public_values) : value == "false" || value == ""])
+    error_message = "native Scribe and durable Zoom production settings must be explicit and dark by default"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      one([for entry in workload.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "false"
+    ])
+    error_message = "the durable Zoom cutover must remain consistently disabled on every production workload by default"
+  }
+
+  assert {
+    condition = alltrue([
+      for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
+      alltrue([
+        for name in setsubtract(toset(keys(local.scribe_native_api_public_values)), toset(keys(local.zoom_durable_public_values))) :
+        !contains([for entry in workload.template[0].container[0].env : entry.name], name)
+      ])
+    ])
+    error_message = "native device and encounter gates must remain API-only"
+  }
+
+  assert {
+    condition = alltrue([
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_WORKFLOW_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_HANDOFF_ENABLED"]) == "false",
+    ])
+    error_message = "the production wiring must not activate the unprovisioned external workflow or legacy handoff"
+  }
+}
+
+run "scribe_core_native_independent_projection" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = []
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = true
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = true
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_ENCOUNTER_CREATION_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "SCRIBE_CAPTURE_ENABLED"]) == "false",
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+      one([for entry in azurerm_container_app.scheduler.template[0].container[0].env : entry.value if entry.name == "ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED"]) == "true",
+    ])
+    error_message = "Core-native encounter and durable Zoom gates must project without activating the absent Scribe workflow"
+  }
+}
+
+run "scribe_capture_complete_projection" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    enable_scribe_workflow                         = true
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_service_base_url                        = "https://scribe.example.invalid"
+    scribe_service_scope                           = "api://00000000-0000-0000-0000-000000000000/.default"
+    scribe_native_production_rollout = {
+      capture_enabled                       = true
+      capture_long_visits_enabled           = true
+      capture_notes_enabled                 = true
+      capture_recovery_enabled              = true
+      capture_source_enabled                = true
+      capture_upload_origins                = ["https://uploads.example.invalid"]
+      capture_working_transcripts_enabled   = true
+      combined_session_preparation_enabled  = true
+      encounter_creation_enabled            = true
+      encounter_prep_enabled                = true
+      zoom_durable_capture_bindings_enabled = true
+    }
+  }
+
+  assert {
+    condition = alltrue([
+      for name, value in local.scribe_native_api_public_values :
+      one([for entry in azurerm_container_app.app.template[0].container[0].env : entry.value if entry.name == name]) == value
+    ]) && local.scribe_native_api_public_values.SCRIBE_CAPTURE_UPLOAD_ORIGINS == "https://uploads.example.invalid"
+    error_message = "a complete reviewed Scribe workflow must project every exact native gate and upload origin"
+  }
+}
+
+run "reject_capture_without_workflow" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = true
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://uploads.example.invalid"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_non_origin_upload_target" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = false
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = ["https://uploads.example.invalid/container?token=forbidden"]
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_subfeature_without_capture" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    scribe_native_production_rollout = {
+      capture_enabled                       = false
+      capture_long_visits_enabled           = false
+      capture_notes_enabled                 = true
+      capture_recovery_enabled              = false
+      capture_source_enabled                = false
+      capture_upload_origins                = []
+      capture_working_transcripts_enabled   = false
+      combined_session_preparation_enabled  = false
+      encounter_creation_enabled            = false
+      encounter_prep_enabled                = false
+      zoom_durable_capture_bindings_enabled = false
+    }
+  }
+
+  expect_failures = [var.scribe_native_production_rollout]
+}
+
+run "reject_controlled_rollout_name_in_api_only_secrets" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars = [
+      "RECALL_WEBHOOK_SECRET",
+      "SCRIBE_CAPTURE_ENABLED",
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    ]
+  }
+
+  expect_failures = [azurerm_container_app.app]
 }
 
 run "public_phi_observability_static_plan" {
