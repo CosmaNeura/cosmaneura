@@ -1,0 +1,18 @@
+{
+  "status": "RETAINED_REJECTED_OUTPUTS_NOT_REQUALIFIED",
+  "sourceHead": "8a929f0c403d1985f52f71f18091ef1e620ab8a4",
+  "cases": [
+    {
+      "id": "R2",
+      "sourceResponseSHA256": "d97b20d158a2e1b0443c852b1dc706866f8637da00890919073e750256c56ed9",
+      "originalStatus": "REJECTED_NO_NOTE",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,33,37,38]},\"fields\":{\"Subjective\":\"The patient reports dizziness that began twelve days ago (corrected from an earlier report of twenty days). The dizziness occurs when standing up quickly and lasts about thirty seconds. \\\"It does not last thirty minutes.\\\" The patient states, \\\"I have never fainted.\\\" The patient reports, \\\"I have no chest pain, no shortness of breath, and no fever.\\\" The patient notes, \\\"I did have a mild headache yesterday, but I do not have one today.\\\" The patient initially described the dizziness as severe but now corrects it to mild. They are able to walk and carry out their normal routine. In response to \\\"How many episodes occurred yesterday?\\\", the patient states, \\\"There were two episodes yesterday, not seven.\\\" The patient drinks about four glasses of water daily. The patient states, \\\"I have not started, stopped, or changed any medicine.\\\" The patient reports, \\\"My blood pressure reading at home was one hundred eighteen over seventy-two, not one hundred eighty over seventy-two.\\\"\\n\\nThe current medication list was not specified; only that no medicine was started, stopped, or changed.\",\"Objective\":\"Not mentioned in transcript.\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}"
+    },
+    {
+      "id": "R3",
+      "sourceResponseSHA256": "a10dae93ddad3d696ab6c2b1e4f84dc07340697e484ec20046d7c989a2e4caa6",
+      "originalStatus": "REJECTED_NO_NOTE",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[31,32,33,34,35,36]},\"fields\":{\"Subjective\":\"I am Avery Stone.\\nMy right shoulder became sore after moving boxes four days ago.\\nI first said left, but the correct side is right.\\nThe discomfort is mild at rest and increases when I reach overhead.\\nI have no fever or chest pain.\\nThere was no fall.\\nI have no numbness and no weakness.\\nThe pain does not travel down my arm.\\nI can hold a cup and get dressed.\\nMy current pain score is two out of ten.\\nI said four before thinking carefully, so please use two.\\nResting from heavy lifting has helped.\\nI have not taken any new medicine.\\nMy right shoulder is the affected side, not my left.\\nThere is still no numbness, weakness, fever, or chest pain.\",\"Objective\":\"No vital signs or physical examination findings were provided during this encounter.\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}"
+    }
+  ]
+}

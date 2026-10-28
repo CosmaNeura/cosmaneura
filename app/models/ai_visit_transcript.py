@@ -1,4 +1,7 @@
+from uuid import UUID
+
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import SerializerFunctionWrapHandler, field_serializer, model_serializer
 
 from activemodel import BaseModel
 from activemodel.mixins import (
@@ -27,6 +30,30 @@ class TranscriptEntry(PydanticBaseModel):
 
     endTime: int
     "in milliseconds"
+
+    source_speaker_id: UUID | None = None
+    "Transcript-local acoustic identity; never a clinical role or person identity."
+
+    def legacy_data(self) -> dict[str, object]:
+        """The existing delivery/deduplication contract excludes display metadata."""
+        return {
+            "speaker": self.speaker,
+            "content": self.content,
+            "startTime": self.startTime,
+            "endTime": self.endTime,
+        }
+
+    @field_serializer("source_speaker_id")
+    def serialize_identity(self, value: UUID | None) -> str | None:
+        # ActiveModel's JSONB encoder uses model_dump() in Python mode.
+        return str(value) if value is not None else None
+
+    @model_serializer(mode="wrap")
+    def omit_missing_identity(self, handler: SerializerFunctionWrapHandler):
+        data = handler(self)
+        if self.source_speaker_id is None:
+            data.pop("source_speaker_id", None)
+        return data
 
 
 class AIVisitTranscript(

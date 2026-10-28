@@ -10,14 +10,28 @@ runs:
         # SHA-256 published by the official 1Password Debian Packages index:
         # https://downloads.1password.com/linux/debian/amd64/dists/stable/main/binary-amd64/Packages
         OP_CLI_DEB_SHA256: 3d5230a1a57f6b7259a837e345fb7886614e20cd87b53640fa4a93c67c0b2bf1
+        # Exact same-version ARM64 package from the official 1Password URL.
+        OP_CLI_ARM64_DEB_SHA256: 22b9317202772b3e63d3beb5cbd2e53f2a8b018d8e0bd85664108bc132432a58
         OP_CLI_PACKAGE_VERSION: 2.39.0-1
         OP_CLI_VERSION: 2.39.0
       run: |
         set -euo pipefail
-        if [[ "$RUNNER_OS" != "Linux" || "$RUNNER_ARCH" != "X64" ]]; then
-          echo "The pinned 1Password CLI installer supports only Linux X64 runners." >&2
+        if [[ "$RUNNER_OS" != "Linux" ]]; then
+          echo "The pinned 1Password CLI installer supports only Linux runners." >&2
           exit 1
         fi
+        case "$RUNNER_ARCH" in
+          X64)
+            expected_architecture=amd64
+            url="https://downloads.1password.com/linux/debian/amd64/pool/main/1/1password-cli/1password-cli-${OP_CLI_PACKAGE_VERSION}.amd64.deb"
+            ;;
+          ARM64)
+            expected_architecture=arm64
+            OP_CLI_DEB_SHA256="$OP_CLI_ARM64_DEB_SHA256"
+            url="https://downloads.1password.com/linux/debian/arm64/pool/main/1/1password-cli/1password-cli-${OP_CLI_PACKAGE_VERSION}.arm64.deb"
+            ;;
+          *) echo "No pinned 1Password CLI package for this runner architecture." >&2; exit 1 ;;
+        esac
 
         install_root=$(mktemp -d "$RUNNER_TEMP/op-cli.XXXXXX")
         chmod 0700 "$install_root"
@@ -26,7 +40,6 @@ runs:
         extract_dir="$install_root/extracted"
         install_dir=$(mktemp -d "$RUNNER_TEMP/op-cli-bin.XXXXXX")
         chmod 0700 "$install_dir"
-        url="https://downloads.1password.com/linux/debian/amd64/pool/main/1/1password-cli/1password-cli-${OP_CLI_PACKAGE_VERSION}.amd64.deb"
 
         curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
           "$url" --output "$package"
@@ -38,7 +51,7 @@ runs:
         package_architecture=$(dpkg-deb --field "$package" Architecture)
         if [[ "$package_name" != "1password-cli" || \
               "$package_version" != "$OP_CLI_PACKAGE_VERSION" || \
-              "$package_architecture" != "amd64" ]]; then
+              "$package_architecture" != "$expected_architecture" ]]; then
           echo "The 1Password CLI package metadata does not match the pin." >&2
           exit 1
         fi

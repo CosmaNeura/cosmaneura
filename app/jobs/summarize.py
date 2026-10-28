@@ -54,7 +54,12 @@ def _capture_owns_appointment(session: Session, appointment_id: TypeIDType) -> b
     )
 
 
-def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
+def perform(
+    transcript_id: str | TypeIDType,
+    schema_id: str | TypeIDType,
+    *,
+    note_policy: str | None = None,
+):
     log.info(
         "starting summarization",
         transcript_ref=provider_log_ref(str(transcript_id)),
@@ -149,11 +154,22 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         segment_count=len(all_transcripts),
         merged_duration=merged.duration,
     )
+    policy_args = {}
+    if note_policy is not None:
+        from app.services import zoom_bot_note_policy
+        from app.services.zoom_bot_note_grounding import segment_boundaries
+
+        if note_policy == zoom_bot_note_policy.POLICY and zoom_bot_note_policy.eligible(
+            trigger, doctor
+        ):
+            policy_args["bot_fidelity"] = True
+            policy_args["bot_segment_boundaries"] = segment_boundaries(all_transcripts)
     note = generate_clinical_note(
         transcript=merged,
         example_note=example,
         note_schema=schema,
         customization=customization,  # None -> platform defaults
+        **policy_args,
     )
 
     log.info("augmenting clinical note")
@@ -445,10 +461,23 @@ def _merge_transcripts(
 
 
 perform_celery = celery_app.task(perform)
+perform_bot_celery = celery_app.task(
+    perform,
+    name="app.jobs.summarize.perform_bot",
+    autoretry_for=(),
+    max_retries=0,
+)
 
 
 def queue(*args, **kwargs):
     log.info("queuing summarization job")
+    from app.services.zoom_bot_note_policy import POLICY
+
+    if kwargs.get("note_policy") == POLICY:
+        # The pilot has one generation attempt, including transport or commit
+        # failures. A broker redelivery still uses the durable note replay guard.
+        perform_bot_celery.delay(*args, **kwargs)
+        return
     perform_celery.delay(*args, **kwargs)
 
 
@@ -698,7 +727,20 @@ def generate_clinical_note(
     example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
     customization: NoteTypeCustomization | None = None,
+    *,
+    bot_fidelity: bool = False,
+    bot_segment_boundaries: tuple[int, ...] = (),
 ) -> dict[str, str]:
+    if bot_fidelity:
+        from app.services.zoom_bot_note_grounding import generate_grounded_note
+
+        return generate_grounded_note(
+            transcript,
+            example_note,
+            note_schema,
+            customization,
+            boundaries=bot_segment_boundaries,
+        )
     prompt = build_structured_prompt(
         transcript, example_note, note_schema, customization
     )

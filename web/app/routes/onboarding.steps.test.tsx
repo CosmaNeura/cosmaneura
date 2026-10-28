@@ -20,7 +20,41 @@ vi.mock("~/components/shared/PracticeJoinPanel", () => ({
   PracticeJoinPanel: () => null,
 }))
 
+function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
+  return {
+    legal_name: "Pilot Organization",
+    join_code: "PILOT123",
+    email_domain: "example.com",
+    origin_channel: "direct",
+    pastoral_pack: false,
+    baa_accepted: true,
+    role: "owner",
+    attested: false,
+    access_authorized: true,
+    authorization_basis: "organization_roster",
+    access_revoked: false,
+    access_ends_at: null,
+    access_ended: false,
+    pilot_access_grant_active: false,
+    trial_ends_at: null,
+    billing_exempt: true,
+    billing_exempt_until: null,
+    billing_exempt_active: true,
+    billing_enabled: false,
+    billing_management_enabled: false,
+    billing_portal_available: false,
+    billing_checkout_resumable: false,
+    billing_subscription_manageable: false,
+    billing_checkout_available_at: null,
+    entitled: true,
+    subscription_status: null,
+    seat_summary: null,
+    ...overrides,
+  }
+}
+
 beforeEach(() => {
+  window.history.replaceState({}, "", "/onboarding")
   client.updateSettingsData.mockReset()
   client.completeOnboarding.mockReset()
   toast.mockReset()
@@ -87,12 +121,75 @@ describe("onboarding biography step", () => {
 })
 
 describe("onboarding final step", () => {
+  it("routes an owner with paused billing to recovery without claiming readiness", async () => {
+    client.completeOnboarding.mockResolvedValue({
+      data: null,
+      error: undefined,
+    })
+    render(
+      <AllSetStep
+        practice={practice({
+          entitled: false,
+          billing_exempt: false,
+          billing_exempt_active: false,
+        })}
+      />,
+    )
+    expect(
+      screen.getByRole("heading", { name: "Your practice setup is saved" }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Cosmas is ready/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "Review billing" }))
+    await waitFor(() => expect(window.location.pathname).toBe("/settings"))
+    expect(new URLSearchParams(window.location.search).get("billing")).toBe(
+      "required",
+    )
+    expect(new URLSearchParams(window.location.search).get("returnTo")).toBe(
+      "/notes",
+    )
+    expect(client.completeOnboarding).toHaveBeenCalledOnce()
+  })
+
+  it("directs an unentitled workforce member to their practice owner", async () => {
+    render(
+      <AllSetStep
+        practice={practice({ entitled: false, role: "workforce" })}
+      />,
+    )
+    expect(
+      screen.getByText(/practice owner needs to restore billing/),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Review practice access" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Review billing" }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("keeps server-confirmed pilot access ready without a practice subscription", async () => {
+    render(
+      <AllSetStep
+        practice={practice({
+          entitled: false,
+          pilot_access_grant_active: true,
+        })}
+      />,
+    )
+    expect(
+      screen.getByRole("heading", { name: "You're all set!" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Go to Cosmas" }),
+    ).toBeInTheDocument()
+  })
+
   it("goes to notes once setup is complete", async () => {
     client.completeOnboarding.mockResolvedValue({
       data: null,
       error: undefined,
     })
-    render(<AllSetStep practice={{} as PracticeStatus} />)
+    render(<AllSetStep practice={practice()} />)
 
     fireEvent.click(screen.getByRole("button", { name: "Go to Cosmas" }))
 
@@ -107,7 +204,7 @@ describe("onboarding final step", () => {
           "Name or join a practice and accept the BAA before using Cosmas.",
       },
     })
-    render(<AllSetStep practice={{} as PracticeStatus} />)
+    render(<AllSetStep practice={practice()} />)
 
     fireEvent.click(screen.getByRole("button", { name: "Go to Cosmas" }))
 
@@ -127,7 +224,7 @@ describe("onboarding final step", () => {
       error: { detail: "x" },
     })
     const start = window.location.href
-    render(<AllSetStep practice={{} as PracticeStatus} />)
+    render(<AllSetStep practice={practice()} />)
 
     fireEvent.click(screen.getByRole("button", { name: "Go to Cosmas" }))
 

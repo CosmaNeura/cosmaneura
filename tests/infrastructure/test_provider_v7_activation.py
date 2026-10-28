@@ -167,7 +167,7 @@ def _decode_build_arguments(output: bytes) -> dict[str, str]:
 
 def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
-    manual = _read(".github/workflows/build_and_publish_manual.yml")
+    manual = _read(".github/workflows/build_and_publish_local.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
 
     # Only the canonical candidate workflow deploys staging, so only it may
@@ -183,7 +183,7 @@ def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
 def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak() -> (
     None
 ):
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     canonical = _read(".github/workflows/deploy_staging_candidate.yml")
     production_resolve = _frontend_resolve_step(workflow, "production")
     exact_boolean_check = f'(.{FRONTEND_FLAG} == "true" or .{FRONTEND_FLAG} == "false")'
@@ -363,5 +363,5 @@ def test_provider_v7_control_does_not_leak_into_production_paths() -> None:
         assert CONTROL not in source
         assert PROVIDER_ORIGIN not in source
 
-    workflow = _read(".github/workflows/build_and_publish_manual.yml")
+    workflow = _read(".github/workflows/build_and_publish_local.yml")
     assert CONTROL not in workflow

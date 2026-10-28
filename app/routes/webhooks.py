@@ -32,6 +32,10 @@ MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 _EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
 RECALL_SUPPORTED_EVENT_TYPES = frozenset(
     {
+        "bot.recording_permission_denied",
+        "bot.call_ended",
+        "bot.done",
+        "bot.fatal",
         "recording.done",
         "transcript.done",
         "transcript.failed",

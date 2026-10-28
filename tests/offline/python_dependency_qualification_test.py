@@ -4,17 +4,17 @@ import importlib.util
 import json
 import subprocess
 import sys
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-pytest.importorskip(
+codegen = pytest.importorskip(
     "datamodel_code_generator", reason="Requires the debugging-extras group"
 )
-import datamodel_code_generator as codegen  # noqa: E402
-from datamodel_code_generator import Error, InputFileType, generate  # noqa: E402
-from filelock import FileLock  # noqa: E402
+Error, InputFileType, generate = codegen.Error, codegen.InputFileType, codegen.generate
+FileLock = import_module("filelock").FileLock
 
 # The legacy generator re-exported this enum but did not have an enums module.
 DataModelType = getattr(codegen, "DataModelType")

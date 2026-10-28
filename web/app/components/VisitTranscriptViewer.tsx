@@ -74,6 +74,16 @@ export default function VisitTranscriptViewer({
     )
   }
 
+  const speakerNumbers = new Map<string, number>()
+  for (const entry of transcript.transcript_data) {
+    if (
+      entry.source_speaker_id &&
+      !speakerNumbers.has(entry.source_speaker_id)
+    ) {
+      speakerNumbers.set(entry.source_speaker_id, speakerNumbers.size + 1)
+    }
+  }
+
   return (
     <Collapsible open={isOpen} onOpenChange={setOpen}>
       <div className="flex items-start">
@@ -95,14 +105,31 @@ export default function VisitTranscriptViewer({
         <div className="text-muted-foreground mb-2 text-sm italic">
           <RetentionNotice createdAt={transcript.created_at} />
         </div>
-        {transcript.transcript_data.map((transcriptEntry: TranscriptEntry) => {
-          return (
-            <div className="mb-2 break-words" key={transcriptEntry.startTime}>
-              <span className="font-bold">{transcriptEntry.speaker}: </span>
-              {transcriptEntry.content}
-            </div>
-          )
-        })}
+        {speakerNumbers.size > 0 && (
+          <p className="text-muted-foreground mb-2 text-sm">
+            Speaker numbers distinguish voices within this transcript. They do
+            not identify people or confirm clinical roles.
+          </p>
+        )}
+        {transcript.transcript_data.map(
+          (transcriptEntry: TranscriptEntry, index) => {
+            const number = transcriptEntry.source_speaker_id
+              ? speakerNumbers.get(transcriptEntry.source_speaker_id)
+              : undefined
+            const label = number
+              ? `Speaker ${number} (${transcriptEntry.speaker === "Unknown" ? "role unknown" : transcriptEntry.speaker})`
+              : transcriptEntry.speaker
+            return (
+              <div
+                className="mb-2 break-words"
+                key={`${transcriptEntry.source_speaker_id ?? "legacy"}:${transcriptEntry.startTime}:${index}`}
+              >
+                <span className="font-bold">{label}: </span>
+                {transcriptEntry.content}
+              </div>
+            )
+          },
+        )}
       </CollapsibleContent>
     </Collapsible>
   )

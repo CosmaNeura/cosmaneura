@@ -5,8 +5,13 @@ from typing import Any
 import app.jobs.transcribe as transcribe_job
 from app import log
 from app.configuration.redis import get_redis
+from app.configuration.zoom import ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED
 from app.services import recall as recall_service
-from app.services import recall_webhook_operations
+from app.services import (
+    recall_webhook_operations,
+    zoom_capture_bindings,
+    zoom_capture_status,
+)
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
@@ -37,8 +42,12 @@ def handle_recording_done(payload: dict[str, Any]) -> None:
         raise PermanentWebhookError()
     recording_id = _required_id(data, "recording")
 
-    redis = get_redis()
-    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
+    if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+        binding = zoom_capture_bindings.for_recording(recording_id)
+        doctor_id = binding.doctor_id if binding else None
+    else:
+        redis = get_redis()
+        doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
     if not doctor_id:
         log.warning(
             "recall recording tenant mapping unavailable",
@@ -110,14 +119,20 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
         )
         return
 
-    redis = get_redis()
     # A bot can span more than one provider recording, so bot-scoped tenant
     # keys are not encounter authority.  Require the exact recording ID that
     # _start_appointment_session bound; an old/discarded segment ID must fail
     # closed instead of inheriting a prior patient's chart from the bot.
-    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
-    appointment_id = _rget(redis, f"recall:recording:{recording_id}:appointment_id")
-    patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id")
+    if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+        binding = zoom_capture_bindings.for_recording(recording_id, bot_id=bot_id)
+        doctor_id = binding.doctor_id if binding else None
+        appointment_id = binding.appointment_id if binding else None
+        patient_id = binding.patient_id if binding else None
+    else:
+        redis = get_redis()
+        doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
+        appointment_id = _rget(redis, f"recall:recording:{recording_id}:appointment_id")
+        patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id")
     if not doctor_id or not appointment_id or not patient_id:
         log.warning(
             "recall transcript tenant mapping unavailable",
@@ -247,6 +262,10 @@ def _compute_duration_seconds(entries: list[TranscriptEntry]) -> int:
 
 
 HANDLERS = {
+    **{
+        event: zoom_capture_status.handle_bot_terminal
+        for event in zoom_capture_status.EVENTS
+    },
     "recording.done": handle_recording_done,
     "transcript.done": handle_transcript_done,
     "transcript.failed": handle_transcript_failed,

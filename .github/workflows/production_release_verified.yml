@@ -1,0 +1,248 @@
+name: Release verified production
+
+# One-time release after an exact stale test assertion repair. Reuse only the
+# immutable original run plus the exact separately accepted clinical delta.
+# Every production byte must match that reviewed source composition.
+on:
+  workflow_dispatch:
+    inputs:
+      github_hosted_fallback_authorized:
+        type: boolean
+        description: "Authorize the hosted build and deployment"
+        required: true
+        default: false
+      reviewed_commit:
+        type: string
+        description: "Exact independently reviewed repair commit merged into master"
+        required: true
+      local_assertion_repair_verified:
+        type: boolean
+        description: "Attest that the sole failed equality assertion passed locally after the exact repair"
+        required: true
+        default: false
+      terraform_apply_run_id:
+        type: string
+        description: "Successful applicable production Terraform Apply run"
+        required: true
+      provider_signed_recall_callback_verified:
+        type: boolean
+        description: "Attest that the real signed synthetic Recall callback passed before release"
+        required: true
+        default: false
+
+concurrency:
+  group: Build & Publish-${{ github.ref }}
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLUMNS: 120
+jobs:
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    concurrency:
+      group: cosmaneura-production-container-apps
+      cancel-in-progress: false
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        inputs.github_hosted_fallback_authorized
+      }}
+    environment: production
+    env:
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+      # TODO why exactly do we need id-token here?
+      id-token: write
+    steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact prior acceptance and unchanged production source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          LOCAL_ASSERTION_REPAIR_VERIFIED: ${{ inputs.local_assertion_repair_verified }}
+        run: python3 scripts/verify_one_time_release_reuse.py
+      - name: Require provider-signed callback gate for manual production deploy
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PROVIDER_CALLBACK_VERIFIED: ${{ inputs.provider_signed_recall_callback_verified }}
+        run: |
+          if [[ "$PROVIDER_CALLBACK_VERIFIED" != "true" ]]; then
+            echo "A real provider-signed non-PHI Recall callback must pass before production deploy." >&2
+            exit 1
+          fi
+      - name: Verify successful applicable Terraform Apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            TERRAFORM_APPLY_RUN_ID=$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply_local.yml/runs?branch=master&event=workflow_dispatch&status=success&per_page=1" \
+                --jq '.workflow_runs[0].id // empty'
+            )
+          fi
+          if [[ ! "$TERRAFORM_APPLY_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "No successful Terraform Apply is available for this production deploy." >&2
+            exit 1
+          fi
+          mapfile -t apply_run < <(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TERRAFORM_APPLY_RUN_ID" \
+              --jq '[.name, .path, .conclusion, .event, .head_branch, .head_sha] | .[]'
+          )
+          if [[ "${apply_run[0]:-}" != "Terraform Apply" || \
+                "${apply_run[1]:-}" != ".github/workflows/infra_apply_local.yml" || \
+                "${apply_run[2]:-}" != "success" || \
+                "${apply_run[4]:-}" != "master" ]]; then
+            echo "The supplied run is not a successful Terraform Apply on master." >&2
+            exit 1
+          fi
+          if [[ "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
+            echo "The supplied Terraform Apply run has an invalid trigger." >&2
+            exit 1
+          fi
+          apply_sha="${apply_run[5]:-}"
+          if [[ -z "$apply_sha" ]] || \
+             ! git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"; then
+            echo "The supplied Terraform Apply commit is not an ancestor of this deploy." >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
+            infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+            Justfile just Procfile .github/actions \
+            .github/workflows/infra_apply_local.yml \
+            .github/workflows/infra_production_plan_local.yml \
+            .github/workflows/build_and_publish.yml \
+            .github/workflows/build_and_publish_local.yml \
+            .github/workflows/infra_production_plan.yml .github/workflows/infra_apply.yml \
+            .github/workflows/build_and_publish_manual.yml .env.shared docker-compose.yml \
+            scripts/local_release_runner.py scripts/local_ci_services.py scripts/local-runner; then
+            echo "Production infrastructure changed after the supplied Terraform Apply." >&2
+            exit 1
+          fi
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          # deploy only builds/pushes the image + calls Azure; ffmpeg & friends
+          # are baked into the image, not needed on the host (only zsh, for `just`)
+          apt-packages: zsh
+
+      # This verified tool install runs before registry authentication and
+      # before any production secret is bound to a build/deploy step.
+      - uses: ./.github/actions/install-nixpacks
+
+      - name: Resolve production frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+
+      # NOTE registry/Azure vars resolve at step level so the environment scope
+      # is active during evaluation — job-level env blocks miss environment vars
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+      - name: Build production images from resolved public configuration
+        run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          PYTHON_ENV: production
+      - name: Remove resolved production frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify current master before publishing production images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced during the build; refusing to publish stale images." >&2
+            exit 1
+          fi
+      - run: just build_push
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          PYTHON_ENV: production
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Reverify current master before production deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced before deployment; refusing to mutate Azure from a stale commit." >&2
+            exit 1
+          fi
+
+      - name: Deploy to Azure
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          CONTAINER_REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+        run: |
+          cd infra && bash deploy.sh ${{ github.sha }}

@@ -24,7 +24,7 @@ async function open() {
   render(<NoteTemplateFieldsEditor schemaId="schema-1" onSaved={onSaved} />)
   expect(getFields).not.toHaveBeenCalled()
   fireEvent.click(
-    screen.getByRole("button", { name: "Edit headings and guidance" }),
+    screen.getByRole("button", { name: "Edit sections and guidance" }),
   )
   await screen.findByLabelText("Heading 1")
   return onSaved
@@ -103,13 +103,13 @@ describe("NoteTemplateFieldsEditor", () => {
     getFields.mockResolvedValueOnce({ response: { status: 503 } })
     render(<NoteTemplateFieldsEditor schemaId="schema-1" onSaved={vi.fn()} />)
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit headings and guidance" }),
+      screen.getByRole("button", { name: "Edit sections and guidance" }),
     )
     await screen.findByRole("alert")
     expect(updateFields).not.toHaveBeenCalled()
     expect(screen.queryByRole("status")).not.toBeInTheDocument()
     fireEvent.click(
-      screen.getByRole("button", { name: "Edit headings and guidance" }),
+      screen.getByRole("button", { name: "Edit sections and guidance" }),
     )
     await screen.findByLabelText("Heading 1")
     fireEvent.change(screen.getByLabelText("Heading 1"), {
@@ -120,5 +120,41 @@ describe("NoteTemplateFieldsEditor", () => {
     await screen.findByRole("alert")
     expect(screen.getByLabelText("Heading 1")).toHaveValue("Plan")
     expect(screen.queryByRole("status")).not.toBeInTheDocument()
+  })
+
+  it("adds, moves and removes sections while Undo retains the exact removed guidance", async () => {
+    await open()
+    fireEvent.click(screen.getByRole("button", { name: "Move section 2 up" }))
+    expect(screen.getByLabelText("Heading 1")).toHaveValue("Plan")
+    expect(screen.getByLabelText("Guidance 1")).toHaveValue("Discussed plan")
+    fireEvent.click(screen.getByRole("button", { name: "Remove section 2" }))
+    expect(
+      screen.getByRole("button", { name: "Remove section 1" }),
+    ).toBeDisabled()
+    fireEvent.click(screen.getByRole("button", { name: "Undo removal" }))
+    expect(screen.getByLabelText("Heading 2")).toHaveValue("Labs - 02/12/2026")
+    expect(screen.getByLabelText("Guidance 2")).toHaveValue("Discussed tests")
+    fireEvent.click(screen.getByRole("button", { name: "Add section" }))
+    fireEvent.change(screen.getByLabelText("Heading 3"), {
+      target: { value: "Custom follow-up" },
+    })
+    const fields = [
+      baseline.fields[1],
+      baseline.fields[0],
+      { heading: "Custom follow-up", guidance: "" },
+    ]
+    updateFields.mockResolvedValue({
+      data: { revision: "b".repeat(64), fields },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save template" }))
+    await screen.findByText("Template saved.")
+    expect(updateFields).toHaveBeenCalledWith({
+      path: { schema_id: "schema-1" },
+      body: { expected_revision: baseline.revision, fields },
+    })
+    expect(baseline.fields[0]).toEqual({
+      heading: "Labs - 02/12/2026",
+      guidance: "Discussed tests",
+    })
   })
 })

@@ -532,6 +532,76 @@
         }
       }
     },
+    "/internal/v1/note-template-preference": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Get Note Template Preference",
+        "operationId": "get_note_template_preference",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreference"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Note Template Preference",
+        "operationId": "update_note_template_preference",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTemplatePreference"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplatePreference"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/note-schemas/{schema_id}/fields": {
       "get": {
         "tags": [
@@ -632,6 +702,53 @@
             }
           }
         }
+      }
+    },
+    "/internal/v1/note-schemas": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Note Template",
+        "description": "A name is unique for this owner; identical retries never create duplicates.",
+        "operationId": "create_note_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNoteTemplate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedNoteTemplate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/notes/{appointment_id}/private-note": {
@@ -4333,6 +4450,32 @@
         ],
         "title": "CreateMedication"
       },
+      "CreateNoteTemplate": {
+        "properties": {
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Fields"
+          },
+          "note_type": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fields",
+          "note_type"
+        ],
+        "title": "CreateNoteTemplate"
+      },
       "CreatePracticeBody": {
         "properties": {
           "legal_name": {
@@ -4403,6 +4546,38 @@
           "email"
         ],
         "title": "CreatePracticeInvitationBody"
+      },
+      "CreatedNoteTemplate": {
+        "properties": {
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateField"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "schema_id": {
+            "type": "string",
+            "title": "Schema Id"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "revision",
+          "fields",
+          "schema_id",
+          "note_type"
+        ],
+        "title": "CreatedNoteTemplate"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -7275,6 +7450,33 @@
         ],
         "title": "TemplateFields"
       },
+      "TemplatePreference": {
+        "properties": {
+          "default_schema_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Schema Ref"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "default_schema_ref",
+          "revision"
+        ],
+        "title": "TemplatePreference"
+      },
       "Terminology": {
         "type": "string",
         "enum": [
@@ -7364,6 +7566,17 @@
           "endTime": {
             "type": "integer",
             "title": "Endtime"
+          },
+          "source_speaker_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Speaker Id"
           }
         },
         "type": "object",
@@ -7603,11 +7816,6 @@
       },
       "UpdateTemplateFields": {
         "properties": {
-          "expected_revision": {
-            "type": "string",
-            "pattern": "^[a-f0-9]{64}$",
-            "title": "Expected Revision"
-          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/TemplateField"
@@ -7616,15 +7824,48 @@
             "maxItems": 100,
             "minItems": 1,
             "title": "Fields"
+          },
+          "expected_revision": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$",
+            "title": "Expected Revision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "fields",
+          "expected_revision"
+        ],
+        "title": "UpdateTemplateFields"
+      },
+      "UpdateTemplatePreference": {
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Revision"
+          },
+          "default_schema_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Schema Ref"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "expected_revision",
-          "fields"
+          "default_schema_ref"
         ],
-        "title": "UpdateTemplateFields"
+        "title": "UpdateTemplatePreference"
       },
       "UsageResponse": {
         "properties": {
@@ -8035,6 +8276,22 @@
           "capture_authorized": {
             "type": "boolean",
             "title": "Capture Authorized"
+          },
+          "capture_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "permission_denied",
+                  "ended",
+                  "failed"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Status"
           }
         },
         "additionalProperties": false,

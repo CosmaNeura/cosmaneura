@@ -8,6 +8,7 @@ import selectors
 import socket
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -29,9 +30,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.exc import TimeoutError as PoolTimeout
 from sqlalchemy.pool import QueuePool
 
+PROVIDER_CLIENT_ID = "11111111-1111-4111-8111-111111111111"
+
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch):
+    monkeypatch.setattr(
+        bounds,
+        "SOVEREIGN_TOOL_AUTH_SETTINGS",
+        replace(
+            bounds.SOVEREIGN_TOOL_AUTH_SETTINGS,
+            sovereign_client_ids=frozenset({PROVIDER_CLIENT_ID}),
+        ),
+    )
     monkeypatch.setattr(bounds, "_engine", None)
     monkeypatch.setattr(bounds, "_dns_slots", threading.BoundedSemaphore(2))
     monkeypatch.setattr(bounds, "POOL_SECONDS", 0.05)
@@ -644,7 +655,11 @@ def test_nonprovider_and_disabled_work_use_original_context(monkeypatch):
         "get_engine",
         lambda: pytest.fail("global engine should not be read"),
     )
-    for workload, enabled in [("scribe", True), (None, True), ("provider", False)]:
+    for workload, enabled in [
+        ("scribe", True),
+        (None, True),
+        (PROVIDER_CLIENT_ID, False),
+    ]:
         with bounds.provider_receiver_session(
             workload, threading.Event(), SimpleNamespace(enabled=enabled)
         ):
@@ -658,7 +673,7 @@ def test_owned_session_is_shared_by_nested_calls_and_restored(monkeypatch):
     token = bounds.session_manager._session_context.set(prior)
     try:
         with bounds.provider_receiver_session(
-            "provider", threading.Event(), SimpleNamespace(enabled=True)
+            PROVIDER_CLIENT_ID, threading.Event(), SimpleNamespace(enabled=True)
         ):
             current = bounds.session_manager._session_context.get()
             assert current is not prior
@@ -678,7 +693,7 @@ def test_session_setup_failure_and_pool_timeout_restore_context(monkeypatch):
     )
     with pytest.raises(bounds.ProviderDatabaseDeadlineExceeded):
         with bounds.provider_receiver_session(
-            "provider", threading.Event(), SimpleNamespace(enabled=True)
+            PROVIDER_CLIENT_ID, threading.Event(), SimpleNamespace(enabled=True)
         ):
             pytest.fail("work should not run")
     assert (
@@ -693,7 +708,7 @@ def test_already_active_session_is_not_retargeted():
     try:
         with pytest.raises(bounds.ProviderDatabaseDeadlineExceeded):
             with bounds.provider_receiver_session(
-                "provider", threading.Event(), SimpleNamespace(enabled=True)
+                PROVIDER_CLIENT_ID, threading.Event(), SimpleNamespace(enabled=True)
             ):
                 pytest.fail("transaction must not move")
         assert bounds.session_manager._session_context.get() is prior
@@ -773,7 +788,7 @@ def test_real_retained_route_worker_receives_cancellation(monkeypatch, actual_sc
 
     async def scenario():
         task = asyncio.create_task(
-            ns["_run_agent_database"](work, receiver_workload="provider")
+            ns["_run_agent_database"](work, receiver_workload=PROVIDER_CLIENT_ID)
         )
         deadline = time.monotonic() + 1
         while not entered.is_set():

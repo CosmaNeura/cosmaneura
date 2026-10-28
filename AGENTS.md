@@ -15,6 +15,16 @@ that work; it does not replace decomposition or deployed-state reconciliation.
   Production and staging run on Azure Container Apps.
 - Install: `just setup` (macOS local setup; creates local configuration).
 - Full test: `just py_test && just js_test`.
+- PR validation (`Pull Request Checks`, `Change budget`, and secretless
+  `Terraform Plan`) uses standard GitHub-hosted Ubuntu 24.04 runners for this
+  public repository, as authorized by the owner on 2026-10-28. Local acceptance
+  remains available. Production plan/apply use native local runners.
+  On 2026-10-27 the owner authorized
+  a hosted release fallback after local Docker image-pull readiness failed.
+  `Build & Publish (manual)` may use hosted Ubuntu only with explicit founder
+  opt-in on exact master; its acceptance and promotion gates remain mandatory.
+  Other tracked workflows retain their existing compute controls.
+  Never rerun retired hosted deployment snapshots.
 - Focused test: `uv run pytest <path>`.
 - Lint/typecheck: `just lint`.
 - Local development: `just dev`.
@@ -189,6 +199,6 @@ issue when it is done.
 
 ### Known limits
 
-- CI is off.
+- PR checks use GitHub-hosted runners; workflow enablement is a separate setting.
 - Stripe checkout may fail because of a Clerk permission issue.
 - Recording-start timing needs a real iPhone and is out of scope.

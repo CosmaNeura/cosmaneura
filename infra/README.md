@@ -216,9 +216,9 @@ that use a protected deployment environment.
 
 | Workflow | Used by | Subject claim |
 | --- | --- | --- |
-| `infra_apply.yml` (manual attested-plan apply) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `infra_production_plan.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `build_and_publish_manual.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `infra_apply_local.yml` (manual attested-plan apply) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `infra_production_plan_local.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `build_and_publish_local.yml` (production deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 | `deploy_staging_candidate.yml` (staging candidate deploy) | `environment: staging` | `repo:CosmaNeura/cosmaneura:environment:staging` |
 
 The three production rows share the production environment subject, so one

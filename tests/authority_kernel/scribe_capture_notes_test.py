@@ -40,7 +40,7 @@ class FakeModel:
     def __init__(self):
         self.calls = []
         self.after = None
-        self.output = '{"Plan":"Discuss sleep at follow-up.","CC":"Sleep"}'
+        self.output = '{"Plan":"","CC":"Sleep"}'
 
     async def complete(self, prompt, *, json_output):
         self.calls.append((prompt, json_output))
@@ -262,7 +262,7 @@ async def test_invalid_output_retains_source_and_retry_can_succeed(
         await notes.capture_note(**kwargs)
     assert not str(error.value)
     assert not rows(f, AIVisitNote)
-    f.model.output = '{"CC":"Sleep","Plan":"Discuss sleep at follow-up."}'
+    f.model.output = '{"CC":"Sleep","Plan":""}'
     assert (await notes.capture_note(**kwargs)).status == "draft"
     assert len(rows(f, AIVisitTranscript)) == len(rows(f, AIVisitNote)) == 1
 
@@ -564,6 +564,41 @@ async def test_existing_core_content_is_linked_once_without_regeneration(
         == len(rows(f, AIVisitNote))
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_template_section_changes_preserve_the_actual_existing_note(
+    admission_case, monkeypatch
+):
+    from fastapi import Request
+
+    from app.routes import note_template_fields as templates
+
+    f = admission_case
+    kwargs = await setup(f, monkeypatch)
+    first = await notes.capture_note(**kwargs)
+    monkeypatch.setattr(templates, "get_session", lambda: Session(f.engine))
+    request = Request({"type": "http", "state": {"doctor": f.case.doctor}})
+    before = templates.get_note_template_fields(request, f.schema_ref)
+    templates.update_note_template_fields(
+        request,
+        f.schema_ref,
+        templates.UpdateTemplateFields(
+            expected_revision=before.revision,
+            fields=[
+                templates.TemplateField(
+                    heading="Custom follow-up", guidance="Only discussed follow-up"
+                )
+            ],
+        ),
+    )
+    current = await notes.capture_note(**{**kwargs, "prepare": False})
+    assert current.note_ref == first.note_ref
+    assert current.note_sha256 == first.note_sha256
+    assert current.field_order == first.field_order
+    assert current.fields == first.fields
+    assert len(f.model.calls) == 1
+    assert len(rows(f, AIVisitNote)) == 1
 
 
 @pytest.mark.asyncio

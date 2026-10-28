@@ -42,6 +42,7 @@ from app.services.scribe_capture_deadline import (
 from app.services.scribe_capture_notebook import ScratchNotes
 from app.services.scribe_capture_protocol import CaptureOperation
 from app.services.scribe_configured_capture_contract import ConfiguredCaptureSelection
+from app.services.scribe_failure_diagnostics import report_unconfirmed
 from app.services.scribe_workflow import (
     ScribeWorkflowClient,
     build_scribe_workflow_client,
@@ -144,13 +145,23 @@ class NoteRequest(NoteScopeRequest):
     schema_ref: str | None = Field(
         default=None, pattern=r"^doctor_note_schema_[0-7][0-9a-hjkmnp-tv-z]{25}$"
     )
-    action: Literal["read", "prepare", "templates", "save", "resolve", "save_status"]
+    action: Literal[
+        "read",
+        "prepare",
+        "templates",
+        "template_preference",
+        "save",
+        "resolve",
+        "save_status",
+    ]
     edit: note_edits.NoteEdit | None = None
     scratch_notes: ScratchNotes | None = None
 
     @model_validator(mode="after")
     def template_selection(self) -> NoteRequest:
-        if (self.action == "templates") != (self.schema_ref is None):
+        if (self.action in {"templates", "template_preference"}) != (
+            self.schema_ref is None
+        ):
             raise ValueError("invalid_template_selection")
         if (self.action in {"save", "resolve", "save_status"}) != (
             self.edit is not None
@@ -364,7 +375,10 @@ async def perform_capture_operation(
         admission.AdmissionError,
         gateway.CaptureOperationUnconfirmed,
         SQLAlchemyError,
-    ):
+    ) as error:
+        report_unconfirmed(
+            boundary="capture_operation", operation=data.operation.kind, error=error
+        )
         return _admission_problem(503, "CAPTURE_OPERATION_UNCONFIRMED", retryable=True)
     finally:
         try:
@@ -481,6 +495,14 @@ async def prepare_or_read_note(
         async with asyncio.timeout(NOTE_REQUEST_TIMEOUT_SECONDS):
             if data.action == "templates":
                 receipt = await notes.capture_note_templates(
+                    caller=caller,
+                    binding_ref=data.binding_ref,
+                    workspace_id=data.workspace_id,
+                    expected_session_id=data.expected_session_id,
+                    client=client,
+                )
+            elif data.action == "template_preference":
+                receipt = await notes.capture_template_preference(
                     caller=caller,
                     binding_ref=data.binding_ref,
                     workspace_id=data.workspace_id,

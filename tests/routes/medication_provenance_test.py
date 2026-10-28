@@ -42,7 +42,8 @@ def test_inconsistent_foreign_source_provenance_is_not_exposed():
     other = DoctorFactory.build().save()
     other_patient = PatientFactory.build(doctor_id=other.id).save()
     source = AppointmentFactory.build(
-        doctor_id=other.id, patient_id=other_patient.id,
+        doctor_id=other.id,
+        patient_id=other_patient.id,
     ).save()
     row = PatientMedication(
         doctor_id=doctor.id,

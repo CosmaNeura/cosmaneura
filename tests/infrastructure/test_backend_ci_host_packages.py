@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 LOCALIAS_WORKFLOWS = (
     ".github/workflows/pull_request_checks.yml",
-    ".github/workflows/build_and_publish_manual.yml",
+    ".github/workflows/build_and_publish_local.yml",
     ".github/workflows/deploy_staging_candidate.yml",
 )
 
@@ -53,7 +53,7 @@ def test_localias_install_is_version_and_digest_pinned() -> None:
 
 
 def test_backend_ci_installs_only_each_shards_required_host_dependencies() -> None:
-    workflow = (ROOT / ".github/workflows/build_and_publish_manual.yml").read_text(
+    workflow = (ROOT / ".github/workflows/build_and_publish_local.yml").read_text(
         encoding="utf-8"
     )
     quality = workflow[
@@ -62,7 +62,7 @@ def test_backend_ci_installs_only_each_shards_required_host_dependencies() -> No
     tests = workflow[workflow.index("  backend-tests:\n") : workflow.index("  app:\n")]
     quality_setup = quality[
         quality.index("      - uses: ./.github/actions/common-setup") : quality.index(
-            "      - run: just up --fast"
+            "      - run: just py_setup"
         )
     ]
     assert "iloveitaly/github-action-localias@" not in quality + tests

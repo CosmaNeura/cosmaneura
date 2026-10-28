@@ -1,0 +1,9 @@
+{
+  "actualModelHead": "7a8a2e97327fe9c46d23fd6c6748d4dc6658cf0a",
+  "sourceInputSHA256": "38117f2fd31627435507c5e620a213d97bbd841f260ac2eb612c5956554d268d",
+  "case": "R3",
+  "rawResponseSHA256": "7a11af5d9e8cac9937a696d4fa23a6e46d2ff07f626c44818ad8dccf5b7f60c5",
+  "raw": "{\"plan_source_refs\":{\"Plan\":[31,32,33,34,35]},\"primary_history_source_kinds\":{\"5\":\"clinical_history\",\"6\":\"clinical_history\",\"7\":\"clinical_history\",\"8\":\"clinical_history\",\"9\":\"nonclinical\",\"18\":\"clinical_history\",\"19\":\"nonclinical\",\"20\":\"nonclinical\",\"25\":\"clinical_history\",\"26\":\"clinical_history\",\"27\":\"clinical_history\",\"29\":\"nonclinical\",\"30\":\"clinical_history\",\"38\":\"nonclinical\"},\"source_context_refs\":{\"question_scopes\":[{\"question_ref\":12,\"source_refs\":[]},{\"question_ref\":13,\"source_refs\":[]},{\"question_ref\":24,\"source_refs\":[]}],\"other_source_refs\":[]},\"fields\":{\"Subjective\":\"\",\"Objective\":\"\",\"Assessment\":\"\",\"Plan\":\"\"}}",
+  "originalQuality": "FAIL_PARTIAL_QUESTION_SCOPE",
+  "limits": "Unchanged actual response copied for deterministic regression; no new model result."
+}

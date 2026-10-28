@@ -1,3 +1,5 @@
+# Owner-approved temporary job pause. Restore the canonical dependabot.yml
+# filename only after isolated local Dependabot runner selection is verified.
 version: 2
 
 updates:

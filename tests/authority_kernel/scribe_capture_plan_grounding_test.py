@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from typeid import TypeID
 
+from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_plan_grounding as plans
 from app.services.scribe_capture_notebook import ScratchNotes
@@ -56,7 +57,35 @@ class Model:
     async def complete(self, prompt, *, json_output):
         self.calls.append(prompt)
         assert json_output
-        return json.dumps({"fields": FIELDS, "plan_source_refs": self.refs})
+        result = {
+            "fields": {
+                heading: "" if heading in PROSPECTIVE else value
+                for heading, value in FIELDS.items()
+            },
+            "plan_source_refs": self.refs,
+        }
+        if history.CONTRACT_START in prompt:
+            contract = json.loads(
+                prompt.split(history.CONTRACT_START, 1)[1].split(
+                    history.CONTRACT_END, 1
+                )[0]
+            )
+            assert not set(contract["reported_history_fields"]) & set(PROSPECTIVE)
+            for field in contract["reported_history_fields"]:
+                result["fields"][field] = ""
+            # This mock isolates plan behavior. An empty history selection is
+            # deliberately a review limitation, never actual-model evidence.
+            result[history.KEY] = {
+                field: {
+                    "current_list": [],
+                    "change_history": [],
+                    "source_context": [],
+                }
+                if field in contract["medication_fields"]
+                else {"source_refs": []}
+                for field in contract["reported_history_fields"]
+            }
+        return json.dumps(result)
 
 
 async def physical_case(f, monkeypatch, contents=None, *, role="unknown", refs=None):
@@ -114,7 +143,10 @@ async def test_actual_iphone55_shape_unspoken_plan_cannot_be_saved(
     assert result.fields is not None
     assert result.fields["Patient"] == "Avery Morgan"
     assert len(model.calls) == 1
-    assert "complaint, symptom, question, current medication/history" in model.calls[0]
+    assert (
+        "Select history, symptoms, measurements, function, explicit negatives, "
+        "medication reports and relevant clinical requests" in model.calls[0]
+    )
     assert "no plan was discussed, use an empty array" in model.calls[0]
     assert len(rows(f, AIVisitNote)) == len(rows(f, AIVisitTranscript)) == 1
     assert (await notes.capture_note(**{**args, "prepare": False})) == result
@@ -167,7 +199,7 @@ async def test_explicit_negated_conditional_and_translated_plans_keep_complete_s
     )
     result = await notes.capture_note(**args)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == f"Transcript — {label}:\n{utterance}"
+    assert result.fields["P - PLAN"] == f"- {label}: {utterance}"
     assert result.fields is not None
     assert "Seek medical attention" not in result.fields["P - PLAN"]
     assert len(model.calls) == 1
@@ -249,7 +281,7 @@ async def test_wrongly_selected_complaint_cannot_become_invented_advice(
     # Classification can still be wrong; source attribution makes that visible.
     # A model cannot transform this reference into an unspoken recommendation.
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == "Transcript — Patient:\nI have a cough."
+    assert result.fields["P - PLAN"] == "- Patient: I have a cough."
 
 
 @pytest.mark.asyncio
@@ -271,7 +303,7 @@ async def test_saved_scratch_decision_is_not_labeled_as_recorded_speech(
     )
     result = await notes.capture_note(**args, scratch_notes=scratch)
     assert result.fields is not None
-    assert result.fields["P - PLAN"] == "Clinician's saved scratch notes:\n" + content
+    assert result.fields["P - PLAN"] == "- Clinician's saved scratch notes: " + content
     assert result.notebook_source == scratch.reference()
     assert model.calls[0].count(json.dumps(content)[1:-1]) == 1
     assert "[source 2] Separate source:" in model.calls[0]
@@ -289,8 +321,20 @@ async def test_invalid_reference_retains_source_but_never_publishes_unchecked_pl
         heading: invalid if heading == "P - PLAN" else [] for heading in PROSPECTIVE
     }
     args, _ = await physical_case(f, monkeypatch, refs=refs)
+    reached = []
+    production_resolve = plans.PlanGrounding.resolve
+
+    def inspect_then_resolve(grounding, raw, *, max_bytes):
+        value = json.loads(raw)
+        assert history.KEY not in value
+        assert value["plan_source_refs"]["P - PLAN"] == invalid
+        reached.append(True)
+        return production_resolve(grounding, raw, max_bytes=max_bytes)
+
+    monkeypatch.setattr(plans.PlanGrounding, "resolve", inspect_then_resolve)
     with pytest.raises(notes.CaptureNoteUnconfirmed) as error:
         await notes.capture_note(**args)
+    assert reached == [True]  # A history-envelope failure must not mask this guard.
     assert not str(error.value)
     assert not rows(f, AIVisitNote) and len(rows(f, AIVisitTranscript)) == 1
 
@@ -324,7 +368,7 @@ def test_complete_entries_preserve_chronology_and_conflicting_decisions():
     _, resolved = grounding.resolve(
         json.dumps(
             {
-                "fields": {"Plan": "Start medication."},
+                "fields": {"Plan": ""},
                 "plan_source_refs": {"Plan": [2, 1]},
             }
         ),
@@ -334,6 +378,26 @@ def test_complete_entries_preserve_chronology_and_conflicting_decisions():
         sources[1].text
     )
     assert "Correction: do not start it." in resolved["Plan"]
+
+
+@pytest.mark.asyncio
+async def test_nonempty_plan_is_rejected_before_note_and_empty_channel_can_retry(
+    admission_case, monkeypatch
+):
+    f = admission_case
+    args = await setup(f, monkeypatch)
+    f.model.output = '{"CC":"Sleep","Plan":"Discuss sleep at follow-up."}'
+    with pytest.raises(notes.CaptureNoteUnconfirmed):
+        await notes.capture_note(**args)
+    assert not rows(f, AIVisitNote)
+    assert len(rows(f, AIVisitTranscript)) == 1
+    f.model.output = '{"CC":"Sleep","Plan":""}'
+    saved = await notes.capture_note(**args)
+    assert saved.fields is not None
+    assert saved.fields["Plan"] == plans.REVIEW_REQUIRED
+    assert (await notes.capture_note(**{**args, "prepare": False})) == saved
+    assert (await notes.capture_note(**args)) == saved
+    assert len(f.model.calls) == 2  # Explicit retry only; both replays use saved data.
 
 
 @pytest.mark.asyncio

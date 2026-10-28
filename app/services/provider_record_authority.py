@@ -169,6 +169,21 @@ def validate_provider_record_scope(
     current = _record_lineage_rows(session, scope, binding)
     if current is None:
         raise ProviderRecordScopeDenied
+    return _validate_record_lineage(
+        session=session,
+        scope=scope,
+        doctor=doctor,
+        practice=practice,
+        binding=binding,
+        actor_id=actor_id,
+        current=current,
+    )
+
+
+def _validate_record_lineage(
+    *, session, scope, doctor, practice, binding, actor_id, current
+):
+    """Exact-row checks shared by ordinary reads and bounded catalog inputs."""
     mapping, appointment, patient, person = current
     if (
         mapping is None

@@ -4,11 +4,14 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from starlette.responses import JSONResponse
 
 from app.routes.authority_errors import agent_problem_response
+from app.routes.dependencies.entra_service import EntraServicePrincipal
 from app.services import authority
 from app.services import provider_chat_admission as admission
 from app.services.authority_conversation import (
@@ -264,7 +267,7 @@ def test_problem_retry_metadata_is_bounded_and_content_free():
 
     assert response.headers["Retry-After"] == "5"
     assert response.headers["Cache-Control"] == "no-store"
-    assert json.loads(response.body)["retry_after_seconds"] == 5
+    assert json.loads(bytes(response.body))["retry_after_seconds"] == 5
     for invalid in (True, 0, 61, "5"):
         with pytest.raises(ValueError):
             agent_problem_response(
@@ -272,7 +275,7 @@ def test_problem_retry_metadata_is_bounded_and_content_free():
                 code="RATE_LIMITED",
                 title="Rate limited",
                 detail="Please wait briefly.",
-                retry_after_seconds=invalid,
+                retry_after_seconds=cast(Any, invalid),
             )
 
 
@@ -290,7 +293,7 @@ def test_public_chat_remains_outside_dedicated_provider_admission(
 
     monkeypatch.setattr(admission, "_database_now", forbidden)
     token, turn_id, ref = _public_context(authority_session)
-    arguments = dict(
+    arguments: dict[str, Any] = dict(
         context_token=token,
         client_turn_id=turn_id,
         interaction_ref=ref,
@@ -342,14 +345,15 @@ async def test_receiver_returns_only_bounded_rate_metadata(monkeypatch):
     result = await agent.write_conversation_turn(
         request=request,
         response=agent.Response(),
-        principal=SimpleNamespace(client_id=WORKLOAD),
+        principal=EntraServicePrincipal(client_id=WORKLOAD),
         mount_context_token="synthetic-context-token-only",
         interaction_ref="synthetic-interaction-only",
         client_turn_id=uuid4(),
         idempotency_key=uuid4().hex,
         settings=SETTINGS,
     )
-    body = json.loads(result.body)
+    assert isinstance(result, JSONResponse)
+    body = json.loads(bytes(result.body))
     assert result.status_code == 429
     assert (body["code"], body["retryable"], body["retry_after_seconds"]) == (
         "RATE_LIMITED",
@@ -357,4 +361,4 @@ async def test_receiver_returns_only_bounded_rate_metadata(monkeypatch):
         5,
     )
     assert result.headers["Retry-After"] == "5"
-    assert "synthetic-context-token-only" not in result.body.decode()
+    assert "synthetic-context-token-only" not in bytes(result.body).decode()

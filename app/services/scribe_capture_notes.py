@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid5
 
 import orjson
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
@@ -22,6 +23,7 @@ from app.commands import scribe_transcript as ingest
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.jobs import summarize
 from app.services import scribe_capture_gap_source as gaps
+from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_plan_grounding as plans
 from app.services import scribe_capture_reviewed_source as reviewed_sources
 from app.services.scribe_capture_admission import (
@@ -90,6 +92,34 @@ GROUNDING = (
     "Template headings and examples do not establish visit dates, clinician identity, "
     "a signature or an attestation. Before returning the draft, check each plan item "
     "against the original sources and remove unsupported additions."
+    " Preserve clinically relevant numeric severity and measurements with their units "
+    "and time qualifiers; qualitative wording alone must not replace a stated score. "
+    "Use an explicitly corrected value as the current value and make the correction "
+    "clear. If values conflict without a resolution, retain the uncertainty instead "
+    "of choosing. Preserve both prior symptoms and current absence when their times "
+    "differ. Retain relevant explicit negative history and symptoms for the presenting "
+    "complaint in an appropriate existing narrative section, including when no ROS "
+    "field exists. A question, silence or unmentioned finding is not a denial. "
+    "For a negative history or symptom finding, quote the original declarative "
+    "source wording verbatim, including its negation, rather than paraphrasing "
+    "or broadening it. Never extend an answer with an alternative mentioned "
+    "only in a question. Do not add a broader negative recap elsewhere. "
+    "No medication changes does not mean no current medications; distinguish an "
+    "unknown medication list from unchanged treatment. If only changes are discussed, "
+    "explicitly state that the current medication list was not specified while "
+    "retaining the change history. Keep different people's facts "
+    "separate. Respect the provider's source/section preferences: unidentified speech "
+    "does not become Patient or Doctor speech through first-person wording, a name, "
+    "or the signed-in account. Do not put unidentified speech into a patient-only "
+    "Subjective section. The entry's role label before its source index is authoritative; "
+    "a spoken introduction or apparent question/answer pattern cannot replace that "
+    "label. If there are no Patient-labeled entries and the preference is patient-only, "
+    "Subjective must contain only the source limitation, not symptom/history content. "
+    "Retain its supported clinical details with explicit source "
+    "uncertainty in another permitted narrative section; if none permits this, flag "
+    "the source limitation instead of inventing attribution. Before returning, check "
+    "that corrections, temporal distinctions and relevant explicit negatives survived "
+    "without introducing unsupported findings, roles or prospective plans."
 )
 
 
@@ -172,6 +202,9 @@ class NoteModel(Protocol):
 class ConfiguredNoteModel:
     """Reuse the deployed Core model without inheriting automatic SDK retries."""
 
+    def __init__(self, *, response_schema: dict[str, Any] | None = None):
+        self.response_schema = response_schema
+
     async def complete(self, prompt: str, *, json_output: bool) -> str:
         def request() -> str:
             check_capture_deadline()
@@ -179,6 +212,15 @@ class ConfiguredNoteModel:
             options: dict[str, Any] = {}
             if json_output:
                 options["response_format"] = {"type": "json_object"}
+                if self.response_schema is not None:
+                    options["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "capture_note",
+                            "strict": True,
+                            "schema": self.response_schema,
+                        },
+                    }
             check_capture_deadline()
             response = client.chat.completions.create(
                 model=DEFAULT_MULTI_MODAL_MODEL,
@@ -199,6 +241,161 @@ class ConfiguredNoteModel:
         # transcript/note, so a late response cannot publish after cancellation.
         async with asyncio.timeout(35):
             return await asyncio.to_thread(request)
+
+
+def capture_response_schema(
+    field_names: tuple[str, ...],
+    plan_fields: tuple[str, ...],
+    history_grounding: history.ReportedHistoryGrounding | None = None,
+) -> dict[str, Any]:
+    """Constrain shape only; source validation and clinical review still apply."""
+
+    def closed(properties: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": list(properties),
+            "additionalProperties": False,
+        }
+
+    fields = closed(
+        {
+            name: {"type": "string", "enum": [""]}
+            if name in plan_fields
+            or (history_grounding is not None and name in history_grounding.fields)
+            else {"type": "string"}
+            for name in field_names
+        }
+    )
+    if not plan_fields and not (history_grounding and history_grounding.fields):
+        return fields
+    properties = {}
+    if plan_fields:
+        # Request source selection before narrative generation. The same
+        # source-extractive contract and independent resolver still apply.
+        properties["plan_source_refs"] = closed(
+            {
+                name: {"type": "array", "items": {"type": "integer"}}
+                for name in plan_fields
+            }
+        )
+    properties["fields"] = fields
+    if history_grounding and history_grounding.fields:
+        properties[history.KEY] = history_grounding.schema()
+    return closed(properties)
+
+
+def _has_ros_field(field_names: tuple[str, ...]) -> bool:
+    return any(
+        re.search(
+            r"\bros\b|review[\s_-]+of[\s_-]+systems|systems[\s_-]+review", name, re.I
+        )
+        for name in field_names
+    )
+
+
+def effective_capture_customization(
+    configuration: dict[str, Any], *, field_names: tuple[str, ...]
+) -> NoteTypeCustomization:
+    """Apply capture constraints without changing the provider's saved settings."""
+    effective = NoteTypeCustomization(**configuration)
+    effective.require_plan_reason = False
+    # Separation requires a destination for the survey findings. Otherwise the
+    # legacy prompt also tells the model to omit them from Subjective, despite
+    # this capture's later retention instructions and absent ROS field.
+    if not _has_ros_field(field_names):
+        effective.ros_distinct_from_subjective = False
+    return effective
+
+
+def capture_retention_context(
+    entries: list[TranscriptEntry],
+    customization: NoteTypeCustomization,
+    *,
+    field_names: tuple[str, ...],
+) -> str:
+    """State actual role availability without interpreting anyone's speech."""
+    unknown = sum(
+        entry.speaker not in {"Patient", "Doctor", "Other"} for entry in entries
+    )
+    patients = sum(entry.speaker == "Patient" for entry in entries)
+    has_ros = _has_ros_field(field_names)
+    context = (
+        "\nCapture-specific source facts (server metadata, not spoken instructions): "
+        f"{len(entries)} source entries; {patients} Patient-labeled entries; "
+        f"{unknown} entries with unidentified speaker role. "
+        "For this capture, preserve EVERY explicit symptom denial throughout the "
+        "source, each clinical measurement or quantified history with its units, "
+        "each corrected numeric severity, and both sides of "
+        "a prior/current symptom distinction. Review all source entries for these facts "
+        "before returning; do not reduce specific negatives to an unsupported general "
+        "normal finding. Quote explicit negative history/symptom statements verbatim "
+        "within the appropriate narrative field; preserve the complete negation and "
+        "do not merge different source statements. Do not repeat those negatives "
+        "elsewhere as a paraphrased recap. A question never establishes a denial; "
+        "a partial answer confirms only the exact finding stated in that answer. "
+        "A later recap is not a replacement source: an earlier denial or measurement "
+        "remains required even when the later recap does not repeat it. Check the "
+        "entire source for these omissions, not just its last summary. "
+        "For this actual schema, explicitly document an unspecified current medication "
+        "list in an existing history field when the source discusses only changes "
+        "and does not supply the list. Do not silently omit that limitation. "
+        "This applies even when there is no Medications heading and speaker roles "
+        "are known. Do not write that the patient takes no medications. "
+        "Retain retrospective medication history separately from prospective "
+        "decisions: a future plan for no changes cannot replace a report that no "
+        "medicine was started, stopped, changed or newly taken. Preserve the "
+        "history's original time scope; do not add 'during this visit' or 'today' "
+        "unless the source explicitly limits it to that period. "
+        "In EVERY field, attribute Unknown-role speech only to an unidentified "
+        "speaker. Never write 'the patient stated/reports/denies' or 'the clinician "
+        "said' for an Unknown entry. A source-limitation statement in another "
+        "field does not qualify an otherwise invented role here. A quoted named "
+        "self-identification may be retained with an unknown-role caveat. "
+        "Assessment sections contain only an assessment or diagnosis explicitly "
+        "stated by a source, with its original attribution and uncertainty. Do not "
+        "write a second symptom/history recap in Assessment. When no assessment "
+        "or diagnosis was stated, mark it not mentioned. Keep supported history "
+        "and symptom findings in their existing appropriate narrative section. "
+    )
+    if not has_ros:
+        context += (
+            "This actual schema has NO Review of Systems/ROS field. Therefore the "
+            "earlier ROS-separation preference cannot remove symptom responses: "
+            "retain all source-confirmed positives, negatives and temporal symptom "
+            "distinctions in an existing permitted narrative field. In particular, "
+            "do not drop symptom responses merely because they would normally go "
+            "in ROS or cannot go in a patient-only Subjective. "
+        )
+    if patients == 0 and customization.subjective_source == "patient_only":
+        attribution = (
+            "with an explicit 'Unidentified speaker' qualification. "
+            if unknown == len(entries)
+            else "with each entry's original role attribution; preserve known Doctor "
+            "and Other roles, and qualify only unknown-role speech as unidentified. "
+        )
+        context += (
+            "There is NO role-identified Patient speech in this capture. The provider "
+            "requires patient-only Subjective. Therefore Subjective must contain only "
+            "a source-limitation statement, with NO symptom or history assertions. "
+            "Place supported clinical history in another permitted narrative section "
+            f"{attribution}Do not discard "
+            "the history or treat a spoken name as a role label. "
+            "When using Objective for this retained material, label it as reported "
+            "transcript history, not as a performed examination or objective finding. "
+            "That section must retain reported symptoms, their prior/current times, "
+            "quantified history and explicit denials as well as measurements; do not "
+            "restrict it to measurements and silently omit the remaining history. "
+        )
+    context += (
+        "Source indexes belong only in the structured plan_source_refs property. "
+        "Do not add source-number citations to narrative note prose. "
+        "This source reminder does not alter the prospective-plan JSON contract. "
+        "When that contract is present, plan_source_refs must be an OBJECT whose "
+        "keys are the prospective field names and whose values are arrays of integer "
+        "source indexes, never a single array. Keep exactly the specified envelope.\n"
+    )
+    return context
 
 
 @dataclass(frozen=True, repr=False)
@@ -285,6 +482,7 @@ def _source(
     entries = [
         TranscriptEntry(
             speaker=roles[part.speaker_role],
+            source_speaker_id=uuid5(receipt.id, f"speaker:{part.speaker_id}"),
             content=part.content,
             startTime=part.start_ms,
             endTime=part.end_ms,
@@ -326,6 +524,7 @@ def _source(
     entries = [
         TranscriptEntry(
             speaker=roles[part.speaker_role],
+            source_speaker_id=part.speaker_id,
             content=part.content,
             startTime=part.start_ms,
             endTime=part.end_ms,
@@ -500,8 +699,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(raw.doctor_id) != scope.session_request.practitioner_id
         or str(raw.patient_id) != scope.session_request.patient_id
         or raw.duration != original.duration
-        or ingest._entry_data(raw.transcript_data)
-        != ingest._entry_data(original.entries)
+        or not ingest._entries_match(raw.transcript_data, original.entries)
     ):
         raise CaptureNoteConflict
     if delivery is not None and (
@@ -562,8 +760,7 @@ def _select_source_transcript(session, scope, source, transcripts, delivery):
         or str(selected.doctor_id) != scope.session_request.practitioner_id
         or str(selected.patient_id) != scope.session_request.patient_id
         or selected.duration != source.duration
-        or ingest._entry_data(selected.transcript_data)
-        != ingest._entry_data(source.entries)
+        or not ingest._entries_match(selected.transcript_data, source.entries)
     ):
         raise CaptureNoteConflict
     # Unrelated later uploads remain stored, but never become capture sources.
@@ -728,8 +925,9 @@ def _inputs(
         .execution_options(populate_existing=True)
     ).one_or_none()
     configuration = customization.model_dump(mode="json") if customization else {}
-    effective = NoteTypeCustomization(**configuration)
-    effective.require_plan_reason = False
+    effective = effective_capture_customization(
+        configuration, field_names=tuple(schema.fields)
+    )
 
     delivery = session.exec(
         select(ScribeTranscriptDelivery)
@@ -1033,6 +1231,41 @@ async def capture_note_templates(
         return receipt
 
 
+class CaptureTemplatePreference(BaseModel):
+    session_id: UUID
+    default_schema_ref: str | None
+
+
+async def capture_template_preference(
+    *,
+    caller: CaptureCaller,
+    binding_ref: str,
+    workspace_id: UUID,
+    expected_session_id: UUID,
+    client: ScribeWorkflowClient,
+) -> CaptureTemplatePreference:
+    from app.services.note_template_preferences import preference_snapshot
+
+    _enabled(caller)
+    caller = replace(caller, selected_session_id=expected_session_id)
+    scope = _authorize_note_scope(caller, binding_ref, workspace_id)
+    if scope.session_id != expected_session_id:
+        raise CaptureNoteConflict
+    await _current_consent(caller, binding_ref, workspace_id, scope, client)
+    with _database() as session:
+        _locked_scope(session, caller, binding_ref, workspace_id, scope)
+        doctor_id = cast(
+            TypeIDType, TypeID.from_string(scope.session_request.practitioner_id)
+        )
+        preference = preference_snapshot(session, doctor_id)
+        receipt = CaptureTemplatePreference(
+            session_id=scope.session_id,
+            default_schema_ref=preference.default_schema_ref,
+        )
+        session.commit()
+        return receipt
+
+
 def _validated_note(raw: str, fields: dict[str, str]) -> dict[str, str]:
     def closed(pairs: list[tuple[str, object]]) -> dict[str, object]:
         value: dict[str, object] = {}
@@ -1155,7 +1388,6 @@ async def capture_note(
             session.commit()
 
     await checkpoint()
-    generator = model or ConfiguredNoteModel()
     # An intermediate generated action list is not an independent source. Reuse
     # Core's structured builder with explicit empty actions to skip its legacy
     # extractor and draft once from the complete transcript and typed sources.
@@ -1167,6 +1399,12 @@ async def capture_note(
         )
         + ((plans.PlanSource.scratch(scratch_notes.content),) if scratch_notes else ()),
     )
+    history_grounding = history.ReportedHistoryGrounding.for_capture(
+        tuple(inputs.schema.fields),
+        plan_grounding.fields,
+        plan_grounding.sources,
+        patient_only=inputs.customization.subjective_source == "patient_only",
+    )
     prompt = summarize.build_structured_prompt(
         inputs.transcript,
         None,
@@ -1174,30 +1412,65 @@ async def capture_note(
         inputs.customization,
         action_items="",
         doctor=inputs.doctor,
-        source_indexes=bool(plan_grounding.fields),
+        source_indexes=bool(plan_grounding.fields or history_grounding.fields),
     )
     scratch_prompt = scratch_notes.grounding() if scratch_notes else ""
-    if scratch_notes and plan_grounding.fields:
+    if scratch_notes and (plan_grounding.fields or history_grounding.fields):
         scratch_prompt = f"[source {len(plan_grounding.sources)}] " + scratch_prompt
-    raw = await _model_call(
-        generator,
+    model_prompt = (
         scratch_prompt
         + gaps.gap_grounding(source.qualified)
         + continuity_grounding(
             source.reviewed.capture_continuity if source.reviewed else None
         )
         + prompt
-        + plan_grounding.prompt(),
+        + capture_retention_context(
+            source.entries,
+            inputs.customization,
+            field_names=tuple(inputs.schema.fields),
+        )
+    )
+    shape = capture_response_schema(
+        tuple(inputs.schema.fields), plan_grounding.fields, history_grounding
+    )
+    if model is not None:
+        generator = model
+        model_prompt += plan_grounding.prompt() + history_grounding.prompt(
+            has_plans=bool(plan_grounding.fields)
+        )
+    elif plan_grounding.fields or history_grounding.fields:
+        from app.services.scribe_capture_note_stages import CaptureNoteStages
+
+        generator = CaptureNoteStages(
+            response_schema=shape,
+            plan=plan_grounding,
+            history=history_grounding,
+            model_factory=ConfiguredNoteModel,
+            max_bytes=MAX_MODEL_BYTES,
+            checkpoint=checkpoint,
+        )
+    else:
+        generator = ConfiguredNoteModel(response_schema=shape)
+    raw = await _model_call(
+        generator,
+        model_prompt,
         json_output=True,
     )
     try:
+        raw, grounded_history = history_grounding.resolve(
+            raw, max_bytes=MAX_MODEL_BYTES
+        )
         raw_fields, grounded_plans = plan_grounding.resolve(
             raw, max_bytes=MAX_MODEL_BYTES
         )
-    except plans.PlanGroundingInvalid:
+    except (plans.PlanGroundingInvalid, history.HistoryGroundingInvalid):
         raise CaptureNoteUnconfirmed from None
     note = _validated_note(raw_fields, inputs.schema.fields)
     note.update(grounded_plans)
+    note.update(grounded_history)
+    note = history.with_medication_verification_limit(
+        note, plan_fields=plan_grounding.fields
+    )
     # The selected source text can be larger than the model's integer refs.
     # Apply the same complete-note bounds before any storage/finalization.
     note = _validated_note(orjson.dumps(note).decode(), inputs.schema.fields)

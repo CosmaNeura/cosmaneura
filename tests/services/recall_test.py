@@ -151,7 +151,18 @@ def test_start_recording_sends_exact_six_hour_retention(monkeypatch):
             return None
 
         def json(self):
-            return {"id": "recording-xyz"}
+            return {
+                "id": "bot-xyz",
+                "status_changes": [{"code": "in_call_recording"}],
+                "recordings": [
+                    {
+                        "id": "recording-xyz",
+                        "started_at": "2026-10-25T10:00:00Z",
+                        "completed_at": None,
+                        "status": {"code": "processing"},
+                    }
+                ],
+            }
 
     class FakeClient:
         def __enter__(self):
@@ -166,6 +177,16 @@ def test_start_recording_sends_exact_six_hour_retention(monkeypatch):
             return FakeResponse()
 
     monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
+
+    monkeypatch.setattr(
+        recall,
+        "_read_recording_bot",
+        lambda *_: {
+            "id": "bot-xyz",
+            "recordings": [],
+            "status_changes": [{"code": "in_call_not_recording"}],
+        },
+    )
 
     assert recall.start_recording("bot-xyz", wait_for_ready=False) == {
         "id": "recording-xyz"

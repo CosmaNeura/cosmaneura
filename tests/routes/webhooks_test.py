@@ -226,6 +226,10 @@ def test_zoom_supported_event_allowlist_is_exact() -> None:
 def test_recall_supported_event_allowlist_is_exact() -> None:
     assert webhooks.RECALL_SUPPORTED_EVENT_TYPES == frozenset(
         {
+            "bot.recording_permission_denied",
+            "bot.call_ended",
+            "bot.done",
+            "bot.fatal",
             "recording.done",
             "transcript.done",
             "transcript.failed",
@@ -581,3 +585,39 @@ def test_desktop_sdk_events_fail_closed_until_exact_capture_binding_exists(
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.json() == {"status": "unsupported event"}
+
+
+@pytest.mark.usefixtures("recall_secret")
+@pytest.mark.parametrize(
+    "event",
+    ["bot.recording_permission_denied", "bot.call_ended", "bot.done", "bot.fatal"],
+)
+def test_signed_bot_terminal_events_enter_durable_inbox(client, durable_ingress, event):
+    body = json.dumps(
+        {
+            "event": event,
+            "data": {
+                "bot": {"id": "synthetic-bot"},
+                "data": {
+                    "code": event.removeprefix("bot."),
+                    "sub_code": None,
+                    "updated_at": "2026-10-26T20:22:15Z",
+                },
+            },
+        }
+    ).encode()
+    ts = str(int(time.time()))
+    headers = {
+        "webhook-id": "msg-terminal",
+        "webhook-timestamp": ts,
+        "webhook-signature": _recall_sign(body, ts, "msg-terminal"),
+    }
+    response = client.post(RECALL_WEBHOOK_PATH, content=body, headers=headers)
+    assert response.status_code == 200
+    assert durable_ingress["stored"][0]["event_type"] == event
+    headers["webhook-signature"] = "v1,bad"
+    assert (
+        client.post(RECALL_WEBHOOK_PATH, content=body, headers=headers).status_code
+        == 401
+    )
+    assert len(durable_ingress["stored"]) == 1

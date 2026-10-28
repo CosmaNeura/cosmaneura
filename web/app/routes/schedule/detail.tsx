@@ -26,6 +26,10 @@ import type {
   ZoomMeetingResponse,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import {
+  type MeetingNoteAvailability,
+  loadMeetingNoteAvailability,
+} from "~/lib/meeting-note-availability"
 import { useTerminology } from "~/utils/terminology"
 
 function formatDateTime(isoString: string): string {
@@ -77,6 +81,28 @@ function CaptureAuthorization({
     if (submitting) return
     setOpen(nextOpen)
     if (!nextOpen) resetForm()
+  }
+
+  if (meeting.capture_status) {
+    return (
+      <div
+        role="status"
+        className="border-warning/30 bg-warning/10 rounded-lg border p-4"
+      >
+        <p className="text-foreground font-medium">
+          {meeting.capture_status === "permission_denied"
+            ? "Zoom recording permission denied"
+            : meeting.capture_status === "failed"
+              ? "Meeting bot could not continue"
+              : "Meeting bot has left the meeting"}
+        </p>
+        <p className="text-foreground mt-1 text-sm">
+          Do not rely on the bot to capture the rest of this meeting. Check the
+          linked visit for any partial notes. You can continue with Scribe after
+          confirming consent. The bot will not restart automatically.
+        </p>
+      </div>
+    )
   }
 
   if (meeting.capture_authorized) {
@@ -231,11 +257,13 @@ export function MeetingDetail({
   appointments,
   captureEnabled,
   meeting,
+  noteAvailability = null,
   patients,
 }: {
   appointments: Appointment[]
   captureEnabled: boolean
   meeting: ZoomMeetingResponse
+  noteAvailability?: MeetingNoteAvailability | null
   patients: Patient[]
 }) {
   const t = useTerminology()
@@ -322,7 +350,7 @@ export function MeetingDetail({
         )}
       </div>
 
-      {captureEnabled && isActive && (
+      {captureEnabled && (isActive || meeting.capture_status) && (
         <div className="mt-6">
           <CaptureAuthorization
             meeting={meeting}
@@ -337,18 +365,24 @@ export function MeetingDetail({
           {meeting.appointment_id ? (
             <div>
               <p className="text-muted-foreground mb-2 text-sm">
-                This meeting has ended. AI notes are available.
+                This meeting has ended.{" "}
+                {noteAvailability === "ready"
+                  ? "Notes are available for the linked visit."
+                  : noteAvailability === "missing"
+                    ? "No note is available for the linked visit yet."
+                    : "Note availability could not be checked."}
               </p>
               <Button variant="outline" asChild>
                 <Link to={href("/notes/:id", { id: meeting.appointment_id })}>
-                  View notes →
+                  {noteAvailability === "ready"
+                    ? "View notes →"
+                    : "Open visit →"}
                 </Link>
               </Button>
             </div>
           ) : (
             <p className="text-muted-foreground text-sm italic">
-              Notes will appear here after the meeting ends and Cosmas processes
-              the recording.
+              This meeting has ended. No visit is linked.
             </p>
           )}
         </div>
@@ -357,7 +391,7 @@ export function MeetingDetail({
       {!isEnded && (
         <div className="mt-6 border-t pt-6">
           <p className="text-muted-foreground text-sm italic">
-            Notes will appear here after the meeting ends.
+            After the meeting, open the linked visit to check for notes.
           </p>
         </div>
       )}
@@ -385,11 +419,19 @@ export async function clientLoader(args: Route.ClientLoaderArgs) {
     !meeting.capture_authorized &&
     (meeting.status === "scheduled" || meeting.status === "started")
   if (!needsAppointmentOptions) {
+    const noteAvailability =
+      meeting.status === "ended" && meeting.appointment_id
+        ? await loadMeetingNoteAvailability(
+            meeting.appointment_id,
+            args.request,
+          )
+        : null
     return {
       appointments: [],
       appointmentsUnavailable: false,
       captureEnabled,
       meeting,
+      noteAvailability,
       patients: [],
     }
   }
@@ -404,6 +446,7 @@ export async function clientLoader(args: Route.ClientLoaderArgs) {
     appointmentsUnavailable: Boolean(noteError || patientError),
     captureEnabled,
     meeting,
+    noteAvailability: null,
     patients: patientData ?? [],
   }
 }
@@ -416,6 +459,7 @@ export default function ScheduleDetailPage({
     appointmentsUnavailable,
     captureEnabled,
     meeting,
+    noteAvailability,
     patients,
   } = loaderData
 
@@ -430,6 +474,7 @@ export default function ScheduleDetailPage({
         ) : null}
         <MeetingDetail
           meeting={meeting}
+          noteAvailability={noteAvailability}
           appointments={appointments}
           captureEnabled={captureEnabled}
           patients={patients}

@@ -8,6 +8,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, Callable, cast
 from uuid import uuid4
 
 import pytest
@@ -65,7 +66,7 @@ def local_http(monkeypatch):
     )
 
     class LocalTransport(health._HealthTransport):
-        def _make_pool(self):
+        def _make_pool(self) -> Any:
             return pool
 
     monkeypatch.setattr(health, "_HealthTransport", LocalTransport)
@@ -147,6 +148,7 @@ def test_existing_60second_schedule_and_registered_task_name_are_preserved():
         )
     ]
     assert len(schedules) == 1
+    assert isinstance(schedules[0], ast.Dict)
     selected = next(
         child
         for key, child in zip(schedules[0].keys, schedules[0].values)
@@ -157,7 +159,9 @@ def test_existing_60second_schedule_and_registered_task_name_are_preserved():
         "schedule": 60.0,
     }
     with pytest.raises(TypeError):
-        health.capture_worker_heartbeat(monitor_slug=SENTINEL)
+        cast(Callable[..., None], health.capture_worker_heartbeat)(
+            monitor_slug=SENTINEL
+        )
 
 
 def test_ambient_scope_processors_attachments_and_hostile_SDK_environment_are_unused(

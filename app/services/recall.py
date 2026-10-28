@@ -1,4 +1,7 @@
+import asyncio
+import json
 import time
+from datetime import datetime
 
 import httpx
 
@@ -89,6 +92,8 @@ def create_bot(
     bot_name: str = BOT_NAME,
     manual_recording: bool = True,
     metadata: dict | None = None,
+    deadline: float | None = None,
+    before_mutation=None,
 ) -> dict:
     if not manual_recording:
         raise ValueError("Recall bots must use explicit manual recording control")
@@ -115,6 +120,22 @@ def create_bot(
     if metadata is not None:
         payload["metadata"] = metadata
 
+    if deadline is not None:
+        if before_mutation is not None:
+            before_mutation()
+        data = _bounded_provider_json("POST", "/bot/", deadline, payload)
+    else:
+        data = _create_bot_unbounded(payload)
+
+    log.info(
+        "recall bot created",
+        bot_ref=provider_log_ref(data.get("id")),
+        manual_recording=True,
+    )
+    return data
+
+
+def _create_bot_unbounded(payload: dict) -> dict:
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/",
@@ -132,11 +153,6 @@ def create_bot(
         response.raise_for_status()
         data = response.json()
 
-    log.info(
-        "recall bot created",
-        bot_ref=provider_log_ref(data.get("id")),
-        manual_recording=True,
-    )
     return data
 
 
@@ -217,22 +233,34 @@ def _wait_until_bot_ready(
     bot_id: str,
     timeout_seconds: float = 45.0,
     poll_interval: float = 2.0,
+    deadline: float | None = None,
 ) -> str | None:
     """Poll Recall until the bot can accept start_recording (or has really
     terminated). Returns the final observed status, or None on timeout."""
-    deadline = time.monotonic() + timeout_seconds
+    bounded_launch = deadline is not None
+    deadline = min(
+        time.monotonic() + timeout_seconds,
+        deadline if deadline is not None else float("inf"),
+    )
     last_status: str | None = None
     while time.monotonic() < deadline:
         try:
-            bot = get_bot(bot_id)
-        except httpx.HTTPError as exc:
+            bot = (
+                _bounded_provider_json("GET", f"/bot/{bot_id}/", deadline)
+                if bounded_launch
+                else get_bot(bot_id)
+            )
+        except (httpx.HTTPError, TimeoutError) as exc:
             log.warning(
                 "recall get_bot transient error while waiting for ready",
                 bot_ref=provider_log_ref(bot_id),
                 error_type=type(exc).__name__,
             )
-            time.sleep(poll_interval)
+            time.sleep(max(0.0, min(poll_interval, deadline - time.monotonic())))
             continue
+
+        if time.monotonic() >= deadline:
+            break
 
         status = _current_bot_status(bot)
         if status != last_status:
@@ -269,7 +297,16 @@ def _wait_until_bot_ready(
                 bot_ref=provider_log_ref(bot_id),
                 transient_permission_phase=True,
             )
-            time.sleep(min(poll_interval, _PERMISSION_PHASE_POLL_INTERVAL))
+            time.sleep(
+                max(
+                    0.0,
+                    min(
+                        poll_interval,
+                        _PERMISSION_PHASE_POLL_INTERVAL,
+                        deadline - time.monotonic(),
+                    ),
+                )
+            )
             continue
 
         if _has_recording_approval(bot):
@@ -280,7 +317,7 @@ def _wait_until_bot_ready(
             return _latest_ready_status(bot) or status
         if status in _BOT_READY_STATUSES:
             return status
-        time.sleep(poll_interval)
+        time.sleep(max(0.0, min(poll_interval, deadline - time.monotonic())))
 
     log.warning(
         "recall bot did not become ready before timeout",
@@ -291,14 +328,147 @@ def _wait_until_bot_ready(
     return last_status
 
 
-def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
+def _recordings_by_id(bot: dict, bot_id: str) -> dict[str, dict]:
+    """Recall start_recording returns a Bot, whose top-level ID is not a recording."""
+    if not isinstance(bot, dict) or bot.get("id") != bot_id:
+        raise ValueError("recall_recording_bot_mismatch")
+    rows = bot.get("recordings")
+    if not isinstance(rows, list) or len(rows) > 100:
+        raise ValueError("recall_recordings_unconfirmed")
+    result = {}
+    for row in rows:
+        key = row.get("id") if isinstance(row, dict) else None
+        if not isinstance(key, str) or not key or key == bot_id or key in result:
+            raise ValueError("recall_recording_identity_unconfirmed")
+        for field in ("started_at", "completed_at"):
+            value = row.get(field)
+            if value is not None:
+                try:
+                    parsed = datetime.fromisoformat(value)
+                    if parsed.tzinfo is None:
+                        raise ValueError()
+                except (TypeError, ValueError):
+                    raise ValueError("recall_recording_timing_unconfirmed") from None
+        result[key] = row
+    return result
+
+
+def _new_started_recording(bot: dict, bot_id: str, previous: set[str]) -> dict | None:
+    recordings = _recordings_by_id(bot, bot_id)
+    candidates = set(recordings) - previous
+    if len(candidates) > 1 or not previous.issubset(recordings):
+        raise ValueError("recall_recording_selection_ambiguous")
+    changes = bot.get("status_changes")
+    if (
+        not isinstance(changes, list)
+        or not changes
+        or not isinstance(changes[-1], dict)
+    ):
+        raise ValueError("recall_recording_status_unconfirmed")
+    current = changes[-1].get("code")
+    if current in _BOT_TERMINAL_STATUSES or (
+        current == _BOT_PERMISSION_DENIED_STATUS
+        and changes[-1].get("sub_code") != _TRANSIENT_PERMISSION_DENIED_SUB_CODE
+    ):
+        raise ValueError("recall_recording_start_unconfirmed")
+    if candidates:
+        key = candidates.pop()
+        row = recordings[key]
+        if row.get("completed_at") is not None:
+            raise ValueError("recall_recording_already_completed")
+        status = row.get("status")
+        if not isinstance(status, dict) or status.get("code") != "processing":
+            raise ValueError("recall_recording_not_processing")
+        if (
+            row.get("started_at") is not None
+            and "completed_at" in row
+            and current == "in_call_recording"
+        ):
+            return {"id": key}
+    return None
+
+
+def _bounded_provider_json(
+    method: str,
+    path: str,
+    deadline: float,
+    payload: dict | None = None,
+    ceiling: float = 30.0,
+) -> dict:
+    # asyncio.timeout bounds the entire request, including connect, headers and
+    # streamed body. HTTPX's per-read timeout alone permits a slow response to
+    # outlive the polling deadline. This synchronous adapter runs on the worker.
+    async def read():
+        timeout_seconds = min(ceiling, deadline - time.monotonic())
+        if timeout_seconds <= 0:
+            raise TimeoutError("recall_launch_deadline_exhausted")
+        async with asyncio.timeout(timeout_seconds):
+            async with httpx.AsyncClient(timeout=timeout_seconds) as client:
+                async with client.stream(
+                    method,
+                    f"{RECALL_API_BASE}{path}",
+                    json=payload,
+                    headers={"Authorization": f"Token {RECALL_API_KEY}"},
+                ) as response:
+                    response.raise_for_status()
+                    data = bytearray()
+                    async for part in response.aiter_bytes(chunk_size=65536):
+                        data.extend(part)
+                        if len(data) > 1048576:
+                            raise ValueError("recall_recording_response_too_large")
+                    return json.loads(data)
+
+    return asyncio.run(read())
+
+
+def _read_recording_bot(bot_id: str, timeout_seconds: float) -> dict:
+    return _bounded_provider_json(
+        "GET", f"/bot/{bot_id}/", time.monotonic() + timeout_seconds, ceiling=5.0
+    )
+
+
+def _confirm_new_recording(
+    bot: dict, bot_id: str, previous: set[str], deadline: float | None = None
+) -> dict:
+    deadline = min(
+        time.monotonic() + 15.0, deadline if deadline is not None else float("inf")
+    )
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("recall_recording_start_unconfirmed")
+        recording = _new_started_recording(bot, bot_id, previous)
+        if recording is not None:
+            return recording
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("recall_recording_start_unconfirmed")
+        time.sleep(min(0.5, remaining))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("recall_recording_start_unconfirmed")
+        bot = _read_recording_bot(bot_id, min(5.0, remaining))
+
+
+def start_recording(
+    bot_id: str,
+    wait_for_ready: bool = True,
+    *,
+    deadline: float | None = None,
+    before_mutation=None,
+) -> dict:
     """Tell the bot to start recording. When wait_for_ready is True (the
     default, used by the live patient-joined flow) we first poll Recall
     until the bot is in_call_not_recording — otherwise a start_recording
     command issued while the bot is still joining is silently dropped
     and the meeting yields an empty transcript."""
     if wait_for_ready:
-        status = _wait_until_bot_ready(bot_id)
+        if deadline is not None and deadline - time.monotonic() < 95.0:
+            raise TimeoutError("recall_launch_budget_insufficient")
+        status = (
+            _wait_until_bot_ready(bot_id, deadline=deadline - 50.0)
+            if deadline is not None
+            else _wait_until_bot_ready(bot_id)
+        )
         if status not in _BOT_READY_STATUSES:
             log.warning(
                 "recall start_recording aborted: bot never reached ready state",
@@ -311,8 +481,43 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
                 "recall bot already recording, skipping start_recording",
                 bot_ref=provider_log_ref(bot_id),
             )
-            return {}
+            raise ValueError("recall_recording_already_active")
 
+    before = _read_recording_bot(
+        bot_id, min(5.0, deadline - time.monotonic()) if deadline else 5.0
+    )
+    previous = _recordings_by_id(before, bot_id)
+    if _current_bot_status(before) not in {
+        "in_call_not_recording",
+        "recording_permission_allowed",
+    } or any(row.get("completed_at") is None for row in previous.values()):
+        raise ValueError("recall_recording_already_active")
+
+    if deadline is not None:
+        if before_mutation is not None:
+            before_mutation()
+        data = _bounded_provider_json(
+            "POST",
+            f"/bot/{bot_id}/start_recording/",
+            deadline - 15.0,
+            START_RECORDING_CONFIG,
+        )
+    else:
+        data = _start_recording_unbounded(bot_id)
+    # The POST is issued exactly once. Missing, conflicting or timed-out
+    # correspondence raises so the caller retains its durable teardown intent;
+    # it must never consume an old recording or adopt the Bot's own ID.
+    recording = _confirm_new_recording(data, bot_id, set(previous), deadline)
+    log.info(
+        "recall recording started",
+        bot_ref=provider_log_ref(bot_id),
+        recording_ref=provider_log_ref(recording["id"]),
+        retention_hours=RECORDING_RETENTION_HOURS,
+    )
+    return recording
+
+
+def _start_recording_unbounded(bot_id: str) -> dict:
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/start_recording/",
@@ -327,16 +532,12 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
             )
         response.raise_for_status()
         data = response.json()
-    log.info(
-        "recall recording started",
-        bot_ref=provider_log_ref(bot_id),
-        recording_ref=provider_log_ref(data.get("id")),
-        retention_hours=RECORDING_RETENTION_HOURS,
-    )
     return data
 
 
-def send_chat_message(bot_id: str, message: str, to: str = "everyone") -> None:
+def send_chat_message(
+    bot_id: str, message: str, to: str = "everyone", *, deadline: float | None = None
+) -> None:
     """Post a chat message into the meeting as the bot. Used to surface the
     in-call recording disclosure to all participants when recording starts.
 
@@ -344,6 +545,15 @@ def send_chat_message(bot_id: str, message: str, to: str = "everyone") -> None:
     The real disclosure/consent gate is Zoom's native recording-consent
     prompt (see require_recording_permission in create_bot), so a dropped
     chat message must never abort the recording."""
+    if deadline is not None:
+        _bounded_provider_json(
+            "POST",
+            f"/bot/{bot_id}/send_chat_message/",
+            deadline,
+            {"to": to, "message": message},
+            ceiling=5.0,
+        )
+        return
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/send_chat_message/",

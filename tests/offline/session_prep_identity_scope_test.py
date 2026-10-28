@@ -164,7 +164,7 @@ def source_functions():
     }
     exec(  # noqa: S102 — named local source only; no app/service bootstrap.
         compile(
-            ast.Module(body=selected, type_ignores=[]),
+            ast.Module(body=list(selected), type_ignores=[]),
             "identity_source_selection",
             "exec",
             flags=__import__("__future__").annotations.compiler_flag,

@@ -21,11 +21,11 @@ def perform(zoom_meeting_record_id: str) -> None:
         return
 
     redis = get_redis()
-    with zoom_webhooks._lifecycle_lock(redis, meeting.zoom_meeting_id):
-        _perform_locked(meeting, redis)
+    with zoom_webhooks._lifecycle_lock(redis, meeting.zoom_meeting_id) as launch_lock:
+        _perform_locked(meeting, redis, launch_lock=launch_lock)
 
 
-def _perform_locked(meeting: ZoomMeeting, redis) -> None:
+def _perform_locked(meeting: ZoomMeeting, redis, *, launch_lock=None) -> None:
     meeting_id = meeting.zoom_meeting_id
     occurrence_digest = _redis_text(
         redis, f"recall:meeting:{meeting_id}:occurrence_digest"
@@ -61,7 +61,9 @@ def _perform_locked(meeting: ZoomMeeting, redis) -> None:
         )
         return
 
-    zoom_webhooks._resume_or_start_recording_locked(redis, meeting_id, "", "")
+    zoom_webhooks._resume_or_start_recording_locked(
+        redis, meeting_id, "", "", launch_lock=launch_lock
+    )
 
 
 perform_celery = celery_app.task(perform)

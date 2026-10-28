@@ -675,7 +675,7 @@ def test_verifier_callback_cannot_mutate_policy_or_reference_authority() -> None
 
     assert proof.record_sha256 != authentication._digest(case["record_bytes"])
     assert proof.certificate_identity.endswith(
-        "build_and_publish_manual.yml@refs/heads/master"
+        "build_and_publish_local.yml@refs/heads/master"
     )
 
 

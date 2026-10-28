@@ -189,7 +189,7 @@ def test_every_egress_field_retains_the_same_rules(
 def test_closed_codes_cover_all_combinations_without_schema_change():
     assert len(set(generator.SAFETY_FAILURE_CODES.values())) == 15
     for mask in range(1, 16):
-        categories = tuple(
+        categories: tuple[generator.SafetyCategory, ...] = tuple(
             item
             for index, item in enumerate(generator.SAFETY_CATEGORIES)
             if mask & (1 << index)
@@ -278,7 +278,7 @@ def test_actual_worker_exception_boundary_preserves_closed_code_without_db(
         if isinstance(node, ast.FunctionDef) and node.name == "run_one_build"
     )
     block = next(node for node in worker.body if isinstance(node, ast.Try))
-    categories = tuple(
+    categories: tuple[generator.SafetyCategory, ...] = tuple(
         item
         for index, item in enumerate(generator.SAFETY_CATEGORIES)
         if mask & (1 << index)

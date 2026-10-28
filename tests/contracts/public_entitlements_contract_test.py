@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v1"
 SCHEMA_PATH = CONTRACT_DIR / "capability-entitlement.schema.json"
 FIXTURE_PATH = CONTRACT_DIR / "synthetic-authorized-preflight.json"
-OPENAPI_PATH = ROOT / "web" / "openapi.json"
 
 
 def _schema() -> dict:
@@ -155,12 +154,11 @@ def test_v1_preserves_fail_closed_billing_incident_states() -> None:
 
 
 def test_v1_schema_and_fixture_are_byte_pinned() -> None:
+    # The generated browser API snapshot evolves independently of these frozen
+    # artifacts and has its own equivalence check.
     assert hashlib.sha256(SCHEMA_PATH.read_bytes()).hexdigest() == (
         "02f13fcf8226e6990389a085dfa3478ca4d7d4a8f9cc9f5ad3b3e676508fb865"
     )
     assert hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest() == (
         "9695b1a93b0c422467e46a93f587af2224b5b8c40b3c4951fc3bfc432e678530"
-    )
-    assert hashlib.sha256(OPENAPI_PATH.read_bytes()).hexdigest() == (
-        "c2698e99a7fcf5d1050eee395763d6f78aea7e732a6d32a7edc603c85b98cf33"
     )

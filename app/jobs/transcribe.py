@@ -114,7 +114,9 @@ def queue(*args, **kwargs):
     perform_celery.delay(*args, **kwargs)
 
 
-def queue_schema_transcription(transcript: AIVisitTranscript):
+def queue_schema_transcription(
+    transcript: AIVisitTranscript, *, note_policy: str | None = None
+):
     # now that the transcript exists, let's summarize it for each note type the doctor has
     # Get all note schemas for the doctor and issue summary jobs
     note_schemas = DoctorNoteSchema.where(
@@ -130,7 +132,10 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
         return
 
     for schema in cast(list[DoctorNoteSchema], note_schemas):
-        app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
+        options = {"note_policy": note_policy} if note_policy is not None else {}
+        app.jobs.summarize.queue(
+            transcript_id=transcript.id, schema_id=schema.id, **options
+        )
 
 
 def download_blob(visit: VisitAudioFile) -> str:
@@ -264,7 +269,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
 
 
 def label_speakers(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
-    """Relabel each entry's ``speaker`` to ``"Doctor"`` or ``"Patient"``.
+    """Classify two source speakers; qualify other source labels as unverified.
 
     The raw speaker labels differ by source: AssemblyAI (audio upload) uses
     ``"A"``/``"B"``, while Recall (Zoom bot) uses the participant display name.
@@ -275,17 +280,29 @@ def label_speakers(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
     The doctor-identification prompt is hardcoded to two speakers ``A`` and
     ``B``, so we map the distinct raw labels onto A/B for the LLM, then map its
     answer back to the raw label. The round-trip is fully reversible, so the
-    final Doctor/Patient assignment is independent of the A/B mapping direction
-    (the audio-upload path, already A/B, is unaffected).
+    final Doctor/Patient assignment is independent of the A/B mapping direction.
+    A participant label is not acoustic diarization: one participant can carry
+    several voices. The two-role classifier cannot resolve one or three-plus
+    source labels, so those recordings retain distinct unverified source labels.
+    Neither this classification nor a participant label verifies a clinical role.
     """
     if not entries:
         return entries
 
-    # Distinct raw labels in order of first appearance; a visit has two speakers.
+    # Distinct source labels do not establish clinical roles or acoustic voices.
     raw_labels: list[str] = []
     for entry in entries:
         if entry.speaker not in raw_labels:
             raw_labels.append(entry.speaker)
+
+    if len(raw_labels) != 2:
+        log.info("speaker roles unresolved", speaker_count=len(raw_labels))
+        return [
+            entry.model_copy(
+                update={"speaker": f"Unverified speaker ({entry.speaker})"}
+            )
+            for entry in entries
+        ]
 
     synthetic_by_raw = {raw: chr(ord("A") + i) for i, raw in enumerate(raw_labels)}
     raw_by_synthetic = {syn: raw for raw, syn in synthetic_by_raw.items()}
@@ -296,17 +313,14 @@ def label_speakers(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
     )
     classification = identify_doctor_from_transcript(sample)
     doctor_synthetic = extract_doctor_classification(classification)
-    if doctor_synthetic is None:
+    if doctor_synthetic not in raw_by_synthetic:
         log.error("speaker identification failed")
         raise ValueError("Could not extract doctor classification from reasoning.")
 
     doctor_raw = raw_by_synthetic.get(doctor_synthetic)
     return [
-        TranscriptEntry(
-            speaker="Doctor" if entry.speaker == doctor_raw else "Patient",
-            content=entry.content,
-            startTime=entry.startTime,
-            endTime=entry.endTime,
+        entry.model_copy(
+            update={"speaker": "Doctor" if entry.speaker == doctor_raw else "Patient"}
         )
         for entry in entries
     ]

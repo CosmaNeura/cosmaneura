@@ -14,6 +14,9 @@ const client = vi.hoisted(() => ({
   updateSettingsData: vi.fn(),
   zoomAuthUrl: vi.fn(),
   zoomDisconnect: vi.fn(),
+  getNoteTemplatePreference: vi.fn(),
+  updateNoteTemplatePreference: vi.fn(),
+  createNoteTemplate: vi.fn(),
 }))
 vi.mock("~/configuration/client", () => client)
 
@@ -129,6 +132,10 @@ function openSettings() {
 beforeEach(() => {
   vi.clearAllMocks()
   supportView.active = false
+  client.getNoteTemplatePreference.mockResolvedValue({
+    data: { default_schema_ref: null, revision: 0 },
+    response: new Response(null, { status: 200 }),
+  })
   client.settingsData.mockResolvedValue({
     data: {
       biography: "",
@@ -404,6 +411,63 @@ describe("settings current practice agreement", () => {
 })
 
 describe("settings layout", () => {
+  it("submits the default template independently of the example upload form", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    client.settingsData.mockResolvedValue({
+      data: {
+        biography: "",
+        notes_schema: [
+          {
+            id: "schema-soap",
+            note_type: "SOAP",
+            fields: { Subjective: "History" },
+            example_count: 0,
+          },
+        ],
+        note_customizations: [],
+        zoom_connected: false,
+        has_natmed_subscription: false,
+        terminology: "doctor_patient",
+        billing_recovery_required: false,
+      },
+      response: new Response(null, { status: 200 }),
+    })
+    client.updateNoteTemplatePreference.mockResolvedValue({
+      data: { default_schema_ref: "schema-soap", revision: 1 },
+      response: new Response(null, { status: 200 }),
+    })
+    openSettings()
+    const select = await screen.findByLabelText("Default Scribe template")
+    await waitFor(() => expect(select).toBeEnabled())
+    const form = select.closest("form")!
+    expect(form.parentElement?.closest("form")).toBeNull()
+    fireEvent.change(select, { target: { value: "schema-soap" } })
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }))
+    expect(await screen.findByText("Default template saved.")).toBeVisible()
+    expect(client.updateNoteTemplatePreference).toHaveBeenCalledExactlyOnceWith(
+      {
+        body: { expected_revision: 0, default_schema_ref: "schema-soap" },
+      },
+    )
+    expect(client.updateSettingsData).not.toHaveBeenCalled()
+  })
+
+  it("keeps a new template's section controls outside the example upload form", async () => {
+    practiceApi.getPractice.mockResolvedValue(practice())
+    openSettings()
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Create a template" }),
+    )
+    const name = screen.getByLabelText("Template name")
+    const form = name.closest("form")!
+    expect(form.parentElement?.closest("form")).toBeNull()
+    expect(form).not.toBe(
+      screen
+        .getByRole("button", { name: "Upload Example Visit Note", exact: true })
+        .closest("form"),
+    )
+  })
+
   it("has one page heading, a heading per section, and jump links to them", async () => {
     practiceApi.getPractice.mockResolvedValue(practice())
     openSettings()

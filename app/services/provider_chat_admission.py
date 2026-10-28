@@ -19,7 +19,7 @@ from app.models.authority_conversation import (
     CanonicalConversationUserPhase,
 )
 from sqlalchemy import func
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 BURST_LIMIT = 10
 BURST_WINDOW = timedelta(seconds=60)
@@ -75,8 +75,11 @@ def begin_admission(
     ):
         return None
     actor_id = session.exec(
-        select(MountContextSession.actor_id)
-        .join(MountContextToken, MountContextToken.session_id == MountContextSession.id)
+        select(col(MountContextSession.actor_id))
+        .join(
+            MountContextToken,
+            col(MountContextToken.session_id) == MountContextSession.id,
+        )
         .where(
             MountContextToken.token_hash == authority._token_hash(mount_context_token),
             MountContextSession.surface_ceiling == "provider_assistant",
@@ -138,7 +141,8 @@ def admit_new_chat(
         .join(CanonicalConversationTurn)
         .outerjoin(
             CanonicalConversationFinalPhase,
-            CanonicalConversationFinalPhase.turn_id == CanonicalConversationTurn.id,
+            col(CanonicalConversationFinalPhase.turn_id)
+            == CanonicalConversationTurn.id,
         )
         .where(
             *scope,

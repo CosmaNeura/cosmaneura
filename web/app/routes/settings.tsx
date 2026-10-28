@@ -11,6 +11,8 @@ import type { Route } from "./+types/settings"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { CreateNoteTemplate } from "~/components/CreateNoteTemplate"
+import { DefaultNoteTemplate } from "~/components/DefaultNoteTemplate"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { NoteTemplateFieldsEditor } from "~/components/NoteTemplateFieldsEditor"
@@ -297,36 +299,43 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 
   return (
     <section className="prose-headings prose w-full max-w-2xl space-y-4">
-      <h3>Note Types</h3>
+      <h3>Note templates</h3>
       {noteSchemas.length > 0 ? (
-        <p>Below are the notes you've uploaded.</p>
+        <p>
+          Choose the sections used for future notes. Existing saved notes are
+          unchanged.
+        </p>
       ) : (
-        <p>Once you upload note types, they'll appear here.</p>
+        <p>
+          Start with SOAP, create your own sections, or upload an example below.
+        </p>
       )}
+      <CreateNoteTemplate onCreated={() => void revalidator.revalidate()} />
+      <DefaultNoteTemplate schemas={noteSchemas} />
       {noteSchemas.map((schema) => (
         <div key={schema.id} className="flex flex-col rounded-lg border p-4">
-          <div
-            className="flex cursor-pointer items-center gap-4"
+          <button
+            type="button"
+            className="flex min-h-11 cursor-pointer items-center gap-4 text-left"
+            aria-expanded={expandedIds.includes(schema.id)}
             onClick={() => toggleExpand(schema.id)}
           >
-            <div className="font-medium">{schema.note_type}</div>
-            <div className="text-sm">
+            <span className="font-medium">{schema.note_type}</span>
+            <span className="text-sm">
               {schema.example_count}{" "}
               {pluralize("example", schema.example_count)}
-            </div>
-            <div className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
+            </span>
+            <span className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
               <ChevronDown
                 className={`h-4 w-4 transform transition-transform ${
                   expandedIds.includes(schema.id) ? "rotate-180" : ""
                 }`}
               />
-            </div>
-          </div>
+            </span>
+          </button>
           {expandedIds.includes(schema.id) && (
             <>
-              <p className="text-sm">
-                Here's the structure we've extracted from your note:
-              </p>
+              <p className="text-sm">Current sections and writing guidance:</p>
               <div className="mt-4 border-l-2 pl-4">
                 <div className="text-muted-foreground text-sm">
                   {Object.entries(schema.fields).map(([field, description]) => (
@@ -446,93 +455,95 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <Form {...form}>
-      <form
-        onSubmit={form.handleSubmit(onSubmit)}
-        className="flex flex-col gap-8"
-      >
-        <section className="w-full max-w-2xl space-y-4">
-          <div className="space-y-2">
-            <h2 className="text-left text-lg font-semibold">Notetaking</h2>
-            <p className="text-muted-foreground text-left text-sm">
-              Upload high quality examples of the different types of notes that
-              you use. These examples will be used to generate future notes for
-              your {t.patientPlural}, so make sure they are a great
-              representation of the structure and quality of note that you want
-              to see from your personalized AI!
-            </p>
-            <p className="text-muted-foreground text-left text-sm">
-              For example: if you use the telehealth SOAP note, pick a
-              high-quality note for that note type and upload a PDF version of
-              this note type.
-            </p>
-          </div>
+    <div className="flex flex-col gap-8">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <section className="w-full max-w-2xl space-y-4">
+            <div className="space-y-2">
+              <h2 className="text-left text-lg font-semibold">Notetaking</h2>
+              <p className="text-muted-foreground text-left text-sm">
+                Upload high quality examples of the different types of notes
+                that you use. These examples will be used to generate future
+                notes for your {t.patientPlural}, so make sure they are a great
+                representation of the structure and quality of note that you
+                want to see from your personalized AI!
+              </p>
+              <p className="text-muted-foreground text-left text-sm">
+                For example: if you use the telehealth SOAP note, pick a
+                high-quality note for that note type and upload a PDF version of
+                this note type.
+              </p>
+            </div>
 
-          <ImageDropzone onDropFile={setFile}>
-            {!file && (
-              <div className="flex items-center gap-4 font-semibold">
-                <div className="bg-muted rounded-full p-3">
-                  <Upload className="h-4 w-4" />
+            <ImageDropzone onDropFile={setFile}>
+              {!file && (
+                <div className="flex items-center gap-4 font-semibold">
+                  <div className="bg-muted rounded-full p-3">
+                    <Upload className="h-4 w-4" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <p>Upload Example Visit Note</p>
+                    <p className="text-muted-foreground text-xs">
+                      Click here or drag to select a PDF (10MB or smaller)
+                    </p>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <p>Upload Example Visit Note</p>
+              )}
+              {file && (
+                <div className="flex flex-col gap-1 font-semibold">
+                  <p>{file.name}</p>
                   <p className="text-muted-foreground text-xs">
-                    Click here or drag to select a PDF (10MB or smaller)
+                    Press the upload button below to add the example {t.patient}{" "}
+                    note
                   </p>
                 </div>
-              </div>
-            )}
-            {file && (
-              <div className="flex flex-col gap-1 font-semibold">
-                <p>{file.name}</p>
-                <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the example {t.patient}{" "}
-                  note
-                </p>
-              </div>
-            )}
-          </ImageDropzone>
+              )}
+            </ImageDropzone>
 
-          <FormField
-            control={form.control}
-            name="note_type"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Note Type</FormLabel>
-                <FormControl>
-                  <SimpleComboBox
-                    items={noteTypeComboBoxItems(noteSchemas)}
-                    onSelectedItemChange={(item) =>
-                      item && field.onChange(item.label)
-                    }
-                    {...field}
-                  />
-                </FormControl>
-                <FormDescription>
-                  Enter the type of note you want to upload. For example, "SOAP
-                  Note". If you've already uploaded a note for this note type,
-                  and want to add more examples to improve our system's
-                  performance, please select it from the list.
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+            <FormField
+              control={form.control}
+              name="note_type"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Note Type</FormLabel>
+                  <FormControl>
+                    <SimpleComboBox
+                      items={noteTypeComboBoxItems(noteSchemas)}
+                      onSelectedItemChange={(item) =>
+                        item && field.onChange(item.label)
+                      }
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Enter the type of note you want to upload. For example,
+                    "SOAP Note". If you've already uploaded a note for this note
+                    type, and want to add more examples to improve our system's
+                    performance, please select it from the list.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <Button disabled={!file || form.formState.isSubmitting} type="submit">
-            {form.formState.isSubmitting ? (
-              <>
-                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              "Upload Example Visit Note"
-            )}
-          </Button>
-        </section>
-        <NoteSchemaDisplay noteSchemas={noteSchemas} />
-      </form>
-    </Form>
+            <Button
+              disabled={!file || form.formState.isSubmitting}
+              type="submit"
+            >
+              {form.formState.isSubmitting ? (
+                <>
+                  <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                "Upload Example Visit Note"
+              )}
+            </Button>
+          </section>
+        </form>
+      </Form>
+      <NoteSchemaDisplay noteSchemas={noteSchemas} />
+    </div>
   )
 }
 
