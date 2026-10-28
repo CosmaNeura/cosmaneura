@@ -1,5 +1,10 @@
 # Local-only acceptance and production execution
 
+The PR-validation compute policy below was superseded on 2026-10-28 by owner
+authorization to use standard GitHub-hosted Ubuntu runners for `Pull Request
+Checks`, `Change budget`, and secretless `Terraform Plan` in this public repo.
+Workflow enablement is separate. Production controls in this plan still apply.
+
 Risk: Tier 2. Outcome: keep acceptance and PR validation local, with an explicit
 owner-authorized hosted release fallback after local execution failure. Preserve
 release authorization, validation prerequisites and evidence.

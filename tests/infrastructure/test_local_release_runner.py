@@ -11,6 +11,11 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+HOSTED_PR_WORKFLOWS = {
+    "pull_request_checks.yml": "pull_request",
+    "change-budget.yml": "pull_request_target",
+    "infra_plan.yml": "pull_request",
+}
 spec = importlib.util.spec_from_file_location(
     "local_release_runner", ROOT / "scripts/local_release_runner.py"
 )
@@ -47,7 +52,13 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
         for job in workflow.get("jobs", {}).values():
             if "runs-on" in job:
                 labels = job["runs-on"]
-                if path.name == "build_and_publish_local.yml":
+                if path.name in HOSTED_PR_WORKFLOWS:
+                    assert labels == "ubuntu-24.04", path
+                    continue
+                if path.name in {
+                    "build_and_publish_local.yml",
+                    "production_release_verified.yml",
+                }:
                     assert labels == "ubuntu-24.04"
                     assert set(workflow.get("on", workflow.get(True, {}))) == {
                         "workflow_dispatch"
@@ -69,6 +80,21 @@ def test_every_tracked_workflow_requires_approved_compute() -> None:
                         "cosmaneura-production-local-${{ github.run_id }}"
                     )
                 assert labels == expected_labels, path
+
+
+@pytest.mark.parametrize("filename,event", HOSTED_PR_WORKFLOWS.items())
+def test_hosted_pr_checks_preserve_unprivileged_event_boundary(
+    filename: str, event: str
+) -> None:
+    source = (ROOT / ".github/workflows" / filename).read_text()
+    workflow = yaml.safe_load(source)
+    assert set(workflow.get("on", workflow.get(True, {}))) == {event}
+    for scope in [workflow, *workflow["jobs"].values()]:
+        assert scope.get("permissions", {}) in ({}, {"contents": "read"})
+        assert "environment" not in scope
+    assert "secrets." not in source
+    assert "vars." not in source
+    assert "id-token:" not in source
 
 
 @pytest.mark.parametrize(
