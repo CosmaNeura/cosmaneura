@@ -28,7 +28,6 @@ from app.routes.dependencies.entra_service import (
 from app.routes.scribe_native_capture import native_capture_api_app
 from app.services import authority
 from app.services import scribe_capture_admission as admission
-from app.services import scribe_capture_deadline as deadline_service
 from app.services import scribe_capture_notes as notes
 from app.services import scribe_capture_scope as scope_service
 from app.services.scribe_capture_deadline import (
@@ -52,6 +51,8 @@ from sqlalchemy.engine.default import DefaultDialect
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session as ActiveSession
+
+from tests.authority_kernel.capture_deadline_clock import coordinated_deadline
 
 PREFIX = "/service/v1/agent/scribe/"
 DELAY = 0.08
@@ -223,58 +224,13 @@ def observed_binding_request(monkeypatch):
     )
 
 
-def coordinated_deadline(monkeypatch):
-    """Advance the unchanged 80 ms budget at an explicit fixture boundary.
-
-    Do not mutate the global clock or asyncio module: actual worker loops,
-    synchronous dependency dispatch and unrelated send timers remain real.
-    """
-    started = time.monotonic()
-    now = started
-    expired, waiting = asyncio.Event(), asyncio.Event()
-
-    async def wait(futures, *, timeout=None, return_when=asyncio.ALL_COMPLETED):
-        # The capture boundary waits on its outcome and disconnect watcher.
-        # Its one-future public response-send deadline retains the real timer.
-        futures = set(futures)
-        if len(futures) != 2 or return_when != asyncio.FIRST_COMPLETED:
-            return await asyncio.wait(futures, timeout=timeout, return_when=return_when)
-        assert timeout == pytest.approx(DELAY)
-        waiting.set()
-        timer = asyncio.create_task(expired.wait())
-        try:
-            done, pending = await asyncio.wait(
-                futures | {timer}, return_when=return_when
-            )
-            return done - {timer}, pending - {timer}
-        finally:
-            timer.cancel()
-            await asyncio.gather(timer, return_exceptions=True)
-
-    class AsyncioTimer:
-        def __getattr__(self, name):
-            return wait if name == "wait" else getattr(asyncio, name)
-
-    def expire():
-        nonlocal now
-        assert now == started
-        now = started + DELAY
-        expired.set()
-
-    clock = SimpleNamespace(monotonic=lambda: now)
-    monkeypatch.setattr(boundary, "time", clock)
-    monkeypatch.setattr(deadline_service, "time", clock)
-    monkeypatch.setattr(boundary, "asyncio", AsyncioTimer())
-    return SimpleNamespace(expire=expire, waiting=waiting)
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outer_boundary", [False, True])
 async def test_sync_auth_retains_one_slot_until_dependency_settles(
     monkeypatch, outer_boundary
 ):
     target = app(monkeypatch)
-    clock = coordinated_deadline(monkeypatch)
+    clock = coordinated_deadline(monkeypatch, seconds=DELAY)
     observed = observed_binding_request(monkeypatch)
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(boundary, "_workers", slots)
@@ -346,7 +302,7 @@ async def test_sync_auth_deadline_before_worker_entry_never_dispatches(
     monkeypatch, outer_boundary
 ):
     target = app(monkeypatch)
-    clock = coordinated_deadline(monkeypatch)
+    clock = coordinated_deadline(monkeypatch, seconds=DELAY)
     observed = observed_binding_request(monkeypatch)
     slots = BoundedSemaphore(1)
     monkeypatch.setattr(boundary, "_workers", slots)
@@ -426,7 +382,7 @@ async def test_sync_auth_binding_markers_reachable_with_valid_request(
     monkeypatch, outer_boundary
 ):
     target = app(monkeypatch)
-    coordinated_deadline(monkeypatch)
+    coordinated_deadline(monkeypatch, seconds=DELAY)
     observed = observed_binding_request(monkeypatch)
     if outer_boundary:
         monkeypatch.setattr(middleware, "ALLOWED_HOST_LIST", "testserver")
@@ -450,7 +406,7 @@ async def test_sync_auth_binding_markers_reachable_with_valid_request(
 @pytest.mark.asyncio
 async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypatch):
     target = app(monkeypatch)
-    clock = coordinated_deadline(monkeypatch)
+    clock = coordinated_deadline(monkeypatch, seconds=DELAY)
     release, entered, cancelled, closed = Event(), Event(), Event(), Event()
     calls = []
     payload = ConsentCreate(
@@ -531,7 +487,7 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
 @pytest.mark.asyncio
 async def test_late_note_commit_is_refused_and_cleanup_retains_capacity(monkeypatch):
     target = app(monkeypatch)
-    clock = coordinated_deadline(monkeypatch)
+    clock = coordinated_deadline(monkeypatch, seconds=DELAY)
     monkeypatch.setattr(boundary, "_workers", BoundedSemaphore(1))
     release, entered, cancelled, attempted, cleanup_release, closed = (
         Event() for _ in range(6)
@@ -818,7 +774,7 @@ async def test_real_global_session_dependency_is_owned_until_worker_finishes(
     monkeypatch,
 ):
     target = app(monkeypatch)
-    clock = coordinated_deadline(monkeypatch)
+    clock = coordinated_deadline(monkeypatch, seconds=DELAY)
     target.dependency_overrides.pop(aglobal_session)
     release, entered, cancelled, session_closed = Event(), Event(), Event(), Event()
     life = []
