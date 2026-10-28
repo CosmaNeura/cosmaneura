@@ -1,0 +1,17 @@
+{
+  "synthetic_only": true,
+  "evaluated_head": "c86e13e4231f5c5f8b341bf4304840b502ade91f",
+  "status": "RETAINED_FAILED_QUALITY_OUTPUTS_DO_NOT_REGRADE",
+  "cases": [
+    {
+      "id": "R2",
+      "response_sha256": "e5f7a18eb23099f343c4f99a2398cd1f2469b73373b2d308db885ba995ebd4cb",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[28,29,30,32,33,37,38]},\"fields\":{\"Subjective\":\"The patient reports dizziness that began twelve days ago (corrected from an earlier statement of twenty days). The dizziness occurs when standing up quickly and lasts about thirty seconds per episode (not thirty minutes). The patient has never fainted. The patient reports no chest pain, no shortness of breath, and no fever. The patient had a mild headache yesterday but does not have one today. The patient initially described the dizziness as severe but now corrects it to mild. The patient is able to walk and carry out their normal routine. There were two episodes of dizziness yesterday (corrected from an earlier count of seven). The patient drinks about four glasses of water daily. The patient has not started, stopped, or changed any medicine. The patient's home blood pressure reading was one hundred eighteen over seventy-two (corrected from an earlier value of one hundred eighty over seventy-two). The patient does not want denied symptoms shown as present.\",\"Objective\":\"No physical examination findings or additional diagnostic data were provided. The patient's home blood pressure reading was 118/72.\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}"
+    },
+    {
+      "id": "R3",
+      "response_sha256": "c6642f7121b7e935ee90816f39767185d818458912cebc262f11729c8d501314",
+      "raw": "{\"plan_source_refs\":{\"Plan\":[31,32,33,34,35,36,41]},\"fields\":{\"Subjective\":\"Avery Stone reports their right shoulder became sore after moving boxes four days ago. They first said left, but the correct side is right. The discomfort is mild at rest and increases when reaching overhead. Avery states, \\\"I have no fever or chest pain.\\\" Avery confirms, \\\"There was no fall.\\\" They state, \\\"I have no numbness and no weakness.\\\" Avery reports, \\\"The pain does not travel down my arm.\\\" They are able to hold a cup and get dressed. Avery's current pain score is two out of ten (they previously said four but corrected to two). Resting from heavy lifting has helped. Avery has not taken any new medicine. Avery confirms, \\\"The sore side is still the right shoulder.\\\" Avery reiterates, \\\"My right shoulder is the affected side, not my left.\\\" Avery states, \\\"There is still no numbness, weakness, fever, or chest pain.\\\" The current medication list was not specified; only that no new medicine has been taken.\",\"Objective\":\"Not mentioned in transcript.\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"}}"
+    }
+  ]
+}

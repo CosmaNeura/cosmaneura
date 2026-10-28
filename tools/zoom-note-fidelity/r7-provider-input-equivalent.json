@@ -1,0 +1,43 @@
+{
+  "status": "PROVIDER_INPUT_EQUIVALENT_PENDING_STORED_CANONICAL_EXPORT",
+  "synthetic_only": true,
+  "rawSource": "/private/tmp/scribe-zoom-r7-media-20261027-01/transcript.json",
+  "rawSHA256": "3fa6c3db2a02ccad7dc34a451caeff924ec13b373d2379a9959782db28c61eb7",
+  "parserSource": "/private/tmp/core-bot-quality-r8-20261027/app/services/recall_webhooks.py",
+  "parserSHA256": "7abeedf2deb154bf073d0260f78c7249ef57da45e5fbc8731531426063e2126e",
+  "guardSource": "/private/tmp/core-bot-quality-r8-20261027/app/jobs/transcribe.py",
+  "guardSHA256": "ed1d467b3de40cb6783b0a712b51ca3f3614ec6b12d0a79e196d0b624039dd83",
+  "dashboardSHA256": "b9372068f7b08cb4f55a83958f5160e359c5f4d27f0eb4a7df6af1fba4d88348",
+  "participantIds": [
+    200
+  ],
+  "providerSegments": 1,
+  "providerWordTokens": 392,
+  "mappedEntries": [
+    {
+      "speaker": "Scribe Synthetic Audio R7",
+      "content": "This is a completely synthetic practice Visit. I am Dr. Lane speaking with Casey Vale. We will check several details carefully and correct anything that was misstated. Cayce, please describe the dizziness you mentioned and give me the time course in your own words. The dizziness began 12 days ago. Earlier I said 20 days, but 12 is correct. It lasts about 30 seconds. When I stand up quickly, it does not last 30 minutes. I have never fainted. The opening marker is orange telescope and this is invented test information to confirm symptoms. Began 12 days ago. Episodes last 30 seconds and there has been no fainting. Have you noticed chest pain, shortness of breath, fever or a headache? Please distinguish a symptom you actually have from one you are denying. I have no chest pain. No. No shortness of breath and no fever. I did have a mild headache yesterday, but I do not have one today. I initially called the dizziness severe. I would correct that to mild. I can still walk and carry out my normal routine. How many episodes occurred yesterday? Also tell me about fluid intake and whether you have started or stopped any medicines. I want the corrected count to replace the earlier number rather than leave two competing versions in the final summary. There were two episodes yesterday, not seven. I drink about four glasses of water daily. I have not started, stopped or changed any medicine. The middle marker is turquoise notebook. My blood pressure reading at home was 11872, not 18072. The corrected home reading is 11872 with two mild episodes yesterday. For this practice plan, rise slowly. Keep a brief symptom diary and maintain regular fluids. We are not starting a new medicine. Follow up should be in 10 days, not 10 weeks. I understand. I will record when the dizziness happens and how long it lasts. I will use the corrected count of two and the duration of 30 seconds. I do not want the denied symptoms shown as present. My late marker is Indigo lantern. Final check. 12 days of brief mild dizziness on standing. No fainting, no chest pain, no shortness of breath and no current headache. No medication changes. Planned follow up is 10 days. The closing marker is Cedar Compass. This concludes the synthetic corrections test.",
+      "startTime": 498900,
+      "endTime": 646359
+    }
+  ],
+  "candidateEntries": [
+    {
+      "speaker": "Unverified speaker (Scribe Synthetic Audio R7)",
+      "content": "This is a completely synthetic practice Visit. I am Dr. Lane speaking with Casey Vale. We will check several details carefully and correct anything that was misstated. Cayce, please describe the dizziness you mentioned and give me the time course in your own words. The dizziness began 12 days ago. Earlier I said 20 days, but 12 is correct. It lasts about 30 seconds. When I stand up quickly, it does not last 30 minutes. I have never fainted. The opening marker is orange telescope and this is invented test information to confirm symptoms. Began 12 days ago. Episodes last 30 seconds and there has been no fainting. Have you noticed chest pain, shortness of breath, fever or a headache? Please distinguish a symptom you actually have from one you are denying. I have no chest pain. No. No shortness of breath and no fever. I did have a mild headache yesterday, but I do not have one today. I initially called the dizziness severe. I would correct that to mild. I can still walk and carry out my normal routine. How many episodes occurred yesterday? Also tell me about fluid intake and whether you have started or stopped any medicines. I want the corrected count to replace the earlier number rather than leave two competing versions in the final summary. There were two episodes yesterday, not seven. I drink about four glasses of water daily. I have not started, stopped or changed any medicine. The middle marker is turquoise notebook. My blood pressure reading at home was 11872, not 18072. The corrected home reading is 11872 with two mild episodes yesterday. For this practice plan, rise slowly. Keep a brief symptom diary and maintain regular fluids. We are not starting a new medicine. Follow up should be in 10 days, not 10 weeks. I understand. I will record when the dizziness happens and how long it lasts. I will use the corrected count of two and the duration of 30 seconds. I do not want the denied symptoms shown as present. My late marker is Indigo lantern. Final check. 12 days of brief mild dizziness on standing. No fainting, no chest pain, no shortness of breath and no current headache. No medication changes. Planned follow up is 10 days. The closing marker is Cedar Compass. This concludes the synthetic corrections test.",
+      "startTime": 498900,
+      "endTime": 646359
+    }
+  ],
+  "textExactlyMatchesRenderedPersistedTranscript": true,
+  "sourceTextTimingAndExistingSpeakerIdUnchanged": true,
+  "newRoleClassificationCalls": 0,
+  "providerCalls": 0,
+  "databaseConnections": 0,
+  "limits": [
+    "Stored canonical timing/identity and exact R7 schema/example/preferences still need confirmation.",
+    "One provider participant is not evidence of one or two acoustic speakers; no clinical role is inferred.",
+    "Raw ASR uses 11872 and 18072; the numeric text is not silently repaired.",
+    "This is source mapping evidence, not model, note quality or audio acceptance."
+  ]
+}
