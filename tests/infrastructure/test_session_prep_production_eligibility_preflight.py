@@ -5,10 +5,17 @@ import json
 import secrets
 from collections import Counter
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from app.services.organization_access import (
+    RosterApprovalInput,
+    claim_roster_access,
+    configure_provider_organization,
+    import_roster_approvals,
+)
 from app.services.session_prep_provider_access import (
     resolve_session_prep_provider_access,
 )
@@ -184,6 +191,129 @@ def test_command_refuses_before_database_access_outside_production(
     assert captured.err == "Session Prep production eligibility preflight refused.\n"
 
 
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "postgresql://user:password@localhost:5432/production?sslmode=require",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5433/production?sslmode=require",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/staging?sslmode=require",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production",
+        "postgresql://user:password@cosmaneura-prod-postgres.postgres.database.azure.com:5432/production?sslmode=require&application_name=other",
+    ],
+)
+def test_production_database_url_rejects_wrong_endpoint_before_connect(
+    database_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    connected = False
+
+    def refuse_connect(*args: Any, **kwargs: Any) -> None:
+        nonlocal connected
+        connected = True
+
+    monkeypatch.setenv("PYTHON_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setattr(preflight.psycopg, "connect", refuse_connect)
+
+    assert preflight.main() == 2
+    assert connected is False
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "Session Prep production eligibility preflight failed.\n"
+
+
+class _MainConnection:
+    def __init__(self) -> None:
+        self.rolled_back = False
+
+    def __enter__(self) -> _MainConnection:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        return None
+
+    def execute(self, query: str, params: tuple[Any, ...] = ()) -> _Rows:
+        assert params == ()
+        if query == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY":
+            return _Rows([])
+        if query == preflight.SERVER_IDENTITY_QUERY:
+            return _Rows([("production", "public", "on")])
+        raise AssertionError("unexpected query")
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+
+
+def test_command_binds_canonical_endpoint_and_read_only_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_url = (
+        "postgresql://user:password@"
+        "cosmaneura-prod-postgres.postgres.database.azure.com:5432/"
+        "production?sslmode=require"
+    )
+    connection = _MainConnection()
+    observed_connect: dict[str, Any] = {}
+
+    def connect(value: str, **kwargs: Any) -> _MainConnection:
+        observed_connect.update({"database_url": value, **kwargs})
+        return connection
+
+    report = {
+        "environment": "production",
+        "eligible": 0,
+        "total": 0,
+    }
+    monkeypatch.setenv("PYTHON_ENV", "production")
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("SESSION_PREP_PROVIDER_ENABLED", "false")
+    monkeypatch.setattr(preflight.psycopg, "connect", connect)
+    monkeypatch.setattr(
+        preflight,
+        "collect_inventory",
+        lambda connection, **kwargs: report,
+    )
+
+    assert preflight.main() == 0
+    assert observed_connect == {
+        "database_url": database_url,
+        "connect_timeout": preflight.CONNECT_TIMEOUT_SECONDS,
+        "application_name": "session_prep_production_eligibility_preflight",
+        "options": (
+            "-c default_transaction_read_only=on "
+            f"-c statement_timeout={preflight.STATEMENT_TIMEOUT_MILLISECONDS} "
+            "-c timezone=UTC"
+        ),
+    }
+    assert connection.rolled_back is True
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == report
+    assert captured.err == ""
+
+
+def _write_revision(path: Path, revision: str, down_revision: object) -> None:
+    path.write_text(
+        f"revision = {revision!r}\ndown_revision = {down_revision!r}\n",
+        encoding="utf-8",
+    )
+
+
+def test_repository_migration_contract_rejects_disconnected_cycle(
+    tmp_path: Path,
+) -> None:
+    versions = tmp_path / "migrations" / "versions"
+    versions.mkdir(parents=True)
+    _write_revision(versions / "base.py", "base", None)
+    _write_revision(versions / "head.py", "head", "base")
+    _write_revision(versions / "cycle_a.py", "cycle_a", "cycle_b")
+    _write_revision(versions / "cycle_b.py", "cycle_b", "cycle_a")
+
+    with pytest.raises(preflight.InventoryFailure):
+        preflight.repository_migration_contract(tmp_path)
+
+
 def _doctor(label: str, *, onboarded: bool = True) -> Doctor:
     nonce = secrets.token_hex(4)
     return Doctor(
@@ -227,6 +357,52 @@ def _pilot_grant(
     ).save()
 
 
+def _rostered_provider(label: str, *, observed_at: datetime) -> Doctor:
+    nonce = secrets.token_hex(4)
+    domain = f"inventory-{label}-{nonce}.example.com"
+    doctor = Doctor(
+        clerk_id=f"user_inventory_roster_{label}_{nonce}",
+        email=f"provider@{domain}",
+        biography="",
+        onboarding_completed_at=observed_at - timedelta(minutes=1),
+    ).save()
+    practice = Practice(
+        legal_name=f"Inventory {label} MCD Practice",
+        join_code=f"I{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="mcd",
+        is_solo=False,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=observed_at - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+        billing_exempt=True,
+    ).save()
+    _, access_code, _ = configure_provider_organization(
+        practice,
+        legal_name=f"Inventory {label} MCD Organization",
+        slug=f"inventory-{label}-{secrets.token_hex(5)}",
+        email_domain=domain,
+        operator_ref="test-eligibility-inventory",
+        reason="Verify aggregate MCD roster eligibility",
+        now=observed_at,
+    )
+    import_roster_approvals(
+        practice,
+        [RosterApprovalInput(email=doctor.email or "")],
+        operator_ref="test-eligibility-inventory",
+        reason="Authorize a synthetic MCD provider",
+        source_ref=f"test://eligibility-inventory/{label}",
+        source_sha256=hashlib.sha256(label.encode()).hexdigest(),
+        now=observed_at,
+    )
+    claim_roster_access(
+        doctor,
+        supplied_code=access_code,
+        now=observed_at + timedelta(seconds=1),
+    )
+    return doctor
+
+
 def _collect_from_test_database(
     *,
     observed_at: datetime,
@@ -259,6 +435,8 @@ def test_aggregate_query_matches_the_live_strict_provider_predicate() -> None:
     allowed = _doctor("allowed")
     provision_practice_in_force(allowed)
     providers.append(allowed)
+
+    providers.append(_rostered_provider("rostered", observed_at=observed_at))
 
     deleted = _doctor("deleted")
     deleted.deleted_at = observed_at - timedelta(seconds=1)

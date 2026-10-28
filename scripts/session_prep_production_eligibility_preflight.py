@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import sys
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -28,6 +29,7 @@ REPORT_SCHEMA_VERSION = 1
 EXPECTED_ENVIRONMENT = "production"
 EXPECTED_DATABASE_NAME = "production"
 EXPECTED_SCHEMA = "public"
+EXPECTED_DATABASE_HOST = "cosmaneura-prod-postgres.postgres.database.azure.com"
 BAA_CURRENT_REFERENCE = "CN-BAA-CUST-CW v2.3"
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_SESSION_PREP_ANCESTORS = (
@@ -431,7 +433,33 @@ def repository_migration_contract(
         raise InventoryFailure("repository migration head is ambiguous")
     head = heads[0]
     ancestors = _revision_ancestors(graph, head)
+    if ancestors != frozenset(graph):
+        raise InventoryFailure("repository migration graph is disconnected")
     return RepositoryMigrationContract(head=head, ancestors=ancestors)
+
+
+def validate_production_database_url(database_url: str) -> None:
+    """Require the canonical production endpoint before opening a socket."""
+
+    try:
+        parsed = urllib.parse.urlsplit(database_url)
+    except ValueError as error:
+        raise InventoryFailure("production database URL is invalid") from error
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        raise InventoryFailure("production database URL is invalid")
+    if not parsed.username or not parsed.password or parsed.netloc.count("@") != 1:
+        raise InventoryFailure("production database identity is invalid")
+    try:
+        canonical_host = (parsed.hostname or "").rstrip(".").lower()
+        port = parsed.port
+    except ValueError as error:
+        raise InventoryFailure("production database URL is invalid") from error
+    if canonical_host != EXPECTED_DATABASE_HOST:
+        raise InventoryFailure("production database host is unexpected")
+    if port not in {None, 5432} or parsed.path != f"/{EXPECTED_DATABASE_NAME}":
+        raise InventoryFailure("production database target is unexpected")
+    if parsed.query != "sslmode=require" or parsed.fragment:
+        raise InventoryFailure("production database URL options are unexpected")
 
 
 def validate_migration_compatibility(
@@ -607,6 +635,7 @@ def main() -> int:
         return 2
 
     try:
+        validate_production_database_url(database_url)
         rollout_enabled = _rollout_enabled(
             os.environ.get("SESSION_PREP_PROVIDER_ENABLED")
         )
