@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass
 from itertools import groupby
 
-from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_plan_grounding as plans
+from app.services.zoom_bot_history_grounding_v1 import BotHistoryGrounding
 
 
 def render_sources(indexes, sources, identities):
@@ -51,7 +51,7 @@ class BotPlanGrounding(plans.PlanGrounding):
 
 
 @dataclass(frozen=True, repr=False)
-class BotReportedHistoryGrounding(history.ReportedHistoryGrounding):
+class BotReportedHistoryGrounding(BotHistoryGrounding):
     identities: tuple = ()
 
     def _render(self, indexes):

@@ -65,7 +65,7 @@ def segment_boundaries(transcripts) -> tuple[int, ...]:
 @dataclass(frozen=True, repr=False)
 class BotGrounding:
     plan: plans.PlanGrounding
-    history: history.ReportedHistoryGrounding
+    history: BotReportedHistoryGrounding
     boundaries: tuple[int, ...]
     has_classified_roles: bool
     entries: tuple[constraints.Source, ...]
@@ -137,14 +137,17 @@ class BotGrounding:
             and not any(entry.speaker == "Patient" for entry in entries)
             and constraints.patient_history_field(field)
         )
-        retained = history.ReportedHistoryGrounding.for_capture(
+        retained = BotReportedHistoryGrounding.for_capture(
             tuple(field for field in fields if field not in empty_subjective),
             plan.fields,
             plan.sources,
             patient_only=patient_only,
         )
         retained = BotReportedHistoryGrounding(
-            retained.fields, retained.medication_fields, retained.sources, identities
+            retained.fields,
+            retained.medication_fields,
+            retained.sources,
+            identities=identities,
         )
         literals = tuple(
             constraints.Source(entry.speaker, entry.content) for entry in entries
@@ -191,6 +194,11 @@ class BotGrounding:
         schema = capture_response_schema(tuple(fields), self.plan.fields, self.history)
         enveloped = bool(self.plan.fields or self.history.fields)
         field_schema = schema["properties"]["fields"] if enveloped else schema
+        # The bot's evaluated v1 history envelope permits strings that its
+        # closed source resolver replaces. Keep capture's newer Objective-only
+        # empty-string schema from silently changing this provider contract.
+        for field in self.history.fields:
+            field_schema["properties"][field].pop("enum", None)
         for field in self.empty_subjective:
             field_schema["properties"][field]["enum"] = [""]
         allowed = [
