@@ -2,15 +2,20 @@
 
 import json
 from types import SimpleNamespace as NS
+from typing import cast
 
 import pytest
+
 from app.jobs import summarize
 from app.services import scribe_capture_history_grounding as history
 from app.services import zoom_bot_note_grounding as bot
 from app.services import zoom_bot_note_policy as policy
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor import Terminology
-from app.models.note_type_customization import NoteTypeCustomization
+from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.note_type_customization import NoteTypeCustomization, PronounStyle
 
 from tests.job.zoom_bot_test_support import SOAP, response, transcript
 
@@ -112,7 +117,7 @@ def test_provider_schema_example_preferences_and_single_call_remain(monkeypatch)
     schema = NS(fields=fields)
     example = NS(field_examples={"Subjective": "EXAMPLE STYLE ONLY"})
     customization = NoteTypeCustomization(
-        custom_instructions="Use short sentences.", pronoun_style="neutral"
+        custom_instructions="Use short sentences.", pronoun_style=PronounStyle.neutral
     )
     before = customization.model_dump()
     g = bot.BotGrounding.build(source, fields, patient_only=True)
@@ -146,7 +151,11 @@ def test_provider_schema_example_preferences_and_single_call_remain(monkeypatch)
         summarize, "extract_action_items", lambda *_: pytest.fail("extra model call")
     )
     note = summarize.generate_clinical_note(
-        source, example, schema, customization, bot_fidelity=True
+        cast(AIVisitTranscript, source),
+        cast(DoctorNoteExample, example),
+        cast(DoctorNoteSchema, schema),
+        customization,
+        bot_fidelity=True,
     )
     assert len(calls) == 1 and options == [{"timeout": 30.0, "max_retries": 0}]
     prompt = calls[0]["messages"][1]["content"]
@@ -181,6 +190,6 @@ def test_pilot_queue_has_no_automatic_retry_and_default_queue_is_preserved(monke
         transcript_id="synthetic", schema_id="synthetic", note_policy=policy.POLICY
     )
     assert [route for route, _ in routed] == ["default", "bot"]
-    assert summarize.perform_bot_celery.autoretry_for == ()
+    assert getattr(summarize.perform_bot_celery, "autoretry_for") == ()
     assert summarize.perform_bot_celery.max_retries == 0
-    assert summarize.perform_celery.autoretry_for == (Exception,)
+    assert getattr(summarize.perform_celery, "autoretry_for") == (Exception,)

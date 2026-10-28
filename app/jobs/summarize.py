@@ -462,11 +462,10 @@ def _merge_transcripts(
 
 perform_celery = celery_app.task(perform)
 perform_bot_celery = celery_app.task(
-    perform,
     name="app.jobs.summarize.perform_bot",
     autoretry_for=(),
     max_retries=0,
-)
+)(perform)
 
 
 def queue(*args, **kwargs):

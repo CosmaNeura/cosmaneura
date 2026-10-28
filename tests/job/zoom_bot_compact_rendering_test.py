@@ -4,6 +4,7 @@ import json
 from uuid import UUID
 
 import pytest
+
 from app.services import scribe_capture_history_grounding as history
 from app.services import zoom_bot_note_grounding as bot
 from app.services.scribe_capture_plan_grounding import PlanSource

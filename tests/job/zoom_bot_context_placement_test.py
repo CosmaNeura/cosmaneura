@@ -4,10 +4,11 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
+
 from app.services import zoom_bot_note_grounding as bot
 from app.services import zoom_bot_source_constraints as constraints
 from app.services import zoom_bot_source_passages as passages
-from pydantic import BaseModel
 
 from app.models.ai_visit_transcript import TranscriptEntry
 

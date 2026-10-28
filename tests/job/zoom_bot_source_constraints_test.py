@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace as NS
 
 import pytest
+
 from app.services import zoom_bot_note_grounding as bot
 from app.services import zoom_bot_source_constraints as constraints
 

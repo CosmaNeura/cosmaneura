@@ -1,6 +1,7 @@
 """Real PostgreSQL authority after Redis loss; provider calls are stand-ins."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Callable, TypedDict
 from uuid import uuid4
 
 import pytest
@@ -9,6 +10,7 @@ from app.services import recall_webhooks, zoom_capture_status
 from app.services import zoom_capture_bindings as bindings
 from app.services.external_webhook_inbox import RetryableWebhookError
 
+from activemodel.types import TypeIDType
 from app.models.external_webhook_operation import ExternalWebhookOperation
 from app.models.zoom_capture_binding import ZoomCaptureBinding
 from app.models.zoom_meeting import ZoomMeeting
@@ -19,6 +21,16 @@ from tests.authority_kernel.zoom_bot_note_policy_test import isolated_session
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
 engine = _engine
+
+
+class BindingArguments(TypedDict):
+    doctor_id: TypeIDType
+    meeting_id: str
+    appointment_id: TypeIDType
+    patient_id: TypeIDType
+    occurrence: str
+    bot_id: str
+    require: Callable[[], None]
 
 
 @pytest.fixture
@@ -40,7 +52,7 @@ def capture(engine, monkeypatch):
             capture_authorization_consumed_at=at,
         ).save()
         bot, recording = uuid4().hex, uuid4().hex
-        args = dict(
+        args = BindingArguments(
             doctor_id=doctor.id,
             meeting_id=meeting.zoom_meeting_id,
             appointment_id=appointment.id,
@@ -178,6 +190,7 @@ def test_normal_transcript_done_persists_same_visit_without_redis(capture, monke
     saved = recall_webhooks.recall_webhook_operations.find_ingested_transcript(
         transcript
     )
+    assert saved is not None
     assert saved.transcript.appointment_id == appointment.id
     assert saved.transcript.doctor_id == doctor.id
     assert saved.transcript.patient_id == appointment.patient_id

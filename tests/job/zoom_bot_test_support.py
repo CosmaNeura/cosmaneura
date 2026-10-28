@@ -2,6 +2,7 @@
 
 import json
 from types import SimpleNamespace as NS
+from typing import Any
 
 from app.services import scribe_capture_history_grounding as history
 
@@ -49,7 +50,7 @@ def primary_selection(grounding, selected=()):
 
 
 def response(grounding, fields=SOAP, *, plans=(), histories=(), context=(), prose=None):
-    result = {
+    result: dict[str, Any] = {
         "fields": dict(prose) if prose is not None else {key: "" for key in fields}
     }
     if grounding.plan.fields:
