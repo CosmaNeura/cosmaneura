@@ -116,7 +116,7 @@ def run_human_snapshot(
         return deadline
 
     def remaining(maximum: float) -> float:
-        value = phase(maximum) - time.monotonic()
+        value = min(maximum, phase(maximum) - time.monotonic())
         require(value > 0)
         return value
 
@@ -381,7 +381,7 @@ def run_human_preparation(
         return result
 
     def remaining(maximum):
-        result = phase(maximum) - time.monotonic()
+        result = min(maximum, phase(maximum) - time.monotonic())
         require(result > 0)
         return result
 
