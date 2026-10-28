@@ -155,6 +155,6 @@ issue when it is done.
 
 ### Known limits
 
-- CI is off.
+- PR checks use GitHub-hosted runners; workflow enablement is a separate setting.
 - Stripe checkout may fail because of a Clerk permission issue.
 - Recording-start timing needs a real iPhone and is out of scope.
