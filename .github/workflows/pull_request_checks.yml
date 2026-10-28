@@ -172,6 +172,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
+        with:
+          apt-packages: zsh
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi
