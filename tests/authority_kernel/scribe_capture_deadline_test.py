@@ -449,7 +449,8 @@ async def test_sync_auth_binding_markers_reachable_with_valid_request(
 
 @pytest.mark.asyncio
 async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypatch):
-    target = app(monkeypatch)
+    # Give worker startup room; the held downstream call must cross the deadline.
+    target = app(monkeypatch, seconds=1)
     release, entered, cancelled, closed = Event(), Event(), Event(), Event()
     calls = []
     payload = ConsentCreate(
@@ -502,6 +503,7 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
             )
         assert response.status_code == 504 and entered.is_set()
         assert calls == [("consent dispatched", "retained-consent-key")]
+        await until(cancelled)
     finally:
         release.set()
     await until(closed)

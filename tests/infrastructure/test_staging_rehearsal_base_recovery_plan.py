@@ -1454,10 +1454,27 @@ def test_subprocess_is_bounded_and_kills_its_group(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     real_popen, real_killpg, seen = subprocess.Popen, os.killpg, {}
+    descendant_ready, descendant_survived = tmp_path / "descendant-ready", tmp_path / "descendant-survived"
+    wait_for_descendant = False
 
     def popen(*args: Any, **kwargs: Any) -> Any:
         seen["new_session"] = kwargs.get("start_new_session")
-        return real_popen(*args, **kwargs)
+        process = real_popen(*args, **kwargs)
+        if wait_for_descendant:
+            # Test group cleanup after the child exists, not Python startup speed.
+            try:
+                expires = time.monotonic() + 5
+                while not descendant_ready.is_file():
+                    assert time.monotonic() < expires, "synthetic descendant did not start"
+                    time.sleep(0.001)
+            except BaseException:
+                try:
+                    real_killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=2)
+                raise
+        return process
 
     def killpg(pid: int, sig: int) -> None:
         seen["killpg"] = sig
@@ -1478,7 +1495,7 @@ def test_subprocess_is_bounded_and_kills_its_group(
             cwd=tmp_path,
             timeout_seconds=0.01,
         )
-    descendant_ready, descendant_survived = tmp_path / "descendant-ready", tmp_path / "descendant-survived"
+    wait_for_descendant = True
     source = f'import os,time\npid=os.fork()\nif pid == 0:\n open({str(descendant_ready)!r},"w").close();time.sleep(0.5);open({str(descendant_survived)!r},"w").close();time.sleep(30);os._exit(0)\nwhile not os.path.exists({str(descendant_ready)!r}):time.sleep(0.01)\nos._exit(0)'
     with pytest.raises(recovery.RecoveryPlanError, match="timed out"):
         recovery._run_process([sys.executable, "-c", source], cwd=tmp_path, timeout_seconds=0.05)
