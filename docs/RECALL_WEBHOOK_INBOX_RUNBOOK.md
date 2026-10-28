@@ -5,6 +5,11 @@ not a production-readiness declaration. Recall bot/recording-to-tenant bindings
 remain in Redis with a 24-hour TTL; replacing them with durable,
 server-authoritative bindings is a Phase 2 release gate.
 
+The default-off implementation and staged cutover for that gate are described in
+`ZOOM_DURABLE_CAPTURE_BINDING_FLIGHT_PLAN.md`. Until its migration, coordinated
+flag activation and actual synthetic meeting acceptance pass, this runbook's
+Phase 2 gate remains open.
+
 ## Verified Recall workspace contract
 
 - Workspace: **CosmaNeura — US West (Oregon)**, API v1.11.
@@ -152,10 +157,12 @@ side-effect fence during this rolling-deploy window.
    body in application/Sentry/Celery logs.
 4. Do not add Desktop SDK webhook subscriptions during this cutover. They are a
    separate, reviewed change after the desktop upload adapter exists.
-5. Keep Zoom clinical capture disabled until activation gate D2 supplies each
-   `ZoomMeeting` with an exact appointment plus an unexpired occurrence digest.
-   This runtime deliberately contains no producer for that authorization and
-   fails closed when it is absent, mismatched, expired, or already consumed.
+5. Activation gate D2 requires each `ZoomMeeting` to have an exact appointment
+   plus an unexpired occurrence digest. The current normal per-visit
+   `authorize-capture` route produces that authorization; account connection is
+   insufficient. Capture still fails closed when authority is absent,
+   mismatched, expired, or already consumed. This authorization producer alone
+   does not close the separate durable bot/recording binding gate.
 
 When the flag is false, ordinary verified callbacks return HTTP 200 after
 enqueueing the hardened compatibility bridge with a keyed pseudonymous event
