@@ -101,7 +101,7 @@ SOURCE_PINS = (
     ),
     (
         "staging_snapshot_human",
-        "540cc2ee50dc6c7ffc8517391e02fac4d8cef2bc4cf4eb44fe933a4c7497ac13",
+        "0bfd8e4f3632003d9b3f3a7b6da45c1f205e47b5a7d486615adf17b4d1c23eaf",
     ),
 )
 PRELOAD = (
