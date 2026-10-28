@@ -16,7 +16,8 @@ RECORD_GRANT_TTL_SECONDS = 60
 RECORD_GRANT_PATTERN = r"^[A-Za-z0-9_-]{80,4096}={0,2}$"
 
 _OPAQUE_REF = re.compile(r"^[A-Za-z0-9._~-]+$")
-_CANONICAL_FERNET_KEY = re.compile(r"^[A-Za-z0-9_-]{43}=$")
+CANONICAL_FERNET_KEY_PATTERN = r"^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]=$"
+_CANONICAL_FERNET_KEY = re.compile(CANONICAL_FERNET_KEY_PATTERN)
 
 
 class RecordGrantConfigurationError(RuntimeError):

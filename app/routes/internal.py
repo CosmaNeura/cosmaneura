@@ -31,6 +31,7 @@ import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.reference_labs_gate as reference_labs_gate
+import app.services.session_prep_discovery as session_prep_discovery
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -39,6 +40,7 @@ import app.services.zoom_capture_status as zoom_capture_status
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
+from app.configuration import session_prep as session_prep_configuration
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.redis import get_redis
 from app.configuration.scribe_encounters import SCRIBE_ENCOUNTER_SETTINGS
@@ -1016,6 +1018,19 @@ class VisitPrepSettingsData(BaseModel, extra="forbid"):
     can_send_sms: bool
 
 
+class SessionPrepSettingsData(BaseModel, extra="forbid"):
+    """PHI-free discovery state for the current provider context.
+
+    This is intentionally narrower than an execution authorization.
+    ``can_review_sources`` reflects the same current provider/practice/BAA/
+    entitlement gate as review execution. Session Prep read and review routes
+    still re-resolve record and note ownership at request time.
+    """
+
+    eligible: bool
+    can_review_sources: bool
+
+
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
@@ -1037,6 +1052,14 @@ class SettingsData(BaseModel, extra="forbid"):
     has_natmed_subscription: bool
     terminology: Terminology
     visit_prep: VisitPrepSettingsData
+    # Optional on the wire so existing generated clients and cached fixtures
+    # remain compatible. The server always supplies the current projection.
+    session_prep: SessionPrepSettingsData = Field(
+        default_factory=lambda: SessionPrepSettingsData(
+            eligible=False,
+            can_review_sources=False,
+        )
+    )
 
 
 def _platform_admin_capability_active(request: Request) -> bool:
@@ -1069,10 +1092,21 @@ def _platform_admin_capability_active(request: Request) -> bool:
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
+    view_as_active = getattr(request.state, "view_as", None) is not None
     access_decision = resolve_doctor_access(doctor, require_entitlement=False)
+    session_prep_access_decision = resolve_doctor_access(doctor)
     visit_prep_decision = visit_prep_access.resolve_visit_prep_access(
         doctor,
-        view_as_active=getattr(request.state, "view_as", None) is not None,
+        view_as_active=view_as_active,
+    )
+    session_prep_decision = session_prep_discovery.resolve_session_prep_discovery(
+        selected_for_beta=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
+                doctor.clerk_id
+            )
+        ),
+        provider_access_allowed=session_prep_access_decision.allowed,
+        view_as_active=view_as_active,
     )
 
     zoom_integration = DoctorVideoIntegration.get(
@@ -1137,6 +1171,10 @@ def settings_data(request: Request) -> SettingsData:
             can_manage=visit_prep_decision.can_manage,
             can_send_email=visit_prep_decision.can_send_email,
             can_send_sms=visit_prep_decision.can_send_sms,
+        ),
+        session_prep=SessionPrepSettingsData(
+            eligible=session_prep_decision.eligible,
+            can_review_sources=session_prep_decision.can_review_sources,
         ),
     )
 

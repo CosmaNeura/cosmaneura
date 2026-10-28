@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from "react"
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { AiVisitTranscript, NoteDetail } from "~/configuration/client"
 import {
@@ -35,9 +35,33 @@ vi.mock("~/utils/reference-toolkit-feature", () => ({
   isReferenceToolkitEnabled: vi.fn(() => false),
   isReferenceLabsEnabled: vi.fn(() => false),
 }))
+const sessionPrepUi = vi.hoisted(() => ({
+  buildAvailable: false,
+  settings: undefined as
+    | {
+        session_prep?: {
+          eligible: boolean
+          can_review_sources: boolean
+        }
+      }
+    | undefined,
+}))
+vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@tanstack/react-query")>()
+  return {
+    ...actual,
+    useQuery: () => ({ data: sessionPrepUi.settings }),
+  }
+})
+vi.mock("client/@tanstack/react-query.gen", () => ({
+  settingsDataOptions: () => ({ queryKey: ["settings"] }),
+}))
 vi.mock("~/sovereign/SovereignPanelHost", () => ({
-  SovereignPanelHost: () => null,
-  resolveSovereignProviderConfig: () => null,
+  SovereignPanelHost: () => <div data-testid="session-prep-panel" />,
+  resolveSovereignProviderConfig: () =>
+    sessionPrepUi.buildAvailable
+      ? { origin: "https://sovereign.invalid" }
+      : null,
 }))
 vi.mock("@/components/notes/UploadRecordingButton", () => ({
   UploadRecordingButton: () => null,
@@ -58,6 +82,9 @@ vi.mock("~/components/shared/EngagementBadge", () => ({
 }))
 vi.mock("~/components/MedicationPanel", () => ({
   MedicationPanel: () => <div>Medication tools</div>,
+}))
+vi.mock("~/components/SessionPrepPriorNotes", () => ({
+  SessionPrepPriorNotes: () => <div>Prior visits for Session Prep</div>,
 }))
 vi.mock("~/components/LabResultsPanel", () => ({
   LabResultsPanel: () => <div>Lab tools</div>,
@@ -127,6 +154,62 @@ function show({
     />,
   )
 }
+
+beforeEach(() => {
+  sessionPrepUi.buildAvailable = false
+  sessionPrepUi.settings = undefined
+})
+
+const priorNotes: NonNullable<NoteDetail["session_prep_prior_notes"]> = {
+  included_count: 1,
+  more_notes: false,
+  selection_limited: false,
+  notes: [
+    {
+      note_id: "visit_note_reviewed",
+      appointment_id: "appointment_prior",
+      appointment_date: "2026-09-20T12:00:00Z",
+      note_type: "SOAP",
+      status: "included",
+    },
+  ],
+}
+
+describe("Session Prep provider discovery", () => {
+  it("shows the panel and prior-visit controls to a selected provider with current access", () => {
+    sessionPrepUi.buildAvailable = true
+    sessionPrepUi.settings = {
+      session_prep: { eligible: true, can_review_sources: true },
+    }
+
+    show({ priorNotes })
+
+    expect(screen.getByTestId("session-prep-panel")).toBeInTheDocument()
+    expect(screen.getByText("Prior visits for Session Prep")).toBeVisible()
+  })
+
+  it.each([
+    [
+      "an existing provider outside the selected cohort",
+      { session_prep: { eligible: false, can_review_sources: false } },
+    ],
+    ["a newly onboarded provider without discovery state", {}],
+    [
+      "a selected provider without current practice entitlement",
+      { session_prep: { eligible: true, can_review_sources: false } },
+    ],
+  ])("hides every launcher for %s", (_label, settings) => {
+    sessionPrepUi.buildAvailable = true
+    sessionPrepUi.settings = settings
+
+    show({ priorNotes })
+
+    expect(screen.queryByTestId("session-prep-panel")).not.toBeInTheDocument()
+    expect(
+      screen.queryByText("Prior visits for Session Prep"),
+    ).not.toBeInTheDocument()
+  })
+})
 
 describe("note detail page heading", () => {
   it("renders the patient name as the only page-level heading", () => {

@@ -24,6 +24,7 @@ import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { type EngagementRole, noteDetail } from "~/configuration/client"
+import { SETTINGS_STALE_TIME } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
 import { NOTE_STATUS_LABELS } from "~/lib/appointment"
 import { appointmentDateFormat } from "~/lib/date"
@@ -48,6 +49,8 @@ import {
 } from "~/utils/reference-toolkit-feature"
 
 import { useUser } from "@clerk/clerk-react"
+import { useQuery } from "@tanstack/react-query"
+import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
 type Status = Parameters<typeof StatusBadge>[0]["status"]
 
@@ -238,7 +241,20 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const [sessionPrepOpenRequest, setSessionPrepOpenRequest] = useState(0)
   const [sessionPrepState, setSessionPrepState] =
     useState<SessionPrepUiState | null>(null)
-  const sessionPrepAvailable = resolveSovereignProviderConfig() !== null
+  const sessionPrepBuildAvailable = resolveSovereignProviderConfig() !== null
+  const { data: settings } = useQuery({
+    ...settingsDataOptions(),
+    staleTime: SETTINGS_STALE_TIME,
+    enabled: sessionPrepBuildAvailable,
+  })
+  // The build-wide flag only makes the pinned provider integration available.
+  // Core's current exact-account and access decision controls whether this
+  // provider sees any Session Prep launcher or source-review affordance.
+  const sessionPrepAvailable = Boolean(
+    sessionPrepBuildAvailable &&
+      settings?.session_prep?.eligible === true &&
+      settings.session_prep.can_review_sources === true,
+  )
   useEffect(() => {
     setSessionPrepState(null)
     setSessionPrepOpenRequest(0)
@@ -310,17 +326,17 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           </p>
         )}
 
-        {loaderData.session_prep_prior_notes && !loaderData.focusedNoteId && (
-          <SessionPrepPriorNotes
-            overview={loaderData.session_prep_prior_notes}
-            preparationState={sessionPrepState}
-            onOpenSessionPrep={
-              sessionPrepAvailable
-                ? () => setSessionPrepOpenRequest((request) => request + 1)
-                : undefined
-            }
-          />
-        )}
+        {sessionPrepAvailable &&
+          loaderData.session_prep_prior_notes &&
+          !loaderData.focusedNoteId && (
+            <SessionPrepPriorNotes
+              overview={loaderData.session_prep_prior_notes}
+              preparationState={sessionPrepState}
+              onOpenSessionPrep={() =>
+                setSessionPrepOpenRequest((request) => request + 1)
+              }
+            />
+          )}
 
         {hasNotes ? (
           notes.map((note, index) => (
@@ -369,15 +385,17 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           <VisitTranscriptViewer transcript={sharedTranscript} />
         )}
       </InnerScrollableContent>
-      <SovereignPanelHost
-        key={loaderData.appointment.id}
-        appointmentId={loaderData.appointment.id}
-        patientName={loaderData.patient.name}
-        appointmentDate={loaderData.appointment.appointment_date}
-        priorNotes={loaderData.session_prep_prior_notes}
-        openRequest={sessionPrepOpenRequest}
-        onSessionPrepStateChange={setSessionPrepState}
-      />
+      {sessionPrepAvailable && (
+        <SovereignPanelHost
+          key={loaderData.appointment.id}
+          appointmentId={loaderData.appointment.id}
+          patientName={loaderData.patient.name}
+          appointmentDate={loaderData.appointment.appointment_date}
+          priorNotes={loaderData.session_prep_prior_notes}
+          openRequest={sessionPrepOpenRequest}
+          onSessionPrepStateChange={setSessionPrepState}
+        />
+      )}
     </SidebarInset>
   )
 }

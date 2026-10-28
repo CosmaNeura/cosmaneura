@@ -656,6 +656,18 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
+        for_each = merge(
+          local.session_prep_shared_public_values,
+          local.session_prep_authority_runtime_public_values,
+          local.session_prep_api_public_values,
+        )
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      dynamic "env" {
         for_each = local.core_cab_secret_values
         content {
           name        = env.key
@@ -756,6 +768,16 @@ resource "azurerm_container_app" "app" {
     precondition {
       condition     = length(local.scribe_native_api_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic API environment-name sets"
+    }
+
+    precondition {
+      condition     = length(local.session_prep_api_env_name_collisions) == 0
+      error_message = "Session Prep rollout settings cannot also be supplied through generic API environment-name sets"
+    }
+
+    precondition {
+      condition     = local.session_prep_production_prerequisites_valid
+      error_message = "Session Prep production activation requires the exact Clerk issuer and an existing record-grant signing secret"
     }
 
     precondition {
@@ -860,6 +882,15 @@ resource "azurerm_container_app" "scheduler" {
         }
       }
 
+      dynamic "env" {
+        for_each = local.session_prep_shared_public_values
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       # Beat is lightweight: it polls Redis every few seconds and enqueues
       # the occasional task. Half a CPU and 512Mi is generous.
       cpu    = 0.25
@@ -905,6 +936,11 @@ resource "azurerm_container_app" "scheduler" {
     precondition {
       condition     = length(local.scribe_native_scheduler_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic scheduler environment-name sets"
+    }
+
+    precondition {
+      condition     = length(local.session_prep_scheduler_env_name_collisions) == 0
+      error_message = "Session Prep rollout settings cannot also be supplied through generic scheduler environment-name sets"
     }
 
     precondition {
@@ -1034,6 +1070,18 @@ resource "azurerm_container_app" "worker" {
         }
       }
 
+      dynamic "env" {
+        for_each = merge(
+          local.session_prep_shared_public_values,
+          local.session_prep_authority_runtime_public_values,
+        )
+
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
       env {
         name  = "AZURE_DEID_AUTH_MODE"
         value = var.enable_deid_managed_identity ? "managed_identity" : "client_secret"
@@ -1108,6 +1156,16 @@ resource "azurerm_container_app" "worker" {
     precondition {
       condition     = length(local.scribe_native_worker_env_name_collisions) == 0
       error_message = "Native Scribe and durable Zoom rollout settings cannot also be supplied through generic worker environment-name sets"
+    }
+
+    precondition {
+      condition     = length(local.session_prep_worker_env_name_collisions) == 0
+      error_message = "Session Prep rollout settings cannot also be supplied through generic worker environment-name sets"
+    }
+
+    precondition {
+      condition     = local.session_prep_authority_runtime_prerequisites_valid
+      error_message = "Session Prep worker activation requires the exact canonical Clerk issuer"
     }
 
     precondition {
