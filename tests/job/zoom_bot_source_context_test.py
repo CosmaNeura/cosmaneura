@@ -3,6 +3,7 @@
 import json
 
 import pytest
+
 from app.services import zoom_bot_note_grounding as bot
 
 from tests.job.zoom_bot_test_support import SOAP, response, transcript

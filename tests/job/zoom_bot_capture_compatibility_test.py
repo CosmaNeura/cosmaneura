@@ -10,18 +10,24 @@ from tests.job.zoom_bot_test_support import SOAP, transcript
 
 
 @pytest.mark.parametrize("patient_only", [True, False])
-def test_bot_history_does_not_call_the_evolving_capture_factory(monkeypatch, patient_only):
+def test_bot_history_does_not_call_the_evolving_capture_factory(
+    monkeypatch, patient_only
+):
     def capture_changed(*_args, **_kwargs):
         pytest.fail("Bot must retain its evaluated history factory")
 
-    monkeypatch.setattr(capture.ReportedHistoryGrounding, "for_capture", capture_changed)
+    monkeypatch.setattr(
+        capture.ReportedHistoryGrounding, "for_capture", capture_changed
+    )
     entries = transcript(("Patient", "A source measurement was corrected."))
     bot = BotGrounding.build(entries, SOAP, patient_only=patient_only)
     assert bot.history.fields == ()
     assert capture.KEY not in bot.response_schema(SOAP)["properties"]
 
 
-def test_unknown_bot_preserves_original_source_identity_and_provider_schema(monkeypatch):
+def test_unknown_bot_preserves_original_source_identity_and_provider_schema(
+    monkeypatch,
+):
     entries = transcript(
         ("Unverified speaker (first)", "A complete source statement."),
         ("Unverified speaker (second)", "A different source statement."),

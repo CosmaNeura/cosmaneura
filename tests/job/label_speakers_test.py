@@ -3,8 +3,9 @@ normalization used by both the audio-upload path and the Zoom/Recall path."""
 
 from uuid import uuid4
 
-import app.jobs.transcribe as transcribe
 import pytest
+
+import app.jobs.transcribe as transcribe
 from app.jobs.transcribe import label_speakers
 
 from app.models.ai_visit_transcript import TranscriptEntry

@@ -243,10 +243,17 @@ class ConfiguredNoteModel:
             return await asyncio.to_thread(request)
 
 
+class HistoryResponseSchema(Protocol):
+    @property
+    def fields(self) -> tuple[str, ...]: ...
+
+    def schema(self) -> dict[str, Any]: ...
+
+
 def capture_response_schema(
     field_names: tuple[str, ...],
     plan_fields: tuple[str, ...],
-    history_grounding: history.ReportedHistoryGrounding | None = None,
+    history_grounding: HistoryResponseSchema | None = None,
 ) -> dict[str, Any]:
     """Constrain shape only; source validation and clinical review still apply."""
 
