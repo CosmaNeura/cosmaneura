@@ -1,0 +1,8 @@
+{
+  "sourceHead": "3195ed1051b6d393e9bc310a5525f143b821337c",
+  "case": "R7",
+  "originalStatus": "REJECTED_NO_NOTE",
+  "responseSHA256": "ab4f50da330c25697d2cbf57113ce39044576ecb00f1dbfe65d592a02eb1b628",
+  "canonicalReadSHA256": "644e8eb228160ab710aed0f11423eb4cc2d1d1652b1d1655aa44748d43a19a9d",
+  "raw": "{\"plan_source_refs\":{\"Plan\":[26,27,28,29,31,32,39]},\"fields\":{\"Subjective\":\"No patient-labeled entries were present in the transcript. Symptom and history content cannot be included in Subjective per the patient-only preference.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[5,6,7,8,10,13,14,15,16,20,21,22,24,25,36,37,38]}}}"
+}

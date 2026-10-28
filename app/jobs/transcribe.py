@@ -114,7 +114,9 @@ def queue(*args, **kwargs):
     perform_celery.delay(*args, **kwargs)
 
 
-def queue_schema_transcription(transcript: AIVisitTranscript):
+def queue_schema_transcription(
+    transcript: AIVisitTranscript, *, note_policy: str | None = None
+):
     # now that the transcript exists, let's summarize it for each note type the doctor has
     # Get all note schemas for the doctor and issue summary jobs
     note_schemas = DoctorNoteSchema.where(
@@ -130,7 +132,10 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
         return
 
     for schema in cast(list[DoctorNoteSchema], note_schemas):
-        app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
+        options = {"note_policy": note_policy} if note_policy is not None else {}
+        app.jobs.summarize.queue(
+            transcript_id=transcript.id, schema_id=schema.id, **options
+        )
 
 
 def download_blob(visit: VisitAudioFile) -> str:
