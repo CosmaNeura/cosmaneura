@@ -463,7 +463,7 @@ describe("settings layout", () => {
     expect(form.parentElement?.closest("form")).toBeNull()
     expect(form).not.toBe(
       screen
-        .getByRole("button", { name: "Upload Example Visit Note", exact: true })
+        .getByRole("button", { name: "Upload Example Visit Note" })
         .closest("form"),
     )
   })
