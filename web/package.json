@@ -75,7 +75,7 @@
     "turndown": "^7.2.0",
     "typescript": "^5.8.2",
     "vaul": "^1.1.2",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
     "vite-plugin-compression": "^0.5.1",
     "vite-plugin-inspect": "^11.0.0",
     "vite-plugin-terminal": "^1.3.0",
@@ -112,6 +112,7 @@
   },
   "pnpm": {
     "overrides": {
+      "qs@>=6.7.0 <6.16.1": "6.16.1",
       "body-parser@<1.20.9": "^1.20.9",
       "handlebars@<4.7.9": "^4.7.9",
       "@babel/runtime@<7.26.10": "^7.29.7",
