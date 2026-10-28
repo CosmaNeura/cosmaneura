@@ -287,24 +287,40 @@ def get_meeting_join_url(doctor: Doctor, meeting_id: str) -> str:
 
 
 def get_user_meetings(doctor: Doctor) -> list[dict]:
-    """Fetch upcoming scheduled meetings for the authenticated doctor from Zoom API."""
+    """Fetch upcoming and active meetings for the authenticated doctor.
+
+    Zoom removes a meeting from ``upcoming`` after it starts. Fetch ``live`` as
+    well so a meeting that begins before the next local sync still reaches the
+    schedule. A meeting can briefly appear in both lists, so merge by provider
+    ID and let the live payload refresh any overlapping fields.
+    """
     integration = get_zoom_integration(doctor)
     assert integration, "doctor has no zoom integration"
 
-    data = _zoom_get(
-        f"/users/{integration.provider_user_id}/meetings",
-        integration=integration,
-        operation="get_user_meetings",
-        params={"type": "upcoming", "page_size": "100"},
-    )
+    meetings_by_id: dict[str, dict] = {}
+    for meeting_type in ("upcoming", "live"):
+        data = _zoom_get(
+            f"/users/{integration.provider_user_id}/meetings",
+            integration=integration,
+            operation="get_user_meetings",
+            params={"type": meeting_type, "page_size": "100"},
+        )
+        for meeting in data.get("meetings", []):
+            meeting_id = str(meeting["id"])
+            meetings_by_id[meeting_id] = {
+                **meetings_by_id.get(meeting_id, {}),
+                **meeting,
+            }
+
+    meetings = list(meetings_by_id.values())
     log.info(
         "zoom meetings fetched",
         doctor_ref=provider_log_ref(str(doctor.id)),
         operation="get_user_meetings",
         status="succeeded",
-        count=len(data.get("meetings", [])),
+        count=len(meetings),
     )
-    return data.get("meetings", [])
+    return meetings
 
 
 def delete_meeting(doctor: Doctor, zoom_meeting_id: str) -> None:
