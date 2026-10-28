@@ -13,6 +13,8 @@ from redis.exceptions import RedisError
 
 from app import log
 from app.configuration.redis import get_redis
+from app.configuration.zoom import ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED
+from app.services import zoom_capture_bindings
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
     RetryableWebhookError,
@@ -78,6 +80,18 @@ def handle_bot_terminal(payload: dict) -> None:
     else:
         status = "failed" if event == "bot.fatal" else "ended"
 
+    if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+        if not zoom_capture_bindings.project_terminal(
+            bot_id, status, updated.astimezone(UTC)
+        ):
+            raise RetryableWebhookError("bot_capture_binding_unavailable")
+        log.info(
+            "recall terminal capture event durably projected",
+            bot_ref=provider_log_ref(bot_id),
+            capture_status=status,
+        )
+        return
+
     redis = get_redis()
     binding_key = f"recall:bot:{bot_id}:zoom_capture"
     raw = cast(str | bytes | None, redis.get(binding_key))
@@ -133,6 +147,10 @@ def for_meeting(meeting) -> CaptureStatus | None:
     """Read only a result matching the schedule row's consumed authorization."""
     if not meeting.capture_authorization_consumed_at:
         return None
+    if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+        return cast(
+            CaptureStatus | None, zoom_capture_bindings.terminal_for_meeting(meeting)
+        )
     try:
         raw = cast(
             str | bytes | None,

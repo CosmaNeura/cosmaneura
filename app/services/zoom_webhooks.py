@@ -7,7 +7,10 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
-from app.configuration.zoom import ZOOM_WATCHDOG_ENABLED
+from app.configuration.zoom import (
+    ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED,
+    ZOOM_WATCHDOG_ENABLED,
+)
 from app.environments import is_production, is_staging
 from app.jobs import merge_window, verify_bot_joined
 from app.routes.recall_callbacks import zak_token_redis_key
@@ -15,6 +18,7 @@ from app.services import (
     alerting,
     recall,
     zoom_capture_authorization,
+    zoom_capture_bindings,
     zoom_webhook_operations,
 )
 from app.services import zoom as zoom_service
@@ -681,6 +685,16 @@ def _start_appointment_session(
     publication_error = None
     try:
         boundary.publish_bot(bot_id)
+        if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+            zoom_capture_bindings.bind_bot(
+                doctor_id=doctor.id,
+                meeting_id=str(meeting_id),
+                appointment_id=appointment.id,
+                patient_id=appointment.patient_id,
+                occurrence=occurrence,
+                bot_id=bot_id,
+                require=boundary.require,
+            )
     except Exception as exc:
         publication_error = exc
     # Until recording-scoped ownership is fully established, a worker death
@@ -720,6 +734,10 @@ def _start_appointment_session(
     # fence as soon as Recall confirms the first recording ID; it intentionally
     # outlives merge-window cleanup and is reset only by a new meeting.started
     # (or the canonical meeting.ended cleanup).
+    if ZOOM_DURABLE_CAPTURE_BINDINGS_ENABLED:
+        zoom_capture_bindings.bind_recording(
+            bot_id=bot_id, recording_id=recording_id, require=boundary.require
+        )
     boundary.publish_recording(
         bot_id, recording_id, str(appointment.id), str(appointment.patient_id)
     )
