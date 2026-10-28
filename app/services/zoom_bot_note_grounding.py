@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from typing import Any, cast
 
 from app.services import scribe_capture_history_grounding as history
 from app.services import scribe_capture_plan_grounding as plans
@@ -289,7 +290,9 @@ class BotGrounding:
                 # The original history and Plan selections already passed their
                 # resolvers. Revalidate the additive server refs and render one
                 # chronological source union in an existing neutral field.
-                categories = original_history_payload[history.KEY][self.context.target]
+                categories = cast(dict[str, Any], original_history_payload)[
+                    history.KEY
+                ][self.context.target]
                 key = (
                     "source_context"
                     if self.context.target in self.history.medication_fields

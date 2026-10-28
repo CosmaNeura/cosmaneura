@@ -3,10 +3,11 @@
 from datetime import timedelta
 
 import pytest
+
 from app.jobs import summarize
 from app.services import zoom_bot_note_policy as policy
 
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 
 from tests.authority_kernel.zoom_bot_note_policy_test import candidate as _candidate
 from tests.authority_kernel.zoom_bot_note_policy_test import engine as _engine
@@ -51,21 +52,22 @@ def test_capture_owned_appointment_never_enters_bot_adapter(candidate, monkeypat
 
 def test_perform_marks_only_inserted_merge_boundaries(candidate, monkeypatch):
     session, _, transcript, _, _, schema = candidate
-    AIVisitTranscript(
+    later = AIVisitTranscript(
         doctor_id=transcript.doctor_id,
         appointment_id=transcript.appointment_id,
         patient_id=transcript.patient_id,
         duration=1,
         transcript_data=[
-            {
-                "speaker": "Unknown",
-                "content": "Later report.",
-                "startTime": 0,
-                "endTime": 1000,
-            }
+            TranscriptEntry(
+                speaker="Unknown",
+                content="Later report.",
+                startTime=0,
+                endTime=1000,
+            )
         ],
-        created_at=transcript.created_at + timedelta(seconds=2),
-    ).save()
+    )
+    later.created_at = transcript.created_at + timedelta(seconds=2)
+    later.save()
     seen = []
     monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _: True)
     monkeypatch.setattr(

@@ -162,7 +162,7 @@ async def test_cancelled_capture_cannot_admit_the_next_stage(monkeypatch):
             budget.cancel()
             return '{"plan_source_refs":{"Plan":[3]}}'
 
-    stages.model_factory = lambda **_: CancellingModel()
+    monkeypatch.setattr(stages, "model_factory", lambda **_: CancellingModel())
     with capture_budget(budget), pytest.raises(TimeoutError):
         await stages.complete("Complete sources", json_output=True)
     assert calls == [1]
