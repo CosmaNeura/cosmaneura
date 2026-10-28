@@ -455,93 +455,95 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <Form {...form}>
-      <form
-        onSubmit={form.handleSubmit(onSubmit)}
-        className="flex flex-col gap-8"
-      >
-        <section className="w-full max-w-2xl space-y-4">
-          <div className="space-y-2">
-            <h2 className="text-left text-lg font-semibold">Notetaking</h2>
-            <p className="text-muted-foreground text-left text-sm">
-              Upload high quality examples of the different types of notes that
-              you use. These examples will be used to generate future notes for
-              your {t.patientPlural}, so make sure they are a great
-              representation of the structure and quality of note that you want
-              to see from your personalized AI!
-            </p>
-            <p className="text-muted-foreground text-left text-sm">
-              For example: if you use the telehealth SOAP note, pick a
-              high-quality note for that note type and upload a PDF version of
-              this note type.
-            </p>
-          </div>
+    <div className="flex flex-col gap-8">
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <section className="w-full max-w-2xl space-y-4">
+            <div className="space-y-2">
+              <h2 className="text-left text-lg font-semibold">Notetaking</h2>
+              <p className="text-muted-foreground text-left text-sm">
+                Upload high quality examples of the different types of notes
+                that you use. These examples will be used to generate future
+                notes for your {t.patientPlural}, so make sure they are a great
+                representation of the structure and quality of note that you
+                want to see from your personalized AI!
+              </p>
+              <p className="text-muted-foreground text-left text-sm">
+                For example: if you use the telehealth SOAP note, pick a
+                high-quality note for that note type and upload a PDF version of
+                this note type.
+              </p>
+            </div>
 
-          <ImageDropzone onDropFile={setFile}>
-            {!file && (
-              <div className="flex items-center gap-4 font-semibold">
-                <div className="bg-muted rounded-full p-3">
-                  <Upload className="h-4 w-4" />
+            <ImageDropzone onDropFile={setFile}>
+              {!file && (
+                <div className="flex items-center gap-4 font-semibold">
+                  <div className="bg-muted rounded-full p-3">
+                    <Upload className="h-4 w-4" />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <p>Upload Example Visit Note</p>
+                    <p className="text-muted-foreground text-xs">
+                      Click here or drag to select a PDF (10MB or smaller)
+                    </p>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-1">
-                  <p>Upload Example Visit Note</p>
+              )}
+              {file && (
+                <div className="flex flex-col gap-1 font-semibold">
+                  <p>{file.name}</p>
                   <p className="text-muted-foreground text-xs">
-                    Click here or drag to select a PDF (10MB or smaller)
+                    Press the upload button below to add the example {t.patient}{" "}
+                    note
                   </p>
                 </div>
-              </div>
-            )}
-            {file && (
-              <div className="flex flex-col gap-1 font-semibold">
-                <p>{file.name}</p>
-                <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the example {t.patient}{" "}
-                  note
-                </p>
-              </div>
-            )}
-          </ImageDropzone>
+              )}
+            </ImageDropzone>
 
-          <FormField
-            control={form.control}
-            name="note_type"
-            render={({ field }) => (
-              <FormItem>
-                <FormLabel>Note Type</FormLabel>
-                <FormControl>
-                  <SimpleComboBox
-                    items={noteTypeComboBoxItems(noteSchemas)}
-                    onSelectedItemChange={(item) =>
-                      item && field.onChange(item.label)
-                    }
-                    {...field}
-                  />
-                </FormControl>
-                <FormDescription>
-                  Enter the type of note you want to upload. For example, "SOAP
-                  Note". If you've already uploaded a note for this note type,
-                  and want to add more examples to improve our system's
-                  performance, please select it from the list.
-                </FormDescription>
-                <FormMessage />
-              </FormItem>
-            )}
-          />
+            <FormField
+              control={form.control}
+              name="note_type"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Note Type</FormLabel>
+                  <FormControl>
+                    <SimpleComboBox
+                      items={noteTypeComboBoxItems(noteSchemas)}
+                      onSelectedItemChange={(item) =>
+                        item && field.onChange(item.label)
+                      }
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    Enter the type of note you want to upload. For example,
+                    "SOAP Note". If you've already uploaded a note for this note
+                    type, and want to add more examples to improve our system's
+                    performance, please select it from the list.
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <Button disabled={!file || form.formState.isSubmitting} type="submit">
-            {form.formState.isSubmitting ? (
-              <>
-                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              "Upload Example Visit Note"
-            )}
-          </Button>
-        </section>
-        <NoteSchemaDisplay noteSchemas={noteSchemas} />
-      </form>
-    </Form>
+            <Button
+              disabled={!file || form.formState.isSubmitting}
+              type="submit"
+            >
+              {form.formState.isSubmitting ? (
+                <>
+                  <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                "Upload Example Visit Note"
+              )}
+            </Button>
+          </section>
+        </form>
+      </Form>
+      <NoteSchemaDisplay noteSchemas={noteSchemas} />
+    </div>
   )
 }
 
