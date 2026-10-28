@@ -23,6 +23,8 @@ from app.routes import scribe_capture_deadline as boundary
 from app.services import scribe_http_pool as connections
 from app.services import scribe_workflow as workflow
 
+from tests.authority_kernel.capture_deadline_clock import coordinated_deadline
+
 ORIGIN = "https://scribe.internal.example"
 PATH = "/synthetic-capture"
 SETTINGS = ScribeWorkflowSettings(
@@ -222,6 +224,7 @@ async def test_actual_routes_borrow_sdk_but_keep_each_workflow_request_fresh(
 async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
     monkeypatch, outer, pool_enabled
 ):
+    clock = coordinated_deadline(monkeypatch, seconds=1, control_send=True)
     entered, cleanup, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
     async def token() -> AccessToken:
@@ -256,18 +259,28 @@ async def test_expired_route_waits_owned_token_cleanup_and_never_sends_http(
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app), base_url="http://test"
         ) as client:
+            request = None
             try:
-                first = await client.post(PATH)
+                request = asyncio.create_task(client.post(PATH))
+                await until(entered.is_set)
+                await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+                clock.expire()
+                first = await asyncio.wait_for(request, timeout=2)
                 assert first.status_code == 504 and entered.is_set()
                 await until(cleanup.is_set)
                 assert sdk.closed == 0 and len(owner._operations) == 1
-                second = await client.post(PATH)
+                second = await asyncio.wait_for(client.post(PATH), timeout=2)
                 assert second.status_code == 503 and sdk.calls == 1
                 assert not slots.acquire(blocking=False)
             finally:
                 # A failed admission/cleanup assertion must not hang lifespan
                 # shutdown on the deliberately resistant synthetic token.
                 release.set()
+                if request is not None and not request.done():
+                    request.cancel()
+                    await asyncio.wait_for(
+                        asyncio.gather(request, return_exceptions=True), timeout=2
+                    )
             await until(lambda: not owner._operations)
             # The operation join precedes request-client/private-loop cleanup.
             expires = time.monotonic() + 2
