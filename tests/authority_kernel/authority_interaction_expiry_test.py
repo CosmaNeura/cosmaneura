@@ -95,7 +95,7 @@ def owned_record(capture_engine, monkeypatch):
         monkeypatch.setattr(
             configuration,
             "SESSION_PREP_PROVIDER_SETTINGS",
-            SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+            SessionPrepProviderSettings(True),
         )
         token = authority.exchange_context_token(
             session=session,

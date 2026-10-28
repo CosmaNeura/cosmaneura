@@ -101,10 +101,7 @@ def _provision(engine, monkeypatch, subjects=()):
     monkeypatch.setattr(
         session_prep,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        session_prep.SessionPrepProviderSettings(
-            enabled=True,
-            clerk_subjects=frozenset((*subjects, args["verified_clerk_subject"])),
-        ),
+        session_prep.SessionPrepProviderSettings(enabled=True),
     )
     provisioned = apply(engine, args, plan(engine, args).plan_sha256)
     with get_session() as session:

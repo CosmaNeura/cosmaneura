@@ -1,6 +1,6 @@
 """Only the current clinician can review exactly the displayed note revision."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import Request
@@ -26,12 +26,14 @@ from tests.services.session_prep_note_sources_test import _note, _scope
 def reviewable_note(authenticated_client, monkeypatch):
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    doctor.onboarding_completed_at = datetime.now(UTC)
+    doctor.save()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     note = _note(doctor, patient)
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(True, frozenset({doctor.clerk_id})),
+        SessionPrepProviderSettings(True),
     )
     return note
 
@@ -214,21 +216,11 @@ def test_two_current_notes_keep_distinct_sources_and_reviews(
     assert detail["session_prep_reviews"][str(second.id)]["reviewed_at"] is None
 
 
-@pytest.mark.parametrize("disabled", ["switch", "cohort"])
-def test_review_is_default_off_and_scoped_to_selected_providers(
-    authenticated_client, reviewable_note, monkeypatch, disabled
-):
+def test_review_is_default_off(authenticated_client, reviewable_note, monkeypatch):
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(
-            enabled=disabled != "switch",
-            clerk_subjects=(
-                frozenset({"user_unrelated"})
-                if disabled == "cohort"
-                else configuration.SESSION_PREP_PROVIDER_SETTINGS.clerk_subjects
-            ),
-        ),
+        SessionPrepProviderSettings(enabled=False),
     )
     assert _review(authenticated_client, reviewable_note).status_code == 404
     path = api_app.url_path_for(

@@ -176,27 +176,34 @@ const priorNotes: NonNullable<NoteDetail["session_prep_prior_notes"]> = {
 }
 
 describe("Session Prep provider discovery", () => {
-  it("shows the panel and prior-visit controls to a selected provider with current access", () => {
-    sessionPrepUi.buildAvailable = true
-    sessionPrepUi.settings = {
-      session_prep: { eligible: true, can_review_sources: true },
-    }
+  it.each(["an existing provider", "a newly onboarded provider"])(
+    "shows the panel and prior-visit controls to %s once current access is ready",
+    () => {
+      sessionPrepUi.buildAvailable = true
+      sessionPrepUi.settings = {
+        session_prep: { eligible: true, can_review_sources: true },
+      }
 
-    show({ priorNotes })
+      show({ priorNotes })
 
-    expect(screen.getByTestId("session-prep-panel")).toBeInTheDocument()
-    expect(screen.getByText("Prior visits for Session Prep")).toBeVisible()
-  })
+      expect(screen.getByTestId("session-prep-panel")).toBeInTheDocument()
+      expect(screen.getByText("Prior visits for Session Prep")).toBeVisible()
+    },
+  )
 
   it.each([
     [
-      "an existing provider outside the selected cohort",
+      "an existing provider while the global rollout is disabled",
       { session_prep: { eligible: false, can_review_sources: false } },
     ],
-    ["a newly onboarded provider without discovery state", {}],
+    ["a new provider before onboarding discovery is available", {}],
     [
-      "a selected provider without current practice entitlement",
-      { session_prep: { eligible: true, can_review_sources: false } },
+      "an incomplete, revoked, or unentitled provider",
+      { session_prep: { eligible: false, can_review_sources: false } },
+    ],
+    [
+      "a support view-as session",
+      { session_prep: { eligible: false, can_review_sources: false } },
     ],
   ])("hides every launcher for %s", (_label, settings) => {
     sessionPrepUi.buildAvailable = true

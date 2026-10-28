@@ -294,7 +294,7 @@ def test_source_edit_while_model_is_running_rejects_final_and_final_replay(
 
 
 @pytest.mark.parametrize("version", ["1.0.0", "1.1.0", "1.2.0"])
-def test_cohort_revocation_after_read_denies_final_acceptance(
+def test_global_rollout_disable_after_read_denies_final_acceptance(
     scope, monkeypatch, version
 ):
     _, _, _, token, _ = scope
@@ -304,7 +304,7 @@ def test_cohort_revocation_after_read_denies_final_acceptance(
     monkeypatch.setattr(
         configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        SessionPrepProviderSettings(False, frozenset()),
+        SessionPrepProviderSettings(False),
     )
     assert _final(client, token, turn, ref).status_code in {403, 409}
     assert CanonicalConversationFinalPhase.count() == 0

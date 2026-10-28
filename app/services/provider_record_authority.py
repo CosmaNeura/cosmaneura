@@ -1,4 +1,4 @@
-"""Bind selected providers to their actual practice and owned clinical record.
+"""Bind currently authorized providers to their practice and owned record.
 
 Only verified Clerk exchange calls may provision. Reads revalidate current
 access and the immutable binding; client record references never confer access.
@@ -16,10 +16,12 @@ from typeid import TypeID
 from typeid.errors import TypeIDException
 
 import app.configuration.session_prep as configuration
-from app.services.doctor_access import doctor_access_in_force
 from app.services.doctor_access_row_ownership import (
     capture_owns_subject_rows,
     provider_record_owner_rows,
+)
+from app.services.session_prep_provider_access import (
+    resolve_session_prep_provider_access,
 )
 
 from activemodel.types import TypeIDType
@@ -36,12 +38,7 @@ from app.models.authority import (
 )
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.models.practice import (
-    SEAT_HOLDING_ACCESS_STATES,
-    Practice,
-    PracticeMember,
-    member_access_state,
-)
+from app.models.practice import Practice
 from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
@@ -55,34 +52,13 @@ class ProviderRecordScopeDenied(ValueError):
     """Value-free refusal; no discovery of another provider's record."""
 
 
-def _current_practice_rows(session: Session, doctor: Doctor):
-    """One fresh post-access read, including an absent practice or membership."""
-    return session.exec(
-        select(PracticeMember, Practice)
-        .outerjoin(Practice, col(Practice.id) == col(PracticeMember.practice_id))
-        .where(PracticeMember.doctor_id == doctor.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-
-
 def _current_practice(session: Session, doctor: Doctor) -> Practice:
-    now = datetime.now(UTC)
-    if (
-        doctor.deleted_at is not None
-        or not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id)
-        or not doctor_access_in_force(doctor, at=now)
-    ):
+    if not configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(doctor.clerk_id):
         raise ProviderRecordScopeDenied
-    rows = _current_practice_rows(session, doctor)
-    member, practice = rows if rows is not None else (None, None)
-    if (
-        member is None
-        or member_access_state(member, at=now) not in SEAT_HOLDING_ACCESS_STATES
-    ):
+    decision = resolve_session_prep_provider_access(doctor, session=session)
+    if not decision.allowed or decision.practice is None:
         raise ProviderRecordScopeDenied
-    if practice is None:
-        raise ProviderRecordScopeDenied
-    return practice
+    return decision.practice
 
 
 @dataclass(frozen=True)

@@ -272,7 +272,7 @@ def runtime_calls(monkeypatch):
     monkeypatch.setattr(
         prep_configuration,
         "SESSION_PREP_PROVIDER_SETTINGS",
-        prep_configuration.SessionPrepProviderSettings(True, frozenset({"user_test"})),
+        prep_configuration.SessionPrepProviderSettings(True),
     )
     calls = []
 

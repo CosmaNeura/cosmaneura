@@ -32,6 +32,7 @@ import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.reference_labs_gate as reference_labs_gate
 import app.services.session_prep_discovery as session_prep_discovery
+import app.services.session_prep_provider_access as session_prep_provider_access
 import app.services.stripe_billing as stripe_billing
 import app.services.visit_prep_access as visit_prep_access
 import app.services.zoom as zoom_service
@@ -1094,16 +1095,16 @@ def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
     view_as_active = getattr(request.state, "view_as", None) is not None
     access_decision = resolve_doctor_access(doctor, require_entitlement=False)
-    session_prep_access_decision = resolve_doctor_access(doctor)
+    session_prep_access_decision = (
+        session_prep_provider_access.resolve_session_prep_provider_access(doctor)
+    )
     visit_prep_decision = visit_prep_access.resolve_visit_prep_access(
         doctor,
         view_as_active=view_as_active,
     )
     session_prep_decision = session_prep_discovery.resolve_session_prep_discovery(
-        selected_for_beta=(
-            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.allows(
-                doctor.clerk_id
-            )
+        rollout_enabled=(
+            session_prep_configuration.SESSION_PREP_PROVIDER_SETTINGS.enabled
         ),
         provider_access_allowed=session_prep_access_decision.allowed,
         view_as_active=view_as_active,
