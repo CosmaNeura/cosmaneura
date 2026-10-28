@@ -449,8 +449,8 @@ async def test_sync_auth_binding_markers_reachable_with_valid_request(
 
 @pytest.mark.asyncio
 async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypatch):
-    # Give worker startup room; the held downstream call must cross the deadline.
-    target = app(monkeypatch, seconds=1)
+    target = app(monkeypatch)
+    clock = coordinated_deadline(monkeypatch)
     release, entered, cancelled, closed = Event(), Event(), Event(), Event()
     calls = []
     payload = ConsentCreate(
@@ -494,18 +494,32 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
             closed.set()
 
     target.dependency_overrides[route.get_admission_client_factory] = lambda: Client
+    request = None
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=target), base_url="http://test"
         ) as client:
-            response = await client.post(
-                PREFIX + "capture-admissions", headers=headers(), json=admission_body()
+            request = asyncio.create_task(
+                client.post(
+                    PREFIX + "capture-admissions",
+                    headers=headers(),
+                    json=admission_body(),
+                )
             )
+            await until(entered)
+            await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+            clock.expire()
+            response = await asyncio.wait_for(request, timeout=2)
         assert response.status_code == 504 and entered.is_set()
         assert calls == [("consent dispatched", "retained-consent-key")]
         await until(cancelled)
     finally:
         release.set()
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(request, return_exceptions=True), timeout=2
+            )
     await until(closed)
     # Failure journaling is an existing service attempt; production SQL fences
     # refuse it after expiry. No receipt is accepted and no next phase is sent.
@@ -517,6 +531,7 @@ async def test_late_consent_never_records_receipt_or_dispatches_session(monkeypa
 @pytest.mark.asyncio
 async def test_late_note_commit_is_refused_and_cleanup_retains_capacity(monkeypatch):
     target = app(monkeypatch)
+    clock = coordinated_deadline(monkeypatch)
     monkeypatch.setattr(boundary, "_workers", BoundedSemaphore(1))
     release, entered, cancelled, attempted, cleanup_release, closed = (
         Event() for _ in range(6)
@@ -543,13 +558,20 @@ async def test_late_note_commit_is_refused_and_cleanup_retains_capacity(monkeypa
 
     monkeypatch.setattr(notes, "capture_note", late_note)
     target.dependency_overrides[route.get_admission_client_factory] = lambda: Client
+    request = None
     try:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=target), base_url="http://test"
         ) as client:
-            response = await client.post(
-                PREFIX + "capture-notes", headers=headers(), json=note_body()
+            request = asyncio.create_task(
+                client.post(
+                    PREFIX + "capture-notes", headers=headers(), json=note_body()
+                )
             )
+            await until(entered)
+            await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+            clock.expire()
+            response = await asyncio.wait_for(request, timeout=2)
             assert response.status_code == 504 and entered.is_set()
             release.set()
             await until(attempted)
@@ -561,6 +583,11 @@ async def test_late_note_commit_is_refused_and_cleanup_retains_capacity(monkeypa
     finally:
         release.set()
         cleanup_release.set()
+        if request is not None and not request.done():
+            request.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(request, return_exceptions=True), timeout=2
+            )
     await until(closed)
 
 
@@ -791,6 +818,7 @@ async def test_real_global_session_dependency_is_owned_until_worker_finishes(
     monkeypatch,
 ):
     target = app(monkeypatch)
+    clock = coordinated_deadline(monkeypatch)
     target.dependency_overrides.pop(aglobal_session)
     release, entered, cancelled, session_closed = Event(), Event(), Event(), Event()
     life = []
@@ -827,15 +855,22 @@ async def test_real_global_session_dependency_is_owned_until_worker_finishes(
     target.dependency_overrides[route.get_admission_client_factory] = lambda: Client
     monkeypatch.setattr(notes, "capture_note", work)
     # A real request-scoped ActiveModel session must not be borrowed by the new worker.
+    request = None
     with ActiveSession() as parent_session:
         token = session_manager._session_context.set(parent_session)
         try:
             async with httpx.AsyncClient(
                 transport=httpx.ASGITransport(app=target), base_url="http://test"
             ) as client:
-                response = await client.post(
-                    PREFIX + "capture-notes", headers=headers(), json=note_body()
+                request = asyncio.create_task(
+                    client.post(
+                        PREFIX + "capture-notes", headers=headers(), json=note_body()
+                    )
                 )
+                await until(entered)
+                await asyncio.wait_for(clock.waiting.wait(), timeout=2)
+                clock.expire()
+                response = await asyncio.wait_for(request, timeout=2)
             assert (
                 response.status_code == 504
                 and entered.is_set()
@@ -844,6 +879,11 @@ async def test_real_global_session_dependency_is_owned_until_worker_finishes(
             assert session_manager._session_context.get() is parent_session
         finally:
             release.set()
+            if request is not None and not request.done():
+                request.cancel()
+                await asyncio.wait_for(
+                    asyncio.gather(request, return_exceptions=True), timeout=2
+                )
             session_manager._session_context.reset(token)
     await until(session_closed)
     assert life[0][0] == "open" and life[1] == ("close", life[0][1])
