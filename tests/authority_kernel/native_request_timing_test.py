@@ -2,6 +2,7 @@
 
 import asyncio
 import contextvars
+from threading import Event
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -523,6 +524,14 @@ def test_timeout_freezes_once_and_closed_worker_updates_cannot_emit(
     # The original 80ms could expire before the operation/ledger ever started.
     monkeypatch.setattr(boundary, "CAPTURE_REQUEST_SECONDS", 1.0)
     saved = []
+    emitted = Event()
+    append_observation = timing._emit
+
+    def observe(row):
+        append_observation(row)
+        emitted.set()
+
+    monkeypatch.setattr(timing, "_emit", observe)
 
     async def stall(**_):
         saved.append(timing.current_ledger())
@@ -540,6 +549,7 @@ def test_timeout_freezes_once_and_closed_worker_updates_cannot_emit(
         ).status_code
         == 504
     )
+    assert emitted.wait(2), "cancelled timing worker did not close its ledger"
     assert len(observations) == 1
     assert saved[0] is not None and saved[0].closed
     snapshot = repr(observations)

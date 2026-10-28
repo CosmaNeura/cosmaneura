@@ -72,16 +72,16 @@ class _CaptureBoundary:
         await self.app(scope, receive, send)
 
     @classmethod
+    def _settled(cls, task: asyncio.Future) -> None:
+        cls._settling.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    @classmethod
     def _abandon(cls, task: asyncio.Future) -> None:
         cls._settling.add(task)
         task.cancel()
-
-        def settled(result):
-            cls._settling.discard(result)
-            if not result.cancelled():
-                result.exception()
-
-        task.add_done_callback(settled)
+        task.add_done_callback(cls._settled)
 
     @classmethod
     async def _send_until(
@@ -313,7 +313,9 @@ class _CaptureBoundary:
                     return
         finally:
             budget.cancel()
-            if not watching.done():
+            if watching.done():
+                self._settled(watching)
+            else:
                 self._abandon(watching)
             ownership.release()
 
