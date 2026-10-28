@@ -74,7 +74,10 @@ def flow(monkeypatch):
         "companion_synth",
         "companion_prep_test",
     )
-    engine = create_engine(url, json_serializer=_serialize_pydantic_model)
+    engine = create_engine(
+        url.set(drivername="postgresql+psycopg"),
+        json_serializer=_serialize_pydantic_model,
+    )
     names = {t.name for t in _AUTHORITY_TABLES} | {
         "doctor",
         "patient",
