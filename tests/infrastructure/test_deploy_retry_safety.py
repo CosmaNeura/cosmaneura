@@ -534,7 +534,8 @@ BILLING_API_ONLY_SECRET_VARS=()
 BILLING_PUBLIC_VARS=()
 PUBLIC_VARS=(PYTHON_ENV)
 LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
-ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging","CLERK_DEPLOYMENT_PUBLISHABLE_KEY":"pk_test_legacy"}}'
+RETIRED_PUBLIC_ENV_VARS=(SESSION_PREP_PROVIDER_CLERK_SUBJECTS)
+ENV_JSON='{{"DATABASE_URL":"credential-must-not-appear","PYTHON_ENV":"staging","CLERK_DEPLOYMENT_PUBLISHABLE_KEY":"pk_test_legacy","SESSION_PREP_PROVIDER_CLERK_SUBJECTS":"user_existing_provider_123"}}'
 az() {{
     local original="$*"
     [[ "$FAIL_AZURE" == true ]] && return 42
@@ -626,11 +627,41 @@ def test_safe_workload_evidence_accepts_only_matching_legacy_clerk_key() -> None
     assert _workload_capture(app_environment=legacy_environment).returncode != 0
 
 
+def test_safe_workload_evidence_accepts_exact_retired_cohort_only() -> None:
+    retired_environment = [
+        {"name": "DATABASE_URL", "value": None, "secretRef": "database-url"},
+        {"name": "PYTHON_ENV", "value": "staging", "secretRef": None},
+        {
+            "name": "SESSION_PREP_PROVIDER_CLERK_SUBJECTS",
+            "value": "user_existing_provider_123",
+            "secretRef": None,
+        },
+    ]
+    for workload in ("app", "worker", "scheduler"):
+        kwargs = {f"{workload}_environment": retired_environment, "mode": "safe"}
+        result = _workload_capture(**kwargs)
+        assert result.returncode == 0, result.stderr
+        assert "user_existing_provider_123" not in result.stdout + result.stderr
+        state = json.loads(result.stdout)
+        observed = next(item for item in state if item["name"] == workload)
+        assert observed["retiredPublicEnvNames"] == [
+            "SESSION_PREP_PROVIDER_CLERK_SUBJECTS"
+        ]
+        assert "SESSION_PREP_PROVIDER_CLERK_SUBJECTS" not in observed["publicConfig"]
+
+    mismatched = [dict(item) for item in retired_environment]
+    mismatched[-1]["value"] = "user_unreviewed_provider_456"
+    assert _workload_capture(app_environment=mismatched, mode="safe").returncode != 0
+    assert _workload_capture(app_environment=retired_environment).returncode != 0
+
+
 def test_deploy_removes_legacy_public_environment_variables() -> None:
     deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
     initiate = _shell_function(deploy, "initiate_deployment")
     assert "LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)" in deploy
     assert 'remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")' in initiate
+    assert "RETIRED_PUBLIC_ENV_VARS=(SESSION_PREP_PROVIDER_CLERK_SUBJECTS)" in deploy
+    assert 'remove_env_vars+=("${RETIRED_PUBLIC_ENV_VARS[@]}")' in initiate
 
 
 @pytest.mark.parametrize(

@@ -560,6 +560,7 @@ PUBLIC_VARS=(
 	DURABLE_WEBHOOK_INBOX_ENABLED SENTRY_STAGING_ENABLED
 )
 LEGACY_PUBLIC_ENV_VARS=(CLERK_PUBLISHABLE_KEY)
+RETIRED_PUBLIC_ENV_VARS=(SESSION_PREP_PROVIDER_CLERK_SUBJECTS)
 
 workload_container_name() {
 	case "$1" in
@@ -766,7 +767,7 @@ resolve_staging_digest() {
 collect_workload_state() {
 	local mode=${1:-safe}
 	local container expected_container_name workload_json ready_revision revision_json state_json states_json
-	local secret_names_json public_names_json legacy_public_names_json expected_args_json
+	local secret_names_json public_names_json legacy_public_names_json retired_public_names_json expected_args_json
 	local container_secret_vars=() container_public_vars=()
 	[[ "$mode" == "safe" || "$mode" == "exact" ]] || return 1
 	local states=()
@@ -781,6 +782,8 @@ collect_workload_state() {
 			legacy_public_names_json=$(printf '%s\n' "${LEGACY_PUBLIC_ENV_VARS[@]}" |
 				jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
 		fi
+		retired_public_names_json=$(printf '%s\n' "${RETIRED_PUBLIC_ENV_VARS[@]}" |
+			jq -Rsc 'split("\n") | map(select(length > 0))') || return 1
 		expected_container_name=$(workload_container_name "$container") || return 1
 		case "$container" in
 		"$API_CONTAINER") expected_args_json=$(jq -cn --arg value "$STAGING_API_COMMAND" '[$value]') ;;
@@ -818,6 +821,7 @@ collect_workload_state() {
 			--argjson secret_names "$secret_names_json" \
 			--argjson public_names "$public_names_json" \
 			--argjson legacy_public_names "$legacy_public_names_json" \
+			--argjson retired_public_names "$retired_public_names_json" \
 			--argjson expected_args "$expected_args_json" \
 			--arg expected_name "$container" \
 			--arg expected_container_name "$expected_container_name" \
@@ -845,6 +849,10 @@ collect_workload_state() {
 			   elif $mode == "safe" and ($legacy_public_names | index($name)) != null then
 			     (.value | type == "string" and length > 0) and .secretRef == null and
 			     .value == $configuration.CLERK_DEPLOYMENT_PUBLISHABLE_KEY
+			   elif $mode == "safe" and ($retired_public_names | index($name)) != null then
+			     (.value | type == "string" and length > 0) and .secretRef == null and
+			     (($configuration[$name] // "") | type == "string" and length > 0) and
+			     .value == $configuration[$name]
 			   else false end)) |
 			($environment | map(select(.secretRef != null) |
 			 {key: .name, value: .secretRef}) | from_entries) as $secret_refs |
@@ -875,6 +883,8 @@ collect_workload_state() {
 			 publicConfig: $public_config, secretRefs: $secret_refs,
 			 legacyPublicEnvNames: ($environment | map(.name as $name |
 			   select(($legacy_public_names | index($name)) != null) | .name) | sort),
+			 retiredPublicEnvNames: ($environment | map(.name as $name |
+			   select(($retired_public_names | index($name)) != null) | .name) | sort),
 			 environmentContractExact: ($mode == "exact")
 			}
 		') || {
@@ -1441,6 +1451,7 @@ initiate_deployment() {
 	local container_secret_vars=() container_public_vars=()
 	configure_workload_contract "$container_name"
 	remove_env_vars+=("${LEGACY_PUBLIC_ENV_VARS[@]}")
+	remove_env_vars+=("${RETIRED_PUBLIC_ENV_VARS[@]}")
 
 	for var in "${container_secret_vars[@]}"; do
 		local value
