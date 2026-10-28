@@ -249,6 +249,14 @@ run "secretless_static_plan" {
   }
 
   assert {
+    condition = one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+    ]) == "false"
+    error_message = "the production Session Prep worker heartbeat must remain dark by default"
+  }
+
+  assert {
     condition = alltrue([
       for workload in [azurerm_container_app.worker, azurerm_container_app.scheduler] :
       alltrue([
@@ -273,6 +281,7 @@ run "session_prep_activation_projects_complete_worker_runtime" {
 
   variables {
     adopt_existing_production_postgres_egress_rule = false
+    enable_session_prep_production_worker_heartbeat = true
     production_container_apps_egress_ipv4          = "198.51.100.10"
     session_prep_production_rollout = {
       enabled             = true
@@ -310,6 +319,26 @@ run "session_prep_activation_projects_complete_worker_runtime" {
     )
     error_message = "Agent API identity and record-grant capability must remain API-only"
   }
+
+  assert {
+    condition = one([
+      for entry in azurerm_container_app.worker.template[0].container[0].env : entry.value
+      if entry.name == "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED"
+    ]) == "true"
+    error_message = "the heartbeat may activate only alongside the global Session Prep rollout"
+  }
+}
+
+run "reject_session_prep_heartbeat_without_global_rollout" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule  = false
+    enable_session_prep_production_worker_heartbeat = true
+    production_container_apps_egress_ipv4           = "198.51.100.10"
+  }
+
+  expect_failures = [azurerm_container_app.worker]
 }
 
 run "scribe_core_native_independent_projection" {
