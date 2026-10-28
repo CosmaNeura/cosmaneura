@@ -2,7 +2,7 @@
 
 Risk: Tier 2. This checkpoint prepares a default-off Core configuration seam
 and a PHI-free provider discovery read model. It does not deploy, migrate,
-enable production, select a provider, alter Sovereign, or rebuild the frontend.
+enable production, alter Sovereign, or rebuild the frontend.
 
 ## Source checkpoint
 
@@ -21,29 +21,34 @@ the scheduler, and no Agent API identity or record-grant secret reaches the
 worker.
 
 Activation requires one nonzero canonical Sovereign client UUID, one nonzero
-canonical Agent API audience UUID, the derived
-production Clerk issuer, and an existing record-grant signing secret. The
-issuer must be one canonical HTTPS DNS origin and the signing secret must be an
-exact canonical 44-character Fernet key; malformed variants fail the plan
-without emitting either value. The staging-only Session Prep alert transport
-is deliberately absent.
+canonical Agent API audience UUID, the derived production Clerk issuer, and an
+existing record-grant signing secret. The issuer must be one canonical HTTPS
+DNS origin and the signing secret must be an exact canonical 44-character
+Fernet key; malformed variants fail the plan without emitting either value.
+The retired `SESSION_PREP_PROVIDER_CLERK_SUBJECTS` key remains prohibited in
+generic production environment inputs so an allowlist cannot be reintroduced
+outside this contract. The staging-only Session Prep alert transport is
+deliberately absent.
 
 `GET /internal/v1/settings` adds `session_prep.eligible` and
 `session_prep.can_review_sources`. The response contains no provider subject,
-account list, chart data, or authorization token. It reports only the
+account allowlist, chart data, or authorization token. It reports only the
 current doctor context selected by the existing authenticated dependency chain.
-Both discovery booleans remain false during support view-as. An ordinary
-provider becomes eligible only while the same current provider/practice/BAA/
-entitlement decision used by the review route is in force. All review,
-exchange, and read endpoints continue to enforce their
-existing live record and note ownership checks; this response is not an
-execution grant.
+Both booleans remain false during support view-as. When the global switch is on,
+an ordinary provider becomes eligible automatically only while the same current
+doctor/practice/BAA/entitlement decision used by the review route is in force.
+That includes existing accounts and new accounts immediately after onboarding
+reaches the authorized state; incomplete, revoked, inactive, or unentitled
+accounts remain ineligible. All review, exchange, and read endpoints continue
+to enforce their existing live record and note ownership checks, including the
+provider-own-visit boundary; this response is not an execution grant.
 
 The note-detail UI consumes both discovery booleans in addition to the
 build-time Sovereign integration flag. It renders neither the Session Prep
 panel nor prior-visit controls until Core says the current provider is eligible
 and can currently review sources. Missing or older cached discovery state fails
-closed and refreshes through the ordinary settings query.
+closed; the next successful settings read exposes the feature automatically
+after a new provider finishes onboarding.
 
 ## Read-only preflight
 
@@ -54,13 +59,23 @@ Before any activation proposal:
    Sovereign source and with production authority enabled.
 2. Run `tofu -chdir=infra validate -no-color`, then produce a saved **plan only**
    with the proposed `session_prep_production_rollout`. Do not apply it. The
-   plan must show the same Session Prep enabled state on API, worker, and scheduler;
-   the complete non-secret Authority Kernel runtime on API and worker; Agent
-   API identity only on API; and no unrelated resource change.
-3. Read production metadata without chart content. Require a sole Alembic head
-   compatible with the candidate and ancestry through `443f26a5dfe7`,
-   `c80db51e6a75`, and `de9260834611`. Any migration application is a separate
-   founder-approved operation with a rehearsed forward-recovery plan.
+   plan must show the same global Session Prep switch on API, worker, and
+   scheduler; no provider-subject allowlist; the complete non-secret Authority
+   Kernel runtime on API and worker; Agent API identity only on API; and no
+   unrelated resource change.
+3. From the exact candidate source, run
+   `PYTHON_ENV=production uv run python scripts/session_prep_production_eligibility_preflight.py`
+   with the production application's existing `DATABASE_URL` supplied privately.
+   The command imports no application code, opens one repeatable-read read-only
+   transaction, and emits only fixed denial-reason counts, eligible/total,
+   observation time, rollout state, the sole observed Alembic head, and a digest.
+   Review that count-only output. It refuses unknown or ambiguous access state,
+   more than one database head, a database head different from the candidate's
+   sole repository head, or missing ancestry through `443f26a5dfe7`,
+   `c80db51e6a75`, and `de9260834611`. It never enables Session Prep or emits
+   provider, practice, account, or chart identifiers. Any migration application
+   is a separate founder-approved operation with a rehearsed forward-recovery
+   plan.
 4. Verify the dedicated production provider Sovereign identity has only the
    required Agent API app role, its configured client ID equals the proposed
    Core allowlist, and its Core audience/issuer pair is exact. Verify the public
@@ -104,7 +119,8 @@ needed; update/drain Core worker and scheduler before Core API; deploy the paire
 Sovereign service and frontend only under the same release record; then run the
 provider-owned synthetic acceptance. Existing and new providers become eligible
 automatically as their current account, practice, BAA, and entitlement records
-enter the approved states; no feature-specific user-list update is required.
+enter the approved states; no feature-specific user-list update or deployment is
+required.
 
 Fast stop is a reviewed plan setting `session_prep_production_rollout.enabled`
 back to `false`, which closes new review, exchange, worker, and real-record read
