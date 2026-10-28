@@ -281,6 +281,7 @@ def intake_list(request: Request) -> IntakeList:
     return IntakeList(appointments=cast(list[Appointment], list(appointment_list)))
 
 
+NoteListStatus = Literal["not-started", "in-progress", "completed"]
 NoteStatus = Literal["not-started", "in-progress", "taking-longer", "completed"]
 NOTE_PROCESSING_EXPECTED_WINDOW = timedelta(minutes=15)
 
@@ -305,7 +306,7 @@ def _uploaded_note_status(
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
     patient_names: dict[str, str] = Field(default_factory=dict)
-    note_statuses: dict[str, NoteStatus] = Field(default_factory=dict)
+    note_statuses: dict[str, NoteListStatus] = Field(default_factory=dict)
 
 
 @internal_api_app.get("/notes")
@@ -331,7 +332,7 @@ def note_list(request: Request) -> NotetakingData:
 
     appointments = cast(list[Appointment], list(appointment_list))
     appointment_ids = [appointment.id for appointment in appointments]
-    note_statuses: dict[str, NoteStatus] = {
+    note_statuses: dict[str, NoteListStatus] = {
         str(appointment_id): "not-started" for appointment_id in appointment_ids
     }
     if appointment_ids:
@@ -355,11 +356,8 @@ def note_list(request: Request) -> NotetakingData:
             # short-lived upload marker. This lets another browser or device
             # show note generation without classifying untouched scheduled
             # visits or Scribe capture drafts as active work.
-            uploaded_rows = session.exec(
-                select(
-                    cast(Any, VisitAudioFile.appointment_id),
-                    cast(Any, VisitAudioFile.created_at),
-                )
+            uploaded_ids = session.exec(
+                select(cast(Any, VisitAudioFile.appointment_id))
                 .join(
                     Appointment,
                     cast(Any, Appointment.id) == VisitAudioFile.appointment_id,
@@ -370,7 +368,7 @@ def note_list(request: Request) -> NotetakingData:
                     cast(Any, VisitAudioFile.patient_id)
                     == cast(Any, Appointment.patient_id),
                 )
-                .order_by(cast(Any, VisitAudioFile.created_at).desc())
+                .distinct()
             ).all()
         for appointment_id in completed_ids:
             # A new appointment may appear after the list read. Never introduce
@@ -378,21 +376,13 @@ def note_list(request: Request) -> NotetakingData:
             if str(appointment_id) in note_statuses:
                 note_statuses[str(appointment_id)] = "completed"
 
-        observed_at = datetime.now(timezone.utc)
-        observed_uploads: set[str] = set()
-        for appointment_id, uploaded_at in uploaded_rows:
+        for appointment_id in uploaded_ids:
             key = str(appointment_id)
-            # Rows are newest-first. Multiple admitted uploads for one visit
-            # must retain the newest timestamp instead of being overwritten by
-            # an older retry/correction row later in this loop.
-            if key in observed_uploads:
-                continue
-            observed_uploads.add(key)
             if key in note_statuses and note_statuses[key] != "completed":
-                note_statuses[key] = _uploaded_note_status(
-                    uploaded_at,
-                    now=observed_at,
-                )
+                # Preserve the deployed list contract during rolling updates.
+                # The additive detail field can distinguish an older upload;
+                # old clients safely ignore it, while their list still renders.
+                note_statuses[key] = "in-progress"
 
     patient_names = {}
     if (

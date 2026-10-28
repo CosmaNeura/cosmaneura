@@ -84,11 +84,12 @@ def load_route(session_factory):
             selected.append(node)
         elif isinstance(node, ast.Assign) and any(
             isinstance(target, ast.Name)
-            and target.id in {"NoteStatus", "NOTE_PROCESSING_EXPECTED_WINDOW"}
+            and target.id
+            in {"NoteListStatus", "NoteStatus", "NOTE_PROCESSING_EXPECTED_WINDOW"}
             for target in node.targets
         ):
             selected.append(node)
-    assert len(selected) == 5
+    assert len(selected) == 6
     for node in selected:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
             node.decorator_list = []
@@ -286,7 +287,7 @@ def test_supersession_and_replacement_change_status_without_title_changes(sideba
     assert sidebar.read()["note_statuses"] == {"visit": "completed"}
 
 
-def test_server_upload_state_crosses_browsers_and_ages_without_claiming_failure(
+def test_server_upload_state_crosses_browsers_without_breaking_old_list_clients(
     sidebar,
 ):
     sidebar.insert(
@@ -314,13 +315,13 @@ def test_server_upload_state_crosses_browsers_and_ages_without_claiming_failure(
 
     assert sidebar.read()["note_statuses"] == {
         "recent_upload": "in-progress",
-        "slow_upload": "taking-longer",
+        "slow_upload": "in-progress",
         "scheduled_only": "not-started",
         "completed_upload": "completed",
     }
 
 
-def test_newest_upload_controls_progress_when_a_visit_has_multiple_rows(sidebar):
+def test_multiple_upload_rows_keep_one_backward_compatible_progress_state(sidebar):
     sidebar.insert(
         SidebarAppointment(id="retried_upload"),
         SidebarAudio(

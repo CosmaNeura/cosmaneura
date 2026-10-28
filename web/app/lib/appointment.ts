@@ -13,16 +13,6 @@ export const NOTE_STATUS_LABELS: Record<StatusBadgeOptions, string> = {
   "not-started": "No note yet",
 }
 
-export function noteStatusPresentation(
-  status: NoteStatuses[string] | undefined,
-): { status: StatusBadgeOptions | "none"; label?: string } {
-  if (status === "taking-longer") {
-    return { status: "not-started", label: "Taking longer" }
-  }
-  if (status === undefined) return { status: "none" }
-  return { status, label: NOTE_STATUS_LABELS[status] }
-}
-
 export function appointmentsToSidebarEntries(
   appointments: Appointment[],
   linkTarget: (id: string) => string,
@@ -34,8 +24,7 @@ export function appointmentsToSidebarEntries(
     const appointmentDate = parseAppointmentDate(appointment.appointment_date)
     // An older backend may omit status; a visit title says nothing about notes.
     const knownStatuses: Partial<NoteStatuses> = noteStatuses
-    const rawStatus = knownStatuses[appointment.id]
-    const { status, label } = noteStatusPresentation(rawStatus)
+    const status = knownStatuses[appointment.id] ?? "none"
     return {
       id: appointment.id,
       url: linkTarget(appointment.id),
@@ -44,7 +33,7 @@ export function appointmentsToSidebarEntries(
       date: relativeDayLabel(appointmentDate, now),
       isoDate: appointmentDate.toISOString(),
       status,
-      statusLabel: label,
+      statusLabel: status === "none" ? undefined : NOTE_STATUS_LABELS[status],
       preview: appointment.appointment_name ?? "",
     }
   })

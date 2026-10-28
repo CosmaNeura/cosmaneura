@@ -6228,7 +6228,6 @@
               "enum": [
                 "not-started",
                 "in-progress",
-                "taking-longer",
                 "completed"
               ]
             },
