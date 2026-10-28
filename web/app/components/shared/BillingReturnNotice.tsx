@@ -5,7 +5,11 @@ import { Loader2 } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
 import { safeBillingReturnTo } from "~/lib/billing-recovery"
-import { type PracticeStatus, getPractice } from "~/lib/practice-api"
+import {
+  type PracticeStatus,
+  getPractice,
+  practiceReady,
+} from "~/lib/practice-api"
 
 export { safeBillingReturnTo } from "~/lib/billing-recovery"
 
@@ -22,6 +26,7 @@ type BillingReturnState =
 function stripeSubscriptionConfirmed(practice: PracticeStatus | null) {
   return Boolean(
     practice?.billing_subscription_manageable &&
+      practice.entitled &&
       (practice.subscription_status === "active" ||
         practice.subscription_status === "trialing"),
   )
@@ -51,7 +56,13 @@ export function BillingReturnNotice({
     initialState(result, practice),
   )
   const [pollRun, setPollRun] = useState(0)
+  const [confirmedPractice, setConfirmedPractice] = useState(practice)
   const attempts = useRef(0)
+  const accessReady = Boolean(
+    practiceReady(confirmedPractice) &&
+      confirmedPractice.entitled &&
+      !confirmedPractice.access_ended,
+  )
 
   useEffect(() => {
     if (result === "cancelled") {
@@ -63,6 +74,7 @@ export function BillingReturnNotice({
       return
     }
     if (practice && stripeSubscriptionConfirmed(practice)) {
+      setConfirmedPractice(practice)
       onPracticeChange(practice)
       setState("confirmed")
       return
@@ -78,6 +90,7 @@ export function BillingReturnNotice({
         const refreshed = await getPractice()
         if (cancelled) return
         if (refreshed && stripeSubscriptionConfirmed(refreshed)) {
+          setConfirmedPractice(refreshed)
           onPracticeChange(refreshed)
           setState("confirmed")
           return
@@ -101,13 +114,7 @@ export function BillingReturnNotice({
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [
-    onPracticeChange,
-    pollRun,
-    practice?.billing_subscription_manageable,
-    practice?.subscription_status,
-    result,
-  ])
+  }, [onPracticeChange, pollRun, practice, result])
 
   if (state === "idle") return null
 
@@ -129,11 +136,19 @@ export function BillingReturnNotice({
         <>
           <p className="font-semibold">Subscription confirmed</p>
           <p className="text-muted-foreground mt-1 text-sm">
-            Stripe confirmed your subscription. Your practice access is ready.
+            {accessReady
+              ? "Stripe confirmed your subscription. Your practice access is ready."
+              : "Stripe confirmed your subscription. Review the remaining practice access requirements below."}
           </p>
-          <Button className="mt-3" size="sm" onClick={() => navigate(returnTo)}>
-            Continue to Cosmas
-          </Button>
+          {accessReady && (
+            <Button
+              className="mt-3"
+              size="sm"
+              onClick={() => navigate(returnTo)}
+            >
+              Continue to Cosmas
+            </Button>
+          )}
         </>
       ) : state === "delayed" ? (
         <>
