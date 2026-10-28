@@ -314,6 +314,23 @@ def test_repository_migration_contract_rejects_disconnected_cycle(
         preflight.repository_migration_contract(tmp_path)
 
 
+def test_repository_migration_contract_rejects_reachable_cycle(
+    tmp_path: Path,
+) -> None:
+    versions = tmp_path / "migrations" / "versions"
+    versions.mkdir(parents=True)
+    _write_revision(versions / "base.py", "base", None)
+    _write_revision(versions / "cycle_a.py", "cycle_a", "cycle_b")
+    _write_revision(versions / "cycle_b.py", "cycle_b", "cycle_a")
+    _write_revision(versions / "head.py", "head", ("cycle_a", "base"))
+
+    with pytest.raises(
+        preflight.InventoryFailure,
+        match="migration graph contains a cycle",
+    ):
+        preflight.repository_migration_contract(tmp_path)
+
+
 def _doctor(label: str, *, onboarded: bool = True) -> Doctor:
     nonce = secrets.token_hex(4)
     return Doctor(

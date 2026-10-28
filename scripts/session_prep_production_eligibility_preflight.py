@@ -421,12 +421,39 @@ def _revision_ancestors(
     return frozenset(ancestors)
 
 
+def _assert_acyclic_migration_graph(
+    graph: Mapping[str, tuple[str, ...]],
+) -> None:
+    """Reject every cycle, including one reachable from an apparent head."""
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(revision_id: str) -> None:
+        if revision_id in visiting:
+            raise InventoryFailure("repository migration graph contains a cycle")
+        if revision_id in visited:
+            return
+        parents = graph.get(revision_id)
+        if parents is None:
+            raise InventoryFailure("migration graph is incomplete")
+        visiting.add(revision_id)
+        for parent in parents:
+            visit(parent)
+        visiting.remove(revision_id)
+        visited.add(revision_id)
+
+    for revision_id in graph:
+        visit(revision_id)
+
+
 def repository_migration_contract(
     root: Path = ROOT,
 ) -> RepositoryMigrationContract:
     """Read the source migration graph without initializing the application."""
 
     graph = _migration_graph(root)
+    _assert_acyclic_migration_graph(graph)
     parent_revisions = {parent for parents in graph.values() for parent in parents}
     heads = sorted(set(graph) - parent_revisions)
     if len(heads) != 1:
