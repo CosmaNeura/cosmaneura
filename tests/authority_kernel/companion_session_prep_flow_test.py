@@ -91,6 +91,10 @@ def flow(monkeypatch):
         "session_prep_artifact",
         "session_prep_build",
         "session_prep_read_receipt",
+        "scribe_capture_admission",
+        "scribe_capture_reviewed_source",
+        "scribe_capture_correction_frontier",
+        "scribe_patient_identity",
     }
     tables = {name: SQLModel.metadata.tables[name] for name in names}
     while True:
