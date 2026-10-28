@@ -123,7 +123,8 @@ def test_history_envelope_does_not_remove_prospective_empty_only_schema():
         "enum": [""],
     }
     assert schema["properties"]["fields"]["properties"]["Objective"] == {
-        "type": "string"
+        "type": "string",
+        "enum": [""],
     }
 
 

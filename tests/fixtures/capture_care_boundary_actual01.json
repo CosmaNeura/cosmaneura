@@ -1,0 +1,263 @@
+{
+  "synthetic_only": true,
+  "sourceHead": "19817cfbef01205ba117c4aab3106c3b6b44bab1",
+  "retainedActualRoot": "/private/tmp/capture-objective-model-validation-20261027-03/r3-01",
+  "bindings": {
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/attempt.json": "fd34e298b74544d75035009f76c0f60f811b8fdd47880a44c442d9263caf3427",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/cleanup.json": "ce46e550862628d55288b96527694dc7f744b3b2934b223ddb114113e5d90958",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/inputs.json": "c66c407da0fb66c1ea116f3cd41573b0a2f9f62127a595a47a51919f90b8958f",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/process.json": "b40a0ba500e2be33ccb38c480b37a31f0c3cdd4e6cc437424c294876bca2436f",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/provider-envelope-status.json": "eb0b3605df6ec52ab989a0526a48b9ce349f893e858ee6507aba112e45ddabc8",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/provider-observation.json": "83d25158c8ef248535023755c4e1932e7d5a98a7ab0fd0db2f312b0c875c5ba6",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/response.json": "9336d4e7d99957ccb47a3679eadf4683c82f768e626bbd21e24d8f5cf8909fbe",
+    "/private/tmp/capture-objective-model-validation-20261027-03/r3-01/result.json": "fc96a255510eb11599db5cd8f5c9304840394bf996e1b36d31c836dc3a9747c1"
+  },
+  "entries": [
+    {
+      "speaker": "Unknown",
+      "content": "This is a completely synthetic practice visit."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I am Dr."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Lane, speaking with Avery Stone about shoulder discomfort."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We will take one deliberate quiet pause in the middle and continue the same visit afterward."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Avery, tell me how the discomfort began and which side is affected."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I am Avery Stone."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My right shoulder became sore after moving boxes 4 days ago."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I first said left, but the correct side is right."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The discomfort is mild at rest and increases when I reach overhead."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The opening marker is marble kite."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have no fever or chest pain."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have right shoulder discomfort beginning 4 days ago after lifting boxes."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Is there numbness, weakness, or pain traveling down the arm?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Have you had a fall or another injury?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We are checking that the details before the pause remain part of the same conversation."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "There was no fall."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have no numbness and no weakness."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The pain does not travel down my arm."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I can hold a cup and get dressed."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The first half marker is golden acorn."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I will stop speaking now for the planned quiet pause, and then I will continue."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We have resumed the same synthetic visit after the quiet pause."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Avery, please continue."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I want to confirm that no earlier details disappeared and that new information is added only once."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "What is the current pain score, and what has helped the shoulder so far?"
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My current pain score is 2 out of 10."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I said 4 before thinking carefully."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "So please use 2."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Resting from heavy lifting has helped."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I have not taken any new medicine."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The first marker after the cause is emerald bicycle."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The sore side is still the right shoulder."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "For this practice plan, avoid heavy lifting for 5 days and use comfortable gentle movement."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "We are not prescribing a new medicine."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Please keep track of whether reaching overhead becomes easier."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Follow-up is in 7 days."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I almost said 17, but seven days is the correct interval."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "I understand the plan."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "Five days without heavy lifting, gentle comfortable movement, and follow up in seven days rather than 17."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "My right shoulder is the affected side, not my left."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The late marker is purple windmill."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "There is still no numbness, weakness, fever, or chest pain."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The final summary should retain the history from before the pause and the corrected score and plan from after it no new medicine was started."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "The final decisive marker is crystal badger."
+    },
+    {
+      "speaker": "Unknown",
+      "content": "This ends the resumed portion and completes our entirely synthetic recording test."
+    }
+  ],
+  "schema": {
+    "Subjective": "Document the patient's reported symptoms, concerns, and relevant history, including any changes since the last visit and information provided by the patient or caregivers.",
+    "Objective": "Record measurable or observed findings from the physical exam, vital signs, laboratory results, imaging, and other diagnostic data.",
+    "Assessment": "Summarize your clinical impression, including diagnoses, differential diagnoses, and reasoning based on the subjective and objective information.",
+    "Plan": "Outline the next steps for management, including treatments, medications, follow-up recommendations, referrals, and patient education."
+  },
+  "storedCustomization": {
+    "subjective_source": "patient_only",
+    "pronoun_style": "infer_from_transcript",
+    "plan_ordering": "patient_then_doctor",
+    "flag_new_medications": true,
+    "require_plan_reason": false,
+    "ros_distinct_from_subjective": false,
+    "custom_instructions": null,
+    "deleted_at": null,
+    "created_at": null,
+    "updated_at": null
+  },
+  "raw": "{\"plan_source_refs\":{\"Plan\":[33,34,35,36,37,39,43]},\"fields\":{\"Subjective\":\"No Patient-labeled entries were present in the transcript. Symptom and history content is not included in this section per source limitation.\",\"Objective\":\"\",\"Assessment\":\"Not mentioned in transcript.\",\"Plan\":\"\"},\"reported_history_source_refs\":{\"Objective\":{\"source_refs\":[6,7,8,9,11,12,16,17,18,19,26,27,28,29,30,32,40,42]}}}",
+  "rawSHA256": "0243acc0bfb251a906e20cc5f08995d2b01d6aa07e2efcda3bf04d3011d833ce",
+  "planInclusion": {
+    "passed": false,
+    "missingWholeSourceRefs": [],
+    "unexpectedSourceRefs": [
+      43
+    ],
+    "selectedPlanRefs": [
+      33,
+      34,
+      35,
+      36,
+      37,
+      39,
+      43
+    ]
+  },
+  "optionalQuestionContext": {
+    "applicable": true,
+    "failures": [
+      {
+        "field": "Objective",
+        "sourceRef": 14
+      }
+    ]
+  },
+  "oracle": {
+    "passed": true,
+    "failures": [],
+    "independent_content_review_required": true
+  },
+  "strengthenedFiniteOracle": {
+    "passed": true,
+    "failures": [],
+    "independent_content_review_required": true
+  },
+  "fields": {
+    "Subjective": "No Patient-labeled entries were present in the transcript. Symptom and history content is not included in this section per source limitation.",
+    "Objective": "Current medication list is unverified; review the source statements.\n\nSelected transcript source context (questions are not findings):\n- Unidentified speaker: I am Avery Stone.\n- Unidentified speaker: My right shoulder became sore after moving boxes 4 days ago.\n- Unidentified speaker: I first said left, but the correct side is right.\n- Unidentified speaker: The discomfort is mild at rest and increases when I reach overhead.\n- Unidentified speaker: I have no fever or chest pain.\n- Unidentified speaker: I have right shoulder discomfort beginning 4 days ago after lifting boxes.\n- Unidentified speaker: There was no fall.\n- Unidentified speaker: I have no numbness and no weakness.\n- Unidentified speaker: The pain does not travel down my arm.\n- Unidentified speaker: I can hold a cup and get dressed.\n- Unidentified speaker: My current pain score is 2 out of 10.\n- Unidentified speaker: I said 4 before thinking carefully.\n- Unidentified speaker: So please use 2.\n- Unidentified speaker: Resting from heavy lifting has helped.\n- Unidentified speaker: I have not taken any new medicine.\n- Unidentified speaker: The sore side is still the right shoulder.\n- Unidentified speaker: My right shoulder is the affected side, not my left.\n- Unidentified speaker: There is still no numbness, weakness, fever, or chest pain.",
+    "Assessment": "Not mentioned in transcript.",
+    "Plan": "- Unidentified speaker: For this practice plan, avoid heavy lifting for 5 days and use comfortable gentle movement.\n- Unidentified speaker: We are not prescribing a new medicine.\n- Unidentified speaker: Please keep track of whether reaching overhead becomes easier.\n- Unidentified speaker: Follow-up is in 7 days.\n- Unidentified speaker: I almost said 17, but seven days is the correct interval.\n- Unidentified speaker: Five days without heavy lifting, gentle comfortable movement, and follow up in seven days rather than 17.\n- Unidentified speaker: The final summary should retain the history from before the pause and the corrected score and plan from after it no new medicine was started."
+  },
+  "modelCalls": 1,
+  "databaseConnections": 0,
+  "fullClinicalAcceptance": false,
+  "fullUsabilityAcceptance": false,
+  "interpretation": "Retained original actual selection failure and partial-question gap; no later source or prompt changes regrade it."
+}

@@ -334,13 +334,24 @@ def test_actual08_strict_schema_failure_evidence_remains_unmodified(name):
     "speaker,patient_only",
     [("Patient", True), ("Doctor", True), ("Other", True), ("Unknown", False)],
 )
-def test_disabled_path_keeps_raw_bytes_and_returns_no_new_source_context(
+def test_objective_contract_is_active_but_schema_without_objective_keeps_raw_bytes(
     speaker, patient_only
 ):
     sources = (plans.PlanSource.speech(speaker, "Source."),)
     g = history.ReportedHistoryGrounding.for_capture(
         FIELDS, ("Plan",), sources, patient_only=patient_only
     )
+    assert g.fields == ("Objective",) and g.prompt(has_plans=True)
+    value = envelope(g)
+    remaining, reported = g.resolve(json.dumps(value), max_bytes=20000)
+    assert reported == {"Objective": history.REVIEW_REQUIRED}
+    assert json.loads(remaining)["fields"] == value["fields"]
+    inactive = history.ReportedHistoryGrounding.for_capture(
+        ("Subjective", "Assessment", "Plan"),
+        ("Plan",),
+        sources,
+        patient_only=patient_only,
+    )
     raw = '{  "existing": "unchanged" }'
-    assert g.fields == () and g.prompt(has_plans=True) == ""
-    assert g.resolve(raw, max_bytes=20000) == (raw, {})
+    assert inactive.fields == () and inactive.prompt(has_plans=True) == ""
+    assert inactive.resolve(raw, max_bytes=20000) == (raw, {})
