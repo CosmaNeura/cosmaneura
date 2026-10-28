@@ -74,7 +74,10 @@ def flow(monkeypatch):
         "companion_synth",
         "companion_prep_test",
     )
-    engine = create_engine(url, json_serializer=_serialize_pydantic_model)
+    engine = create_engine(
+        url.set(drivername="postgresql+psycopg"),
+        json_serializer=_serialize_pydantic_model,
+    )
     names = {t.name for t in _AUTHORITY_TABLES} | {
         "doctor",
         "patient",
@@ -91,6 +94,10 @@ def flow(monkeypatch):
         "session_prep_artifact",
         "session_prep_build",
         "session_prep_read_receipt",
+        "scribe_capture_admission",
+        "scribe_capture_reviewed_source",
+        "scribe_capture_correction_frontier",
+        "scribe_patient_identity",
     }
     tables = {name: SQLModel.metadata.tables[name] for name in names}
     while True:
