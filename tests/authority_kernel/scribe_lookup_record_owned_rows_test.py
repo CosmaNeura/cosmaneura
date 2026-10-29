@@ -83,7 +83,7 @@ def test_real_native_retains_receipts_and_exact_locks_with_fewer_reads(
 def test_record_adapter_discovers_current_locks_only_inside_lookup(
     native, engine, monkeypatch
 ):
-    original = provider_record_authority.resolve_session_prep_provider_access
+    original = provider_record_authority.doctor_access_in_force
     checks = []
 
     def access(doctor, **args):
@@ -101,7 +101,7 @@ def test_record_adapter_discovers_current_locks_only_inside_lookup(
 
     monkeypatch.setattr(
         provider_record_authority,
-        "resolve_session_prep_provider_access",
+        "doctor_access_in_force",
         access,
     )
     assert native.post("mount").status_code == 200
