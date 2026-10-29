@@ -273,6 +273,34 @@ describe("schedule loader note availability", () => {
     } as Parameters<typeof clientLoader>[0])
   }
 
+  it("treats a missing meeting in a successful schedule as deliberate unavailability", async () => {
+    scheduleList.mockResolvedValue({
+      data: { meetings: [] },
+      response: new Response(null, { status: 200 }),
+    })
+    await expect(load()).rejects.toMatchObject({
+      data: { scheduleLoadFailure: "unavailable" },
+      init: { status: 404 },
+    })
+    expect(noteList).not.toHaveBeenCalled()
+    expect(patientList).not.toHaveBeenCalled()
+    expect(noteDetail).not.toHaveBeenCalled()
+  })
+
+  it("does not read patient or note options when the schedule request fails", async () => {
+    scheduleList.mockResolvedValue({
+      error: { detail: "Do not show this diagnostic" },
+      response: new Response(null, { status: 503 }),
+    })
+    await expect(load()).rejects.toMatchObject({
+      data: { scheduleLoadFailure: "temporary" },
+      init: { status: 503 },
+    })
+    expect(noteList).not.toHaveBeenCalled()
+    expect(patientList).not.toHaveBeenCalled()
+    expect(noteDetail).not.toHaveBeenCalled()
+  })
+
   it("checks exactly the ended linked visit and discards its content", async () => {
     scheduleList.mockResolvedValue({
       data: {
