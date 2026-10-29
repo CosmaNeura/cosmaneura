@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""Debug Azure Blob Storage connectivity and list blobs in a container."""
+"""Check Azure Blob connectivity without printing credentials or identifiers."""
 
 from __future__ import annotations
 
 import argparse
 import os
+from typing import NoReturn
 
 from azure.core.exceptions import (
     ClientAuthenticationError,
@@ -43,17 +44,19 @@ def _read_config() -> tuple[str | None, str | None, str | None]:
     return account_url, account_key, container_name
 
 
-def _mask_secret(secret: str | None) -> str:
-    if not secret:
-        return "<missing>"
-    if len(secret) <= 8:
-        return "*" * len(secret)
-    return f"{secret[:4]}...{secret[-4:]}"
+class _RedactedArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        # argparse's default errors echo unrecognized arguments and invalid values.
+        self.exit(2, "Invalid arguments. Use --help for usage.\n")
+
+
+def _configuration_status(value: str | None) -> str:
+    return "configured" if value else "missing"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Debug Azure Blob connection and list blobs in a container."
+    parser = _RedactedArgumentParser(
+        description="Check Azure Blob connection and count matching blobs without logging identifiers."
     )
     parser.add_argument(
         "--container",
@@ -74,56 +77,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--check-blob",
         default=None,
-        help="Optional blob name to verify existence and print properties.",
+        help="Optional blob name to verify existence and property access; values are not printed.",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    account_url, account_key, default_container = _read_config()
-    container_name = args.container or default_container
-
-    print("Azure Blob debug")
-    print(f"  account_url: {account_url!r}")
-    print(f"  account_key: {_mask_secret(account_key)!r}")
-    print(f"  container:   {container_name!r}")
-    print(f"  prefix:      {args.prefix!r}")
-    print(f"  limit:       {args.limit!r}")
-
-    if not account_url or not account_key or not container_name:
-        print(
-            "\nMissing config. Ensure these are defined:\n"
-            "  - AZURE_UPLOADS_ACCOUNT_URL\n"
-            "  - AZURE_UPLOADS_ACCOUNT_KEY\n"
-            "  - AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME (or pass --container)"
-        )
-        return 2
-
     try:
+        account_url, account_key, default_container = _read_config()
+        container_name = args.container or default_container
+
+        print("Azure Blob debug")
+        print(f"  account_url: {_configuration_status(account_url)}")
+        print(f"  account_key: {_configuration_status(account_key)}")
+        print(f"  container: {_configuration_status(container_name)}")
+
+        if not account_url or not account_key or not container_name:
+            print(
+                "\nMissing config. Ensure these are defined:\n"
+                "  - AZURE_UPLOADS_ACCOUNT_URL\n"
+                "  - AZURE_UPLOADS_ACCOUNT_KEY\n"
+                "  - AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME (or pass --container)"
+            )
+            return 2
+
         service_client = BlobServiceClient(account_url, credential=account_key)
         container_client = service_client.get_container_client(container_name)
 
         # Lightweight request to validate access and container existence.
-        container_props = container_client.get_container_properties()
-        print(
-            f"\nConnected successfully. Last modified: {container_props.last_modified!s}"
-        )
+        container_client.get_container_properties()
+        print("\nConnected successfully.")
 
         if args.check_blob:
             blob_client = container_client.get_blob_client(args.check_blob)
-            exists = blob_client.exists()
-            print(f"Blob exists [{args.check_blob!r}]: {exists}")
+            exists = bool(blob_client.exists())
+            print(f"Blob exists: {exists}")
             if exists:
-                props = blob_client.get_blob_properties()
-                print(f"  size_bytes: {props.size}")
-                print(f"  content_type: {props.content_settings.content_type!r}")
-                print(f"  last_modified: {props.last_modified!s}")
+                blob_client.get_blob_properties()
+                print("Blob properties: readable")
 
-        print("\nBlobs:")
         count = 0
-        for blob in container_client.list_blobs(name_starts_with=args.prefix):
-            print(f"  {blob.name!r}")
+        for _ in container_client.list_blobs(name_starts_with=args.prefix):
             count += 1
             if count >= args.limit:
                 print(f"  ... truncated after {args.limit} blobs")
@@ -131,20 +126,20 @@ def main() -> int:
         print(f"\nTotal listed: {count}")
         return 0
 
-    except ClientAuthenticationError as exc:
-        print(f"\nAuthentication failed: {exc}")
+    except ClientAuthenticationError:
+        print("\nAuthentication failed")
         return 1
-    except ResourceNotFoundError as exc:
-        print(f"\nContainer or blob not found: {exc}")
+    except ResourceNotFoundError:
+        print("\nContainer or blob not found")
         return 1
-    except ServiceRequestError as exc:
-        print(f"\nNetwork/service request error: {exc}")
+    except ServiceRequestError:
+        print("\nNetwork/service request error")
         return 1
-    except HttpResponseError as exc:
-        print(f"\nAzure HTTP error: {exc}")
+    except HttpResponseError:
+        print("\nAzure HTTP error")
         return 1
-    except Exception as exc:
-        print(f"\nUnexpected error: {exc}")
+    except Exception:
+        print("\nUnexpected error")
         return 1
 
 
