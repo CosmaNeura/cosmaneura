@@ -290,6 +290,7 @@ class ControllerTests(unittest.TestCase):
             source_archive_sha256=m.sha(b"invented-source"),
             github_user_sha256=self.plan["github_user_sha256"],
             protection_sha256="policy",
+            github_actions_enabled=True,
         )
         source.BuildSourceReader.return_value.protections.return_value = "policy"
         if changed_source:
@@ -369,6 +370,8 @@ class ControllerTests(unittest.TestCase):
             value = self.invoke(source_only=True)
         self.assertTrue(value["local_bindings_passed"])
         self.assertTrue(value["authenticated_source_checked"])
+        self.assertIs(value["github_actions_enabled"], True)
+        self.assertEqual(value["protection_sha256"], "policy")
         self.assertFalse(value["build_started"])
         self.assertEqual(value["candidate_sha"], m.CANDIDATE)
         self.assertEqual(value["approval_pr_number"], 385)
@@ -626,6 +629,8 @@ class ControllerTests(unittest.TestCase):
             value = self.invoke()
         self.assertTrue(value["complete"])
         self.assertEqual(value["actor"], "delegated_assistant")
+        self.assertIs(value["github_actions_enabled"], True)
+        self.assertEqual(value["protection_sha256"], "policy")
         self.assertEqual(value["candidate_sha"], m.CANDIDATE)
         self.assertFalse(
             value["publication_authorized"] or value["deployment_authorized"]

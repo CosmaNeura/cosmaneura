@@ -50,6 +50,7 @@ def reader():
     obj.tools = {}
     obj.environment = {"PATH": "/usr/bin:/bin", "HOME": "/invented/user"}
     obj.sequence, obj.response_hashes = 0, []
+    obj.actions_enabled = False
     return obj
 
 
@@ -277,6 +278,118 @@ class TransportTests(unittest.TestCase):
                 obj.final_boundaries()
 
 
+class ActionsCompatibilityTests(unittest.TestCase):
+    def fixture(self, enabled=True):
+        obj = reader()
+        obj.actions_enabled = None
+        obj.request = replace(
+            obj.request, review_kind="local_cursor", controller_check_id=0
+        )
+        policy = {
+            key: {"enabled": value}
+            for key, value in (
+                ("enforce_admins", True),
+                ("allow_force_pushes", False),
+                ("allow_deletions", False),
+                ("required_conversation_resolution", True),
+            )
+        }
+        policy["required_pull_request_reviews"] = {
+            "dismiss_stale_reviews": True,
+            "required_approving_review_count": 0,
+            "require_code_owner_reviews": False,
+            "require_last_push_approval": False,
+        }
+        rules = {
+            "id": 3778800,
+            "target": "branch",
+            "source": m.source.REPOSITORY,
+            "source_type": "Repository",
+            "enforcement": "active",
+            "bypass_actors": [
+                {
+                    "actor_id": 1144995,
+                    "actor_type": "Integration",
+                    "bypass_mode": "always",
+                },
+                {
+                    "actor_id": 1210556,
+                    "actor_type": "Integration",
+                    "bypass_mode": "always",
+                },
+            ],
+            "conditions": {
+                "ref_name": {"exclude": [], "include": ["refs/heads/master"]}
+            },
+            "rules": [{"type": "non_fast_forward"}],
+        }
+        values = {
+            m.source.API + "/branches/master/protection": policy,
+            m.source.API + "/rulesets/3778800": rules,
+            m.source.API + "/actions/permissions": {"enabled": enabled},
+        }
+        obj.gh = Mock(side_effect=lambda route: values[route])
+        return obj, values
+
+    def test_local_mode_binds_actual_boolean_without_changing_settings(self):
+        fingerprints = []
+        for enabled in (False, True):
+            obj, _ = self.fixture(enabled)
+            fingerprints.append(obj.protections())
+            self.assertIs(obj.actions_enabled, enabled)
+            self.assertEqual(obj.protections(), fingerprints[-1])
+            self.assertEqual(
+                {call.args[0] for call in obj.gh.call_args_list},
+                {
+                    m.source.API + "/branches/master/protection",
+                    m.source.API + "/rulesets/3778800",
+                    m.source.API + "/actions/permissions",
+                },
+            )
+        self.assertNotEqual(*fingerprints)
+
+    def test_missing_or_nonboolean_permissions_refuse(self):
+        for value in ({}, {"enabled": None}, {"enabled": 1}, {"enabled": "true"}):
+            obj, values = self.fixture()
+            values[m.source.API + "/actions/permissions"] = value
+            with self.subTest(value=value), self.assertRaises(m.BuildSourceRefused):
+                obj.protections()
+
+    def test_changed_actions_state_refuses_during_one_observation(self):
+        obj, values = self.fixture(False)
+        obj.protections()
+        values[m.source.API + "/actions/permissions"]["enabled"] = True
+        with self.assertRaises(m.BuildSourceRefused):
+            obj.protections()
+
+    def test_existing_protection_controls_are_not_relaxed(self):
+        for key, enabled in (
+            ("enforce_admins", False),
+            ("allow_force_pushes", True),
+            ("allow_deletions", True),
+            ("required_conversation_resolution", False),
+        ):
+            obj, values = self.fixture()
+            values[m.source.API + "/branches/master/protection"][key] = {
+                "enabled": enabled
+            }
+            with (
+                self.subTest(key=key),
+                self.assertRaises(m.source.SourceProvenanceRefused),
+            ):
+                obj.protections()
+
+    def test_retained_bugbot_path_still_requires_disabled_actions(self):
+        obj, _ = self.fixture(True)
+        obj.request = replace(
+            obj.request, review_kind="bugbot", controller_check_id=102
+        )
+        with patch.object(m.source, "protection") as protection:
+            with self.assertRaises(m.BuildSourceRefused):
+                obj.protections()
+            self.assertFalse(protection.call_args.kwargs["current_staging"])
+
+
 class ControllerProofTests(unittest.TestCase):
     def fixture(self):
         obj = reader()
@@ -374,6 +487,86 @@ class ControllerProofTests(unittest.TestCase):
             ),
             2 * len(m.MODULES),
         )
+
+    def test_enabled_actions_local_review_requires_exact_head_successful_ci(self):
+        for failure in (None, "failed", "pending", "missing", "wrong_head"):
+            obj, values, blobs = self.fixture()
+            report = "Independent synthetic review fixture.\n"
+            metadata = {
+                "reviewer": "Codex",
+                "reviewed_head": REVIEWED,
+                "result": "accepted",
+                "after_final_substantive_push": True,
+                "report_sha256": m.sha(report.encode()),
+            }
+            body = (
+                "<!-- COSMANEURA_LOCAL_AGENT_REVIEW "
+                + json.dumps(metadata)
+                + " -->\n"
+                + report
+            )
+            values["issues/comments/101"] = {
+                "id": 101,
+                "user": USER,
+                "issue_url": "https://api.github.com/repos/CosmaNeura/cosmaneura/issues/419",
+                "body": body,
+            }
+            obj.request = replace(
+                obj.request,
+                review_kind="local_cursor",
+                controller_check_id=0,
+                controller_review_sha256=m.sha(body.encode()),
+            )
+            obj.actions_enabled = True
+            rows = [
+                {
+                    "name": name,
+                    "head_sha": REVIEWED,
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+                for name in m.source.CHECKS
+            ]
+            if failure == "failed":
+                rows[0]["conclusion"] = "failure"
+            if failure == "pending":
+                rows[0]["status"] = "in_progress"
+            if failure == "missing":
+                rows.pop()
+            if failure == "wrong_head":
+                rows[0]["head_sha"] = "f" * 40
+            values["commits/" + REVIEWED + "/status?per_page=100"] = {
+                "sha": REVIEWED,
+                "total_count": 0,
+                "statuses": [],
+            }
+            values["commits/" + REVIEWED + "/check-runs?filter=all&per_page=100"] = {
+                "total_count": len(rows),
+                "check_runs": rows,
+            }
+            original_git = obj.git_bytes.side_effect
+            obj.git_bytes = Mock(
+                side_effect=lambda *args, original_git=original_git: (
+                    b"" if args[0] == "diff" else original_git(*args)
+                )
+            )
+            with (
+                self.subTest(failure=failure),
+                patch.object(
+                    Path,
+                    "read_bytes",
+                    autospec=True,
+                    side_effect=lambda path, blobs=blobs: blobs[path.name],
+                ),
+            ):
+                if failure:
+                    with self.assertRaises(m.source.SourceProvenanceRefused):
+                        obj.controller()
+                else:
+                    obj.controller()
+            self.assertFalse(
+                any("workflows" in call.args[0] for call in obj.gh.call_args_list)
+            )
 
     def test_squash_merge_requires_identical_complete_reviewed_tree(self):
         for failure in (None, "tree", "object", "parent_count", "bugbot", "drift"):
@@ -594,6 +787,7 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(result.source_archive, ARCHIVE)
         self.assertFalse(result.execution_authorized)
         self.assertFalse(result.deployment_authorized)
+        self.assertFalse(result.github_actions_enabled)
         self.assertEqual(result.github_user_sha256, USER_SHA)
 
 
