@@ -14,6 +14,12 @@ variable "enable_public_phi_observability" {
   default     = false
 }
 
+variable "enable_session_prep_production_worker_heartbeat" {
+  description = "Enable the fixed PHI-free Session Prep worker heartbeat in production after monitor and failure/recovery routing acceptance."
+  type        = bool
+  default     = false
+}
+
 variable "public_phi_alert_email" {
   description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
   type        = string
