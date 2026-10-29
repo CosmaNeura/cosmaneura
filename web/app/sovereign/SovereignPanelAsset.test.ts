@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "4d9ccc80f6449ad347f922ec4cd4ce4b36a804b7",
+      "f4e47585c2aaae81da2e2207490853eec03fc010",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
@@ -71,5 +71,19 @@ describe("pinned Sovereign panel asset", () => {
     expect(source).not.toContain("indexedDB")
     expect(source).not.toContain("caches.open")
     expect(source).not.toContain('headers["x-cosmaneura-mount-context"]')
+  })
+
+  it("retains the prior immutable asset for already-open dashboard sessions", async () => {
+    const previousSha =
+      "030b3854b0d9b5a385624ce8f786c7aca4fcc88aa3c2b05e8d6963f85f7ea4a4"
+    const bytes = await readFile(
+      resolve(
+        process.cwd(),
+        "public",
+        "vendor",
+        `cosmaneura-panel.v1.${previousSha}.js`,
+      ),
+    )
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(previousSha)
   })
 })
