@@ -154,7 +154,7 @@ def test_dynamic_capability_is_never_derived_outside_staging(monkeypatch):
     assert "session-prep:read" not in _capabilities(token)
 
 
-def test_record_switch_never_carries_synthetic_capability(monkeypatch):
+def test_unprovisioned_record_switch_never_carries_synthetic_capability(monkeypatch):
     doctor, fixture, authority = _provision(monkeypatch, "record-switch")
     _configure_session_prep(monkeypatch, doctor=doctor, fixture=fixture)
     synthetic_token = _token(doctor, str(fixture.appointment.id))
@@ -184,9 +184,8 @@ def test_record_switch_never_carries_synthetic_capability(monkeypatch):
         verified_at=datetime.now(UTC),
     ).save()
 
-    ordinary_token = _token(doctor, str(ordinary_appointment.id))
-
-    assert "session-prep:read" not in _capabilities(ordinary_token)
+    with pytest.raises(authority_service.AuthorityRequestDeniedError):
+        _token(doctor, str(ordinary_appointment.id))
 
 
 def test_existing_mount_loses_capability_after_fixture_tampering(monkeypatch):

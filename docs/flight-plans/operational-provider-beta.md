@@ -21,12 +21,9 @@ data is rewritten. Rehearse on isolated PostgreSQL 16 using synthetic records.
 Rollback the application and leave this additive structure dormant. Deleting
 review snapshots is a separate retention operation, not immediate rollback.
 
-The global rollout requires `SESSION_PREP_PROVIDER_ENABLED=true`; its default
-exposes no review action. Once enabled, every current provider who passes the
-existing practice, BAA, and entitlement gate is eligible automatically. New
-providers become eligible when onboarding reaches that state; view-as and
-incomplete, revoked, or unentitled accounts remain denied. This increment does
-not yet deliver a real-record prepared brief.
+The cohort requires both `SESSION_PREP_PROVIDER_ENABLED=true` and an exact
+`SESSION_PREP_PROVIDER_CLERK_SUBJECTS` allowlist. Defaults expose no review action.
+This increment does not yet deliver a real-record prepared brief.
 
 ## Remaining increments and release order
 
@@ -42,7 +39,7 @@ not yet deliver a real-record prepared brief.
 
 ## Increment 2: record and practice authority
 
-Verified Clerk token exchange can bind a currently authorized doctor to the actual
+Verified Clerk token exchange can bind an allowlisted doctor to the actual
 practice membership, owned appointment, and owned patient. The record binding
 retains those exact identities. Every later resolution checks current access,
 membership, identity, tenant, and record ownership; changing the patient or
@@ -108,7 +105,7 @@ work or queue age over 120 seconds produces a warning while the feature is on.
 No provider, record, source content, or exception detail appears in these events.
 Sixteen local operations/worker tests pass; focused Ruff/Pyright checks pass.
 Recovery: restore the prior worker/scheduler application. This increment changes
-no schema, provider eligibility, or environment configuration.
+no schema, cohort, or environment configuration.
 
 ## Current paired deployment drift (read-only observation, 2026-09-23)
 
@@ -127,7 +124,7 @@ worker, and scheduler as part of that rollout. No cloud mutation performed.
 
 The initial Cursor review found note-section ordering loss, database-time-zone
 sensitivity, stale review guidance, a provider membership lifecycle conflict,
-Practice/Doctor lock inversion, ambiguous demo/real routing, and persistent
+Practice/Doctor lock inversion, overlapping demo/real cohorts, and persistent
 queue warnings after ordinary scope changes. This follow-up preserves ordered
 section/text pairs inside the existing JSONB snapshot, hashes that order, rejects
 NUL text consistently, uses naive UTC appointment bounds, and directs stale pages
@@ -140,9 +137,8 @@ contract. Revoked target memberships are not revived, and staff memberships are
 not moved implicitly. Unmapped fixture/import tenants cause a denied exchange
 with all memberships preserved. Practice is locked before Doctor at the HTTP
 route, ahead of view-as reconciliation, and again at the service boundary;
-membership is rechecked, matching roster/offboarding. The exact synthetic
-fixture path and real-provider record path remain independently scoped, so the
-global provider rollout cannot turn an unrelated record into fixture authority.
+membership is rechecked, matching roster/offboarding. Startup rejects overlapping enabled
+synthetic and real-provider cohorts instead of falling back to fixture authority.
 
 Queue health retains total failure counts but warns only for recent actionable
 failures or excessive pending/running lag. Scope failures still alert because
@@ -158,8 +154,7 @@ editing or reordering content always requires a new review.
 Risk remains Tier 2. Recovery: set SESSION_PREP_PROVIDER_ENABLED=false and return
 to the previous receiver image, with the additive tables left dormant. Keep the
 real-record feature disabled when reverting to the earlier unordered snapshot
-reader. No environment configuration, live migration, or provider eligibility
-was changed.
+reader. No environment configuration, live migration, or cohort was changed.
 Local validation and final Cursor review evidence are recorded on the follow-up PR.
 
 The follow-up Cursor findings are covered by an actual HTTP exchange/offboarding

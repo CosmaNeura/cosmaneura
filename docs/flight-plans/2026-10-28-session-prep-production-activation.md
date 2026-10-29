@@ -128,24 +128,11 @@ deployment; exact post-state evidence rejects it.
 
 ## Shared provider exchange and Scribe continuity
 
-The provider context token is shared infrastructure, not a Session Prep grant.
-Browser exchange and the trusted native Scribe facade therefore retain the
-existing provider-product decision, exact record ownership, view-as refusal and
-fresh capture authorization. A still-active exact legacy pilot grant may retain
-that existing Scribe access after ordinary entitlement ends, but it never
-creates a Session Prep permission.
-
-Real Session Prep scope provisioning runs in an isolated savepoint. Refusal or
-an unreconciled legacy provider binding rolls back that optional work before the
-shared exchange continues. Every mapped or retained legacy record must still
-pass exact clinical and authority lineage. The shared token first applies the
-stronger Session Prep resolver; only its policy-specific unavailability can
-fall back to the existing provider-product decision, with no
-`session-prep:read` capability or context snapshot attached. Record-lineage,
-ownership, identity, membership, offboarding and view-as failures still deny
-the shared context. Worker and review execution continue to call the strict
-Session Prep validator directly.
-
-No token field, database structure or external service changes. Recovery is
-the prior application image: it restores the former coupled exchange behavior
-without data rollback, while retained mappings and capture rows remain intact.
+The provider token is shared infrastructure, not a Session Prep grant. Browser and
+trusted-native capture retain their existing product decision, exact owner,
+view-as refusal and fresh authorization; a valid legacy pilot can retain only
+that capture access. Optional Prep provisioning runs in a savepoint, and only
+policy-specific unavailability may fall back to capture, without a Prep
+capability or context. All lineage, identity, membership and offboarding
+conflicts still deny; Prep workers and reads remain strict. This adds no token,
+schema or external service. Recovery is the prior image, without data rollback.

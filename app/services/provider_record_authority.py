@@ -49,6 +49,10 @@ from app.models.provider_record_authority import (
     ProviderPracticeAuthority,
     ProviderRecordAuthority,
 )
+from app.models.synthetic_preview_appointment_fixture import (
+    SYNTHETIC_PREVIEW_FIXTURE_VERSION,
+    SyntheticPreviewAppointmentFixture,
+)
 from sqlalchemy import select as sql_select
 from sqlalchemy.exc import MultipleResultsFound
 from sqlmodel import Session, col, select
@@ -298,11 +302,6 @@ def _validate_unmapped_provider_record_scope(
     ).one_or_none()
     if doctor is None:
         raise ProviderRecordScopeDenied
-    practice = (
-        _current_session_prep_practice(session, doctor)
-        if session_prep
-        else _current_practice(session, doctor)
-    )
     appointment = session.get(
         Appointment, cast(TypeIDType, appointment_id), populate_existing=True
     )
@@ -311,11 +310,6 @@ def _validate_unmapped_provider_record_scope(
         if appointment is not None
         else None
     )
-    mapping = session.exec(
-        select(ProviderPracticeAuthority)
-        .where(ProviderPracticeAuthority.practice_id == practice.id)
-        .execution_options(populate_existing=True)
-    ).one_or_none()
     person = session.get(AuthorityPerson, binding.person_id, populate_existing=True)
     origin = (
         session.exec(
@@ -328,6 +322,58 @@ def _validate_unmapped_provider_record_scope(
         if person is not None and patient is not None
         else None
     )
+    fixture = session.exec(
+        select(SyntheticPreviewAppointmentFixture).where(
+            SyntheticPreviewAppointmentFixture.appointment_id == appointment_id,
+            SyntheticPreviewAppointmentFixture.doctor_id == doctor.id,
+            SyntheticPreviewAppointmentFixture.fixture_version
+            == SYNTHETIC_PREVIEW_FIXTURE_VERSION,
+        )
+    ).one_or_none()
+    provisioned = session.exec(
+        select(AuthorityAuditEvent).where(
+            AuthorityAuditEvent.event_type == "authority.provider_fixture.provisioned",
+            AuthorityAuditEvent.event_source == "platform_authoritative",
+            AuthorityAuditEvent.outcome == "accepted",
+            AuthorityAuditEvent.actor_id == actor_id,
+            AuthorityAuditEvent.tenant_id == binding.tenant_id,
+            AuthorityAuditEvent.person_id == binding.person_id,
+            AuthorityAuditEvent.resource_type == "appointment",
+            AuthorityAuditEvent.resource_ref == binding.binding_ref,
+        )
+    ).one_or_none()
+    if fixture is not None and provisioned is not None:
+        if (
+            doctor.deleted_at is not None
+            or doctor.last_active_at is None
+            or appointment is None
+            or patient is None
+            or person is None
+            or origin is None
+            or fixture.synthetic_only is not True
+            or fixture.patient_id != patient.id
+            or appointment.doctor_id != doctor.id
+            or appointment.patient_id != patient.id
+            or patient.doctor_id != doctor.id
+            or binding.actor_id is not None
+            or binding.binding_kind != "provider_record"
+            or binding.status != "active"
+            or binding.verified_at is None
+            or binding.revoked_at is not None
+            or person.status != "active"
+        ):
+            raise ProviderRecordScopeDenied
+        return
+    practice = (
+        _current_session_prep_practice(session, doctor)
+        if session_prep
+        else _current_practice(session, doctor)
+    )
+    mapping = session.exec(
+        select(ProviderPracticeAuthority)
+        .where(ProviderPracticeAuthority.practice_id == practice.id)
+        .execution_options(populate_existing=True)
+    ).one_or_none()
     if (
         appointment is None
         or patient is None
@@ -596,6 +642,8 @@ def _ensure_provider_record_scope(
         )
         if scope is None:
             # Existing fixture/import bindings require explicit reconciliation.
+            if session_prep:
+                raise SessionPrepProviderScopeUnavailable
             raise ProviderRecordScopeDenied
         return scope
 

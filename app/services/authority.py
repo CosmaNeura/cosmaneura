@@ -465,8 +465,10 @@ def exchange_context_token(
                     clerk_subject=clerk_subject,
                     record_ref=record_ref,
                 )
-        except ProviderRecordScopeDenied:
+        except SessionPrepProviderScopeUnavailable:
             provider_scope = None
+        except ProviderRecordScopeDenied:
+            raise AuthorityRequestDeniedError from None
     actor, source_identity = _actor_for_clerk_identity(
         db,
         clerk_issuer,
