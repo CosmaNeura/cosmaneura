@@ -85,6 +85,32 @@ def test_sync_creates_zoom_meetings(global_session):
     assert any(entry.get("event_code") == "zoom_sync_completed" for entry in logs)
 
 
+def test_sync_imports_live_meeting_missing_from_upcoming(global_session):
+    doctor = _authorized_doctor()
+    _create_zoom_integration(doctor)
+    live_meeting = {
+        "id": "81054466452",
+        "topic": "Synthetic live visit",
+        "start_time": "2026-10-28T23:30:00Z",
+        "duration": 30,
+        "join_url": "https://zoom.us/j/81054466452",
+    }
+
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=[live_meeting],
+    ):
+        perform(str(doctor.id))
+
+    meeting = ZoomMeeting.get(
+        doctor_id=doctor.id,
+        zoom_meeting_id="81054466452",
+    )
+    assert meeting is not None
+    assert meeting.topic == "Synthetic live visit"
+    assert meeting.start_time == datetime(2026, 10, 28, 23, 30, tzinfo=timezone.utc)
+
+
 def test_sync_upserts_existing_meetings(global_session):
     doctor = _authorized_doctor()
     _create_zoom_integration(doctor)
