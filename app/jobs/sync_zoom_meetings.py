@@ -17,7 +17,7 @@ def _bounded_count(value: int) -> int:
 
 
 def perform(doctor_id: str) -> None:
-    """Fetch upcoming Zoom meetings for a doctor and upsert into the DB."""
+    """Fetch upcoming and active Zoom meetings and upsert them into the DB."""
     doctor = Doctor.get(id=doctor_id)
     doctor_ref = provider_log_ref(f"doctor:{doctor_id}")
 
