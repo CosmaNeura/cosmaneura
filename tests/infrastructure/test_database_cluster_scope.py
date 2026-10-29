@@ -213,7 +213,8 @@ def test_admin_url_accepts_one_non_cli_source(monkeypatch: pytest.MonkeyPatch) -
     value = (
         "postgresql://admin:opaque@"
         "cosmaneura-prod-postgres.postgres.database.azure.com/"
-        "production?sslmode=require"
+        "production?sslmode=verify-full&"
+        "sslrootcert=%2Fetc%2Fssl%2Fcerts%2Fca-certificates.crt"
     )
     monkeypatch.setattr(scope.sys, "stdin", io.StringIO(f"{value}\n"))
     assert (
