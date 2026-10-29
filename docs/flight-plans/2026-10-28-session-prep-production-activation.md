@@ -79,7 +79,8 @@ Before any activation proposal:
 4. Verify the dedicated production provider Sovereign identity has only the
    required Agent API app role, its configured client ID equals the proposed
    Core allowlist, and its Core audience/issuer pair is exact. Verify the public
-   Sovereign identity is absent.
+   Sovereign app/runtime is absent. A retained public foundation identity may
+   exist, but it must have no Agent API app-role assignment.
 5. Compare current API, worker, and scheduler image digests, environment-name
    sets, readiness, and retained recovery revisions. Refuse mixed Core images,
    duplicate environment keys, missing recovery, or stale frontend assets.
