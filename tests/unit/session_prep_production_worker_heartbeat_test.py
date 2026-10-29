@@ -372,6 +372,8 @@ def test_infrastructure_switch_is_default_off_and_worker_only() -> None:
     api = main[: main.index('resource "azurerm_container_app" "scheduler"')]
     assert "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED" not in scheduler
     assert "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED" not in api
+    assert "var.python_api_only_secret_vars" in collision_guard
+    assert "var.python_billing_api_only_secret_vars" in collision_guard
     assert "session_prep_production_heartbeat_env_name_collisions" in collision_guard
     assert (
         "length(local.session_prep_production_heartbeat_env_name_collisions) == 0"

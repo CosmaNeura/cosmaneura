@@ -146,16 +146,17 @@ override_data {
       RECALL_API_KEY                             = "not-a-secret"
       # Deliberately fake, non-production key with the required Recall/Svix
       # whsec_ + base64 syntax so the static plan exercises the shape guard.
-      RECALL_WEBHOOK_SECRET              = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
-      REDIS_URL                          = "redis://placeholder.invalid/1"
-      SCRIBE_API_AUDIENCE                = "00000000-0000-0000-0000-000000000000"
-      SCRIBE_CALLER_CLIENT_ID            = ""
-      SCRIBE_HANDOFF_ENABLED             = "false"
-      SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
-      SCRIBE_CAPTURE_ENABLED             = "forbidden-generic-override"
-      SENTRY_DSN                         = ""
-      SESSION_SECRET_KEY                 = "not-a-secret"
-      SMTP_URL                           = "smtp://placeholder.invalid:1025"
+      RECALL_WEBHOOK_SECRET                     = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
+      REDIS_URL                                 = "redis://placeholder.invalid/1"
+      SCRIBE_API_AUDIENCE                       = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_CALLER_CLIENT_ID                   = ""
+      SCRIBE_HANDOFF_ENABLED                    = "false"
+      SCRIBE_RECONCILER_CALLER_CLIENT_ID        = ""
+      SCRIBE_CAPTURE_ENABLED                    = "forbidden-generic-override"
+      SENTRY_DSN                                = ""
+      SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED = "false"
+      SESSION_SECRET_KEY                        = "not-a-secret"
+      SMTP_URL                                  = "smtp://placeholder.invalid:1025"
       # Canonical 32-byte Fernet test key (43 URL-safe base64 characters plus
       # one pad). This is fixed non-production test material.
       SOVEREIGN_RECORD_GRANT_SECRET = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -280,9 +281,9 @@ run "session_prep_activation_projects_complete_worker_runtime" {
   command = plan
 
   variables {
-    adopt_existing_production_postgres_egress_rule = false
+    adopt_existing_production_postgres_egress_rule  = false
     enable_session_prep_production_worker_heartbeat = true
-    production_container_apps_egress_ipv4          = "198.51.100.10"
+    production_container_apps_egress_ipv4           = "198.51.100.10"
     session_prep_production_rollout = {
       enabled             = true
       sovereign_client_id = "11111111-1111-1111-1111-111111111111"
@@ -336,6 +337,22 @@ run "reject_session_prep_heartbeat_without_global_rollout" {
     adopt_existing_production_postgres_egress_rule  = false
     enable_session_prep_production_worker_heartbeat = true
     production_container_apps_egress_ipv4           = "198.51.100.10"
+  }
+
+  expect_failures = [azurerm_container_app.worker]
+}
+
+run "reject_session_prep_heartbeat_name_in_api_only_secrets" {
+  command = plan
+
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    python_api_only_secret_vars = [
+      "RECALL_WEBHOOK_SECRET",
+      "SESSION_PREP_PRODUCTION_HEARTBEAT_ENABLED",
+      "SOVEREIGN_RECORD_GRANT_SECRET",
+    ]
   }
 
   expect_failures = [azurerm_container_app.worker]

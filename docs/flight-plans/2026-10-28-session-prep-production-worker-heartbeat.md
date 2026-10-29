@@ -123,8 +123,7 @@ and Session Prep records. Never leave the monitor enabled over an image without
 the publisher because that creates false outages. Never treat removing this
 source commit as sufficient recovery from a live monitor/configuration change.
 
-This branch is intentionally separate from the production-activation branch.
-When integrated, rebase it onto the final activation commit, resolve the nearby
-worker environment block deliberately, rerun OpenTofu plan tests, and obtain a
-new independent review of the combined final SHA. No live action is authorized
-by this flight plan.
+This checkpoint is integrated onto the final automatic-access activation base
+and is the combined independent-review target. Its worker environment block and
+mocked OpenTofu plans must pass on that exact combined SHA before publication.
+No live action is authorized by this flight plan.
