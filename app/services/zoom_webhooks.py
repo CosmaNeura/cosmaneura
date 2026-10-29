@@ -306,6 +306,14 @@ def handle_meeting_started(
                 host_ref=provider_log_ref(host_id),
             )
             return
+        # A reusable PMI/recurring meeting's detail endpoint describes its
+        # template, so start_time can be missing or can point at an old
+        # occurrence. The authenticated start event is the authority for the
+        # live occurrence's agenda time.
+        meeting = {
+            **meeting,
+            "start_time": _meeting_started_at(payload, obj),
+        }
 
         # The provider read deliberately runs outside the lifecycle lock. It
         # may take long enough for this occurrence to end or be replaced, so
@@ -470,6 +478,34 @@ def _occurrence_digest(obj: dict[str, Any]) -> str | None:
     if not isinstance(occurrence_uuid, str) or not occurrence_uuid.strip():
         return None
     return digest_provider_reference(f"zoom-occurrence:{occurrence_uuid}")
+
+
+def _meeting_started_at(payload: dict[str, Any], obj: dict[str, Any]) -> datetime:
+    """Return the live occurrence time carried by an authenticated start event."""
+
+    raw_start_time = obj.get("start_time")
+    if isinstance(raw_start_time, str) and raw_start_time.strip():
+        try:
+            parsed = datetime.fromisoformat(raw_start_time.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None:
+                return parsed.astimezone(UTC)
+        except ValueError:
+            pass
+
+    event_timestamp = payload.get("event_ts")
+    if (
+        not isinstance(event_timestamp, bool)
+        and isinstance(event_timestamp, int)
+        and event_timestamp >= 0
+    ):
+        try:
+            return datetime.fromtimestamp(event_timestamp / 1000, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            pass
+
+    # The signed start event itself proves this is a live occurrence. Receipt
+    # time is a safer agenda key than a stale reusable-meeting template time.
+    return datetime.now(UTC)
 
 
 def _participant_ref(

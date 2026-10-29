@@ -21,6 +21,7 @@ MEETING_ID = "99911112222"
 HOST_ID = "zoom-host-abc"
 BOT_ID = "recall-bot-abc"
 OCCURRENCE_UUID = "zoom-occurrence-current"
+OCCURRENCE_STARTED_AT = datetime(2026, 10, 29, 12, 15, tzinfo=timezone.utc)
 _EVENT_TIMESTAMPS = count(1_700_000_000_000)
 
 
@@ -209,7 +210,7 @@ def mock_zoom(monkeypatch):
             "id": meeting_id,
             "host_id": HOST_ID,
             "topic": "Recovered live visit",
-            "start_time": datetime.now(timezone.utc).isoformat(),
+            "start_time": "2000-01-01T00:00:00Z",
             "duration": 30,
             "join_url": f"https://zoom.us/j/{meeting_id}",
         },
@@ -227,6 +228,7 @@ def _started_payload(occurrence_uuid: str | None = OCCURRENCE_UUID) -> dict:
             "object": {
                 "id": MEETING_ID,
                 "host_id": HOST_ID,
+                "start_time": OCCURRENCE_STARTED_AT.isoformat().replace("+00:00", "Z"),
             }
         }
     }
@@ -343,8 +345,49 @@ def test_meeting_started_imports_missing_live_meeting_when_lists_are_empty(
     assert recovered is not None
     assert recovered.status == ZoomMeetingStatus.started
     assert recovered.topic == "Recovered live visit"
+    assert recovered.start_time == OCCURRENCE_STARTED_AT
     assert recovered.appointment_id is None
     assert recovered.capture_authorization_occurrence_digest is None
+    assert mock_recall["create_bot"] == []
+
+
+def test_meeting_started_imports_live_occurrence_without_template_start_time(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    existing = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert existing is not None
+    existing.delete()
+    monkeypatch.setattr(
+        zoom_service,
+        "get_meeting",
+        lambda _doctor, meeting_id: {
+            "id": meeting_id,
+            "host_id": HOST_ID,
+            "topic": "Instant live visit",
+            "duration": 0,
+            "join_url": f"https://zoom.us/j/{meeting_id}",
+        },
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    recovered = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert recovered is not None
+    assert recovered.status == ZoomMeetingStatus.started
+    assert recovered.start_time == OCCURRENCE_STARTED_AT
     assert mock_recall["create_bot"] == []
 
 
