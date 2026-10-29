@@ -1,4 +1,5 @@
 import { useViewAsActive } from "~/components/ViewAsRouteGuard"
+import { getDeploymentEnvironment } from "~/utils/deployment-environment"
 
 import { UserButton, useUser } from "@clerk/clerk-react"
 
@@ -10,9 +11,7 @@ export function ViewAsAccountControl({
   const viewAsActive = useViewAsActive()
   const { user } = useUser()
   const email = user?.primaryEmailAddress?.emailAddress
-  const staging = (import.meta.env.VITE_PYTHON_URL ?? "").includes(
-    "staging-app.cosmaneura.com",
-  )
+  const staging = getDeploymentEnvironment() === "staging"
 
   return (
     <div

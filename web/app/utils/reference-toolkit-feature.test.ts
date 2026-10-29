@@ -63,6 +63,29 @@ describe("isReferenceToolkitEnabled", () => {
     expect(isReferenceToolkitEnabled(null)).toBe(false)
     expect(isReferenceToolkitEnabled("")).toBe(false)
   })
+
+  it.each([
+    "https://staging-app.cosmaneura.com.evil.invalid",
+    "https://app.cosmaneura.com.evil.invalid",
+    "https://evil.invalid/staging-app.cosmaneura.com",
+    "https://evil.invalid?origin=staging-app.cosmaneura.com",
+    "https://staging-app.cosmaneura.com@evil.invalid",
+    "https://user:pass@staging-app.cosmaneura.com",
+    "http://staging-app.cosmaneura.com",
+    "https://app.cosmaneura.com:8443",
+    "https://preview.example.invalid",
+    "https://api.cosma.localhost.evil.invalid",
+    "not a URL",
+    "",
+    undefined,
+  ])("keeps toolkit and labs closed for an untrusted target: %s", (url) => {
+    vi.stubEnv("VITE_PYTHON_URL", url)
+    vi.stubEnv("VITE_REFERENCE_LABS_ENABLED", "true")
+    for (const email of ["john@cosmaneura.com", "stranger@example.com"]) {
+      expect(isReferenceToolkitEnabled(email)).toBe(false)
+      expect(isReferenceLabsEnabled(email)).toBe(false)
+    }
+  })
 })
 
 describe("independent lab release gate", () => {

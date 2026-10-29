@@ -1,3 +1,5 @@
+import { getDeploymentEnvironment } from "./deployment-environment"
+
 // Base per-environment beta allowlist for features gated to specific accounts.
 // Zoom retains this base cohort and adds two staging-only synthetic accounts
 // separately in zoom-feature.ts, without enabling their engagement badges.
@@ -29,16 +31,11 @@ const PROD_BETA_EMAILS = new Set([
   "sherin.george@mycatholicdoctor.com",
 ])
 
-function isStagingDeployment(): boolean {
-  return (import.meta.env.VITE_PYTHON_URL ?? "").includes(
-    "staging-app.cosmaneura.com",
-  )
-}
-
 export function isBetaUserEnabled(email: string | null | undefined): boolean {
   if (!email) return false
-  const allowlist = isStagingDeployment()
-    ? STAGING_BETA_EMAILS
-    : PROD_BETA_EMAILS
+  const environment = getDeploymentEnvironment()
+  if (environment === "unknown") return false
+  const allowlist =
+    environment === "staging" ? STAGING_BETA_EMAILS : PROD_BETA_EMAILS
   return allowlist.has(email.toLowerCase())
 }
